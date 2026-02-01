@@ -114,23 +114,27 @@ function initCharts() {
 
     const throughputCtx = document.getElementById('throughputChart').getContext('2d');
     state.throughputChart = new Chart(throughputCtx, {
-        type: 'bar',
+        type: 'line',
         data: {
             labels: [],
             datasets: [
                 {
                     label: 'TX Rate',
                     data: [],
-                    backgroundColor: 'rgba(52, 152, 219, 0.7)',
                     borderColor: '#3498db',
-                    borderWidth: 1
+                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3
                 },
                 {
                     label: 'RX Rate',
                     data: [],
-                    backgroundColor: 'rgba(46, 204, 113, 0.7)',
                     borderColor: '#2ecc71',
-                    borderWidth: 1
+                    backgroundColor: 'rgba(46, 204, 113, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3
                 }
             ]
         },
@@ -140,7 +144,7 @@ function initCharts() {
                 ...chartOptions.plugins,
                 title: {
                     display: true,
-                    text: 'Throughput Rate (bytes/sec)',
+                    text: 'Throughput (bytes/sec)',
                     color: '#4fc3f7'
                 }
             }
@@ -149,23 +153,27 @@ function initCharts() {
 
     const packetsCtx = document.getElementById('packetsChart').getContext('2d');
     state.packetsChart = new Chart(packetsCtx, {
-        type: 'bar',
+        type: 'line',
         data: {
             labels: [],
             datasets: [
                 {
                     label: 'Packets Sent',
                     data: [],
-                    backgroundColor: 'rgba(52, 152, 219, 0.7)',
                     borderColor: '#3498db',
-                    borderWidth: 1
+                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3
                 },
                 {
                     label: 'Packets Received',
                     data: [],
-                    backgroundColor: 'rgba(46, 204, 113, 0.7)',
                     borderColor: '#2ecc71',
-                    borderWidth: 1
+                    backgroundColor: 'rgba(46, 204, 113, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3
                 }
             ]
         },
@@ -175,7 +183,7 @@ function initCharts() {
                 ...chartOptions.plugins,
                 title: {
                     display: true,
-                    text: 'Packets by Peer',
+                    text: 'Total Packets by Peer',
                     color: '#4fc3f7'
                 }
             }
