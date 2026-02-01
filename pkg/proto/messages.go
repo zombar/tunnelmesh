@@ -2,7 +2,10 @@
 package proto
 
 import (
+	"io"
 	"net"
+	"net/http"
+	"strings"
 	"time"
 )
 
@@ -152,6 +155,13 @@ func GetLocalIPsExcluding(excludeCIDR string) (public []string, private []string
 		}
 	}
 
+	// If no public IPs found locally (behind NAT), try to get external IP
+	if len(public) == 0 {
+		if externalIP := GetExternalIP(); externalIP != "" {
+			public = append(public, externalIP)
+		}
+	}
+
 	return public, private
 }
 
@@ -189,4 +199,46 @@ func bytesGreaterOrEqual(a, b net.IP) bool {
 		}
 	}
 	return true
+}
+
+// publicIPServices is a list of services that return the public IP as plain text.
+var publicIPServices = []string{
+	"https://ifconfig.me/ip",
+	"https://ipinfo.io/ip",
+	"https://api.ipify.org",
+	"https://icanhazip.com",
+}
+
+// GetExternalIP fetches the public IP address from an external service.
+// This is useful when behind NAT where local interfaces don't show the public IP.
+// Returns empty string if the public IP cannot be determined.
+func GetExternalIP() string {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	for _, service := range publicIPServices {
+		resp, err := client.Get(service)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			continue
+		}
+
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+		if err != nil {
+			continue
+		}
+
+		ip := strings.TrimSpace(string(body))
+		// Validate it's a valid IPv4 address
+		if parsed := net.ParseIP(ip); parsed != nil && parsed.To4() != nil {
+			return ip
+		}
+	}
+
+	return ""
 }
