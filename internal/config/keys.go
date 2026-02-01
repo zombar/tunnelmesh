@@ -129,3 +129,23 @@ func GetPublicKeyFingerprint(key ssh.PublicKey) string {
 	hash := sha256.Sum256(key.Marshal())
 	return "SHA256:" + base64.StdEncoding.EncodeToString(hash[:])
 }
+
+// EncodePublicKey encodes an SSH public key to base64 wire format for transmission.
+func EncodePublicKey(key ssh.PublicKey) string {
+	return base64.StdEncoding.EncodeToString(key.Marshal())
+}
+
+// DecodePublicKey decodes a base64-encoded SSH public key.
+func DecodePublicKey(encoded string) (ssh.PublicKey, error) {
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode base64: %w", err)
+	}
+
+	key, err := ssh.ParsePublicKey(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse public key: %w", err)
+	}
+
+	return key, nil
+}

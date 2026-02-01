@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"os"
 	"os/exec"
@@ -250,6 +251,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load keys: %w", err)
 	}
 
+	pubKeyEncoded := config.EncodePublicKey(signer.PublicKey())
 	pubKeyFP := config.GetPublicKeyFingerprint(signer.PublicKey())
 	log.Info().Str("fingerprint", pubKeyFP).Msg("using SSH key")
 
@@ -263,7 +265,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	// Connect to coordination server
 	client := coord.NewClient(cfg.Server, cfg.AuthToken)
 
-	resp, err := client.Register(cfg.Name, pubKeyFP, publicIPs, privateIPs, cfg.SSHPort)
+	resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort)
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}
@@ -373,7 +375,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 
 	// Start peer discovery and tunnel establishment loop
-	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder)
+	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
 
 	// Start heartbeat loop
 	go heartbeatLoop(ctx, client, cfg.Name, pubKeyFP, resolver)
@@ -517,12 +519,18 @@ func handleSSHConnection(ctx context.Context, conn net.Conn, sshServer *tunnel.S
 			continue
 		}
 
-		// Create tunnel from channel
-		peerName := sshConn.Conn.User()
+		// Get peer name from extra data (sent by client when opening channel)
+		peerName := string(newChannel.ExtraData())
+		if peerName == "" {
+			peerName = sshConn.Conn.User() // Fallback to user name
+		}
+
 		tun := tunnel.NewTunnel(channel, peerName)
 
 		// Add to tunnel manager
 		tunnelMgr.Add(peerName, tun)
+
+		log.Info().Str("peer", peerName).Msg("tunnel established from incoming connection")
 
 		// Handle incoming packets from this tunnel
 		go forwarder.HandleTunnel(ctx, peerName, tun)
@@ -532,12 +540,41 @@ func handleSSHConnection(ctx context.Context, conn net.Conn, sshServer *tunnel.S
 // peerDiscoveryLoop periodically discovers peers and establishes tunnels
 func peerDiscoveryLoop(ctx context.Context, client *coord.Client, myName string,
 	sshClient *tunnel.SSHClient, negotiator *negotiate.Negotiator,
-	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder) {
+	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder,
+	sshServer *tunnel.SSHServer) {
+
+	// Add random jitter (0-3 seconds) before initial discovery to stagger startup
+	jitter := time.Duration(rand.Intn(3000)) * time.Millisecond
+	log.Debug().Dur("jitter", jitter).Msg("waiting before initial peer discovery")
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(jitter):
+	}
 
 	// Initial peer discovery
-	discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder)
+	discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
 
-	// Periodic rediscovery
+	// Fast retry phase: discover every 5 seconds for the first 30 seconds
+	// This helps establish connections quickly after startup
+	fastTicker := time.NewTicker(5 * time.Second)
+	fastPhaseEnd := time.After(30 * time.Second)
+
+fastLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			fastTicker.Stop()
+			return
+		case <-fastPhaseEnd:
+			fastTicker.Stop()
+			break fastLoop
+		case <-fastTicker.C:
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
+		}
+	}
+
+	// Normal phase: discover every 60 seconds
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
@@ -546,14 +583,15 @@ func peerDiscoveryLoop(ctx context.Context, client *coord.Client, myName string,
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder)
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
 		}
 	}
 }
 
 func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName string,
 	sshClient *tunnel.SSHClient, negotiator *negotiate.Negotiator,
-	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder) {
+	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder,
+	sshServer *tunnel.SSHServer) {
 
 	peers, err := client.ListPeers()
 	if err != nil {
@@ -572,6 +610,16 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 			continue // Skip self
 		}
 
+		// Add peer's public key to authorized keys for incoming connections
+		if peer.PublicKey != "" {
+			pubKey, err := config.DecodePublicKey(peer.PublicKey)
+			if err != nil {
+				log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to decode peer public key")
+			} else {
+				sshServer.AddAuthorizedKey(pubKey)
+			}
+		}
+
 		// Update routing table with peer's mesh IP
 		router.AddRoute(peer.MeshIP, peer.Name)
 
@@ -580,12 +628,19 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 			continue
 		}
 
+		// Only initiate outbound connection if our name is lexicographically lower
+		// This prevents both sides from connecting simultaneously and creating duplicate tunnels
+		if myName > peer.Name {
+			log.Debug().Str("peer", peer.Name).Msg("waiting for peer to initiate connection")
+			continue
+		}
+
 		// Try to establish tunnel
-		go establishTunnel(ctx, peer, sshClient, negotiator, tunnelMgr, forwarder)
+		go establishTunnel(ctx, peer, myName, sshClient, negotiator, tunnelMgr, forwarder)
 	}
 }
 
-func establishTunnel(ctx context.Context, peer proto.Peer, sshClient *tunnel.SSHClient,
+func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshClient *tunnel.SSHClient,
 	negotiator *negotiate.Negotiator, tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder) {
 
 	peerInfo := &negotiate.PeerInfo{
@@ -622,8 +677,8 @@ func establishTunnel(ctx context.Context, peer proto.Peer, sshClient *tunnel.SSH
 		return
 	}
 
-	// Open data channel
-	channel, _, err := sshConn.OpenChannel(tunnel.ChannelType, nil)
+	// Open data channel with our name as extra data so the peer knows who we are
+	channel, _, err := sshConn.OpenChannel(tunnel.ChannelType, []byte(myName))
 	if err != nil {
 		log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to open channel")
 		sshConn.Close()

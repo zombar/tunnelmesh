@@ -18,7 +18,9 @@ const (
 
 // SSHServer handles incoming SSH connections.
 type SSHServer struct {
-	config *ssh.ServerConfig
+	config         *ssh.ServerConfig
+	authorizedKeys []ssh.PublicKey
+	keysMu         sync.RWMutex
 }
 
 // SSHConnection represents an established SSH connection.
@@ -32,10 +34,17 @@ type SSHConnection struct {
 
 // NewSSHServer creates a new SSH server.
 func NewSSHServer(hostKey ssh.Signer, authorizedKeys []ssh.PublicKey) *SSHServer {
+	s := &SSHServer{
+		authorizedKeys: authorizedKeys,
+	}
+
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			s.keysMu.RLock()
+			defer s.keysMu.RUnlock()
+
 			keyBytes := key.Marshal()
-			for _, authorized := range authorizedKeys {
+			for _, authorized := range s.authorizedKeys {
 				if string(keyBytes) == string(authorized.Marshal()) {
 					return &ssh.Permissions{
 						Extensions: map[string]string{
@@ -48,8 +57,9 @@ func NewSSHServer(hostKey ssh.Signer, authorizedKeys []ssh.PublicKey) *SSHServer
 		},
 	}
 	config.AddHostKey(hostKey)
+	s.config = config
 
-	return &SSHServer{config: config}
+	return s
 }
 
 // Accept accepts an incoming connection and performs SSH handshake.
@@ -77,8 +87,21 @@ func (s *SSHServer) Accept(conn net.Conn) (*SSHConnection, error) {
 
 // AddAuthorizedKey adds a public key to the authorized keys.
 func (s *SSHServer) AddAuthorizedKey(key ssh.PublicKey) {
-	// Note: In a production implementation, you'd want a more dynamic
-	// authorized keys management. This is simplified for the initial version.
+	s.keysMu.Lock()
+	defer s.keysMu.Unlock()
+
+	// Check if key already exists
+	keyBytes := key.Marshal()
+	for _, existing := range s.authorizedKeys {
+		if string(existing.Marshal()) == string(keyBytes) {
+			return // Already authorized
+		}
+	}
+
+	s.authorizedKeys = append(s.authorizedKeys, key)
+	log.Debug().
+		Str("fingerprint", ssh.FingerprintSHA256(key)).
+		Msg("authorized key added")
 }
 
 // SSHClient handles outgoing SSH connections.
