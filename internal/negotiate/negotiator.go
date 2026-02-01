@@ -116,7 +116,7 @@ type Negotiator struct {
 
 // NewNegotiator creates a new Negotiator with the given config.
 func NewNegotiator(cfg Config) *Negotiator {
-	cfg.Validate()
+	_ = cfg.Validate()
 	return &Negotiator{config: cfg}
 }
 

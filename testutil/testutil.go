@@ -138,8 +138,8 @@ func (m *MockConn) Close() error {
 	return nil
 }
 
-func (m *MockConn) LocalAddr() net.Addr            { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0} }
-func (m *MockConn) RemoteAddr() net.Addr           { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0} }
+func (m *MockConn) LocalAddr() net.Addr                { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0} }
+func (m *MockConn) RemoteAddr() net.Addr               { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0} }
 func (m *MockConn) SetDeadline(_ time.Time) error      { return nil }
 func (m *MockConn) SetReadDeadline(_ time.Time) error  { return nil }
 func (m *MockConn) SetWriteDeadline(_ time.Time) error { return nil }

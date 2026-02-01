@@ -175,7 +175,7 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +239,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +258,7 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 
 	resp := proto.PeerListResponse{Peers: peers}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
@@ -281,7 +281,7 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(info.peer)
+		_ = json.NewEncoder(w).Encode(info.peer)
 
 	case http.MethodDelete:
 		s.peersMu.Lock()
@@ -300,7 +300,7 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 
 		log.Info().Str("name", name).Msg("peer deregistered")
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 	default:
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -340,7 +340,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 	resp := proto.HeartbeatResponse{OK: true}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
@@ -362,13 +362,13 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 
 	resp := proto.DNSUpdateNotification{Records: records}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) jsonError(w http.ResponseWriter, message string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(proto.ErrorResponse{
+	_ = json.NewEncoder(w).Encode(proto.ErrorResponse{
 		Error:   http.StatusText(code),
 		Code:    code,
 		Message: message,

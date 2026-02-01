@@ -104,7 +104,7 @@ func TestSSHClient_Connect(t *testing.T) {
 	go func() {
 		conn, _ := listener.Accept()
 		if conn != nil {
-			srv.Accept(conn)
+			_, _ = srv.Accept(conn)
 		}
 	}()
 
@@ -150,7 +150,7 @@ func TestDataChannel(t *testing.T) {
 		// Accept channels from Channels
 		for newChan := range sshConn.Channels {
 			if newChan.ChannelType() != "tunnelmesh-data" {
-				newChan.Reject(ssh.UnknownChannelType, "unknown channel type")
+				_ = newChan.Reject(ssh.UnknownChannelType, "unknown channel type")
 				continue
 			}
 			ch, _, _ := newChan.Accept()
@@ -186,7 +186,7 @@ func TestDataChannel(t *testing.T) {
 	// Test bidirectional data transfer
 	testData := []byte("hello from client")
 	go func() {
-		clientChan.Write(testData)
+		_, _ = clientChan.Write(testData)
 	}()
 
 	buf := make([]byte, 100)
@@ -197,7 +197,7 @@ func TestDataChannel(t *testing.T) {
 	// Test reverse direction
 	serverData := []byte("hello from server")
 	go func() {
-		serverChan.Write(serverData)
+		_, _ = serverChan.Write(serverData)
 	}()
 
 	n, err = clientChan.Read(buf)

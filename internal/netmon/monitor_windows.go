@@ -43,10 +43,10 @@ func (m *windowsMonitor) Start(ctx context.Context) (<-chan Event, error) {
 	// Register for interface change notifications
 	// Parameters: Family, Callback, CallerContext, InitialNotification, NotificationHandle
 	r1, _, err := procNotifyIpInterfaceChange.Call(
-		uintptr(afUnspec),                    // AF_UNSPEC = 0 - monitor all address families
-		callback,                             // Callback function
-		uintptr(unsafe.Pointer(m)),           // Context pointer
-		uintptr(0),                           // InitialNotification = FALSE
+		uintptr(afUnspec),          // AF_UNSPEC = 0 - monitor all address families
+		callback,                   // Callback function
+		uintptr(unsafe.Pointer(m)), // Context pointer
+		uintptr(0),                 // InitialNotification = FALSE
 		uintptr(unsafe.Pointer(&m.notifyHandle)),
 	)
 	if r1 != 0 {

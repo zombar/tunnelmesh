@@ -113,8 +113,14 @@ func EnsureKeyPairExists(privPath string) (ssh.Signer, error) {
 		return signer, nil
 	}
 
+	// Check if file doesn't exist (handle both Unix and Windows error messages)
+	errMsg := err.Error()
+	isNotExist := os.IsNotExist(err) ||
+		strings.Contains(errMsg, "no such file") ||
+		strings.Contains(errMsg, "cannot find the file")
+
 	// Generate new key pair if it doesn't exist
-	if os.IsNotExist(err) || strings.Contains(err.Error(), "no such file") {
+	if isNotExist {
 		if err := GenerateKeyPair(privPath); err != nil {
 			return nil, fmt.Errorf("generate key pair: %w", err)
 		}

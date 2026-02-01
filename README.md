@@ -16,119 +16,45 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 
 ![Admin Dashboard](docs/images/admin-dashboard.png)
 
-## Installation
+## Getting Started
 
-### From Source
+For a complete step-by-step setup guide including downloading releases, configuring servers and peers, and installing as a system service, see the **[Getting Started Guide](docs/GETTING_STARTED.md)**.
 
-Requires Go 1.24+
+## Architecture
 
-```bash
-git clone https://github.com/zombar/tunnelmesh.git
-cd tunnelmesh
-make build
+```
+┌─────────────────┐                      ┌─────────────────┐
+│   Peer Node A   │                      │   Peer Node B   │
+│   (10.99.0.1)   │                      │   (10.99.0.2)   │
+│                 │    SSH Tunnel        │                 │
+│  ┌───────────┐  │◄────────────────────►│  ┌───────────┐  │
+│  │ TUN Device│  │     (Encrypted)      │  │ TUN Device│  │
+│  │  Router   │  │                      │  │  Router   │  │
+│  │ Forwarder │  │                      │  │ Forwarder │  │
+│  └───────────┘  │                      │  └───────────┘  │
+└────────┬────────┘                      └────────┬────────┘
+         │                                        │
+         │  Register/Heartbeat/Discovery          │
+         │                                        │
+         └──────────────┬─────────────────────────┘
+                        │
+                        ▼
+              ┌─────────────────┐
+              │  Coordination   │
+              │     Server      │
+              │                 │
+              │ • Peer Registry │
+              │ • IP Allocation │
+              │ • DNS Records   │
+              │ • Admin UI      │
+              └─────────────────┘
 ```
 
-### Cross-Platform Builds
-
-```bash
-make release-all
-```
-
-Outputs binaries for Linux, macOS, and Windows (amd64/arm64) in `bin/`.
-
-## Quick Start
-
-### 1. Generate SSH Keys
-
-```bash
-tunnelmesh init
-```
-
-This creates `~/.tunnelmesh/id_ed25519` and `~/.tunnelmesh/id_ed25519.pub`.
-
-### 2. Start the Coordination Server
-
-Create `server.yaml`:
-
-```yaml
-listen: ":8080"
-auth_token: "your-secure-token"
-mesh_cidr: "10.99.0.0/16"
-domain_suffix: ".mesh"
-admin:
-  enabled: true
-```
-
-Run the server:
-
-```bash
-tunnelmesh serve -c server.yaml
-```
-
-The admin interface is available at `http://localhost:8080/`.
-
-### 3. Join a Peer to the Mesh
-
-Create `peer.yaml`:
-
-```yaml
-name: "mynode"
-server: "http://coord.example.com:8080"
-auth_token: "your-secure-token"
-ssh_port: 2222
-private_key: "~/.tunnelmesh/id_ed25519"
-tun:
-  name: "tun-mesh0"
-  mtu: 1400
-dns:
-  enabled: true
-  listen: "127.0.0.53:5353"
-```
-
-Join the mesh (requires root/admin for TUN interface):
-
-```bash
-sudo tunnelmesh join -c peer.yaml
-```
-
-### 4. Verify Connectivity
-
-```bash
-# List connected peers
-tunnelmesh peers
-
-# Check node status
-tunnelmesh status
-
-# Resolve a mesh hostname
-tunnelmesh resolve othernode.mesh
-
-# Ping another node
-ping othernode.mesh
-```
-
-## CLI Reference
-
-| Command | Description |
-|---------|-------------|
-| `tunnelmesh serve` | Run the coordination server |
-| `tunnelmesh join` | Connect a peer to the mesh |
-| `tunnelmesh status` | Show node status and connectivity |
-| `tunnelmesh peers` | List all connected peers |
-| `tunnelmesh resolve <hostname>` | Resolve mesh hostname to IP |
-| `tunnelmesh leave` | Deregister from the mesh |
-| `tunnelmesh init` | Generate SSH keys |
-| `tunnelmesh version` | Show version information |
-
-### Global Flags
-
-| Flag | Description |
-|------|-------------|
-| `-c, --config` | Config file path |
-| `-l, --log-level` | Logging level (debug, info, warn, error) |
-| `-s, --server` | Coordination server URL |
-| `-t, --token` | Authentication token |
-| `-n, --name` | Node name |
+**Key points:**
+- Traffic flows directly between peers via SSH tunnels
+- The coordination server only handles discovery and registration
+- Each peer runs a TUN interface for transparent IP routing
+- Peers establish connections using negotiated strategies (direct or reverse)
 
 ## Configuration
 
@@ -202,41 +128,130 @@ The tool searches for config files in the following order:
 
 **Peer:** `~/.tunnelmesh/config.yaml`, `tunnelmesh.yaml`, `peer.yaml`
 
-## Architecture
+## CLI Reference
 
-```
-┌─────────────────┐                      ┌─────────────────┐
-│   Peer Node A   │                      │   Peer Node B   │
-│   (10.99.0.1)   │                      │   (10.99.0.2)   │
-│                 │    SSH Tunnel        │                 │
-│  ┌───────────┐  │◄────────────────────►│  ┌───────────┐  │
-│  │ TUN Device│  │     (Encrypted)      │  │ TUN Device│  │
-│  │  Router   │  │                      │  │  Router   │  │
-│  │ Forwarder │  │                      │  │ Forwarder │  │
-│  └───────────┘  │                      │  └───────────┘  │
-└────────┬────────┘                      └────────┬────────┘
-         │                                        │
-         │  Register/Heartbeat/Discovery          │
-         │                                        │
-         └──────────────┬─────────────────────────┘
-                        │
-                        ▼
-              ┌─────────────────┐
-              │  Coordination   │
-              │     Server      │
-              │                 │
-              │ • Peer Registry │
-              │ • IP Allocation │
-              │ • DNS Records   │
-              │ • Admin UI      │
-              └─────────────────┘
+| Command | Description |
+|---------|-------------|
+| `tunnelmesh serve` | Run the coordination server |
+| `tunnelmesh join` | Connect a peer to the mesh |
+| `tunnelmesh status` | Show node status and connectivity |
+| `tunnelmesh peers` | List all connected peers |
+| `tunnelmesh resolve <hostname>` | Resolve mesh hostname to IP |
+| `tunnelmesh leave` | Deregister from the mesh |
+| `tunnelmesh init` | Generate SSH keys |
+| `tunnelmesh version` | Show version information |
+| `tunnelmesh service install` | Install as system service |
+| `tunnelmesh service uninstall` | Remove system service |
+| `tunnelmesh service start/stop` | Control the service |
+| `tunnelmesh service status` | Show service status |
+| `tunnelmesh service logs` | View service logs |
+
+### Global Flags
+
+| Flag | Description |
+|------|-------------|
+| `-c, --config` | Config file path |
+| `-l, --log-level` | Logging level (debug, info, warn, error) |
+| `-s, --server` | Coordination server URL |
+| `-t, --token` | Authentication token |
+| `-n, --name` | Node name |
+
+## Running as a System Service
+
+TunnelMesh can be installed as a system service that starts automatically at boot.
+
+### Supported Platforms
+
+| Platform | Service Manager | Config Location | Log Command |
+|----------|-----------------|-----------------|-------------|
+| Linux | systemd | `/etc/tunnelmesh/` | `journalctl -u tunnelmesh` |
+| macOS | launchd | `/etc/tunnelmesh/` | `tunnelmesh service logs` |
+| Windows | SCM | `C:\ProgramData\TunnelMesh\` | Event Viewer |
+
+### Install as a Service
+
+#### Linux/macOS
+
+```bash
+# Create config directory and copy config
+sudo mkdir -p /etc/tunnelmesh
+sudo cp peer.yaml /etc/tunnelmesh/peer.yaml
+
+# Install as peer service (default)
+sudo tunnelmesh service install --mode join --config /etc/tunnelmesh/peer.yaml
+
+# Or install as server service
+sudo tunnelmesh service install --mode serve --config /etc/tunnelmesh/server.yaml
+
+# Start the service
+sudo tunnelmesh service start
 ```
 
-**Key points:**
-- Traffic flows directly between peers via SSH tunnels
-- The coordination server only handles discovery and registration
-- Each peer runs a TUN interface for transparent IP routing
-- Peers establish connections using negotiated strategies (direct or reverse)
+#### Windows (as Administrator)
+
+```powershell
+# Create config directory
+mkdir C:\ProgramData\TunnelMesh
+
+# Copy config file
+copy peer.yaml C:\ProgramData\TunnelMesh\peer.yaml
+
+# Install service
+tunnelmesh service install --mode join --config C:\ProgramData\TunnelMesh\peer.yaml
+
+# Start service
+tunnelmesh service start
+```
+
+### Service Commands
+
+```bash
+# Control the service
+tunnelmesh service start
+tunnelmesh service stop
+tunnelmesh service restart
+tunnelmesh service status
+
+# View logs
+tunnelmesh service logs              # Last 50 lines
+tunnelmesh service logs --follow     # Follow logs in real-time
+tunnelmesh service logs --lines 100  # Show more lines
+
+# Uninstall
+sudo tunnelmesh service uninstall
+```
+
+### Service Install Options
+
+| Flag | Description |
+|------|-------------|
+| `--mode` | Service mode: `join` (peer) or `serve` (server) |
+| `--config` | Path to configuration file |
+| `--name` | Custom service name (for multiple instances) |
+| `--force` | Force reinstall if already installed |
+| `--user` | Run as specific user (Linux/macOS) |
+
+### Multiple Instances
+
+You can run multiple TunnelMesh instances with different names:
+
+```bash
+# Install two peer instances
+sudo tunnelmesh service install --mode join --name tunnelmesh-peer1 --config /etc/tunnelmesh/peer1.yaml
+sudo tunnelmesh service install --mode join --name tunnelmesh-peer2 --config /etc/tunnelmesh/peer2.yaml
+
+# Control specific instance
+sudo tunnelmesh service start --name tunnelmesh-peer1
+sudo tunnelmesh service status --name tunnelmesh-peer2
+```
+
+### Updating Configuration
+
+After modifying the config file, restart the service:
+
+```bash
+sudo tunnelmesh service restart
+```
 
 ## Docker Deployment
 

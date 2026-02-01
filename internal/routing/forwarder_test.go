@@ -206,13 +206,13 @@ func TestForwarderStats(t *testing.T) {
 	srcIP := net.ParseIP("10.99.0.1").To4()
 	dstIP := net.ParseIP("10.99.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
-	fwd.ForwardPacket(packet)
+	_ = fwd.ForwardPacket(packet)
 
 	// Receive a packet
 	srcIP = net.ParseIP("10.99.0.2").To4()
 	dstIP = net.ParseIP("10.99.0.1").To4()
 	packet = BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
-	fwd.ReceivePacket(packet)
+	_ = fwd.ReceivePacket(packet)
 
 	stats := fwd.Stats()
 	assert.Equal(t, uint64(1), stats.PacketsSent)
@@ -277,7 +277,7 @@ func TestForwarderLoop(t *testing.T) {
 	defer cancel()
 
 	// Start the forwarder loop (should process the packet then timeout)
-	go fwd.Run(ctx)
+	go func() { _ = fwd.Run(ctx) }()
 
 	// Wait for context to expire
 	<-ctx.Done()

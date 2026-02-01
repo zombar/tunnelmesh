@@ -18,12 +18,12 @@ type AdminConfig struct {
 
 // ServerConfig holds configuration for the coordination server.
 type ServerConfig struct {
-	Listen       string       `yaml:"listen"`
-	AuthToken    string       `yaml:"auth_token"`
-	MeshCIDR     string       `yaml:"mesh_cidr"`
-	DomainSuffix string       `yaml:"domain_suffix"`
-	Admin        AdminConfig  `yaml:"admin"`
-	JoinMesh     *PeerConfig  `yaml:"join_mesh,omitempty"`
+	Listen       string      `yaml:"listen"`
+	AuthToken    string      `yaml:"auth_token"`
+	MeshCIDR     string      `yaml:"mesh_cidr"`
+	DomainSuffix string      `yaml:"domain_suffix"`
+	Admin        AdminConfig `yaml:"admin"`
+	JoinMesh     *PeerConfig `yaml:"join_mesh,omitempty"`
 }
 
 // PeerConfig holds configuration for a peer node.

@@ -62,7 +62,7 @@ func (m *linuxMonitor) readLoop(ctx context.Context) {
 
 		// Set read timeout for periodic context checks
 		tv := unix.Timeval{Sec: 1}
-		unix.SetsockoptTimeval(m.fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)
+		_ = unix.SetsockoptTimeval(m.fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)
 
 		n, _, err := unix.Recvfrom(m.fd, buf, 0)
 		if err != nil {

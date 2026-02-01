@@ -52,7 +52,6 @@ type Forwarder struct {
 	tun       TUNDevice
 	bufPool   *PacketBufferPool
 	stats     ForwarderStats
-	statsMu   sync.RWMutex
 	tunMu     sync.RWMutex
 	localIP   net.IP
 	localIPMu sync.RWMutex

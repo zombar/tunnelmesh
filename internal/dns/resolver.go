@@ -159,7 +159,7 @@ func (r *Resolver) handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 		resp.Rcode = dns.RcodeNameError
 	}
 
-	w.WriteMsg(resp)
+	_ = w.WriteMsg(resp)
 }
 
 func (r *Resolver) stripSuffix(hostname string) string {

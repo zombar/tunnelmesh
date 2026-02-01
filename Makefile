@@ -1,6 +1,7 @@
 .PHONY: all build build-force test test-verbose test-coverage clean install lint fmt \
         dev-server dev-peer gen-keys release release-all push-release \
-        docker-build docker-up docker-down docker-logs docker-clean docker-test
+        docker-build docker-up docker-down docker-logs docker-clean docker-test \
+        service-install service-uninstall service-start service-stop service-status
 
 # Build variables
 BINARY_NAME=tunnelmesh
@@ -143,6 +144,32 @@ docker-test: docker-build
 	@echo "\n=== Running containers ==="
 	$(DOCKER_COMPOSE) ps
 
+# Service management targets (require sudo on Linux/macOS)
+SERVICE_MODE ?= join
+SERVICE_CONFIG ?= $(if $(filter serve,$(SERVICE_MODE)),/etc/tunnelmesh/server.yaml,/etc/tunnelmesh/peer.yaml)
+
+service-install: build
+	@echo "Installing TunnelMesh as system service (mode: $(SERVICE_MODE))..."
+	sudo ./$(BUILD_DIR)/$(BINARY_NAME) service install --mode $(SERVICE_MODE) --config $(SERVICE_CONFIG)
+
+service-uninstall:
+	@echo "Uninstalling TunnelMesh service..."
+	sudo ./$(BUILD_DIR)/$(BINARY_NAME) service uninstall
+
+service-start:
+	@echo "Starting TunnelMesh service..."
+	sudo ./$(BUILD_DIR)/$(BINARY_NAME) service start
+
+service-stop:
+	@echo "Stopping TunnelMesh service..."
+	sudo ./$(BUILD_DIR)/$(BINARY_NAME) service stop
+
+service-status:
+	./$(BUILD_DIR)/$(BINARY_NAME) service status
+
+service-logs:
+	./$(BUILD_DIR)/$(BINARY_NAME) service logs --follow
+
 # Help
 help:
 	@echo "Available targets:"
@@ -163,6 +190,14 @@ help:
 	@echo "  dev-peer       - Build and run peer (with sudo)"
 	@echo "  gen-keys       - Generate SSH keys for testing"
 	@echo "  version        - Show version info"
+	@echo ""
+	@echo "Service targets (require sudo):"
+	@echo "  service-install   - Install as system service (SERVICE_MODE=join|serve)"
+	@echo "  service-uninstall - Remove system service"
+	@echo "  service-start     - Start the service"
+	@echo "  service-stop      - Stop the service"
+	@echo "  service-status    - Show service status"
+	@echo "  service-logs      - Follow service logs"
 	@echo ""
 	@echo "Docker targets:"
 	@echo "  docker-build   - Build Docker images"

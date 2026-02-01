@@ -230,7 +230,7 @@ func TestServer_Deregister(t *testing.T) {
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
 	var listResp proto.PeerListResponse
-	json.Unmarshal(w.Body.Bytes(), &listResp)
+	_ = json.Unmarshal(w.Body.Bytes(), &listResp)
 	assert.Len(t, listResp.Peers, 1)
 
 	// Deregister
@@ -245,7 +245,7 @@ func TestServer_Deregister(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer test-token")
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
-	json.Unmarshal(w.Body.Bytes(), &listResp)
+	_ = json.Unmarshal(w.Body.Bytes(), &listResp)
 	assert.Len(t, listResp.Peers, 0)
 }
 
@@ -272,7 +272,7 @@ func TestServer_IPAllocation(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code)
 
 		var resp proto.RegisterResponse
-		json.Unmarshal(w.Body.Bytes(), &resp)
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
 
 		// Verify IP is unique
 		assert.False(t, ips[resp.MeshIP], "IP should be unique: %s", resp.MeshIP)

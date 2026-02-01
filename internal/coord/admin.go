@@ -102,7 +102,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(overview)
+	_ = json.NewEncoder(w).Encode(overview)
 }
 
 // setupAdminRoutes registers the admin API routes and static file server.

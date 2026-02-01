@@ -195,10 +195,8 @@ func TestMonitorStartAndClose(t *testing.T) {
 
 	// Events channel should eventually close
 	select {
-	case _, ok := <-events:
-		if ok {
-			// Might get one event, that's fine
-		}
+	case <-events:
+		// Might get one event, that's fine
 	case <-time.After(2 * time.Second):
 		// Timeout is acceptable for platform-specific implementations
 	}

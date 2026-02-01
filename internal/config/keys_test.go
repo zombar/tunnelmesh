@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,10 +29,12 @@ func TestGenerateKeyPair(t *testing.T) {
 	_, err = os.Stat(pubPath)
 	assert.NoError(t, err, "public key should exist")
 
-	// Check private key permissions
-	info, err := os.Stat(privPath)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0600), info.Mode().Perm(), "private key should have 0600 permissions")
+	// Check private key permissions (skip on Windows as it handles permissions differently)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(privPath)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0600), info.Mode().Perm(), "private key should have 0600 permissions")
+	}
 
 	// Verify we can load the generated keys
 	_, err = LoadPrivateKey(privPath)

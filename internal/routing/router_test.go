@@ -1,7 +1,6 @@
 package routing
 
 import (
-	"bytes"
 	"net"
 	"testing"
 
@@ -174,21 +173,4 @@ func TestChecksumIPv4(t *testing.T) {
 	// Recalculate should be 0 (or 0xFFFF)
 	verify := CalculateIPv4Checksum(header)
 	assert.True(t, verify == 0 || verify == 0xFFFF)
-}
-
-type mockReadWriter struct {
-	readBuf  *bytes.Buffer
-	writeBuf *bytes.Buffer
-}
-
-func (m *mockReadWriter) Read(p []byte) (int, error) {
-	return m.readBuf.Read(p)
-}
-
-func (m *mockReadWriter) Write(p []byte) (int, error) {
-	return m.writeBuf.Write(p)
-}
-
-func (m *mockReadWriter) Close() error {
-	return nil
 }
