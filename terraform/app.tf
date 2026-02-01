@@ -3,6 +3,11 @@ resource "digitalocean_app" "tunnelmesh_coord" {
     name   = "tunnelmesh-coord"
     region = var.region
 
+    domain {
+      name = "${var.subdomain}.${var.domain}"
+      zone = var.domain
+    }
+
     service {
       name               = "coord"
       instance_count     = 1

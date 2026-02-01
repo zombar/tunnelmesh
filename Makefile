@@ -1,7 +1,7 @@
 .PHONY: all build build-force test test-verbose test-coverage clean install lint fmt \
         dev-server dev-peer gen-keys release release-all push-release \
         docker-build docker-up docker-down docker-logs docker-clean docker-test \
-        ghcr-login ghcr-build ghcr-push \
+        ghcr-login ghcr-build ghcr-push deploy deploy-plan deploy-destroy \
         service-install service-uninstall service-start service-stop service-status
 
 # Build variables
@@ -149,6 +149,21 @@ docker-test: docker-build
 GHCR_REPO ?= ghcr.io/zombar/tunnelmesh
 GHCR_TAG ?= $(COMMIT)
 
+# Terraform targets
+TF_DIR = terraform
+
+deploy: ghcr-push
+	@echo "Deploying to DigitalOcean App Platform..."
+	cd $(TF_DIR) && terraform apply -var="image_tag=$(COMMIT)" -auto-approve
+	@echo ""
+	@cd $(TF_DIR) && terraform output admin_url
+
+deploy-plan:
+	cd $(TF_DIR) && terraform plan -var="image_tag=$(COMMIT)"
+
+deploy-destroy:
+	cd $(TF_DIR) && terraform destroy
+
 ghcr-login:
 	@echo "Logging in to GitHub Container Registry..."
 	@echo "Use: echo \$$GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin"
@@ -246,3 +261,8 @@ help:
 	@echo "  ghcr-login     - Show login instructions for ghcr.io"
 	@echo "  ghcr-build     - Build image for ghcr.io (GHCR_TAG=version)"
 	@echo "  ghcr-push      - Build and push to ghcr.io"
+	@echo ""
+	@echo "Deployment targets:"
+	@echo "  deploy         - Build, push image, and deploy to DigitalOcean"
+	@echo "  deploy-plan    - Show terraform plan for deployment"
+	@echo "  deploy-destroy - Destroy deployed infrastructure"

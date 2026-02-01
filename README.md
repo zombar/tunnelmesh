@@ -353,7 +353,8 @@ Deploy the coordination server to DigitalOcean App Platform using Terraform.
 
 After deployment, Terraform outputs:
 - `app_url` - Default App Platform URL
-- `coord_url` - Custom domain URL (https://coord.example.com)
+- `coord_url` - Custom domain URL (https://tunnelmesh.example.com)
+- `admin_url` - Admin dashboard URL (https://tunnelmesh.example.com/admin/)
 - `peer_config_example` - Example peer configuration snippet
 
 ### Connecting Peers
@@ -361,7 +362,7 @@ After deployment, Terraform outputs:
 Once deployed, configure peers to connect:
 
 ```yaml
-server: "https://coord.example.com"
+server: "https://tunnelmesh.example.com"
 auth_token: "your-secure-token"
 ```
 
