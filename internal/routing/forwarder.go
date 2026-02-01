@@ -41,6 +41,7 @@ type ForwarderStats struct {
 	BytesReceived   uint64
 	DroppedNoRoute  uint64
 	DroppedNoTunnel uint64
+	DroppedNonIPv4  uint64
 	Errors          uint64
 }
 
@@ -82,6 +83,18 @@ func (f *Forwarder) SetLocalIP(ip net.IP) {
 
 // ForwardPacket forwards a packet from the TUN to the appropriate tunnel.
 func (f *Forwarder) ForwardPacket(packet []byte) error {
+	// Check packet length and version
+	if len(packet) < 1 {
+		return nil // Silently drop empty packets
+	}
+
+	version := packet[0] >> 4
+	if version != 4 {
+		// Silently drop non-IPv4 packets (IPv6, etc.) - the mesh only supports IPv4
+		atomic.AddUint64(&f.stats.DroppedNonIPv4, 1)
+		return nil
+	}
+
 	// Parse the packet
 	info, err := ParseIPv4Packet(packet)
 	if err != nil {
@@ -201,6 +214,7 @@ func (f *Forwarder) Stats() ForwarderStats {
 		BytesReceived:   atomic.LoadUint64(&f.stats.BytesReceived),
 		DroppedNoRoute:  atomic.LoadUint64(&f.stats.DroppedNoRoute),
 		DroppedNoTunnel: atomic.LoadUint64(&f.stats.DroppedNoTunnel),
+		DroppedNonIPv4:  atomic.LoadUint64(&f.stats.DroppedNonIPv4),
 		Errors:          atomic.LoadUint64(&f.stats.Errors),
 	}
 }

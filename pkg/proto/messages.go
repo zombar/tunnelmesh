@@ -9,7 +9,7 @@ import (
 // Peer represents a node in the mesh network.
 type Peer struct {
 	Name        string    `json:"name"`
-	PublicKey   string    `json:"public_key"`    // SSH public key fingerprint
+	PublicKey   string    `json:"public_key"`    // SSH public key (base64 encoded wire format)
 	PublicIPs   []string  `json:"public_ips"`    // Externally reachable IPs
 	PrivateIPs  []string  `json:"private_ips"`   // Internal network IPs
 	SSHPort     int       `json:"ssh_port"`      // SSH server port

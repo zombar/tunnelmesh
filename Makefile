@@ -1,5 +1,6 @@
 .PHONY: all build build-force test test-verbose test-coverage clean install lint fmt \
-        dev-server dev-peer gen-keys release release-all push-release
+        dev-server dev-peer gen-keys release release-all push-release \
+        docker-build docker-up docker-down docker-logs docker-clean docker-test
 
 # Build variables
 BINARY_NAME=tunnelmesh
@@ -108,6 +109,37 @@ version:
 	@echo "Commit:  $(COMMIT)"
 	@echo "Build:   $(BUILD_TIME)"
 
+# Docker Compose targets
+DOCKER_COMPOSE=docker compose -f docker/docker-compose.yml
+
+docker-build:
+	$(DOCKER_COMPOSE) build
+
+docker-up: docker-build
+	$(DOCKER_COMPOSE) up -d
+	@echo "TunnelMesh Docker environment started"
+	@echo "Use 'make docker-logs' to follow logs"
+
+docker-down:
+	$(DOCKER_COMPOSE) down -v
+
+docker-logs:
+	$(DOCKER_COMPOSE) logs -f
+
+docker-clean: docker-down
+	$(DOCKER_COMPOSE) down -v --rmi local
+	@echo "Docker environment cleaned"
+
+docker-test: docker-build
+	@echo "Starting Docker test environment..."
+	$(DOCKER_COMPOSE) up -d
+	@echo "Waiting for mesh to stabilize (20s)..."
+	@sleep 20
+	@echo "\n=== Mesh Status ==="
+	$(DOCKER_COMPOSE) logs --tail=50 client 2>&1 | grep -E "(SUCCESS|FAILED|Pinging)" || true
+	@echo "\n=== Running containers ==="
+	$(DOCKER_COMPOSE) ps
+
 # Help
 help:
 	@echo "Available targets:"
@@ -128,3 +160,11 @@ help:
 	@echo "  dev-peer       - Build and run peer (with sudo)"
 	@echo "  gen-keys       - Generate SSH keys for testing"
 	@echo "  version        - Show version info"
+	@echo ""
+	@echo "Docker targets:"
+	@echo "  docker-build   - Build Docker images"
+	@echo "  docker-up      - Start server + 5 client mesh environment"
+	@echo "  docker-down    - Stop and remove containers"
+	@echo "  docker-logs    - Follow container logs"
+	@echo "  docker-clean   - Remove containers and images"
+	@echo "  docker-test    - Build, start, and show mesh status"
