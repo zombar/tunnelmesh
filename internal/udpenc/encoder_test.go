@@ -30,9 +30,9 @@ func TestDecoder_ReadFrame(t *testing.T) {
 	// Prepare encoded data
 	data := []byte("hello world")
 	encoded := make([]byte, len(data)+3)
-	encoded[0] = 0                       // Length high
-	encoded[1] = byte(len(data) + 1)     // Length low (data + proto)
-	encoded[2] = byte(ProtoUDP)          // Protocol
+	encoded[0] = 0                   // Length high
+	encoded[1] = byte(len(data) + 1) // Length low (data + proto)
+	encoded[2] = byte(ProtoUDP)      // Protocol
 	copy(encoded[3:], data)
 
 	dec := NewDecoder(bytes.NewReader(encoded))
@@ -45,9 +45,9 @@ func TestDecoder_ReadFrame(t *testing.T) {
 
 func TestEncoderDecoder_Roundtrip(t *testing.T) {
 	tests := []struct {
-		name    string
-		proto   Protocol
-		data    []byte
+		name  string
+		proto Protocol
+		data  []byte
 	}{
 		{"small UDP", ProtoUDP, []byte("hi")},
 		{"medium TCP", ProtoTCP, []byte("hello world this is a test message")},

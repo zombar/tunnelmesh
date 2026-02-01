@@ -2,7 +2,8 @@
 // It provides a simple framing protocol to send UDP datagrams over TCP streams.
 //
 // Frame format:
-//   [2 bytes: payload length (big-endian)] [1 byte: protocol] [payload]
+//
+//	[2 bytes: payload length (big-endian)] [1 byte: protocol] [payload]
 //
 // This preserves packet boundaries when sending over TCP.
 package udpenc

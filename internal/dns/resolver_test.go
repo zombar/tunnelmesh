@@ -156,4 +156,3 @@ func TestResolver_ListRecords(t *testing.T) {
 	assert.Equal(t, "10.99.0.1", records["node1"])
 	assert.Equal(t, "10.99.0.2", records["node2"])
 }
-

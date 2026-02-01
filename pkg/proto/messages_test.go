@@ -20,8 +20,8 @@ func TestIsPrivateIP(t *testing.T) {
 		{"192.168.255.255", true},
 		{"8.8.8.8", false},
 		{"1.1.1.1", false},
-		{"172.15.0.1", false},  // Just outside 172.16.0.0/12
-		{"172.32.0.1", false},  // Just outside 172.16.0.0/12
+		{"172.15.0.1", false}, // Just outside 172.16.0.0/12
+		{"172.32.0.1", false}, // Just outside 172.16.0.0/12
 	}
 
 	for _, tt := range tests {

@@ -142,7 +142,7 @@ func NewServiceConfig(cfg *ServiceConfig, execPath string) *service.Config {
 	case "linux":
 		svcCfg.Dependencies = []string{"network-online.target"}
 		svcCfg.Option = service.KeyValue{
-			"Restart":   "on-failure",
+			"Restart":    "on-failure",
 			"RestartSec": "5",
 		}
 		if cfg.UserName != "" {
