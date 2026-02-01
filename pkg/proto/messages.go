@@ -91,6 +91,17 @@ type ErrorResponse struct {
 
 // GetLocalIPs returns the local IP addresses of the machine.
 func GetLocalIPs() (public []string, private []string) {
+	return GetLocalIPsExcluding("")
+}
+
+// GetLocalIPsExcluding returns the local IP addresses, excluding IPs in the given CIDR.
+// This is useful for excluding mesh network IPs from the advertised addresses.
+func GetLocalIPsExcluding(excludeCIDR string) (public []string, private []string) {
+	var excludeNet *net.IPNet
+	if excludeCIDR != "" {
+		_, excludeNet, _ = net.ParseCIDR(excludeCIDR)
+	}
+
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil, nil
@@ -123,6 +134,11 @@ func GetLocalIPs() (public []string, private []string) {
 			// Only consider IPv4 for now
 			ip4 := ip.To4()
 			if ip4 == nil {
+				continue
+			}
+
+			// Skip IPs in the excluded CIDR (e.g., mesh network)
+			if excludeNet != nil && excludeNet.Contains(ip4) {
 				continue
 			}
 

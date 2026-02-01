@@ -589,7 +589,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 			netMonitor.Close()
 		} else {
 			defer netMonitor.Close()
-			go networkChangeLoop(ctx, networkChanges, client, cfg, pubKeyEncoded, tunnelMgr, triggerDiscovery)
+			go networkChangeLoop(ctx, networkChanges, client, cfg, pubKeyEncoded, resp.MeshCIDR, tunnelMgr, triggerDiscovery)
 		}
 	}
 
@@ -597,7 +597,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, triggerDiscovery)
 
 	// Start heartbeat loop
-	go heartbeatLoop(ctx, client, cfg.Name, pubKeyEncoded, cfg.SSHPort, resolver, forwarder, tunnelMgr)
+	go heartbeatLoop(ctx, client, cfg.Name, pubKeyEncoded, cfg.SSHPort, resp.MeshCIDR, resolver, forwarder, tunnelMgr)
 
 	// Wait for context cancellation (shutdown signal)
 	<-ctx.Done()
@@ -862,7 +862,7 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 // networkChangeLoop handles network interface change events
 func networkChangeLoop(ctx context.Context, events <-chan netmon.Event,
 	client *coord.Client, cfg *config.PeerConfig, pubKeyEncoded string,
-	tunnelMgr *TunnelAdapter, triggerDiscovery chan<- struct{}) {
+	meshCIDR string, tunnelMgr *TunnelAdapter, triggerDiscovery chan<- struct{}) {
 
 	for {
 		select {
@@ -878,8 +878,8 @@ func networkChangeLoop(ctx context.Context, events <-chan netmon.Event,
 				Str("interface", event.Interface).
 				Msg("network change detected")
 
-			// Get new IP addresses
-			publicIPs, privateIPs := proto.GetLocalIPs()
+			// Get new IP addresses, excluding mesh network IPs
+			publicIPs, privateIPs := proto.GetLocalIPsExcluding(meshCIDR)
 			log.Debug().
 				Strs("public", publicIPs).
 				Strs("private", privateIPs).
@@ -1190,7 +1190,7 @@ func loadConfig() (*config.PeerConfig, error) {
 }
 
 func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncoded string,
-	sshPort int, resolver *meshdns.Resolver, forwarder *routing.Forwarder, tunnelMgr *TunnelAdapter) {
+	sshPort int, meshCIDR string, resolver *meshdns.Resolver, forwarder *routing.Forwarder, tunnelMgr *TunnelAdapter) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -1219,7 +1219,7 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncode
 				if errors.Is(err, coord.ErrPeerNotFound) {
 					// Server restarted or peer was removed - re-register
 					log.Info().Msg("peer not found on server, re-registering...")
-					publicIPs, privateIPs := proto.GetLocalIPs()
+					publicIPs, privateIPs := proto.GetLocalIPsExcluding(meshCIDR)
 					if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort); regErr != nil {
 						log.Error().Err(regErr).Msg("failed to re-register")
 					} else {

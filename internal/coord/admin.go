@@ -20,6 +20,7 @@ type AdminOverview struct {
 	OnlinePeers     int             `json:"online_peers"`
 	TotalHeartbeats uint64          `json:"total_heartbeats"`
 	MeshCIDR        string          `json:"mesh_cidr"`
+	DomainSuffix    string          `json:"domain_suffix"`
 	Peers           []AdminPeerInfo `json:"peers"`
 }
 
@@ -28,6 +29,8 @@ type AdminPeerInfo struct {
 	Name                string           `json:"name"`
 	MeshIP              string           `json:"mesh_ip"`
 	PublicIPs           []string         `json:"public_ips"`
+	PrivateIPs          []string         `json:"private_ips"`
+	SSHPort             int              `json:"ssh_port"`
 	LastSeen            time.Time        `json:"last_seen"`
 	Online              bool             `json:"online"`
 	Connectable         bool             `json:"connectable"`
@@ -58,6 +61,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		TotalPeers:      len(s.peers),
 		TotalHeartbeats: s.serverStats.totalHeartbeats,
 		MeshCIDR:        s.cfg.MeshCIDR,
+		DomainSuffix:    s.cfg.DomainSuffix,
 		Peers:           make([]AdminPeerInfo, 0, len(s.peers)),
 	}
 
@@ -71,6 +75,8 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			Name:           info.peer.Name,
 			MeshIP:         info.peer.MeshIP,
 			PublicIPs:      info.peer.PublicIPs,
+			PrivateIPs:     info.peer.PrivateIPs,
+			SSHPort:        info.peer.SSHPort,
 			LastSeen:       info.peer.LastSeen,
 			Online:         online,
 			Connectable:    info.peer.Connectable,

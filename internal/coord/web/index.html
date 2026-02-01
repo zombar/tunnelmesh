@@ -33,6 +33,7 @@
                     <tr>
                         <th>Name</th>
                         <th>Mesh IP</th>
+                        <th>Advertised IPs</th>
                         <th>Status</th>
                         <th>Tunnels</th>
                         <th>Throughput</th>
@@ -44,6 +45,22 @@
             </table>
             <div id="no-peers" class="empty-state" style="display: none;">
                 No peers connected yet.
+            </div>
+        </section>
+
+        <section id="dns-section">
+            <h2>DNS Records</h2>
+            <table id="dns">
+                <thead>
+                    <tr>
+                        <th>Hostname</th>
+                        <th>Mesh IP</th>
+                    </tr>
+                </thead>
+                <tbody id="dns-body"></tbody>
+            </table>
+            <div id="no-dns" class="empty-state" style="display: none;">
+                No DNS records yet.
             </div>
         </section>
     </main>

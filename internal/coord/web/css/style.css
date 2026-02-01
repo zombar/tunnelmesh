@@ -106,14 +106,15 @@ main {
     color: #3fb950;
 }
 
-#peers-section {
+#peers-section, #dns-section {
     background: #0d1117;
     border-radius: 6px;
     padding: 0;
     border: 1px solid #30363d;
+    margin-bottom: 1.5rem;
 }
 
-#peers-section h2 {
+#peers-section h2, #dns-section h2 {
     font-size: 1rem;
     font-weight: 600;
     padding: 1rem;
@@ -178,6 +179,27 @@ td {
 .empty-state {
     text-align: center;
     padding: 3rem;
+    color: #8b949e;
+}
+
+.ips-cell {
+    font-size: 0.75rem;
+    line-height: 1.4;
+}
+
+.ips-cell code {
+    background: #21262d;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.7rem;
+}
+
+.ips-cell .ip-label {
+    color: #8b949e;
+    font-weight: 500;
+}
+
+.ips-cell .no-ips {
     color: #8b949e;
 }
 

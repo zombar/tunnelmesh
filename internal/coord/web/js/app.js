@@ -59,6 +59,24 @@ function updateDashboard(data) {
         }
     });
 
+    // Update DNS records table
+    const dnsTbody = document.getElementById('dns-body');
+    const noDns = document.getElementById('no-dns');
+    const domainSuffix = data.domain_suffix || '.tunnelmesh';
+
+    if (data.peers.length === 0) {
+        dnsTbody.innerHTML = '';
+        noDns.style.display = 'block';
+    } else {
+        noDns.style.display = 'none';
+        dnsTbody.innerHTML = data.peers.map(peer => `
+            <tr>
+                <td><code>${escapeHtml(peer.name)}${domainSuffix}</code></td>
+                <td><code>${peer.mesh_ip}</code></td>
+            </tr>
+        `).join('');
+    }
+
     // Update peers table
     const tbody = document.getElementById('peers-body');
     const noPeers = document.getElementById('no-peers');
@@ -74,6 +92,7 @@ function updateDashboard(data) {
             <tr>
                 <td><strong>${escapeHtml(peer.name)}</strong></td>
                 <td><code>${peer.mesh_ip}</code></td>
+                <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
                 <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
                 <td>${peer.stats?.active_tunnels ?? '-'}</td>
                 <td class="sparkline-cell">
@@ -157,6 +176,20 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+function formatAdvertisedIPs(peer) {
+    const parts = [];
+    const port = peer.ssh_port || 2222;
+
+    if (peer.public_ips && peer.public_ips.length > 0) {
+        parts.push(`<span class="ip-label">Public:</span> ${peer.public_ips.map(ip => `<code>${ip}:${port}</code>`).join(', ')}`);
+    }
+    if (peer.private_ips && peer.private_ips.length > 0) {
+        parts.push(`<span class="ip-label">Private:</span> ${peer.private_ips.map(ip => `<code>${ip}:${port}</code>`).join(', ')}`);
+    }
+
+    return parts.length > 0 ? parts.join('<br>') : '<span class="no-ips">-</span>';
 }
 
 // Initialize
