@@ -166,10 +166,11 @@ func (c *SSHClient) hostKeyCallback() ssh.HostKeyCallback {
 
 // Tunnel represents a bidirectional data tunnel over SSH.
 type Tunnel struct {
-	channel  ssh.Channel
-	peerName string
-	mu       sync.Mutex
-	closed   bool
+	channel   ssh.Channel
+	sshClient *ssh.Client // Keep reference to prevent GC from closing connection
+	peerName  string
+	mu        sync.Mutex
+	closed    bool
 }
 
 // NewTunnel creates a tunnel from an SSH channel.
@@ -177,6 +178,16 @@ func NewTunnel(channel ssh.Channel, peerName string) *Tunnel {
 	return &Tunnel{
 		channel:  channel,
 		peerName: peerName,
+	}
+}
+
+// NewTunnelWithClient creates a tunnel that holds a reference to the SSH client.
+// This prevents the SSH connection from being garbage collected while the tunnel is active.
+func NewTunnelWithClient(channel ssh.Channel, peerName string, client *ssh.Client) *Tunnel {
+	return &Tunnel{
+		channel:   channel,
+		sshClient: client,
+		peerName:  peerName,
 	}
 }
 
@@ -190,7 +201,7 @@ func (t *Tunnel) Write(p []byte) (int, error) {
 	return t.channel.Write(p)
 }
 
-// Close closes the tunnel.
+// Close closes the tunnel and its underlying SSH connection if present.
 func (t *Tunnel) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -200,7 +211,17 @@ func (t *Tunnel) Close() error {
 	}
 	t.closed = true
 
-	return t.channel.Close()
+	// Close the channel first
+	err := t.channel.Close()
+
+	// Close the SSH client if we own it
+	if t.sshClient != nil {
+		if closeErr := t.sshClient.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}
+
+	return err
 }
 
 // PeerName returns the name of the peer at the other end.
