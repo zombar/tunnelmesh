@@ -290,6 +290,73 @@ devices:
   - /dev/net/tun
 ```
 
+## Cloud Deployment (Terraform)
+
+Deploy the coordination server to DigitalOcean App Platform using Terraform.
+
+### Prerequisites
+
+- [Terraform](https://developer.hashicorp.com/terraform/install) installed
+- DigitalOcean account with API token
+- Domain managed in DigitalOcean DNS
+
+### Setup
+
+1. **Push to GitHub** to trigger the Docker image build (GitHub Actions will push to ghcr.io):
+   ```bash
+   git push origin main
+   ```
+
+2. **Configure Terraform variables:**
+   ```bash
+   cd terraform
+   cp terraform.tfvars.example terraform.tfvars
+   ```
+
+   Edit `terraform.tfvars`:
+   ```hcl
+   do_token    = "dop_v1_xxx"              # DO API token
+   domain      = "example.com"             # Your domain
+   auth_token  = "your-secure-token"       # Mesh auth token
+   github_repo = "yourusername/tunnelmesh" # Your GitHub repo
+   ```
+
+3. **Deploy:**
+   ```bash
+   terraform init
+   terraform plan
+   terraform apply
+   ```
+
+### Terraform Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `do_token` | DigitalOcean API token | (required) |
+| `domain` | Base domain name | (required) |
+| `subdomain` | Subdomain for coord server | `coord` |
+| `auth_token` | Mesh authentication token | (required) |
+| `github_repo` | GitHub repo for container image | (required) |
+| `image_tag` | Docker image tag | `latest` |
+| `mesh_cidr` | Mesh network CIDR | `10.99.0.0/16` |
+| `region` | DO region | `ams` |
+
+### Outputs
+
+After deployment, Terraform outputs:
+- `app_url` - Default App Platform URL
+- `coord_url` - Custom domain URL (https://coord.example.com)
+- `peer_config_example` - Example peer configuration snippet
+
+### Connecting Peers
+
+Once deployed, configure peers to connect:
+
+```yaml
+server: "https://coord.example.com"
+auth_token: "your-secure-token"
+```
+
 ## Development
 
 ### Running Tests
