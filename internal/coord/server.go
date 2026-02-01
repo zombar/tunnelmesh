@@ -258,7 +258,7 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 
 	resp := proto.PeerListResponse{Peers: peers}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
@@ -281,7 +281,7 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(info.peer)
+		_ = json.NewEncoder(w).Encode(info.peer)
 
 	case http.MethodDelete:
 		s.peersMu.Lock()
@@ -300,7 +300,7 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 
 		log.Info().Str("name", name).Msg("peer deregistered")
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 	default:
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
