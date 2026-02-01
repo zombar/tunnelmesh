@@ -1,0 +1,53 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: tunnelmesh-server
+    hostname: server
+    command: ["serve", "--config", "/etc/tunnelmesh/server.yaml", "--log-level", "debug"]
+    volumes:
+      - ./config/server.yaml:/etc/tunnelmesh/server.yaml:ro
+    networks:
+      mesh-control:
+        ipv4_address: 172.28.0.10
+    ports:
+      - "8880:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  client:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    deploy:
+      replicas: 5
+    entrypoint: ["/bin/bash", "/scripts/client-entrypoint.sh"]
+    volumes:
+      - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro
+      - ./scripts/client-entrypoint.sh:/scripts/client-entrypoint.sh:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    depends_on:
+      server:
+        condition: service_healthy
+    networks:
+      - mesh-control
+    environment:
+      - SERVER_URL=http://172.28.0.10:8080
+      - AUTH_TOKEN=docker-test-token-123
+      - PING_INTERVAL=10
+      - DISCOVERY_INTERVAL=30
+
+networks:
+  mesh-control:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
