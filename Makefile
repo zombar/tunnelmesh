@@ -147,7 +147,7 @@ docker-test: docker-build
 
 # GitHub Container Registry targets
 GHCR_REPO ?= ghcr.io/zombar/tunnelmesh
-GHCR_TAG ?= $(VERSION)
+GHCR_TAG ?= $(COMMIT)
 
 ghcr-login:
 	@echo "Logging in to GitHub Container Registry..."
