@@ -13,37 +13,37 @@ import (
 )
 
 func TestResolver_AddRecord(t *testing.T) {
-	r := NewResolver(".mesh", 60)
+	r := NewResolver(".tunnelmesh", 60)
 
 	r.AddRecord("mynode", "10.99.0.1")
 	r.AddRecord("other", "10.99.0.2")
 
-	ip, ok := r.Resolve("mynode.mesh")
+	ip, ok := r.Resolve("mynode.tunnelmesh")
 	assert.True(t, ok)
 	assert.Equal(t, "10.99.0.1", ip)
 
-	ip, ok = r.Resolve("other.mesh")
+	ip, ok = r.Resolve("other.tunnelmesh")
 	assert.True(t, ok)
 	assert.Equal(t, "10.99.0.2", ip)
 }
 
 func TestResolver_RemoveRecord(t *testing.T) {
-	r := NewResolver(".mesh", 60)
+	r := NewResolver(".tunnelmesh", 60)
 
 	r.AddRecord("mynode", "10.99.0.1")
 
-	ip, ok := r.Resolve("mynode.mesh")
+	ip, ok := r.Resolve("mynode.tunnelmesh")
 	assert.True(t, ok)
 	assert.Equal(t, "10.99.0.1", ip)
 
 	r.RemoveRecord("mynode")
 
-	_, ok = r.Resolve("mynode.mesh")
+	_, ok = r.Resolve("mynode.tunnelmesh")
 	assert.False(t, ok)
 }
 
 func TestResolver_UpdateRecords(t *testing.T) {
-	r := NewResolver(".mesh", 60)
+	r := NewResolver(".tunnelmesh", 60)
 
 	// Initial records
 	r.AddRecord("node1", "10.99.0.1")
@@ -56,23 +56,23 @@ func TestResolver_UpdateRecords(t *testing.T) {
 	})
 
 	// Old records should be gone
-	_, ok := r.Resolve("node1.mesh")
+	_, ok := r.Resolve("node1.tunnelmesh")
 	assert.False(t, ok)
-	_, ok = r.Resolve("node2.mesh")
+	_, ok = r.Resolve("node2.tunnelmesh")
 	assert.False(t, ok)
 
 	// New records should exist
-	ip, ok := r.Resolve("node3.mesh")
+	ip, ok := r.Resolve("node3.tunnelmesh")
 	assert.True(t, ok)
 	assert.Equal(t, "10.99.0.3", ip)
 }
 
 func TestResolver_ResolveWithoutSuffix(t *testing.T) {
-	r := NewResolver(".mesh", 60)
+	r := NewResolver(".tunnelmesh", 60)
 	r.AddRecord("mynode", "10.99.0.1")
 
 	// Should work with or without suffix
-	ip, ok := r.Resolve("mynode.mesh")
+	ip, ok := r.Resolve("mynode.tunnelmesh")
 	assert.True(t, ok)
 	assert.Equal(t, "10.99.0.1", ip)
 
@@ -82,9 +82,9 @@ func TestResolver_ResolveWithoutSuffix(t *testing.T) {
 }
 
 func TestResolver_ResolveNonexistent(t *testing.T) {
-	r := NewResolver(".mesh", 60)
+	r := NewResolver(".tunnelmesh", 60)
 
-	_, ok := r.Resolve("unknown.mesh")
+	_, ok := r.Resolve("unknown.tunnelmesh")
 	assert.False(t, ok)
 }
 
@@ -92,7 +92,7 @@ func TestResolver_DNSServer(t *testing.T) {
 	port := testutil.FreePort(t)
 	addr := "127.0.0.1:" + strconv.Itoa(port)
 
-	r := NewResolver(".mesh", 60)
+	r := NewResolver(".tunnelmesh", 60)
 	r.AddRecord("testhost", "10.99.0.42")
 
 	// Start server
@@ -110,7 +110,7 @@ func TestResolver_DNSServer(t *testing.T) {
 	// Query the DNS server
 	c := new(dns.Client)
 	m := new(dns.Msg)
-	m.SetQuestion("testhost.mesh.", dns.TypeA)
+	m.SetQuestion("testhost.tunnelmesh.", dns.TypeA)
 
 	resp, _, err := c.Exchange(m, addr)
 	require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestResolver_DNSServer_NXDOMAIN(t *testing.T) {
 	port := testutil.FreePort(t)
 	addr := "127.0.0.1:" + strconv.Itoa(port)
 
-	r := NewResolver(".mesh", 60)
+	r := NewResolver(".tunnelmesh", 60)
 
 	go func() {
 		_ = r.ListenAndServe(addr)
@@ -137,7 +137,7 @@ func TestResolver_DNSServer_NXDOMAIN(t *testing.T) {
 
 	c := new(dns.Client)
 	m := new(dns.Msg)
-	m.SetQuestion("unknown.mesh.", dns.TypeA)
+	m.SetQuestion("unknown.tunnelmesh.", dns.TypeA)
 
 	resp, _, err := c.Exchange(m, addr)
 	require.NoError(t, err)
@@ -146,7 +146,7 @@ func TestResolver_DNSServer_NXDOMAIN(t *testing.T) {
 }
 
 func TestResolver_ListRecords(t *testing.T) {
-	r := NewResolver(".mesh", 60)
+	r := NewResolver(".tunnelmesh", 60)
 
 	r.AddRecord("node1", "10.99.0.1")
 	r.AddRecord("node2", "10.99.0.2")

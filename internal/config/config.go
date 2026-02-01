@@ -67,7 +67,7 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 		cfg.MeshCIDR = "10.99.0.0/16"
 	}
 	if cfg.DomainSuffix == "" {
-		cfg.DomainSuffix = ".mesh"
+		cfg.DomainSuffix = ".tunnelmesh"
 	}
 	// Admin enabled by default
 	cfg.Admin.Enabled = true

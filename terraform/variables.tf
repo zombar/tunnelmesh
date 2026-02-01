@@ -30,7 +30,7 @@ variable "mesh_cidr" {
 variable "domain_suffix" {
   description = "Domain suffix for mesh hostnames"
   type        = string
-  default     = ".mesh"
+  default     = ".tunnelmesh"
 }
 
 variable "github_owner" {

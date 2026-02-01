@@ -18,7 +18,7 @@ func newTestServer(t *testing.T) *Server {
 		Listen:       ":0",
 		AuthToken:    "test-token",
 		MeshCIDR:     "10.99.0.0/16",
-		DomainSuffix: ".mesh",
+		DomainSuffix: ".tunnelmesh",
 		Admin:        config.AdminConfig{Enabled: true},
 	}
 	srv, err := NewServer(cfg)
@@ -65,7 +65,7 @@ func TestServer_Register_Success(t *testing.T) {
 
 	assert.NotEmpty(t, resp.MeshIP)
 	assert.Equal(t, "10.99.0.0/16", resp.MeshCIDR)
-	assert.Equal(t, ".mesh", resp.Domain)
+	assert.Equal(t, ".tunnelmesh", resp.Domain)
 }
 
 func TestServer_Register_Unauthorized(t *testing.T) {

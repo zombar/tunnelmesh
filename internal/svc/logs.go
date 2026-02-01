@@ -48,42 +48,64 @@ func viewLogsLinux(opts LogOptions) error {
 	return cmd.Run()
 }
 
-// viewLogsDarwin uses the macOS log command to view launchd service logs.
+// viewLogsDarwin reads from the log files created by launchd.
 func viewLogsDarwin(opts LogOptions) error {
-	// On macOS, launchd services log to the unified logging system
-	// We use the 'log' command to view them
-	predicate := fmt.Sprintf("subsystem == \"com.tunnelmesh.%s\" OR process == \"tunnelmesh\"", opts.ServiceName)
+	// launchd services log to files in /var/log/
+	outLog := fmt.Sprintf("/var/log/%s.out.log", opts.ServiceName)
+	errLog := fmt.Sprintf("/var/log/%s.err.log", opts.ServiceName)
 
 	if opts.Follow {
-		// Use 'log stream' for following
-		args := []string{"stream", "--predicate", predicate, "--style", "compact"}
-		cmd := exec.Command("log", args...)
+		// Use tail -f to follow both log files
+		args := []string{"-f", outLog, errLog}
+		cmd := exec.Command("tail", args...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.Stdin = os.Stdin
 		return cmd.Run()
 	}
 
-	// Use 'log show' for historical logs
-	// Estimate time based on lines (roughly 1 line per second for active service)
-	minutes := opts.Lines / 10
-	if minutes < 5 {
-		minutes = 5
+	// Show last N lines from both files combined
+	// First check if files exist
+	outExists := fileExists(outLog)
+	errExists := fileExists(errLog)
+
+	if !outExists && !errExists {
+		fmt.Printf("No log files found for service %q\n", opts.ServiceName)
+		fmt.Printf("Expected log files:\n")
+		fmt.Printf("  - %s\n", outLog)
+		fmt.Printf("  - %s\n", errLog)
+		return nil
 	}
 
-	args := []string{
-		"show",
-		"--predicate", predicate,
-		"--style", "compact",
-		"--last", strconv.Itoa(minutes) + "m",
+	// Show stderr first (errors), then stdout
+	if errExists {
+		fmt.Println("=== Errors ===")
+		cmd := exec.Command("tail", "-n", strconv.Itoa(opts.Lines), errLog)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		_ = cmd.Run()
 	}
 
-	cmd := exec.Command("log", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
+	if outExists {
+		if errExists {
+			fmt.Println("\n=== Output ===")
+		}
+		cmd := exec.Command("tail", "-n", strconv.Itoa(opts.Lines), outLog)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		_ = cmd.Run()
+	}
 
-	return cmd.Run()
+	return nil
+}
+
+// fileExists checks if a file exists and is not a directory.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }
 
 // viewLogsWindows uses PowerShell to query Windows Event Log.

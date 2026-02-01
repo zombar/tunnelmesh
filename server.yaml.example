@@ -13,4 +13,4 @@ auth_token: "your-secure-token-here"
 mesh_cidr: "10.99.0.0/16"
 
 # Domain suffix for mesh hostnames
-domain_suffix: ".mesh"
+domain_suffix: ".tunnelmesh"

@@ -7,7 +7,7 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 - **P2P Encrypted Tunnels** - Direct SSH-based connections between peers
 - **Coordination Server** - Central hub for peer discovery and IP allocation (not a traffic router)
 - **TUN Interface** - Virtual network interface for transparent IP routing
-- **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.mesh`)
+- **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh`)
 - **Network Monitoring** - Automatic detection of network changes with re-connection
 - **NAT Traversal** - Supports both direct and reverse connections for peers behind NAT
 - **Multi-Platform** - Linux, macOS, and Windows support
@@ -71,7 +71,7 @@ auth_token: "your-secure-token"
 mesh_cidr: "10.99.0.0/16"
 
 # Domain suffix for hostnames
-domain_suffix: ".mesh"
+domain_suffix: ".tunnelmesh"
 
 # Admin web interface
 admin:

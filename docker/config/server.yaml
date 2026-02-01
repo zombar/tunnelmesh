@@ -2,7 +2,7 @@
 listen: ":8080"
 auth_token: "docker-test-token-123"
 mesh_cidr: "10.99.0.0/16"
-domain_suffix: ".mesh"
+domain_suffix: ".tunnelmesh"
 
 # Server joins the mesh as a client node
 join_mesh:

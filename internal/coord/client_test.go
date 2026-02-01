@@ -15,7 +15,7 @@ func TestClient_Register(t *testing.T) {
 		Listen:       ":0",
 		AuthToken:    "test-token",
 		MeshCIDR:     "10.99.0.0/16",
-		DomainSuffix: ".mesh",
+		DomainSuffix: ".tunnelmesh",
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -32,7 +32,7 @@ func TestClient_Register(t *testing.T) {
 
 	assert.Equal(t, "10.99.0.1", resp.MeshIP)
 	assert.Equal(t, "10.99.0.0/16", resp.MeshCIDR)
-	assert.Equal(t, ".mesh", resp.Domain)
+	assert.Equal(t, ".tunnelmesh", resp.Domain)
 }
 
 func TestClient_ListPeers(t *testing.T) {
@@ -40,7 +40,7 @@ func TestClient_ListPeers(t *testing.T) {
 		Listen:       ":0",
 		AuthToken:    "test-token",
 		MeshCIDR:     "10.99.0.0/16",
-		DomainSuffix: ".mesh",
+		DomainSuffix: ".tunnelmesh",
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -67,7 +67,7 @@ func TestClient_Heartbeat(t *testing.T) {
 		Listen:       ":0",
 		AuthToken:    "test-token",
 		MeshCIDR:     "10.99.0.0/16",
-		DomainSuffix: ".mesh",
+		DomainSuffix: ".tunnelmesh",
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -91,7 +91,7 @@ func TestClient_HeartbeatNotFound(t *testing.T) {
 		Listen:       ":0",
 		AuthToken:    "test-token",
 		MeshCIDR:     "10.99.0.0/16",
-		DomainSuffix: ".mesh",
+		DomainSuffix: ".tunnelmesh",
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestClient_Deregister(t *testing.T) {
 		Listen:       ":0",
 		AuthToken:    "test-token",
 		MeshCIDR:     "10.99.0.0/16",
-		DomainSuffix: ".mesh",
+		DomainSuffix: ".tunnelmesh",
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestClient_GetDNSRecords(t *testing.T) {
 		Listen:       ":0",
 		AuthToken:    "test-token",
 		MeshCIDR:     "10.99.0.0/16",
-		DomainSuffix: ".mesh",
+		DomainSuffix: ".tunnelmesh",
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)

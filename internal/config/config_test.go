@@ -18,7 +18,7 @@ func TestLoadServerConfig(t *testing.T) {
 listen: ":8080"
 auth_token: "test-token-123"
 mesh_cidr: "10.99.0.0/16"
-domain_suffix: ".mesh"
+domain_suffix: ".tunnelmesh"
 `
 	configPath := testutil.TempFile(t, dir, "server.yaml", content)
 
@@ -28,7 +28,7 @@ domain_suffix: ".mesh"
 	assert.Equal(t, ":8080", cfg.Listen)
 	assert.Equal(t, "test-token-123", cfg.AuthToken)
 	assert.Equal(t, "10.99.0.0/16", cfg.MeshCIDR)
-	assert.Equal(t, ".mesh", cfg.DomainSuffix)
+	assert.Equal(t, ".tunnelmesh", cfg.DomainSuffix)
 }
 
 func TestLoadServerConfig_Defaults(t *testing.T) {
@@ -49,7 +49,7 @@ auth_token: "secret"
 	assert.Equal(t, "secret", cfg.AuthToken)
 	// Check defaults
 	assert.Equal(t, "10.99.0.0/16", cfg.MeshCIDR)
-	assert.Equal(t, ".mesh", cfg.DomainSuffix)
+	assert.Equal(t, ".tunnelmesh", cfg.DomainSuffix)
 }
 
 func TestLoadServerConfig_FileNotFound(t *testing.T) {
@@ -161,7 +161,7 @@ func TestServerConfig_Validate(t *testing.T) {
 				Listen:       ":8080",
 				AuthToken:    "token",
 				MeshCIDR:     "10.99.0.0/16",
-				DomainSuffix: ".mesh",
+				DomainSuffix: ".tunnelmesh",
 			},
 			wantErr: false,
 		},
@@ -170,7 +170,7 @@ func TestServerConfig_Validate(t *testing.T) {
 			cfg: ServerConfig{
 				AuthToken:    "token",
 				MeshCIDR:     "10.99.0.0/16",
-				DomainSuffix: ".mesh",
+				DomainSuffix: ".tunnelmesh",
 			},
 			wantErr: true,
 		},
@@ -179,7 +179,7 @@ func TestServerConfig_Validate(t *testing.T) {
 			cfg: ServerConfig{
 				Listen:       ":8080",
 				MeshCIDR:     "10.99.0.0/16",
-				DomainSuffix: ".mesh",
+				DomainSuffix: ".tunnelmesh",
 			},
 			wantErr: true,
 		},
@@ -189,7 +189,7 @@ func TestServerConfig_Validate(t *testing.T) {
 				Listen:       ":8080",
 				AuthToken:    "token",
 				MeshCIDR:     "invalid",
-				DomainSuffix: ".mesh",
+				DomainSuffix: ".tunnelmesh",
 			},
 			wantErr: true,
 		},

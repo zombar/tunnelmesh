@@ -86,7 +86,7 @@ auth_token: "change-me-to-a-secure-token"
 mesh_cidr: "10.99.0.0/16"
 
 # Domain suffix for mesh DNS resolution
-domain_suffix: ".mesh"
+domain_suffix: ".tunnelmesh"
 
 # Enable the admin web dashboard
 admin:
@@ -113,7 +113,7 @@ auth_token: "change-me-to-a-secure-token"
 mesh_cidr: "10.99.0.0/16"
 
 # Domain suffix for mesh DNS resolution
-domain_suffix: ".mesh"
+domain_suffix: ".tunnelmesh"
 
 # Enable the admin web dashboard
 admin:
@@ -221,7 +221,7 @@ tun:
   name: "tun-mesh0"
   mtu: 1400
 
-# Local DNS resolver for .mesh domains
+# Local DNS resolver for .tunnelmesh domains
 dns:
   enabled: true
   listen: "127.0.0.53:5353"
@@ -314,7 +314,7 @@ tunnelmesh status
 tunnelmesh peers
 
 # Once other peers are connected, ping them by name
-ping otherpeer.mesh
+ping otherpeer.tunnelmesh
 ```
 
 Check the admin dashboard on the server—your peer should now appear in the list.
