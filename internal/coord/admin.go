@@ -1,8 +1,10 @@
 package coord
 
 import (
+	"bytes"
 	"encoding/json"
 	"io/fs"
+	"net"
 	"net/http"
 	"sort"
 	"time"
@@ -89,9 +91,14 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		overview.Peers = append(overview.Peers, peerInfo)
 	}
 
-	// Sort peers by name for consistent ordering
+	// Sort peers by mesh IP for consistent ordering
 	sort.Slice(overview.Peers, func(i, j int) bool {
-		return overview.Peers[i].Name < overview.Peers[j].Name
+		ipI := net.ParseIP(overview.Peers[i].MeshIP)
+		ipJ := net.ParseIP(overview.Peers[j].MeshIP)
+		if ipI == nil || ipJ == nil {
+			return overview.Peers[i].MeshIP < overview.Peers[j].MeshIP
+		}
+		return bytes.Compare(ipI.To16(), ipJ.To16()) < 0
 	})
 
 	w.Header().Set("Content-Type", "application/json")

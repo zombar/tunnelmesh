@@ -1,7 +1,7 @@
 # Binaries
 bin/
-tunnelmesh
-tunnelmesh-server
+/tunnelmesh
+/tunnelmesh-server
 *.exe
 *.exe~
 *.dll
@@ -35,6 +35,9 @@ server.yaml
 peer.yaml
 *.pem
 *.key
+
+# Exception: docker test configs are OK to commit
+!docker/config/server.yaml
 
 # SSH keys (should not be committed)
 id_ed25519

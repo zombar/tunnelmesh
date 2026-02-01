@@ -24,6 +24,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
 	"github.com/tunnelmesh/tunnelmesh/internal/negotiate"
+	"github.com/tunnelmesh/tunnelmesh/internal/netmon"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/tun"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
@@ -424,8 +425,24 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		}()
 	}
 
+	// Create network monitor for detecting network changes
+	triggerDiscovery := make(chan struct{}, 1)
+	netMonitor, err := netmon.New(netmon.DefaultConfig())
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to create network monitor, changes won't be detected")
+	} else {
+		networkChanges, err := netMonitor.Start(ctx)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to start network monitor")
+			netMonitor.Close()
+		} else {
+			defer netMonitor.Close()
+			go networkChangeLoop(ctx, networkChanges, client, cfg, pubKeyEncoded, tunnelMgr, triggerDiscovery)
+		}
+	}
+
 	// Start peer discovery and tunnel establishment loop
-	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
+	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, triggerDiscovery)
 
 	// Start heartbeat loop
 	go heartbeatLoop(ctx, client, cfg.Name, pubKeyFP, resolver, forwarder, tunnelMgr)
@@ -585,7 +602,7 @@ func handleSSHConnection(ctx context.Context, conn net.Conn, sshServer *tunnel.S
 func peerDiscoveryLoop(ctx context.Context, client *coord.Client, myName string,
 	sshClient *tunnel.SSHClient, negotiator *negotiate.Negotiator,
 	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder,
-	sshServer *tunnel.SSHServer) {
+	sshServer *tunnel.SSHServer, triggerDiscovery <-chan struct{}) {
 
 	// Add random jitter (0-3 seconds) before initial discovery to stagger startup
 	jitter := time.Duration(rand.Intn(3000)) * time.Millisecond
@@ -615,6 +632,9 @@ fastLoop:
 			break fastLoop
 		case <-fastTicker.C:
 			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
+		case <-triggerDiscovery:
+			log.Debug().Msg("peer discovery triggered by network change")
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
 		}
 	}
 
@@ -627,6 +647,9 @@ fastLoop:
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
+		case <-triggerDiscovery:
+			log.Debug().Msg("peer discovery triggered by network change")
 			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
 		}
 	}
@@ -681,6 +704,57 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 
 		// Try to establish tunnel
 		go establishTunnel(ctx, peer, myName, sshClient, negotiator, tunnelMgr, forwarder)
+	}
+}
+
+// networkChangeLoop handles network interface change events
+func networkChangeLoop(ctx context.Context, events <-chan netmon.Event,
+	client *coord.Client, cfg *config.PeerConfig, pubKeyEncoded string,
+	tunnelMgr *TunnelAdapter, triggerDiscovery chan<- struct{}) {
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-events:
+			if !ok {
+				return
+			}
+
+			log.Info().
+				Str("type", event.Type.String()).
+				Str("interface", event.Interface).
+				Msg("network change detected")
+
+			// Get new IP addresses
+			publicIPs, privateIPs := proto.GetLocalIPs()
+			log.Debug().
+				Strs("public", publicIPs).
+				Strs("private", privateIPs).
+				Msg("updated local IPs")
+
+			// Re-register with coordination server
+			resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to re-register after network change")
+				continue
+			}
+
+			log.Info().
+				Str("mesh_ip", resp.MeshIP).
+				Msg("re-registered with coordination server")
+
+			// Close all existing tunnels (they may be using stale IPs)
+			tunnelMgr.CloseAll()
+			log.Debug().Msg("closed stale tunnels after network change")
+
+			// Trigger immediate peer discovery
+			select {
+			case triggerDiscovery <- struct{}{}:
+			default:
+				// Discovery already pending
+			}
+		}
 	}
 }
 

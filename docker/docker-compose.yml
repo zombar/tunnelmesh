@@ -5,9 +5,14 @@ services:
       dockerfile: docker/Dockerfile
     container_name: tunnelmesh-server
     hostname: server
-    command: ["serve", "--config", "/etc/tunnelmesh/server.yaml", "--log-level", "debug"]
+    entrypoint: ["/bin/bash", "/scripts/server-entrypoint.sh"]
     volumes:
       - ./config/server.yaml:/etc/tunnelmesh/server.yaml:ro
+      - ./scripts/server-entrypoint.sh:/scripts/server-entrypoint.sh:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     networks:
       mesh-control:
         ipv4_address: 172.28.0.10
