@@ -21,9 +21,9 @@ resource "digitalocean_app" "tunnelmesh_coord" {
       run_command = <<-EOF
         sh -c 'cat > /etc/tunnelmesh/server.yaml <<CONF
 listen: ":8080"
-auth_token: "${AUTH_TOKEN}"
-mesh_cidr: "${MESH_CIDR}"
-domain_suffix: "${DOMAIN_SUFFIX}"
+auth_token: "$${AUTH_TOKEN}"
+mesh_cidr: "$${MESH_CIDR}"
+domain_suffix: "$${DOMAIN_SUFFIX}"
 admin:
   enabled: true
 CONF
