@@ -16,6 +16,10 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 
 ![Admin Dashboard](docs/images/admin-dashboard.png)
 
+## Getting Started
+
+For a complete step-by-step setup guide including downloading releases, configuring servers and peers, and installing as a system service, see the **[Getting Started Guide](docs/GETTING_STARTED.md)**.
+
 ## Installation
 
 ### From Source
