@@ -1018,7 +1018,8 @@ func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshCli
 		}
 
 		// Create tunnel and add to manager
-		tun := tunnel.NewTunnel(channel, peer.Name)
+		// Use NewTunnelWithClient to keep SSH connection alive (prevents GC from closing it)
+		tun := tunnel.NewTunnelWithClient(channel, peer.Name, sshConn)
 		tunnelMgr.Add(peer.Name, tun)
 
 		log.Info().Str("peer", peer.Name).Msg("tunnel established")
