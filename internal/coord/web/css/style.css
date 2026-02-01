@@ -54,18 +54,50 @@ main {
     width: 100%;
 }
 
-#charts {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-    gap: 1.5rem;
-    margin-bottom: 2rem;
+.sparkline-cell {
+    white-space: nowrap;
 }
 
-.chart-container {
-    background: #16213e;
-    border-radius: 8px;
-    padding: 1rem;
-    border: 1px solid #2d3a4f;
+.sparkline-cell > * {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.sparkline {
+    width: 60px;
+    height: 20px;
+    margin-right: 0.5rem;
+}
+
+.sparkline path {
+    fill: none;
+    stroke-width: 1.5;
+}
+
+.sparkline .tx {
+    stroke: #3498db;
+}
+
+.sparkline .rx {
+    stroke: #2ecc71;
+}
+
+.rate-values {
+    display: inline-block;
+    font-size: 0.75rem;
+    line-height: 1.1;
+}
+
+.rate-values span {
+    display: block;
+}
+
+.rate-values .tx {
+    color: #3498db;
+}
+
+.rate-values .rx {
+    color: #2ecc71;
 }
 
 #peers-section {
@@ -136,6 +168,15 @@ footer {
     color: #666;
     font-size: 0.85rem;
     border-top: 1px solid #2d3a4f;
+}
+
+footer a {
+    color: #666;
+    text-decoration: none;
+}
+
+footer a:hover {
+    color: #4fc3f7;
 }
 
 @media (max-width: 768px) {

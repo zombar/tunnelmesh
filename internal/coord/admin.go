@@ -23,17 +23,19 @@ type AdminOverview struct {
 
 // AdminPeerInfo contains peer information for the admin UI.
 type AdminPeerInfo struct {
-	Name              string           `json:"name"`
-	MeshIP            string           `json:"mesh_ip"`
-	PublicIPs         []string         `json:"public_ips"`
-	LastSeen          time.Time        `json:"last_seen"`
-	Online            bool             `json:"online"`
-	Connectable       bool             `json:"connectable"`
-	RegisteredAt      time.Time        `json:"registered_at"`
-	HeartbeatCount    uint64           `json:"heartbeat_count"`
-	Stats             *proto.PeerStats `json:"stats,omitempty"`
-	BytesSentRate     float64          `json:"bytes_sent_rate"`
-	BytesReceivedRate float64          `json:"bytes_received_rate"`
+	Name                string           `json:"name"`
+	MeshIP              string           `json:"mesh_ip"`
+	PublicIPs           []string         `json:"public_ips"`
+	LastSeen            time.Time        `json:"last_seen"`
+	Online              bool             `json:"online"`
+	Connectable         bool             `json:"connectable"`
+	RegisteredAt        time.Time        `json:"registered_at"`
+	HeartbeatCount      uint64           `json:"heartbeat_count"`
+	Stats               *proto.PeerStats `json:"stats,omitempty"`
+	BytesSentRate       float64          `json:"bytes_sent_rate"`
+	BytesReceivedRate   float64          `json:"bytes_received_rate"`
+	PacketsSentRate     float64          `json:"packets_sent_rate"`
+	PacketsReceivedRate float64          `json:"packets_received_rate"`
 }
 
 // handleAdminOverview returns the admin overview data.
@@ -80,6 +82,8 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			// Rate is calculated as delta over 30 seconds (heartbeat interval)
 			peerInfo.BytesSentRate = float64(info.stats.BytesSent-info.prevStats.BytesSent) / 30.0
 			peerInfo.BytesReceivedRate = float64(info.stats.BytesReceived-info.prevStats.BytesReceived) / 30.0
+			peerInfo.PacketsSentRate = float64(info.stats.PacketsSent-info.prevStats.PacketsSent) / 30.0
+			peerInfo.PacketsReceivedRate = float64(info.stats.PacketsReceived-info.prevStats.PacketsReceived) / 30.0
 		}
 
 		overview.Peers = append(overview.Peers, peerInfo)

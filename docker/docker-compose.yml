@@ -25,7 +25,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     deploy:
-      replicas: 5
+      replicas: 25
     entrypoint: ["/bin/bash", "/scripts/client-entrypoint.sh"]
     volumes:
       - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro

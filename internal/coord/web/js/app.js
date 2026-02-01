@@ -1,8 +1,7 @@
-// Dashboard state
+// Dashboard state - track history per peer
 const state = {
-    peers: [],
-    throughputChart: null,
-    packetsChart: null
+    peerHistory: {}, // { peerName: { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] } }
+    maxHistoryPoints: 20
 };
 
 // Fetch and update dashboard
@@ -25,6 +24,41 @@ function updateDashboard(data) {
     document.getElementById('peer-count').textContent = `${data.online_peers}/${data.total_peers}`;
     document.getElementById('heartbeats').textContent = formatNumber(data.total_heartbeats);
 
+    // Update history for each peer
+    data.peers.forEach(peer => {
+        if (!state.peerHistory[peer.name]) {
+            state.peerHistory[peer.name] = {
+                throughputTx: [],
+                throughputRx: [],
+                packetsTx: [],
+                packetsRx: []
+            };
+        }
+        const history = state.peerHistory[peer.name];
+
+        // Add new data points
+        history.throughputTx.push(peer.bytes_sent_rate || 0);
+        history.throughputRx.push(peer.bytes_received_rate || 0);
+        history.packetsTx.push(peer.packets_sent_rate || 0);
+        history.packetsRx.push(peer.packets_received_rate || 0);
+
+        // Trim to max history
+        if (history.throughputTx.length > state.maxHistoryPoints) {
+            history.throughputTx.shift();
+            history.throughputRx.shift();
+            history.packetsTx.shift();
+            history.packetsRx.shift();
+        }
+    });
+
+    // Clean up history for removed peers
+    const currentPeers = new Set(data.peers.map(p => p.name));
+    Object.keys(state.peerHistory).forEach(name => {
+        if (!currentPeers.has(name)) {
+            delete state.peerHistory[name];
+        }
+    });
+
     // Update peers table
     const tbody = document.getElementById('peers-body');
     const noPeers = document.getElementById('no-peers');
@@ -34,23 +68,70 @@ function updateDashboard(data) {
         noPeers.style.display = 'block';
     } else {
         noPeers.style.display = 'none';
-        tbody.innerHTML = data.peers.map(peer => `
+        tbody.innerHTML = data.peers.map(peer => {
+            const history = state.peerHistory[peer.name];
+            return `
             <tr>
                 <td><strong>${escapeHtml(peer.name)}</strong></td>
                 <td><code>${peer.mesh_ip}</code></td>
                 <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
-                <td>${formatTime(peer.last_seen)}</td>
                 <td>${peer.stats?.active_tunnels ?? '-'}</td>
-                <td>${formatBytes(peer.bytes_sent_rate)}/s</td>
-                <td>${formatBytes(peer.bytes_received_rate)}/s</td>
-                <td>${formatNumber((peer.stats?.packets_sent ?? 0) + (peer.stats?.packets_received ?? 0))}</td>
+                <td class="sparkline-cell">
+                    ${createSparklineSVG(history.throughputTx, history.throughputRx)}
+                    <div class="rate-values">
+                        <span class="tx">${formatBytes(peer.bytes_sent_rate)}/s</span>
+                        <span class="rx">${formatBytes(peer.bytes_received_rate)}/s</span>
+                    </div>
+                </td>
+                <td class="sparkline-cell">
+                    ${createSparklineSVG(history.packetsTx, history.packetsRx)}
+                    <div class="rate-values">
+                        <span class="tx">${formatRate(peer.packets_sent_rate)}</span>
+                        <span class="rx">${formatRate(peer.packets_received_rate)}</span>
+                    </div>
+                </td>
                 <td>${peer.stats?.errors ?? 0}</td>
             </tr>
-        `).join('');
+        `}).join('');
+    }
+}
+
+function createSparklineSVG(dataTx, dataRx) {
+    const width = 80;
+    const height = 24;
+    const padding = 2;
+
+    if (!dataTx.length) {
+        return `<svg class="sparkline" viewBox="0 0 ${width} ${height}"></svg>`;
     }
 
-    // Update charts
-    updateCharts(data.peers);
+    // Find max value across both datasets for consistent scale
+    const allValues = [...dataTx, ...dataRx];
+    const maxVal = Math.max(...allValues, 1); // At least 1 to avoid division by zero
+
+    const pathTx = createSparklinePath(dataTx, width, height, padding, maxVal);
+    const pathRx = createSparklinePath(dataRx, width, height, padding, maxVal);
+
+    return `<svg class="sparkline" viewBox="0 0 ${width} ${height}">
+        <path class="tx" d="${pathTx}"/>
+        <path class="rx" d="${pathRx}"/>
+    </svg>`;
+}
+
+function createSparklinePath(data, width, height, padding, maxVal) {
+    if (!data.length) return '';
+
+    const drawWidth = width - padding * 2;
+    const drawHeight = height - padding * 2;
+    const step = drawWidth / Math.max(data.length - 1, 1);
+
+    const points = data.map((val, i) => {
+        const x = padding + i * step;
+        const y = padding + drawHeight - (val / maxVal) * drawHeight;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+
+    return 'M' + points.join(' L');
 }
 
 function formatBytes(bytes) {
@@ -62,21 +143,14 @@ function formatBytes(bytes) {
     return parseFloat((bytes / Math.pow(k, clampedI)).toFixed(1)) + ' ' + sizes[clampedI];
 }
 
+function formatRate(rate) {
+    if (rate === 0 || rate === undefined || rate === null) return '0';
+    return rate.toFixed(1);
+}
+
 function formatNumber(num) {
     if (num === undefined || num === null) return '0';
     return num.toLocaleString();
-}
-
-function formatTime(isoString) {
-    if (!isoString) return '-';
-    const d = new Date(isoString);
-    const now = new Date();
-    const diff = (now - d) / 1000;
-    if (diff < 0) return 'just now';
-    if (diff < 60) return `${Math.floor(diff)}s ago`;
-    if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
-    return d.toLocaleDateString();
 }
 
 function escapeHtml(text) {
@@ -85,131 +159,8 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-function initCharts() {
-    const chartOptions = {
-        responsive: true,
-        maintainAspectRatio: true,
-        animation: {
-            duration: 400
-        },
-        plugins: {
-            legend: {
-                labels: {
-                    color: '#888'
-                }
-            }
-        },
-        scales: {
-            x: {
-                ticks: { color: '#888' },
-                grid: { color: 'rgba(255,255,255,0.1)' }
-            },
-            y: {
-                beginAtZero: true,
-                ticks: { color: '#888' },
-                grid: { color: 'rgba(255,255,255,0.1)' }
-            }
-        }
-    };
-
-    const throughputCtx = document.getElementById('throughputChart').getContext('2d');
-    state.throughputChart = new Chart(throughputCtx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [
-                {
-                    label: 'TX Rate',
-                    data: [],
-                    borderColor: '#3498db',
-                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
-                    borderWidth: 2,
-                    fill: true,
-                    tension: 0.3
-                },
-                {
-                    label: 'RX Rate',
-                    data: [],
-                    borderColor: '#2ecc71',
-                    backgroundColor: 'rgba(46, 204, 113, 0.1)',
-                    borderWidth: 2,
-                    fill: true,
-                    tension: 0.3
-                }
-            ]
-        },
-        options: {
-            ...chartOptions,
-            plugins: {
-                ...chartOptions.plugins,
-                title: {
-                    display: true,
-                    text: 'Throughput (bytes/sec)',
-                    color: '#4fc3f7'
-                }
-            }
-        }
-    });
-
-    const packetsCtx = document.getElementById('packetsChart').getContext('2d');
-    state.packetsChart = new Chart(packetsCtx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [
-                {
-                    label: 'Packets Sent',
-                    data: [],
-                    borderColor: '#3498db',
-                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
-                    borderWidth: 2,
-                    fill: true,
-                    tension: 0.3
-                },
-                {
-                    label: 'Packets Received',
-                    data: [],
-                    borderColor: '#2ecc71',
-                    backgroundColor: 'rgba(46, 204, 113, 0.1)',
-                    borderWidth: 2,
-                    fill: true,
-                    tension: 0.3
-                }
-            ]
-        },
-        options: {
-            ...chartOptions,
-            plugins: {
-                ...chartOptions.plugins,
-                title: {
-                    display: true,
-                    text: 'Total Packets by Peer',
-                    color: '#4fc3f7'
-                }
-            }
-        }
-    });
-}
-
-function updateCharts(peers) {
-    const labels = peers.map(p => p.name);
-
-    // Update throughput chart - modify data in place to animate from previous values
-    state.throughputChart.data.labels = labels;
-    state.throughputChart.data.datasets[0].data = peers.map(p => p.bytes_sent_rate || 0);
-    state.throughputChart.data.datasets[1].data = peers.map(p => p.bytes_received_rate || 0);
-    state.throughputChart.update('active');
-
-    // Update packets chart - modify data in place to animate from previous values
-    state.packetsChart.data.labels = labels;
-    state.packetsChart.data.datasets[0].data = peers.map(p => p.stats?.packets_sent || 0);
-    state.packetsChart.data.datasets[1].data = peers.map(p => p.stats?.packets_received || 0);
-    state.packetsChart.update('active');
-}
-
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    initCharts();
     fetchData();
     setInterval(fetchData, 5000); // Refresh every 5 seconds
 });

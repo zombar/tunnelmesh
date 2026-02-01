@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TunnelMesh Admin</title>
     <link rel="stylesheet" href="css/style.css">
-    <script src="js/chart.min.js"></script>
 </head>
 <body>
     <header>
@@ -27,15 +26,6 @@
     </header>
 
     <main>
-        <section id="charts">
-            <div class="chart-container">
-                <canvas id="throughputChart"></canvas>
-            </div>
-            <div class="chart-container">
-                <canvas id="packetsChart"></canvas>
-            </div>
-        </section>
-
         <section id="peers-section">
             <h2>Connected Peers</h2>
             <table id="peers">
@@ -44,11 +34,9 @@
                         <th>Name</th>
                         <th>Mesh IP</th>
                         <th>Status</th>
-                        <th>Last Seen</th>
                         <th>Tunnels</th>
-                        <th>TX Rate</th>
-                        <th>RX Rate</th>
-                        <th>Packets</th>
+                        <th>Throughput</th>
+                        <th>Packets/s</th>
                         <th>Errors</th>
                     </tr>
                 </thead>
@@ -61,7 +49,7 @@
     </main>
 
     <footer>
-        <p>TunnelMesh - P2P SSH Tunnel Mesh Network</p>
+        <p><a href="https://github.com/zombar/tunnelmesh" target="_blank">TunnelMesh - P2P SSH Tunnel Mesh Network</a></p>
     </footer>
 
     <script src="js/app.js"></script>

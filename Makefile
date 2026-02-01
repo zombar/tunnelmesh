@@ -119,6 +119,9 @@ docker-up: docker-build
 	$(DOCKER_COMPOSE) up -d
 	@echo "TunnelMesh Docker environment started"
 	@echo "Use 'make docker-logs' to follow logs"
+	@echo "Opening admin interface..."
+	@sleep 2
+	@open http://localhost:8880/admin/
 
 docker-down:
 	$(DOCKER_COMPOSE) down -v
