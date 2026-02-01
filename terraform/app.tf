@@ -10,7 +10,7 @@ resource "digitalocean_app" "tunnelmesh_coord" {
 
       image {
         registry_type = "GHCR"
-        registry      = var.github_repo
+        registry      = var.github_owner
         repository    = "tunnelmesh"
         tag           = var.image_tag
       }

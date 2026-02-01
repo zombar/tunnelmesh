@@ -344,7 +344,7 @@ Deploy the coordination server to DigitalOcean App Platform using Terraform.
 | `domain` | Base domain name | (required) |
 | `subdomain` | Subdomain for coord server | `tunnelmesh` |
 | `auth_token` | Mesh authentication token | (required) |
-| `github_repo` | GitHub repo for container image | `zombar/tunnelmesh` |
+| `github_owner` | GitHub owner for container image | `zombar` |
 | `image_tag` | Docker image tag | `latest` |
 | `mesh_cidr` | Mesh network CIDR | `10.99.0.0/16` |
 | `region` | DO region | `ams` |

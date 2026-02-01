@@ -12,8 +12,8 @@ domain = "example.com"
 # Generate with: openssl rand -hex 32
 auth_token = ""
 
-# GitHub repository for container image (default: "zombar/tunnelmesh")
-# github_repo = "zombar/tunnelmesh"
+# GitHub owner for container image (default: "zombar")
+# github_owner = "zombar"
 
 # Docker image tag (default: "latest")
 # image_tag = "latest"

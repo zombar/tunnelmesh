@@ -33,10 +33,10 @@ variable "domain_suffix" {
   default     = ".mesh"
 }
 
-variable "github_repo" {
-  description = "GitHub repository for container image (e.g., username/tunnelmesh)"
+variable "github_owner" {
+  description = "GitHub username or organization for container image"
   type        = string
-  default     = "zombar/tunnelmesh"
+  default     = "zombar"
 }
 
 variable "image_tag" {
