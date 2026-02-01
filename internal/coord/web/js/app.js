@@ -89,6 +89,9 @@ function initCharts() {
     const chartOptions = {
         responsive: true,
         maintainAspectRatio: true,
+        animation: {
+            duration: 400
+        },
         plugins: {
             legend: {
                 labels: {
@@ -112,7 +115,25 @@ function initCharts() {
     const throughputCtx = document.getElementById('throughputChart').getContext('2d');
     state.throughputChart = new Chart(throughputCtx, {
         type: 'bar',
-        data: { labels: [], datasets: [] },
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: 'TX Rate',
+                    data: [],
+                    backgroundColor: 'rgba(52, 152, 219, 0.7)',
+                    borderColor: '#3498db',
+                    borderWidth: 1
+                },
+                {
+                    label: 'RX Rate',
+                    data: [],
+                    backgroundColor: 'rgba(46, 204, 113, 0.7)',
+                    borderColor: '#2ecc71',
+                    borderWidth: 1
+                }
+            ]
+        },
         options: {
             ...chartOptions,
             plugins: {
@@ -129,7 +150,25 @@ function initCharts() {
     const packetsCtx = document.getElementById('packetsChart').getContext('2d');
     state.packetsChart = new Chart(packetsCtx, {
         type: 'bar',
-        data: { labels: [], datasets: [] },
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: 'Packets Sent',
+                    data: [],
+                    backgroundColor: 'rgba(52, 152, 219, 0.7)',
+                    borderColor: '#3498db',
+                    borderWidth: 1
+                },
+                {
+                    label: 'Packets Received',
+                    data: [],
+                    backgroundColor: 'rgba(46, 204, 113, 0.7)',
+                    borderColor: '#2ecc71',
+                    borderWidth: 1
+                }
+            ]
+        },
         options: {
             ...chartOptions,
             plugins: {
@@ -147,45 +186,17 @@ function initCharts() {
 function updateCharts(peers) {
     const labels = peers.map(p => p.name);
 
-    // Update throughput chart
+    // Update throughput chart - modify data in place to animate from previous values
     state.throughputChart.data.labels = labels;
-    state.throughputChart.data.datasets = [
-        {
-            label: 'TX Rate',
-            data: peers.map(p => p.bytes_sent_rate || 0),
-            backgroundColor: 'rgba(52, 152, 219, 0.7)',
-            borderColor: '#3498db',
-            borderWidth: 1
-        },
-        {
-            label: 'RX Rate',
-            data: peers.map(p => p.bytes_received_rate || 0),
-            backgroundColor: 'rgba(46, 204, 113, 0.7)',
-            borderColor: '#2ecc71',
-            borderWidth: 1
-        }
-    ];
-    state.throughputChart.update();
+    state.throughputChart.data.datasets[0].data = peers.map(p => p.bytes_sent_rate || 0);
+    state.throughputChart.data.datasets[1].data = peers.map(p => p.bytes_received_rate || 0);
+    state.throughputChart.update('active');
 
-    // Update packets chart
+    // Update packets chart - modify data in place to animate from previous values
     state.packetsChart.data.labels = labels;
-    state.packetsChart.data.datasets = [
-        {
-            label: 'Packets Sent',
-            data: peers.map(p => p.stats?.packets_sent || 0),
-            backgroundColor: 'rgba(52, 152, 219, 0.7)',
-            borderColor: '#3498db',
-            borderWidth: 1
-        },
-        {
-            label: 'Packets Received',
-            data: peers.map(p => p.stats?.packets_received || 0),
-            backgroundColor: 'rgba(46, 204, 113, 0.7)',
-            borderColor: '#2ecc71',
-            borderWidth: 1
-        }
-    ];
-    state.packetsChart.update();
+    state.packetsChart.data.datasets[0].data = peers.map(p => p.stats?.packets_sent || 0);
+    state.packetsChart.data.datasets[1].data = peers.map(p => p.stats?.packets_received || 0);
+    state.packetsChart.update('active');
 }
 
 // Initialize
