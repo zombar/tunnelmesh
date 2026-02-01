@@ -163,7 +163,7 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 			Str("to", targetPeer).
 			Msg("relay pairing timeout")
 
-		conn.WriteControl(websocket.CloseMessage,
+		_ = conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "pairing timeout"),
 			time.Now().Add(5*time.Second))
 		conn.Close()
@@ -212,7 +212,7 @@ func (s *Server) relayMessages(src, dst *websocket.Conn) {
 				log.Debug().Err(err).Msg("relay read error")
 			}
 			// Signal the other direction to stop by closing the write side
-			dst.WriteControl(websocket.CloseMessage,
+			_ = dst.WriteControl(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 				time.Now().Add(5*time.Second))
 			return

@@ -159,8 +159,8 @@ func (t *RelayTunnel) Close() error {
 	t.closed = true
 	close(t.closedChan)
 
-	// Send close message
-	t.conn.WriteControl(
+	// Send close message (ignore error since we're closing anyway)
+	_ = t.conn.WriteControl(
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 		time.Now().Add(5*time.Second),
