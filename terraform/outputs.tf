@@ -1,11 +1,16 @@
 output "app_url" {
   description = "Default App Platform URL"
-  value       = "https://${digitalocean_app.tunnelmesh_coord.default_ingress}"
+  value       = digitalocean_app.tunnelmesh_coord.default_ingress
 }
 
 output "coord_url" {
   description = "Coordination server URL (custom domain)"
   value       = "https://${var.subdomain}.${var.domain}"
+}
+
+output "admin_url" {
+  description = "Admin dashboard URL"
+  value       = "https://${var.subdomain}.${var.domain}/admin/"
 }
 
 output "auth_token" {

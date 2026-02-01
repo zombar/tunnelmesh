@@ -3,6 +3,7 @@ package coord
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,9 @@ import (
 
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
+
+// ErrPeerNotFound is returned when the peer is not registered with the server.
+var ErrPeerNotFound = errors.New("peer not found")
 
 // Client is a client for the coordination server.
 type Client struct {
@@ -106,6 +110,9 @@ func (c *Client) HeartbeatWithStats(name, publicKey string, stats *proto.PeerSta
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return ErrPeerNotFound
+	}
 	if resp.StatusCode != http.StatusOK {
 		return c.parseError(resp)
 	}

@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -596,7 +597,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, triggerDiscovery)
 
 	// Start heartbeat loop
-	go heartbeatLoop(ctx, client, cfg.Name, pubKeyFP, resolver, forwarder, tunnelMgr)
+	go heartbeatLoop(ctx, client, cfg.Name, pubKeyEncoded, cfg.SSHPort, resolver, forwarder, tunnelMgr)
 
 	// Wait for context cancellation (shutdown signal)
 	<-ctx.Done()
@@ -1188,8 +1189,8 @@ func loadConfig() (*config.PeerConfig, error) {
 	}, nil
 }
 
-func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKey string,
-	resolver *meshdns.Resolver, forwarder *routing.Forwarder, tunnelMgr *TunnelAdapter) {
+func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncoded string,
+	sshPort int, resolver *meshdns.Resolver, forwarder *routing.Forwarder, tunnelMgr *TunnelAdapter) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -1214,8 +1215,19 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKey strin
 				}
 			}
 
-			if err := client.HeartbeatWithStats(name, pubKey, stats); err != nil {
-				log.Warn().Err(err).Msg("heartbeat failed")
+			if err := client.HeartbeatWithStats(name, pubKeyEncoded, stats); err != nil {
+				if errors.Is(err, coord.ErrPeerNotFound) {
+					// Server restarted or peer was removed - re-register
+					log.Info().Msg("peer not found on server, re-registering...")
+					publicIPs, privateIPs := proto.GetLocalIPs()
+					if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort); regErr != nil {
+						log.Error().Err(regErr).Msg("failed to re-register")
+					} else {
+						log.Info().Msg("re-registered with coordination server")
+					}
+				} else {
+					log.Warn().Err(err).Msg("heartbeat failed")
+				}
 				continue
 			}
 

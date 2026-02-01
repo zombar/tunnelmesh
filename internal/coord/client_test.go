@@ -86,6 +86,26 @@ func TestClient_Heartbeat(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestClient_HeartbeatNotFound(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "10.99.0.0/16",
+		DomainSuffix: ".mesh",
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	client := NewClient(ts.URL, "test-token")
+
+	// Heartbeat without registering should return ErrPeerNotFound
+	err = client.Heartbeat("unknown-node", "SHA256:key")
+	assert.ErrorIs(t, err, ErrPeerNotFound)
+}
+
 func TestClient_Deregister(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
