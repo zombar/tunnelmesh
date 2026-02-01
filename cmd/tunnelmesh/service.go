@@ -121,7 +121,7 @@ Log locations by platform:
 	}
 	logsCmd.Flags().StringVarP(&serviceName, "name", "n", "", "Service name")
 	logsCmd.Flags().BoolVarP(&logsFollow, "follow", "f", false, "Follow log output (like tail -f)")
-	logsCmd.Flags().IntVarP(&logsLines, "lines", "l", 50, "Number of log lines to show")
+	logsCmd.Flags().IntVar(&logsLines, "lines", 50, "Number of log lines to show")
 	serviceCmd.AddCommand(logsCmd)
 
 	return serviceCmd
