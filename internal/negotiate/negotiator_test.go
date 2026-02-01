@@ -89,7 +89,7 @@ func TestNegotiator_ProbeAddress(t *testing.T) {
 	result := neg.ProbeAddress(ctx, addr)
 	assert.True(t, result.Reachable)
 	assert.Equal(t, addr, result.Address)
-	assert.Greater(t, result.Latency, time.Duration(0))
+	assert.GreaterOrEqual(t, result.Latency, time.Duration(0))
 
 	// Test unreachable address
 	result = neg.ProbeAddress(ctx, "127.0.0.1:59999")

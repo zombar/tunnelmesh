@@ -166,7 +166,9 @@ It does not route traffic - peers connect directly to each other.`,
 // runAsService runs the application as a system service.
 // This is called when the service manager starts the application with --service-run flag.
 func runAsService() {
-	setupLogging()
+	// Set up logging directly to a file since launchd/kardianos-service
+	// may not properly redirect stderr
+	setupServiceLogging()
 
 	// Parse the service-specific flags manually
 	var mode, configPath string
@@ -274,6 +276,8 @@ func runServeFromService(ctx context.Context, configPath string) error {
 
 // runJoinFromService runs the peer mode from within a service.
 func runJoinFromService(ctx context.Context, configPath string) error {
+	log.Info().Str("config_path", configPath).Msg("runJoinFromService starting")
+
 	var cfg *config.PeerConfig
 	var err error
 
@@ -286,8 +290,28 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 		return fmt.Errorf("config file required")
 	}
 
+	log.Info().
+		Str("server", cfg.Server).
+		Str("name", cfg.Name).
+		Int("ssh_port", cfg.SSHPort).
+		Msg("config loaded")
+
 	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
 		return fmt.Errorf("server, token, and name are required in config")
+	}
+
+	// Log network interface information for debugging
+	interfaces, _ := net.Interfaces()
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0 {
+			addrs, _ := iface.Addrs()
+			for _, addr := range addrs {
+				log.Debug().
+					Str("interface", iface.Name).
+					Str("address", addr.String()).
+					Msg("network interface")
+			}
+		}
 	}
 
 	return runJoinWithConfig(ctx, cfg)
@@ -928,6 +952,15 @@ func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshCli
 		peerInfo.PublicIP = peer.PublicIPs[0]
 	}
 
+	// Log detailed peer info for debugging
+	log.Debug().
+		Str("peer", peer.Name).
+		Str("public_ip", peerInfo.PublicIP).
+		Strs("private_ips", peerInfo.PrivateIPs).
+		Int("ssh_port", peerInfo.SSHPort).
+		Bool("connectable", peerInfo.Connectable).
+		Msg("attempting to establish tunnel")
+
 	// Negotiate connection
 	result, err := negotiator.Negotiate(ctx, peerInfo)
 	if err != nil {
@@ -1296,6 +1329,27 @@ func setupLogging() {
 	zerolog.SetGlobalLevel(level)
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+}
+
+// setupServiceLogging configures logging for service mode.
+// This writes directly to a file because launchd/kardianos-service
+// may not properly redirect stderr.
+func setupServiceLogging() {
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+
+	// Try to open log file for direct writing
+	logPath := "/var/log/tunnelmesh-service.log"
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		// Fall back to stderr if we can't open the log file
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+		return
+	}
+
+	// Write to both file and stderr
+	multi := io.MultiWriter(logFile, os.Stderr)
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: multi, TimeFormat: time.RFC3339})
 }
 
 // configureSystemResolver sets up the system to resolve .mesh domains via our DNS server.

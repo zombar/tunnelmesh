@@ -121,6 +121,14 @@ func GetLocalIPsExcluding(excludeCIDR string) (public []string, private []string
 			continue
 		}
 
+		// Skip TUN/TAP interfaces (mesh network interfaces)
+		// On macOS: utun*, tun*
+		// On Linux: tun*, tap*
+		ifName := iface.Name
+		if strings.HasPrefix(ifName, "utun") || strings.HasPrefix(ifName, "tun") || strings.HasPrefix(ifName, "tap") {
+			continue
+		}
+
 		addrs, err := iface.Addrs()
 		if err != nil {
 			continue
