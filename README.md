@@ -342,7 +342,7 @@ Deploy the coordination server to DigitalOcean App Platform using Terraform.
 |----------|-------------|---------|
 | `do_token` | DigitalOcean API token (use `TF_VAR_do_token` env) | (required) |
 | `domain` | Base domain name | (required) |
-| `subdomain` | Subdomain for coord server | `coord` |
+| `subdomain` | Subdomain for coord server | `tunnelmesh` |
 | `auth_token` | Mesh authentication token | (required) |
 | `github_repo` | GitHub repo for container image | `zombar/tunnelmesh` |
 | `image_tag` | Docker image tag | `latest` |

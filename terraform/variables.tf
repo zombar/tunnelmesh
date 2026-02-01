@@ -12,7 +12,7 @@ variable "domain" {
 variable "subdomain" {
   description = "Subdomain for the coord server"
   type        = string
-  default     = "coord"
+  default     = "tunnelmesh"
 }
 
 variable "auth_token" {

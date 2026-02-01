@@ -5,8 +5,8 @@
 # Your domain name (must be managed in DigitalOcean DNS)
 domain = "example.com"
 
-# Subdomain for the coordination server (default: "coord")
-# subdomain = "coord"
+# Subdomain for the coordination server (default: "tunnelmesh")
+# subdomain = "tunnelmesh"
 
 # Authentication token for mesh peers
 # Generate with: openssl rand -hex 32
