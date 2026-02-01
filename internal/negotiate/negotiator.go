@@ -168,9 +168,28 @@ func (n *Negotiator) ProbeAll(ctx context.Context, peer *PeerInfo) []ProbeResult
 	addrs := peer.AllAddresses()
 	results := make([]ProbeResult, 0, len(addrs))
 
+	log.Debug().
+		Str("peer", peer.ID).
+		Strs("addresses", addrs).
+		Msg("probing all addresses")
+
 	for _, addr := range addrs {
 		result := n.ProbeAddress(ctx, addr)
 		results = append(results, result)
+
+		if result.Reachable {
+			log.Debug().
+				Str("peer", peer.ID).
+				Str("address", addr).
+				Dur("latency", result.Latency).
+				Msg("address is reachable")
+		} else {
+			log.Debug().
+				Str("peer", peer.ID).
+				Str("address", addr).
+				Err(result.Error).
+				Msg("address is NOT reachable")
+		}
 	}
 
 	return results
