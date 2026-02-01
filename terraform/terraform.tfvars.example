@@ -1,6 +1,6 @@
-# DigitalOcean API Token
+# DigitalOcean API Token - set via environment variable:
+#   export TF_VAR_do_token="dop_v1_xxx"
 # Get yours at: https://cloud.digitalocean.com/account/api/tokens
-do_token = "dop_v1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 # Your domain name (must be managed in DigitalOcean DNS)
 domain = "example.com"
