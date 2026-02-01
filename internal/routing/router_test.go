@@ -1,0 +1,194 @@
+package routing
+
+import (
+	"bytes"
+	"net"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestRouter_AddRoute(t *testing.T) {
+	r := NewRouter()
+
+	// Add route for peer
+	r.AddRoute("10.99.0.2", "peer1")
+	r.AddRoute("10.99.0.3", "peer2")
+
+	// Lookup
+	peer, ok := r.Lookup(net.ParseIP("10.99.0.2"))
+	assert.True(t, ok)
+	assert.Equal(t, "peer1", peer)
+
+	peer, ok = r.Lookup(net.ParseIP("10.99.0.3"))
+	assert.True(t, ok)
+	assert.Equal(t, "peer2", peer)
+}
+
+func TestRouter_RemoveRoute(t *testing.T) {
+	r := NewRouter()
+
+	r.AddRoute("10.99.0.2", "peer1")
+	assert.Equal(t, 1, r.Count())
+
+	r.RemoveRoute("10.99.0.2")
+	assert.Equal(t, 0, r.Count())
+
+	_, ok := r.Lookup(net.ParseIP("10.99.0.2"))
+	assert.False(t, ok)
+}
+
+func TestRouter_LookupNotFound(t *testing.T) {
+	r := NewRouter()
+
+	_, ok := r.Lookup(net.ParseIP("10.99.0.99"))
+	assert.False(t, ok)
+}
+
+func TestRouter_UpdateRoutes(t *testing.T) {
+	r := NewRouter()
+
+	// Add initial routes
+	r.AddRoute("10.99.0.2", "peer1")
+	r.AddRoute("10.99.0.3", "peer2")
+
+	// Bulk update
+	r.UpdateRoutes(map[string]string{
+		"10.99.0.4": "peer3",
+		"10.99.0.5": "peer4",
+	})
+
+	// Old routes gone
+	_, ok := r.Lookup(net.ParseIP("10.99.0.2"))
+	assert.False(t, ok)
+
+	// New routes exist
+	peer, ok := r.Lookup(net.ParseIP("10.99.0.4"))
+	assert.True(t, ok)
+	assert.Equal(t, "peer3", peer)
+}
+
+func TestRouter_ListRoutes(t *testing.T) {
+	r := NewRouter()
+
+	r.AddRoute("10.99.0.2", "peer1")
+	r.AddRoute("10.99.0.3", "peer2")
+
+	routes := r.ListRoutes()
+	assert.Len(t, routes, 2)
+	assert.Equal(t, "peer1", routes["10.99.0.2"])
+	assert.Equal(t, "peer2", routes["10.99.0.3"])
+}
+
+func TestBuildIPv4Packet(t *testing.T) {
+	src := net.ParseIP("10.99.0.1").To4()
+	dst := net.ParseIP("10.99.0.2").To4()
+	payload := []byte("hello")
+
+	packet := BuildIPv4Packet(src, dst, ProtoUDP, payload)
+
+	// Verify header
+	assert.Equal(t, uint8(0x45), packet[0]) // Version 4, IHL 5
+	assert.Equal(t, src, net.IP(packet[12:16]))
+	assert.Equal(t, dst, net.IP(packet[16:20]))
+	assert.Equal(t, uint8(ProtoUDP), packet[9])
+
+	// Verify payload
+	assert.Equal(t, payload, packet[20:])
+}
+
+func TestParseIPv4Packet(t *testing.T) {
+	src := net.ParseIP("10.99.0.1").To4()
+	dst := net.ParseIP("10.99.0.2").To4()
+	payload := []byte("test data")
+
+	packet := BuildIPv4Packet(src, dst, ProtoTCP, payload)
+
+	info, err := ParseIPv4Packet(packet)
+	require.NoError(t, err)
+
+	assert.Equal(t, src, info.SrcIP.To4())
+	assert.Equal(t, dst, info.DstIP.To4())
+	assert.Equal(t, uint8(ProtoTCP), info.Protocol)
+	assert.Equal(t, payload, info.Payload)
+}
+
+func TestParseIPv4Packet_TooShort(t *testing.T) {
+	_, err := ParseIPv4Packet([]byte{0x45, 0x00})
+	assert.Error(t, err)
+}
+
+func TestParseIPv4Packet_NotIPv4(t *testing.T) {
+	packet := make([]byte, 20)
+	packet[0] = 0x60 // IPv6 version
+	_, err := ParseIPv4Packet(packet)
+	assert.Error(t, err)
+}
+
+func TestPacketBuffer(t *testing.T) {
+	buf := NewPacketBuffer(1500)
+
+	data := []byte("test packet data")
+	copy(buf.Data(), data)
+	buf.SetLength(len(data))
+
+	assert.Equal(t, len(data), buf.Length())
+	assert.Equal(t, data, buf.Bytes())
+}
+
+func TestPacketBufferPool(t *testing.T) {
+	pool := NewPacketBufferPool(1500)
+
+	buf1 := pool.Get()
+	assert.NotNil(t, buf1)
+	assert.Equal(t, 1500, cap(buf1.Data()))
+
+	buf2 := pool.Get()
+	assert.NotNil(t, buf2)
+
+	pool.Put(buf1)
+	pool.Put(buf2)
+
+	// Should get recycled buffers
+	buf3 := pool.Get()
+	assert.NotNil(t, buf3)
+}
+
+func TestChecksumIPv4(t *testing.T) {
+	// Create a simple IPv4 header
+	header := []byte{
+		0x45, 0x00, 0x00, 0x73, 0x00, 0x00, 0x40, 0x00,
+		0x40, 0x11, 0x00, 0x00, // Checksum will be calculated
+		0xc0, 0xa8, 0x00, 0x01, // 192.168.0.1
+		0xc0, 0xa8, 0x00, 0xc7, // 192.168.0.199
+	}
+
+	checksum := CalculateIPv4Checksum(header)
+	assert.NotEqual(t, uint16(0), checksum)
+
+	// Set checksum and verify
+	header[10] = byte(checksum >> 8)
+	header[11] = byte(checksum)
+
+	// Recalculate should be 0 (or 0xFFFF)
+	verify := CalculateIPv4Checksum(header)
+	assert.True(t, verify == 0 || verify == 0xFFFF)
+}
+
+type mockReadWriter struct {
+	readBuf  *bytes.Buffer
+	writeBuf *bytes.Buffer
+}
+
+func (m *mockReadWriter) Read(p []byte) (int, error) {
+	return m.readBuf.Read(p)
+}
+
+func (m *mockReadWriter) Write(p []byte) (int, error) {
+	return m.writeBuf.Write(p)
+}
+
+func (m *mockReadWriter) Close() error {
+	return nil
+}

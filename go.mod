@@ -7,6 +7,7 @@ toolchain go1.24.12
 require (
 	github.com/miekg/dns v1.1.72
 	github.com/rs/zerolog v1.34.0
+	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.47.0

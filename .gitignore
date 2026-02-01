@@ -1,2 +1,6 @@
 server.yaml
 peer.yaml
+bin/
+tunnelmesh
+coverage.out
+coverage.html

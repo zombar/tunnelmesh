@@ -2,7 +2,6 @@
 
 # Build variables
 BINARY_NAME=tunnelmesh
-SERVER_BINARY=tunnelmesh-server
 BUILD_DIR=bin
 GO=go
 
@@ -14,15 +13,11 @@ LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.Bu
 
 all: build
 
-build: $(BUILD_DIR)/$(BINARY_NAME) $(BUILD_DIR)/$(SERVER_BINARY)
+build: $(BUILD_DIR)/$(BINARY_NAME)
 
 $(BUILD_DIR)/$(BINARY_NAME):
 	@mkdir -p $(BUILD_DIR)
 	$(GO) build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/tunnelmesh
-
-$(BUILD_DIR)/$(SERVER_BINARY):
-	@mkdir -p $(BUILD_DIR)
-	$(GO) build $(LDFLAGS) -o $(BUILD_DIR)/$(SERVER_BINARY) ./cmd/tunnelmesh-server
 
 test:
 	$(GO) test -race ./...
@@ -41,7 +36,6 @@ clean:
 
 install: build
 	cp $(BUILD_DIR)/$(BINARY_NAME) /usr/local/bin/
-	cp $(BUILD_DIR)/$(SERVER_BINARY) /usr/local/bin/
 
 lint:
 	golangci-lint run ./...
@@ -52,10 +46,10 @@ fmt:
 
 # Development helpers
 dev-server: build
-	./$(BUILD_DIR)/$(SERVER_BINARY) --config server.yaml
+	./$(BUILD_DIR)/$(BINARY_NAME) serve --config server.yaml
 
 dev-peer: build
-	./$(BUILD_DIR)/$(BINARY_NAME) --config peer.yaml
+	./$(BUILD_DIR)/$(BINARY_NAME) join --config peer.yaml
 
 # Generate SSH keys for testing
 gen-keys:

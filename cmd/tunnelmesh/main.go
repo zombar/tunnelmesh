@@ -1,12 +1,18 @@
-// tunnelmesh is the peer daemon for the tunnelmesh network.
+// tunnelmesh is the P2P SSH tunnel mesh network tool.
 package main
 
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,7 +22,12 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
+	"github.com/tunnelmesh/tunnelmesh/internal/negotiate"
+	"github.com/tunnelmesh/tunnelmesh/internal/routing"
+	"github.com/tunnelmesh/tunnelmesh/internal/tun"
+	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
+	"golang.org/x/crypto/ssh"
 )
 
 var (
@@ -36,15 +47,27 @@ var (
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "tunnelmesh",
-		Short: "TunnelMesh peer daemon",
+		Short: "TunnelMesh - P2P SSH tunnel mesh network",
 		Long: `TunnelMesh creates encrypted P2P tunnels between peers using SSH.
 
-It connects to a coordination server for peer discovery and establishes
-direct SSH tunnels to other peers in the mesh network.`,
+Use 'tunnelmesh serve' to run a coordination server.
+Use 'tunnelmesh join' to connect as a peer.`,
 	}
 
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file path")
 	rootCmd.PersistentFlags().StringVarP(&logLevel, "log-level", "l", "info", "log level")
+
+	// Serve command - run coordination server
+	serveCmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Run the coordination server",
+		Long: `Start the TunnelMesh coordination server.
+
+The server manages peer registration, discovery, and DNS records.
+It does not route traffic - peers connect directly to each other.`,
+		RunE: runServe,
+	}
+	rootCmd.AddCommand(serveCmd)
 
 	// Join command
 	joinCmd := &cobra.Command{
@@ -114,6 +137,62 @@ direct SSH tunnels to other peers in the mesh network.`,
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+func runServe(cmd *cobra.Command, args []string) error {
+	setupLogging()
+
+	var cfg *config.ServerConfig
+	var err error
+
+	if cfgFile != "" {
+		cfg, err = config.LoadServerConfig(cfgFile)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+	} else {
+		// Try default locations
+		defaults := []string{"server.yaml", "tunnelmesh-server.yaml"}
+		for _, path := range defaults {
+			if _, err := os.Stat(path); err == nil {
+				cfg, err = config.LoadServerConfig(path)
+				if err != nil {
+					return fmt.Errorf("load config: %w", err)
+				}
+				break
+			}
+		}
+		if cfg == nil {
+			return fmt.Errorf("config file required (use --config or create server.yaml)")
+		}
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	srv, err := coord.NewServer(cfg)
+	if err != nil {
+		return fmt.Errorf("create server: %w", err)
+	}
+
+	// Handle shutdown signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		log.Info().Msg("shutting down...")
+		os.Exit(0)
+	}()
+
+	log.Info().
+		Str("listen", cfg.Listen).
+		Str("mesh_cidr", cfg.MeshCIDR).
+		Str("domain", cfg.DomainSuffix).
+		Msg("starting coordination server")
+
+	return srv.ListenAndServe()
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -195,8 +274,66 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		Str("domain", resp.Domain).
 		Msg("joined mesh network")
 
+	// Create context for shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create TUN device
+	tunCfg := tun.Config{
+		Name:    cfg.TUN.Name,
+		MTU:     cfg.TUN.MTU,
+		Address: resp.MeshIP + "/" + strings.Split(resp.MeshCIDR, "/")[1],
+	}
+
+	tunDev, err := tun.Create(tunCfg)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to create TUN device (requires root)")
+		// Continue without TUN for now
+	} else {
+		defer tunDev.Close()
+		log.Info().
+			Str("name", tunDev.Name()).
+			Str("ip", resp.MeshIP).
+			Msg("TUN device created")
+	}
+
+	// Initialize routing and tunnel management
+	router := routing.NewRouter()
+	tunnelMgr := NewTunnelAdapter()
+	forwarder := routing.NewForwarder(router, tunnelMgr)
+	if tunDev != nil {
+		forwarder.SetTUN(tunDev)
+		forwarder.SetLocalIP(net.ParseIP(resp.MeshIP))
+	}
+
+	// Create SSH server for incoming connections
+	sshServer := tunnel.NewSSHServer(signer, nil) // Will add authorized keys dynamically
+
+	// Start SSH listener
+	sshListener, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.SSHPort))
+	if err != nil {
+		return fmt.Errorf("start SSH listener: %w", err)
+	}
+	defer sshListener.Close()
+	log.Info().Int("port", cfg.SSHPort).Msg("SSH server listening")
+
+	// Handle incoming SSH connections
+	go handleSSHConnections(ctx, sshListener, sshServer, tunnelMgr, forwarder, router)
+
+	// Create negotiator for outbound connections
+	negotiator := negotiate.NewNegotiator(negotiate.Config{
+		ProbeTimeout: 5 * time.Second,
+		MaxRetries:   3,
+		RetryDelay:   1 * time.Second,
+		AllowReverse: true,
+	})
+
+	// Create SSH client for outbound connections
+	sshClient := tunnel.NewSSHClient(signer, nil) // Accept any host key for now
+
 	// Start DNS resolver if enabled
 	var resolver *meshdns.Resolver
+	var dnsConfigured bool
 	if cfg.DNS.Enabled {
 		resolver = meshdns.NewResolver(resp.Domain, cfg.DNS.CacheTTL)
 
@@ -211,12 +348,28 @@ func runJoin(cmd *cobra.Command, args []string) error {
 			}
 		}()
 		log.Info().Str("listen", cfg.DNS.Listen).Msg("DNS server started")
+
+		// Configure system resolver
+		if err := configureSystemResolver(resp.Domain, cfg.DNS.Listen); err != nil {
+			log.Warn().Err(err).Msg("failed to configure system resolver")
+		} else {
+			dnsConfigured = true
+		}
 	}
 
-	// Start heartbeat loop
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Start packet forwarder if TUN is available
+	if tunDev != nil {
+		go func() {
+			if err := forwarder.Run(ctx); err != nil && ctx.Err() == nil {
+				log.Error().Err(err).Msg("forwarder error")
+			}
+		}()
+	}
 
+	// Start peer discovery and tunnel establishment loop
+	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder)
+
+	// Start heartbeat loop
 	go heartbeatLoop(ctx, client, cfg.Name, pubKeyFP, resolver)
 
 	// Wait for shutdown signal
@@ -225,6 +378,18 @@ func runJoin(cmd *cobra.Command, args []string) error {
 
 	<-sigChan
 	log.Info().Msg("shutting down...")
+
+	cancel() // Signal all goroutines to stop
+
+	// Clean up system resolver
+	if dnsConfigured {
+		if err := removeSystemResolver(resp.Domain); err != nil {
+			log.Warn().Err(err).Msg("failed to remove system resolver")
+		}
+	}
+
+	// Close all tunnels
+	tunnelMgr.CloseAll()
 
 	// Deregister
 	if err := client.Deregister(cfg.Name); err != nil {
@@ -238,6 +403,235 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// TunnelAdapter wraps tunnel.TunnelManager to implement routing.TunnelProvider
+type TunnelAdapter struct {
+	tunnels map[string]io.ReadWriteCloser
+	mu      sync.RWMutex
+}
+
+func NewTunnelAdapter() *TunnelAdapter {
+	return &TunnelAdapter{
+		tunnels: make(map[string]io.ReadWriteCloser),
+	}
+}
+
+func (t *TunnelAdapter) Get(name string) (io.ReadWriteCloser, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	tunnel, ok := t.tunnels[name]
+	return tunnel, ok
+}
+
+func (t *TunnelAdapter) Add(name string, tunnel io.ReadWriteCloser) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// Close existing tunnel if present
+	if existing, ok := t.tunnels[name]; ok {
+		existing.Close()
+	}
+	t.tunnels[name] = tunnel
+	log.Debug().Str("peer", name).Msg("tunnel added")
+}
+
+func (t *TunnelAdapter) Remove(name string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if tunnel, ok := t.tunnels[name]; ok {
+		tunnel.Close()
+		delete(t.tunnels, name)
+		log.Debug().Str("peer", name).Msg("tunnel removed")
+	}
+}
+
+func (t *TunnelAdapter) CloseAll() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for name, tunnel := range t.tunnels {
+		tunnel.Close()
+		delete(t.tunnels, name)
+	}
+	log.Debug().Msg("all tunnels closed")
+}
+
+func (t *TunnelAdapter) List() []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	names := make([]string, 0, len(t.tunnels))
+	for name := range t.tunnels {
+		names = append(names, name)
+	}
+	return names
+}
+
+// handleSSHConnections handles incoming SSH connections
+func handleSSHConnections(ctx context.Context, listener net.Listener, sshServer *tunnel.SSHServer,
+	tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder, router *routing.Router) {
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Error().Err(err).Msg("accept error")
+			continue
+		}
+
+		go handleSSHConnection(ctx, conn, sshServer, tunnelMgr, forwarder, router)
+	}
+}
+
+func handleSSHConnection(ctx context.Context, conn net.Conn, sshServer *tunnel.SSHServer,
+	tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder, router *routing.Router) {
+
+	sshConn, err := sshServer.Accept(conn)
+	if err != nil {
+		log.Warn().Err(err).Str("remote", conn.RemoteAddr().String()).Msg("SSH handshake failed")
+		conn.Close()
+		return
+	}
+
+	log.Info().
+		Str("remote", conn.RemoteAddr().String()).
+		Str("user", sshConn.Conn.User()).
+		Msg("incoming SSH connection")
+
+	// Handle channels
+	for newChannel := range sshConn.Channels {
+		if newChannel.ChannelType() != tunnel.ChannelType {
+			newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
+			continue
+		}
+
+		channel, _, err := newChannel.Accept()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to accept channel")
+			continue
+		}
+
+		// Create tunnel from channel
+		peerName := sshConn.Conn.User()
+		tun := tunnel.NewTunnel(channel, peerName)
+
+		// Add to tunnel manager
+		tunnelMgr.Add(peerName, tun)
+
+		// Handle incoming packets from this tunnel
+		go forwarder.HandleTunnel(ctx, peerName, tun)
+	}
+}
+
+// peerDiscoveryLoop periodically discovers peers and establishes tunnels
+func peerDiscoveryLoop(ctx context.Context, client *coord.Client, myName string,
+	sshClient *tunnel.SSHClient, negotiator *negotiate.Negotiator,
+	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder) {
+
+	// Initial peer discovery
+	discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder)
+
+	// Periodic rediscovery
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder)
+		}
+	}
+}
+
+func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName string,
+	sshClient *tunnel.SSHClient, negotiator *negotiate.Negotiator,
+	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder) {
+
+	peers, err := client.ListPeers()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list peers")
+		return
+	}
+
+	existingTunnels := tunnelMgr.List()
+	existingSet := make(map[string]bool)
+	for _, name := range existingTunnels {
+		existingSet[name] = true
+	}
+
+	for _, peer := range peers {
+		if peer.Name == myName {
+			continue // Skip self
+		}
+
+		// Update routing table with peer's mesh IP
+		router.AddRoute(peer.MeshIP, peer.Name)
+
+		// Skip if tunnel already exists
+		if existingSet[peer.Name] {
+			continue
+		}
+
+		// Try to establish tunnel
+		go establishTunnel(ctx, peer, sshClient, negotiator, tunnelMgr, forwarder)
+	}
+}
+
+func establishTunnel(ctx context.Context, peer proto.Peer, sshClient *tunnel.SSHClient,
+	negotiator *negotiate.Negotiator, tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder) {
+
+	peerInfo := &negotiate.PeerInfo{
+		ID:         peer.Name,
+		PublicIP:   "",
+		PrivateIPs: peer.PrivateIPs,
+		SSHPort:    peer.SSHPort,
+	}
+	if len(peer.PublicIPs) > 0 {
+		peerInfo.PublicIP = peer.PublicIPs[0]
+	}
+
+	// Negotiate connection
+	result, err := negotiator.Negotiate(ctx, peerInfo)
+	if err != nil {
+		log.Warn().Err(err).Str("peer", peer.Name).Msg("negotiation failed")
+		return
+	}
+
+	if result.Strategy == negotiate.StrategyReverse {
+		log.Info().Str("peer", peer.Name).Msg("peer requires reverse connection, waiting for incoming")
+		return
+	}
+
+	// Connect via SSH
+	log.Info().
+		Str("peer", peer.Name).
+		Str("addr", result.Address).
+		Msg("connecting to peer")
+
+	sshConn, err := sshClient.Connect(result.Address)
+	if err != nil {
+		log.Warn().Err(err).Str("peer", peer.Name).Msg("SSH connection failed")
+		return
+	}
+
+	// Open data channel
+	channel, _, err := sshConn.OpenChannel(tunnel.ChannelType, nil)
+	if err != nil {
+		log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to open channel")
+		sshConn.Close()
+		return
+	}
+
+	// Create tunnel and add to manager
+	tun := tunnel.NewTunnel(channel, peer.Name)
+	tunnelMgr.Add(peer.Name, tun)
+
+	log.Info().Str("peer", peer.Name).Msg("tunnel established")
+
+	// Handle incoming packets from this tunnel
+	go forwarder.HandleTunnel(ctx, peer.Name, tun)
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
@@ -408,4 +802,283 @@ func setupLogging() {
 	zerolog.SetGlobalLevel(level)
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+}
+
+// configureSystemResolver sets up the system to resolve .mesh domains via our DNS server.
+func configureSystemResolver(domain, dnsAddr string) error {
+	// Extract port from address
+	parts := strings.Split(dnsAddr, ":")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid DNS address: %s", dnsAddr)
+	}
+	port := parts[1]
+
+	// Remove leading dot from domain
+	domain = strings.TrimPrefix(domain, ".")
+
+	switch runtime.GOOS {
+	case "darwin":
+		return configureDarwinResolver(domain, port)
+	case "linux":
+		return configureLinuxResolver(domain, dnsAddr)
+	case "windows":
+		return configureWindowsResolver(domain, dnsAddr)
+	default:
+		log.Warn().Str("os", runtime.GOOS).Msg("automatic DNS configuration not supported on this OS")
+		return nil
+	}
+}
+
+// removeSystemResolver removes the system resolver configuration.
+func removeSystemResolver(domain string) error {
+	domain = strings.TrimPrefix(domain, ".")
+
+	switch runtime.GOOS {
+	case "darwin":
+		return removeDarwinResolver(domain)
+	case "linux":
+		return removeLinuxResolver(domain)
+	case "windows":
+		return removeWindowsResolver(domain)
+	default:
+		return nil
+	}
+}
+
+func configureDarwinResolver(domain, port string) error {
+	resolverDir := "/etc/resolver"
+	resolverFile := filepath.Join(resolverDir, domain)
+
+	// Check if we can write directly (running as root)
+	content := fmt.Sprintf("nameserver 127.0.0.1\nport %s\n", port)
+
+	// Try to create directory and file
+	if err := os.MkdirAll(resolverDir, 0755); err != nil {
+		// Need sudo - try with sudo
+		log.Info().Msg("configuring system DNS resolver (requires sudo)...")
+
+		// Create resolver directory
+		cmd := exec.Command("sudo", "mkdir", "-p", resolverDir)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to create resolver directory: %w", err)
+		}
+
+		// Write resolver file using tee
+		cmd = exec.Command("sudo", "tee", resolverFile)
+		cmd.Stdin = strings.NewReader(content)
+		cmd.Stdout = nil // Suppress tee output
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to write resolver file: %w", err)
+		}
+
+		log.Info().Str("file", resolverFile).Msg("system resolver configured")
+		return nil
+	}
+
+	// We have permissions, write directly
+	if err := os.WriteFile(resolverFile, []byte(content), 0644); err != nil {
+		return fmt.Errorf("write resolver file: %w", err)
+	}
+
+	log.Info().Str("file", resolverFile).Msg("system resolver configured")
+	return nil
+}
+
+func removeDarwinResolver(domain string) error {
+	resolverFile := filepath.Join("/etc/resolver", domain)
+
+	// Check if file exists
+	if _, err := os.Stat(resolverFile); os.IsNotExist(err) {
+		return nil
+	}
+
+	// Try to remove directly
+	if err := os.Remove(resolverFile); err != nil {
+		// Need sudo
+		cmd := exec.Command("sudo", "rm", "-f", resolverFile)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to remove resolver file: %w", err)
+		}
+	}
+
+	log.Info().Str("file", resolverFile).Msg("system resolver removed")
+	return nil
+}
+
+func configureLinuxResolver(domain, dnsAddr string) error {
+	parts := strings.Split(dnsAddr, ":")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid DNS address: %s", dnsAddr)
+	}
+	ip := parts[0]
+	port := parts[1]
+
+	// Try systemd-resolved first (most common on modern Linux)
+	if _, err := exec.LookPath("resolvectl"); err == nil {
+		return configureSystemdResolved(domain, ip, port)
+	}
+
+	// Fallback: create a config file for systemd-resolved
+	confDir := "/etc/systemd/resolved.conf.d"
+	if _, err := os.Stat("/etc/systemd/resolved.conf"); err == nil {
+		return configureSystemdResolvedFile(domain, ip, port, confDir)
+	}
+
+	log.Warn().
+		Str("domain", domain).
+		Str("dns", dnsAddr).
+		Msg("could not auto-configure DNS; manually add DNS server or use: dig @127.0.0.1 -p PORT hostname.mesh")
+	return nil
+}
+
+func configureSystemdResolved(domain, ip, port string) error {
+	log.Info().Msg("configuring systemd-resolved (requires sudo)...")
+
+	// Use resolvectl to set DNS for the mesh domain
+	// Note: This sets a global DNS that only handles .mesh
+	cmd := exec.Command("sudo", "resolvectl", "dns", "lo", ip+":"+port)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("resolvectl dns failed: %w", err)
+	}
+
+	cmd = exec.Command("sudo", "resolvectl", "domain", "lo", "~"+domain)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("resolvectl domain failed: %w", err)
+	}
+
+	log.Info().Str("domain", domain).Msg("systemd-resolved configured")
+	return nil
+}
+
+func configureSystemdResolvedFile(domain, ip, port, confDir string) error {
+	log.Info().Msg("configuring systemd-resolved via config file (requires sudo)...")
+
+	content := fmt.Sprintf(`# TunnelMesh DNS configuration
+[Resolve]
+DNS=%s:%s
+Domains=~%s
+`, ip, port, domain)
+
+	confFile := filepath.Join(confDir, "tunnelmesh.conf")
+
+	// Create directory
+	cmd := exec.Command("sudo", "mkdir", "-p", confDir)
+	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("mkdir failed: %w", err)
+	}
+
+	// Write config
+	cmd = exec.Command("sudo", "tee", confFile)
+	cmd.Stdin = strings.NewReader(content)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("write config failed: %w", err)
+	}
+
+	// Restart systemd-resolved
+	cmd = exec.Command("sudo", "systemctl", "restart", "systemd-resolved")
+	cmd.Stderr = os.Stderr
+	cmd.Run() // Ignore error, might not need restart
+
+	log.Info().Str("file", confFile).Msg("systemd-resolved configured")
+	return nil
+}
+
+func removeLinuxResolver(domain string) error {
+	// Try resolvectl first
+	if _, err := exec.LookPath("resolvectl"); err == nil {
+		cmd := exec.Command("sudo", "resolvectl", "revert", "lo")
+		cmd.Stdin = os.Stdin
+		cmd.Stderr = os.Stderr
+		cmd.Run() // Ignore errors
+	}
+
+	// Remove config file if it exists
+	confFile := "/etc/systemd/resolved.conf.d/tunnelmesh.conf"
+	if _, err := os.Stat(confFile); err == nil {
+		cmd := exec.Command("sudo", "rm", "-f", confFile)
+		cmd.Stdin = os.Stdin
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("remove config failed: %w", err)
+		}
+
+		// Restart systemd-resolved
+		cmd = exec.Command("sudo", "systemctl", "restart", "systemd-resolved")
+		cmd.Stderr = os.Stderr
+		cmd.Run()
+
+		log.Info().Msg("systemd-resolved configuration removed")
+	}
+
+	return nil
+}
+
+func configureWindowsResolver(domain, dnsAddr string) error {
+	parts := strings.Split(dnsAddr, ":")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid DNS address: %s", dnsAddr)
+	}
+	ip := parts[0]
+	port := parts[1]
+
+	log.Info().Msg("configuring Windows DNS (requires Administrator)...")
+
+	// Windows doesn't natively support per-domain DNS or custom ports easily
+	// We'll use NRPT (Name Resolution Policy Table) via PowerShell
+	// This requires running as Administrator
+
+	// PowerShell command to add NRPT rule
+	psCmd := fmt.Sprintf(`Add-DnsClientNrptRule -Namespace ".%s" -NameServers "%s"`, domain, ip)
+
+	if port != "53" {
+		// Windows NRPT doesn't support custom ports directly
+		// We'd need to run a local DNS proxy on port 53
+		log.Warn().
+			Str("port", port).
+			Msg("Windows requires DNS on port 53; consider changing dns.listen to 127.0.0.1:53")
+		return fmt.Errorf("Windows requires DNS on port 53, got port %s", port)
+	}
+
+	cmd := exec.Command("powershell", "-Command", psCmd)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("PowerShell NRPT rule failed: %w", err)
+	}
+
+	log.Info().Str("domain", domain).Msg("Windows NRPT rule configured")
+	return nil
+}
+
+func removeWindowsResolver(domain string) error {
+	// Remove NRPT rule
+	psCmd := fmt.Sprintf(`Get-DnsClientNrptRule | Where-Object {$_.Namespace -eq ".%s"} | Remove-DnsClientNrptRule -Force`, domain)
+
+	cmd := exec.Command("powershell", "-Command", psCmd)
+	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		log.Warn().Err(err).Msg("failed to remove Windows NRPT rule")
+		return err
+	}
+
+	log.Info().Msg("Windows NRPT rule removed")
+	return nil
 }
