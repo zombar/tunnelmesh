@@ -97,6 +97,8 @@ func (m *MeshNode) DiscoverAndConnectPeers(ctx context.Context) {
 
 		// Update routing table with peer's mesh IP
 		m.router.AddRoute(peer.MeshIP, peer.Name)
+		// Cache peer mesh IP for use when coord server is unreachable
+		m.CachePeerMeshIP(peer.Name, peer.MeshIP)
 
 		// Skip if tunnel already exists
 		if existingSet[peer.Name] {
@@ -292,6 +294,7 @@ func (m *MeshNode) RefreshAuthorizedKeys() {
 			}
 		}
 		m.router.AddRoute(peer.MeshIP, peer.Name)
+		m.CachePeerMeshIP(peer.Name, peer.MeshIP)
 	}
 	log.Debug().Int("peers", len(peers)).Msg("refreshed authorized keys")
 }

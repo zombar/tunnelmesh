@@ -60,6 +60,10 @@ type MeshNode struct {
 	lastBehindNAT     bool
 	heartbeatIPsIsSet bool
 
+	// Peer cache for routing (mesh IP lookup when coord server unreachable)
+	peerCacheMu sync.RWMutex
+	peerCache   map[string]string // peer name -> mesh IP
+
 	// Optional components
 	Resolver *dns.Resolver
 }
@@ -74,6 +78,7 @@ func NewMeshNode(identity *PeerIdentity, client *coord.Client) *MeshNode {
 		connecting:       make(map[string]bool),
 		outboundCancels:  make(map[string]context.CancelFunc),
 		triggerDiscovery: make(chan struct{}, 1),
+		peerCache:        make(map[string]string),
 	}
 	node.lastNetworkChange.Store(time.Time{})
 	return node
@@ -201,6 +206,21 @@ func (m *MeshNode) SetHeartbeatIPs(publicIPs, privateIPs []string, behindNAT boo
 	m.lastPrivateIPs = privateIPs
 	m.lastBehindNAT = behindNAT
 	m.heartbeatIPsIsSet = true
+}
+
+// CachePeerMeshIP caches the mesh IP for a peer.
+func (m *MeshNode) CachePeerMeshIP(peerName, meshIP string) {
+	m.peerCacheMu.Lock()
+	defer m.peerCacheMu.Unlock()
+	m.peerCache[peerName] = meshIP
+}
+
+// GetCachedPeerMeshIP returns the cached mesh IP for a peer.
+func (m *MeshNode) GetCachedPeerMeshIP(peerName string) (string, bool) {
+	m.peerCacheMu.RLock()
+	defer m.peerCacheMu.RUnlock()
+	meshIP, ok := m.peerCache[peerName]
+	return meshIP, ok
 }
 
 // IPsChanged returns true if the provided IPs differ from the last known IPs.
