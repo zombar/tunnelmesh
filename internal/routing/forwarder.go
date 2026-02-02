@@ -51,6 +51,7 @@ type Forwarder struct {
 	tunnels   TunnelProvider
 	tun       TUNDevice
 	bufPool   *PacketBufferPool
+	framePool *sync.Pool // Pool for frame buffers (header + MTU)
 	stats     ForwarderStats
 	tunMu     sync.RWMutex
 	localIP   net.IP
@@ -63,6 +64,14 @@ func NewForwarder(router *Router, tunnels TunnelProvider) *Forwarder {
 		router:  router,
 		tunnels: tunnels,
 		bufPool: NewPacketBufferPool(MaxPacketSize),
+		framePool: &sync.Pool{
+			New: func() interface{} {
+				// Allocate buffer for header + max packet size
+				// Use pointer to slice to avoid allocation on Put (SA6002)
+				buf := make([]byte, FrameHeaderSize+MaxPacketSize)
+				return &buf
+			},
+		},
 	}
 }
 
@@ -168,40 +177,46 @@ func (f *Forwarder) ReceivePacket(packet []byte) error {
 // writeFrame writes a length-prefixed frame to the tunnel.
 func (f *Forwarder) writeFrame(w io.Writer, packet []byte) error {
 	// Frame format: [2 bytes length][1 byte proto][payload]
-	frameLen := len(packet) + 1
-	header := make([]byte, FrameHeaderSize)
-	binary.BigEndian.PutUint16(header[0:2], uint16(frameLen))
-	header[2] = 0x01 // IP packet
+	// Use pooled buffer to avoid allocations and combine into single write
+	bufPtr := f.framePool.Get().(*[]byte)
+	buf := *bufPtr
+	defer f.framePool.Put(bufPtr)
 
-	if _, err := w.Write(header); err != nil {
-		return err
-	}
-	if _, err := w.Write(packet); err != nil {
-		return err
-	}
-	return nil
+	frameLen := len(packet) + 1
+	binary.BigEndian.PutUint16(buf[0:2], uint16(frameLen))
+	buf[2] = 0x01 // IP packet
+	copy(buf[FrameHeaderSize:], packet)
+
+	_, err := w.Write(buf[:FrameHeaderSize+len(packet)])
+	return err
 }
 
-// readFrame reads a length-prefixed frame from the tunnel.
-func (f *Forwarder) readFrame(r io.Reader) ([]byte, error) {
-	header := make([]byte, FrameHeaderSize)
-	if _, err := io.ReadFull(r, header); err != nil {
-		return nil, err
+// readFrame reads a length-prefixed frame from the tunnel into the provided buffer.
+// Returns the number of payload bytes read (excluding protocol byte).
+func (f *Forwarder) readFrame(r io.Reader, buf []byte) (int, error) {
+	// Use stack-allocated header to avoid allocation
+	var header [FrameHeaderSize]byte
+	if _, err := io.ReadFull(r, header[:]); err != nil {
+		return 0, err
 	}
 
 	frameLen := int(binary.BigEndian.Uint16(header[0:2]))
 	if frameLen < 1 {
-		return nil, fmt.Errorf("invalid frame length: %d", frameLen)
+		return 0, fmt.Errorf("invalid frame length: %d", frameLen)
 	}
 
 	// frameLen includes the protocol byte
 	payloadLen := frameLen - 1
-	payload := make([]byte, payloadLen)
-	if _, err := io.ReadFull(r, payload); err != nil {
-		return nil, err
+	if payloadLen > len(buf) {
+		return 0, fmt.Errorf("frame too large: %d bytes", payloadLen)
 	}
 
-	return payload, nil
+	// Read payload directly into buffer
+	if _, err := io.ReadFull(r, buf[:payloadLen]); err != nil {
+		return 0, err
+	}
+
+	return payloadLen, nil
 }
 
 // Stats returns a copy of the forwarding statistics.
@@ -255,11 +270,9 @@ func (f *Forwarder) Run(ctx context.Context) error {
 			continue
 		}
 
-		packet := make([]byte, n)
-		copy(packet, buf.Data()[:n])
-
-		// Forward the packet
-		if err := f.ForwardPacket(packet); err != nil {
+		// Forward the packet directly from buffer (no copy needed,
+		// packet is fully processed before next Read)
+		if err := f.ForwardPacket(buf.Data()[:n]); err != nil {
 			log.Debug().Err(err).Msg("forward packet failed")
 		}
 	}
@@ -269,6 +282,10 @@ func (f *Forwarder) Run(ctx context.Context) error {
 func (f *Forwarder) HandleTunnel(ctx context.Context, peerName string, tunnel io.ReadWriteCloser) {
 	log.Info().Str("peer", peerName).Msg("handling tunnel")
 
+	// Get a buffer from the pool for the lifetime of this tunnel handler
+	buf := f.bufPool.Get()
+	defer f.bufPool.Put(buf)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -276,8 +293,8 @@ func (f *Forwarder) HandleTunnel(ctx context.Context, peerName string, tunnel io
 		default:
 		}
 
-		// Read frame from tunnel
-		packet, err := f.readFrame(tunnel)
+		// Read frame from tunnel into pooled buffer
+		n, err := f.readFrame(tunnel, buf.Data())
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -290,8 +307,8 @@ func (f *Forwarder) HandleTunnel(ctx context.Context, peerName string, tunnel io
 			return
 		}
 
-		// Write to TUN
-		if err := f.ReceivePacket(packet); err != nil {
+		// Write to TUN (use slice of buffer, no copy needed)
+		if err := f.ReceivePacket(buf.Data()[:n]); err != nil {
 			log.Debug().Err(err).Msg("receive packet failed")
 		}
 	}

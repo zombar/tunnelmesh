@@ -174,3 +174,45 @@ func TestChecksumIPv4(t *testing.T) {
 	verify := CalculateIPv4Checksum(header)
 	assert.True(t, verify == 0 || verify == 0xFFFF)
 }
+
+// BenchmarkRouterLookup benchmarks the router lookup with binary IP keys.
+func BenchmarkRouterLookup(b *testing.B) {
+	r := NewRouter()
+
+	// Add 100 routes
+	for i := 0; i < 100; i++ {
+		ip := net.IPv4(10, 99, byte(i/256), byte(i%256)).String()
+		r.AddRoute(ip, "peer"+string(rune(i)))
+	}
+
+	lookupIP := net.ParseIP("10.99.0.50")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.Lookup(lookupIP)
+	}
+}
+
+// BenchmarkForwardPacket benchmarks packet forwarding with buffer pooling.
+func BenchmarkForwardPacket(b *testing.B) {
+	router := NewRouter()
+	router.AddRoute("10.99.0.2", "peer1")
+
+	tunnelMgr := NewMockTunnelManager()
+	tunnel := newMockTunnel()
+	tunnelMgr.Add("peer1", tunnel)
+
+	fwd := NewForwarder(router, tunnelMgr)
+
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.2").To4()
+	payload := make([]byte, 1000) // 1KB payload
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, payload)
+
+	b.ResetTimer()
+	b.SetBytes(int64(len(packet)))
+
+	for i := 0; i < b.N; i++ {
+		_ = fwd.ForwardPacket(packet)
+	}
+}

@@ -15,38 +15,76 @@ const (
 	ProtoUDP  = 17
 )
 
+// ipv4Key is a fixed-size key for IPv4 addresses (avoids string allocation).
+type ipv4Key [4]byte
+
 // Router manages routes from mesh IPs to peer IDs.
 type Router struct {
 	mu     sync.RWMutex
-	routes map[string]string // IP string -> peer ID
+	routes map[ipv4Key]string // Binary IPv4 -> peer ID
 }
 
 // NewRouter creates a new Router.
 func NewRouter() *Router {
 	return &Router{
-		routes: make(map[string]string),
+		routes: make(map[ipv4Key]string),
 	}
+}
+
+// parseIPv4Key converts an IP string to a binary key.
+func parseIPv4Key(ip string) (ipv4Key, bool) {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return ipv4Key{}, false
+	}
+	v4 := parsed.To4()
+	if v4 == nil {
+		return ipv4Key{}, false
+	}
+	var key ipv4Key
+	copy(key[:], v4)
+	return key, true
+}
+
+// netIPToKey converts a net.IP to a binary key.
+func netIPToKey(ip net.IP) ipv4Key {
+	var key ipv4Key
+	v4 := ip.To4()
+	if v4 != nil {
+		copy(key[:], v4)
+	}
+	return key
 }
 
 // AddRoute adds a route for an IP to a peer.
 func (r *Router) AddRoute(ip string, peerID string) {
+	key, ok := parseIPv4Key(ip)
+	if !ok {
+		return // Invalid IP, silently ignore
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.routes[ip] = peerID
+	r.routes[key] = peerID
 }
 
 // RemoveRoute removes a route for an IP.
 func (r *Router) RemoveRoute(ip string) {
+	key, ok := parseIPv4Key(ip)
+	if !ok {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.routes, ip)
+	delete(r.routes, key)
 }
 
 // Lookup finds the peer ID for a destination IP.
+// Uses binary key lookup to avoid string allocation.
 func (r *Router) Lookup(ip net.IP) (string, bool) {
+	key := netIPToKey(ip)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	peerID, ok := r.routes[ip.String()]
+	peerID, ok := r.routes[key]
 	return peerID, ok
 }
 
@@ -61,9 +99,11 @@ func (r *Router) Count() int {
 func (r *Router) UpdateRoutes(routes map[string]string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.routes = make(map[string]string)
+	r.routes = make(map[ipv4Key]string)
 	for ip, peerID := range routes {
-		r.routes[ip] = peerID
+		if key, ok := parseIPv4Key(ip); ok {
+			r.routes[key] = peerID
+		}
 	}
 }
 
@@ -72,7 +112,8 @@ func (r *Router) ListRoutes() map[string]string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	result := make(map[string]string)
-	for ip, peerID := range r.routes {
+	for key, peerID := range r.routes {
+		ip := net.IP(key[:]).String()
 		result[ip] = peerID
 	}
 	return result
