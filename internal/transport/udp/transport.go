@@ -55,6 +55,12 @@ type Transport struct {
 	// Pending handshakes (local index -> response channel)
 	pendingHandshakes map[uint32]chan handshakeResponse
 
+	// Rate limiting for rekey-required messages (source addr -> last sent time)
+	rekeyRateLimit map[string]time.Time
+
+	// Callback for session invalidation (called when we receive rekey-required)
+	onSessionInvalid func(peerName string)
+
 	// State
 	running atomic.Bool
 	closeCh chan struct{}
@@ -136,6 +142,7 @@ func New(cfg Config) (*Transport, error) {
 		sessions:          make(map[uint32]*Session),
 		peerSessions:      make(map[string]*Session),
 		pendingHandshakes: make(map[uint32]chan handshakeResponse),
+		rekeyRateLimit:    make(map[string]time.Time),
 		closeCh:           make(chan struct{}),
 	}
 
@@ -145,6 +152,17 @@ func New(cfg Config) (*Transport, error) {
 // Type returns the transport type.
 func (t *Transport) Type() transport.TransportType {
 	return transport.TransportUDP
+}
+
+// rekeyRateLimitInterval is the minimum time between rekey-required messages to the same source.
+const rekeyRateLimitInterval = 5 * time.Second
+
+// SetSessionInvalidCallback sets the callback for session invalidation.
+// This is called when we receive a rekey-required message indicating our session is stale.
+func (t *Transport) SetSessionInvalidCallback(cb func(peerName string)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.onSessionInvalid = cb
 }
 
 // selectSocketForPeer returns the appropriate socket for communicating with the peer.
@@ -283,6 +301,8 @@ func (t *Transport) handlePacket(data []byte, remoteAddr *net.UDPAddr, conn *net
 		} else {
 			t.handleKeepalive(header, remoteAddr)
 		}
+	case PacketTypeRekeyRequired:
+		t.handleRekeyRequired(data, remoteAddr)
 	}
 }
 
@@ -298,6 +318,9 @@ func (t *Transport) handleDataPacket(header *PacketHeader, ciphertext []byte, re
 			Str("from", remoteAddr.String()).
 			Int("ciphertext_len", len(ciphertext)).
 			Msg("data packet for unknown session")
+
+		// Send rekey-required message (rate limited)
+		t.sendRekeyRequired(header.Receiver, remoteAddr)
 		return
 	}
 
@@ -329,6 +352,106 @@ func (t *Transport) handleKeepalive(header *PacketHeader, remoteAddr *net.UDPAdd
 
 	if ok {
 		session.UpdateRemoteAddr(remoteAddr)
+	}
+}
+
+// sendRekeyRequired sends a rekey-required message to tell the peer their session is stale.
+// This is rate-limited to prevent flooding.
+func (t *Transport) sendRekeyRequired(unknownIndex uint32, remoteAddr *net.UDPAddr) {
+	addrKey := remoteAddr.String()
+
+	// Check rate limit
+	t.mu.Lock()
+	lastSent, exists := t.rekeyRateLimit[addrKey]
+	if exists && time.Since(lastSent) < rekeyRateLimitInterval {
+		t.mu.Unlock()
+		return
+	}
+	t.rekeyRateLimit[addrKey] = time.Now()
+	t.mu.Unlock()
+
+	// Build and send rekey-required packet
+	pkt := NewRekeyRequiredPacket(unknownIndex)
+	data := pkt.Marshal()
+
+	// Select the appropriate socket based on address family
+	conn := t.selectSocketForAddr(remoteAddr)
+	if conn == nil {
+		log.Debug().Str("addr", addrKey).Msg("no socket available for rekey-required")
+		return
+	}
+
+	if _, err := conn.WriteToUDP(data, remoteAddr); err != nil {
+		log.Debug().Err(err).Str("addr", addrKey).Msg("failed to send rekey-required")
+		return
+	}
+
+	log.Debug().
+		Uint32("unknown_index", unknownIndex).
+		Str("to", addrKey).
+		Msg("sent rekey-required")
+}
+
+// selectSocketForAddr returns the appropriate socket for an address.
+func (t *Transport) selectSocketForAddr(addr *net.UDPAddr) *net.UDPConn {
+	if addr.IP.To4() != nil {
+		// IPv4 address
+		if t.conn != nil {
+			return t.conn
+		}
+		return t.conn6 // Fallback to IPv6 socket if no IPv4
+	}
+	// IPv6 address
+	if t.conn6 != nil {
+		return t.conn6
+	}
+	return t.conn // Fallback to IPv4 socket
+}
+
+// handleRekeyRequired processes a rekey-required message from a peer.
+// This indicates our session is stale on their side and we need to re-handshake.
+func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
+	pkt, err := UnmarshalRekeyRequired(data)
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to parse rekey-required")
+		return
+	}
+
+	// Find session by the index the peer says is unknown
+	// This is OUR local index that we sent them during handshake
+	t.mu.Lock()
+	session, ok := t.sessions[pkt.UnknownIndex]
+	if !ok {
+		t.mu.Unlock()
+		log.Debug().
+			Uint32("index", pkt.UnknownIndex).
+			Str("from", remoteAddr.String()).
+			Msg("rekey-required for unknown local index (already removed?)")
+		return
+	}
+
+	peerName := session.PeerName()
+
+	// Remove the stale session
+	delete(t.sessions, pkt.UnknownIndex)
+	delete(t.peerSessions, peerName)
+
+	// Get callback while holding lock, then release before calling
+	cb := t.onSessionInvalid
+	t.mu.Unlock()
+
+	log.Info().
+		Str("peer", peerName).
+		Uint32("index", pkt.UnknownIndex).
+		Str("from", remoteAddr.String()).
+		Msg("session invalidated by peer, re-handshake needed")
+
+	// Close the old session
+	session.Close()
+
+	// Notify upper layer to re-establish connection
+	if cb != nil {
+		cb(peerName)
 	}
 }
 

@@ -12,6 +12,7 @@ const (
 	PacketTypeHandshakeResponse = 0x02
 	PacketTypeData              = 0x04
 	PacketTypeKeepalive         = 0x05
+	PacketTypeRekeyRequired     = 0x06 // Sent when session not found, tells peer to re-handshake
 )
 
 // Packet sizes
@@ -123,4 +124,39 @@ func NewKeepalivePacket(receiver uint32) *KeepalivePacket {
 			Counter:  0, // Keepalives don't use counter
 		},
 	}
+}
+
+// RekeyRequiredPacket is sent when we receive data for an unknown session.
+// It tells the sender that their session is stale and they need to re-handshake.
+// Format: [1 type][4 unknown_receiver_index]
+type RekeyRequiredPacket struct {
+	UnknownIndex uint32 // The receiver index we received but don't recognize
+}
+
+// RekeyRequiredSize is the size of a rekey-required packet.
+const RekeyRequiredSize = 5
+
+// NewRekeyRequiredPacket creates a rekey-required packet.
+func NewRekeyRequiredPacket(unknownIndex uint32) *RekeyRequiredPacket {
+	return &RekeyRequiredPacket{
+		UnknownIndex: unknownIndex,
+	}
+}
+
+// Marshal serializes the rekey-required packet.
+func (p *RekeyRequiredPacket) Marshal() []byte {
+	buf := make([]byte, RekeyRequiredSize)
+	buf[0] = PacketTypeRekeyRequired
+	binary.BigEndian.PutUint32(buf[1:5], p.UnknownIndex)
+	return buf
+}
+
+// UnmarshalRekeyRequired parses a rekey-required packet from bytes.
+func UnmarshalRekeyRequired(data []byte) (*RekeyRequiredPacket, error) {
+	if len(data) < RekeyRequiredSize {
+		return nil, fmt.Errorf("rekey packet too short: %d < %d", len(data), RekeyRequiredSize)
+	}
+	return &RekeyRequiredPacket{
+		UnknownIndex: binary.BigEndian.Uint32(data[1:5]),
+	}, nil
 }
