@@ -1057,3 +1057,170 @@ func TestInitialChainKeyAndHash(t *testing.T) {
 		t.Error("InitialChainKey doesn't match expected value")
 	}
 }
+
+// =============================================================================
+// Dual-Stack IPv4/IPv6 Tests
+// =============================================================================
+
+func TestSelectSocketForPeer_IPv4(t *testing.T) {
+	priv, pub, _ := X25519KeyPair()
+	transport := &Transport{
+		staticPrivate: priv,
+		staticPublic:  pub,
+	}
+
+	// Create mock IPv4 socket
+	addr4, _ := net.ResolveUDPAddr("udp4", "127.0.0.1:0")
+	conn4, err := net.ListenUDP("udp4", addr4)
+	if err != nil {
+		t.Skipf("cannot create IPv4 socket: %v", err)
+	}
+	defer conn4.Close()
+	transport.conn = conn4
+
+	// Create mock IPv6 socket
+	addr6, _ := net.ResolveUDPAddr("udp6", "[::1]:0")
+	conn6, err := net.ListenUDP("udp6", addr6)
+	if err != nil {
+		t.Logf("cannot create IPv6 socket (may be disabled): %v", err)
+	} else {
+		defer conn6.Close()
+		transport.conn6 = conn6
+	}
+
+	// IPv4 peer should use IPv4 socket
+	peerAddr4, _ := net.ResolveUDPAddr("udp", "192.168.1.1:2228")
+	selected := transport.selectSocketForPeer(peerAddr4)
+	if selected != conn4 {
+		t.Error("IPv4 peer should select IPv4 socket")
+	}
+}
+
+func TestSelectSocketForPeer_IPv6(t *testing.T) {
+	priv, pub, _ := X25519KeyPair()
+	transport := &Transport{
+		staticPrivate: priv,
+		staticPublic:  pub,
+	}
+
+	// Create mock IPv4 socket
+	addr4, _ := net.ResolveUDPAddr("udp4", "127.0.0.1:0")
+	conn4, err := net.ListenUDP("udp4", addr4)
+	if err != nil {
+		t.Skipf("cannot create IPv4 socket: %v", err)
+	}
+	defer conn4.Close()
+	transport.conn = conn4
+
+	// Create mock IPv6 socket
+	addr6, _ := net.ResolveUDPAddr("udp6", "[::1]:0")
+	conn6, err := net.ListenUDP("udp6", addr6)
+	if err != nil {
+		t.Skipf("cannot create IPv6 socket (may be disabled): %v", err)
+	}
+	defer conn6.Close()
+	transport.conn6 = conn6
+
+	// IPv6 peer should use IPv6 socket
+	peerAddr6, _ := net.ResolveUDPAddr("udp", "[2001:db8::1]:2228")
+	selected := transport.selectSocketForPeer(peerAddr6)
+	if selected != conn6 {
+		t.Error("IPv6 peer should select IPv6 socket")
+	}
+}
+
+func TestSelectSocketForPeer_FallbackToIPv4(t *testing.T) {
+	priv, pub, _ := X25519KeyPair()
+	transport := &Transport{
+		staticPrivate: priv,
+		staticPublic:  pub,
+	}
+
+	// Only create IPv4 socket (no IPv6)
+	addr4, _ := net.ResolveUDPAddr("udp4", "127.0.0.1:0")
+	conn4, err := net.ListenUDP("udp4", addr4)
+	if err != nil {
+		t.Skipf("cannot create IPv4 socket: %v", err)
+	}
+	defer conn4.Close()
+	transport.conn = conn4
+	transport.conn6 = nil // No IPv6 socket
+
+	// IPv6 peer should fall back to IPv4 socket
+	peerAddr6, _ := net.ResolveUDPAddr("udp", "[2001:db8::1]:2228")
+	selected := transport.selectSocketForPeer(peerAddr6)
+	if selected != conn4 {
+		t.Error("IPv6 peer should fall back to IPv4 socket when no IPv6 available")
+	}
+}
+
+func TestTransportStart_DualStack(t *testing.T) {
+	priv, pub, _ := X25519KeyPair()
+	cfg := Config{
+		Port:          0, // Let OS assign port
+		StaticPrivate: priv,
+		StaticPublic:  pub,
+	}
+
+	transport, err := New(cfg)
+	if err != nil {
+		t.Fatalf("create transport: %v", err)
+	}
+
+	err = transport.Start()
+	if err != nil {
+		t.Fatalf("start transport: %v", err)
+	}
+	defer transport.Close()
+
+	// At least one socket should be created
+	if transport.conn == nil && transport.conn6 == nil {
+		t.Error("at least one socket should be created")
+	}
+
+	// On most systems, IPv4 should be available
+	if transport.conn == nil {
+		t.Log("Warning: IPv4 socket not created")
+	} else {
+		t.Logf("IPv4 socket: %s", transport.conn.LocalAddr())
+	}
+
+	// IPv6 may not be available on all systems
+	if transport.conn6 == nil {
+		t.Log("Note: IPv6 socket not created (may be disabled on this system)")
+	} else {
+		t.Logf("IPv6 socket: %s", transport.conn6.LocalAddr())
+	}
+}
+
+func TestTransportClose_DualStack(t *testing.T) {
+	priv, pub, _ := X25519KeyPair()
+	cfg := Config{
+		Port:          0,
+		StaticPrivate: priv,
+		StaticPublic:  pub,
+	}
+
+	transport, _ := New(cfg)
+	_ = transport.Start()
+
+	// Close should not error
+	err := transport.Close()
+	if err != nil {
+		t.Errorf("close transport: %v", err)
+	}
+
+	// Sockets should be closed (writing should fail)
+	if transport.conn != nil {
+		_, err = transport.conn.WriteToUDP([]byte{0}, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234})
+		if err == nil {
+			t.Error("write to closed IPv4 socket should fail")
+		}
+	}
+	if transport.conn6 != nil {
+		_, err = transport.conn6.WriteToUDP([]byte{0}, &net.UDPAddr{IP: net.IPv6loopback, Port: 1234})
+		if err == nil {
+			t.Error("write to closed IPv6 socket should fail")
+		}
+	}
+}

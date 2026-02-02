@@ -32,16 +32,18 @@ type Transport struct {
 	// Configuration
 	config Config
 
-	// Network
-	conn     *net.UDPConn
+	// Network - dual-stack support with separate IPv4 and IPv6 sockets
+	conn     *net.UDPConn // IPv4 socket (or single socket if dual-stack disabled)
+	conn6    *net.UDPConn // IPv6 socket (nil if not available)
 	listener *Listener
 
 	// Identity
 	staticPrivate [32]byte
 	staticPublic  [32]byte
 
-	// Our discovered external address (set after registration)
-	externalAddr string
+	// Our discovered external addresses (set after registration)
+	externalAddr  string // IPv4 external address
+	externalAddr6 string // IPv6 external address
 
 	// Sessions (indexed by local index)
 	sessions map[uint32]*Session
@@ -144,49 +146,100 @@ func (t *Transport) Type() transport.TransportType {
 	return transport.TransportUDP
 }
 
+// selectSocketForPeer returns the appropriate socket for communicating with the peer.
+// Returns the IPv4 socket for IPv4 addresses, IPv6 socket for IPv6 addresses.
+func (t *Transport) selectSocketForPeer(peerAddr *net.UDPAddr) *net.UDPConn {
+	if peerAddr.IP.To4() != nil {
+		// Peer is IPv4
+		return t.conn
+	}
+	// Peer is IPv6
+	if t.conn6 != nil {
+		return t.conn6
+	}
+	// Fall back to main connection if no IPv6 socket (might be dual-stack)
+	return t.conn
+}
+
 // Start starts the UDP transport (listening for incoming packets).
+// Creates both IPv4 and IPv6 sockets for dual-stack support.
 func (t *Transport) Start() error {
 	if t.running.Load() {
 		return fmt.Errorf("transport already running")
 	}
 
-	addr := t.config.ListenAddr
-	if addr == "" {
-		addr = fmt.Sprintf(":%d", t.config.Port)
+	port := t.config.Port
+	if t.config.ListenAddr != "" {
+		// If explicit address provided, use it
+		udpAddr, err := net.ResolveUDPAddr("udp", t.config.ListenAddr)
+		if err != nil {
+			return fmt.Errorf("resolve address: %w", err)
+		}
+		conn, err := net.ListenUDP("udp", udpAddr)
+		if err != nil {
+			return fmt.Errorf("listen UDP: %w", err)
+		}
+		t.conn = conn
+	} else {
+		// Create IPv4 socket
+		udpAddr4 := &net.UDPAddr{IP: net.IPv4zero, Port: port}
+		conn4, err := net.ListenUDP("udp4", udpAddr4)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to create IPv4 UDP socket")
+		} else {
+			t.conn = conn4
+			log.Debug().Str("addr", conn4.LocalAddr().String()).Msg("IPv4 UDP socket created")
+		}
+
+		// Create IPv6 socket
+		udpAddr6 := &net.UDPAddr{IP: net.IPv6zero, Port: port}
+		conn6, err := net.ListenUDP("udp6", udpAddr6)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to create IPv6 UDP socket")
+		} else {
+			t.conn6 = conn6
+			log.Debug().Str("addr", conn6.LocalAddr().String()).Msg("IPv6 UDP socket created")
+		}
+
+		// At least one socket must succeed
+		if t.conn == nil && t.conn6 == nil {
+			return fmt.Errorf("failed to create any UDP socket")
+		}
 	}
 
-	udpAddr, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		return fmt.Errorf("resolve address: %w", err)
-	}
-
-	conn, err := net.ListenUDP("udp", udpAddr)
-	if err != nil {
-		return fmt.Errorf("listen UDP: %w", err)
-	}
-
-	t.conn = conn
 	t.running.Store(true)
 
-	// Start packet receiver
-	go t.receiveLoop()
+	// Start packet receivers for each socket
+	if t.conn != nil {
+		go t.receiveLoop(t.conn)
+	}
+	if t.conn6 != nil {
+		go t.receiveLoop(t.conn6)
+	}
 
 	// Start keepalive sender
 	go t.keepaliveLoop()
 
+	addrs := []string{}
+	if t.conn != nil {
+		addrs = append(addrs, t.conn.LocalAddr().String())
+	}
+	if t.conn6 != nil {
+		addrs = append(addrs, t.conn6.LocalAddr().String())
+	}
 	log.Info().
-		Str("addr", conn.LocalAddr().String()).
+		Strs("addrs", addrs).
 		Msg("UDP transport started")
 
 	return nil
 }
 
-// receiveLoop processes incoming UDP packets.
-func (t *Transport) receiveLoop() {
+// receiveLoop processes incoming UDP packets from the given connection.
+func (t *Transport) receiveLoop(conn *net.UDPConn) {
 	buf := make([]byte, 2000) // Larger than MTU
 
 	for t.running.Load() {
-		n, remoteAddr, err := t.conn.ReadFromUDP(buf)
+		n, remoteAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			if t.running.Load() {
 				log.Debug().Err(err).Msg("UDP read error")
@@ -464,6 +517,15 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 		return nil, fmt.Errorf("resolve peer address: %w", err)
 	}
 
+	// Select the appropriate socket based on peer's address family
+	conn := t.selectSocketForPeer(peerAddr)
+	if conn == nil {
+		peerIsIPv4 := peerAddr.IP.To4() != nil
+		return nil, fmt.Errorf("no %s socket available for peer %s",
+			map[bool]string{true: "IPv4", false: "IPv6"}[peerIsIPv4],
+			opts.PeerName)
+	}
+
 	// Get peer's X25519 public key from ED25519 public key
 	var peerPublic [32]byte
 	if opts.PeerInfo != nil && opts.PeerInfo.PublicKey != "" {
@@ -504,12 +566,12 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 	}
 
 	// Attempt hole-punch if needed
-	if err := t.holePunch(ctx, opts.PeerName, peerAddr); err != nil {
+	if err := t.holePunch(ctx, opts.PeerName, peerAddr, conn); err != nil {
 		log.Debug().Err(err).Str("peer", opts.PeerName).Msg("hole-punch failed, trying direct")
 	}
 
 	// Perform handshake
-	session, err := t.initiateHandshake(ctx, opts.PeerName, peerPublic, peerAddr)
+	session, err := t.initiateHandshake(ctx, opts.PeerName, peerPublic, peerAddr, conn)
 	if err != nil {
 		return nil, fmt.Errorf("handshake failed: %w", err)
 	}
@@ -522,7 +584,7 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 }
 
 // initiateHandshake performs the Noise IK handshake as initiator.
-func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peerPublic [32]byte, peerAddr *net.UDPAddr) (*Session, error) {
+func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peerPublic [32]byte, peerAddr *net.UDPAddr, conn *net.UDPConn) (*Session, error) {
 	hs, err := NewInitiatorHandshake(t.staticPrivate, t.staticPublic, peerPublic)
 	if err != nil {
 		return nil, err
@@ -555,7 +617,7 @@ func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peer
 	copy(packet[1:], initMsg)
 
 	// Send initiation
-	if _, err := t.conn.WriteToUDP(packet, peerAddr); err != nil {
+	if _, err := conn.WriteToUDP(packet, peerAddr); err != nil {
 		return nil, err
 	}
 
@@ -620,21 +682,24 @@ func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peer
 }
 
 // holePunch attempts to establish NAT traversal with the peer.
-func (t *Transport) holePunch(ctx context.Context, peerName string, peerAddr *net.UDPAddr) error {
+func (t *Transport) holePunch(ctx context.Context, peerName string, peerAddr *net.UDPAddr, conn *net.UDPConn) error {
 	if t.config.CoordServerURL == "" {
 		return nil // No coordination server, skip hole-punch
 	}
 
-	// Get our stored external address
+	// Get our stored external address for the appropriate address family
 	t.mu.RLock()
 	externalAddr := t.externalAddr
+	if peerAddr.IP.To4() == nil && t.externalAddr6 != "" {
+		externalAddr = t.externalAddr6
+	}
 	t.mu.RUnlock()
 
 	// Request hole-punch coordination from server
 	reqBody := map[string]string{
 		"from_peer":     t.config.LocalPeerName,
 		"to_peer":       peerName,
-		"local_addr":    t.conn.LocalAddr().String(),
+		"local_addr":    conn.LocalAddr().String(),
 		"external_addr": externalAddr,
 	}
 
@@ -692,7 +757,7 @@ func (t *Transport) holePunch(ctx context.Context, peerName string, peerAddr *ne
 	// Send hole-punch packets
 	for i := 0; i < t.config.HolePunchRetries; i++ {
 		// Send a small packet to punch the hole
-		_, _ = t.conn.WriteToUDP([]byte{0}, peerAddr)
+		_, _ = conn.WriteToUDP([]byte{0}, peerAddr)
 		time.Sleep(100 * time.Millisecond)
 
 		select {
@@ -804,6 +869,9 @@ func (t *Transport) Close() error {
 
 	if t.conn != nil {
 		t.conn.Close()
+	}
+	if t.conn6 != nil {
+		t.conn6.Close()
 	}
 
 	return nil
