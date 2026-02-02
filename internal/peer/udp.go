@@ -41,6 +41,18 @@ func (m *MeshNode) handleUDPConnection(ctx context.Context, conn transport.Conne
 	// Cancel any outbound connection attempt to this peer
 	m.CancelOutboundConnection(peerName)
 
+	// If we already have a healthy tunnel to this peer, reject the incoming connection
+	// to avoid race conditions where both peers connect simultaneously
+	if existing, ok := m.tunnelMgr.Get(peerName); ok {
+		if hc, canCheck := existing.(tunnel.HealthChecker); canCheck && hc.IsHealthy() {
+			log.Debug().
+				Str("peer", peerName).
+				Msg("already have healthy tunnel, rejecting incoming connection")
+			conn.Close()
+			return
+		}
+	}
+
 	// Fetch peer info from coordination server to get mesh IP and add route
 	// This ensures routing works immediately, without waiting for next discovery cycle
 	m.ensurePeerRoute(peerName)
