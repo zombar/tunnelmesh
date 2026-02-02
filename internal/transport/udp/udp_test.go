@@ -262,6 +262,6 @@ func BenchmarkDecrypt(b *testing.B) {
 	b.SetBytes(int64(len(plaintext)))
 
 	for i := 0; i < b.N; i++ {
-		crypto.Decrypt(1, ciphertext, nil)
+		_, _ = crypto.Decrypt(1, ciphertext, nil)
 	}
 }

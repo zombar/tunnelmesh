@@ -207,14 +207,7 @@ func DeriveX25519KeyPair(edPriv ed25519.PrivateKey) (x25519Priv, x25519Pub []byt
 
 // GetED25519PrivateKey extracts the ED25519 private key from an SSH signer.
 func GetED25519PrivateKey(signer ssh.Signer) (ed25519.PrivateKey, error) {
-	// Try to get the underlying crypto private key
-	type cryptoSigner interface {
-		ssh.Signer
-		PublicKey() ssh.PublicKey
-	}
-
 	// The ssh.Signer from ParsePrivateKey wraps the crypto key
-	// We need to access it through reflection or type assertion
 	pubKey := signer.PublicKey()
 	if pubKey.Type() != ssh.KeyAlgoED25519 {
 		return nil, fmt.Errorf("key type %s is not ED25519", pubKey.Type())

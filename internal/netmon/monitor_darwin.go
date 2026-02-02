@@ -60,7 +60,7 @@ func (m *darwinMonitor) readLoop(ctx context.Context) {
 
 		// Set read timeout for periodic context checks
 		tv := unix.Timeval{Sec: 1}
-		unix.SetsockoptTimeval(m.fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)
+		_ = unix.SetsockoptTimeval(m.fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)
 
 		n, err := unix.Read(m.fd, buf)
 		if err != nil {

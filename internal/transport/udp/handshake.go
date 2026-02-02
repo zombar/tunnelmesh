@@ -39,9 +39,6 @@ type HandshakeState struct {
 	chainingKey [32]byte
 	hash        [32]byte
 
-	// Pre-shared key (optional, for additional security)
-	psk [32]byte
-
 	// Session indices
 	localIndex  uint32
 	remoteIndex uint32
@@ -370,7 +367,7 @@ func (hs *HandshakeState) PeerStaticPublic() [32]byte {
 // mixKey mixes new key material into the chaining key.
 func (hs *HandshakeState) mixKey(input []byte) {
 	reader := hkdfExpand(hs.chainingKey[:], input)
-	io.ReadFull(reader, hs.chainingKey[:])
+	_, _ = io.ReadFull(reader, hs.chainingKey[:])
 }
 
 // blake2sHash computes BLAKE2s-256 hash.

@@ -189,31 +189,6 @@ func (m *MeshNode) buildTransportPeerInfo(peer proto.Peer) *transport.PeerInfo {
 	}
 }
 
-// handleRelayConnection handles establishing a relay tunnel.
-func (m *MeshNode) handleRelayConnection(ctx context.Context, peer proto.Peer) {
-	log.Info().Str("peer", peer.Name).Msg("using relay connection through coordination server")
-
-	jwtToken := m.client.JWTToken()
-	if jwtToken == "" {
-		log.Warn().Str("peer", peer.Name).Msg("no JWT token available for relay")
-		return
-	}
-
-	relayTunnel, err := tunnel.NewRelayTunnel(ctx, m.client.BaseURL(), peer.Name, jwtToken)
-	if err != nil {
-		log.Warn().Err(err).Str("peer", peer.Name).Msg("relay connection failed")
-		return
-	}
-
-	m.tunnelMgr.Add(peer.Name, relayTunnel)
-	log.Info().Str("peer", peer.Name).Msg("relay tunnel established")
-
-	if m.Forwarder != nil {
-		m.Forwarder.HandleTunnel(ctx, peer.Name, relayTunnel)
-	}
-	m.tunnelMgr.RemoveIfMatch(peer.Name, relayTunnel)
-}
-
 // RefreshAuthorizedKeys fetches peer keys from coordination server and adds them to SSH server.
 func (m *MeshNode) RefreshAuthorizedKeys() {
 	if m.SSHServer == nil {

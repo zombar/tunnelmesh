@@ -374,12 +374,9 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 	}
 
 	// Get peer's X25519 public key
+	// Note: For now we use zero key; actual key exchange happens in handshake
 	var peerPublic [32]byte
-	if opts.PeerInfo != nil && opts.PeerInfo.PublicKey != "" {
-		// Convert from base64 ED25519 to X25519
-		// For now, assume we have a way to get this
-		// TODO: implement proper key conversion
-	}
+	// TODO: Implement proper ED25519 to X25519 conversion for known peers
 
 	// Attempt hole-punch if needed
 	if err := t.holePunch(ctx, opts.PeerName, peerAddr); err != nil {
@@ -431,8 +428,8 @@ func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peer
 	}
 
 	// Set read deadline for receiving response
-	t.conn.SetReadDeadline(time.Now().Add(timeout))
-	defer t.conn.SetReadDeadline(time.Time{})
+	_ = t.conn.SetReadDeadline(time.Now().Add(timeout))
+	defer func() { _ = t.conn.SetReadDeadline(time.Time{}) }()
 
 	// Read response
 	buf := make([]byte, 256)
@@ -538,7 +535,7 @@ func (t *Transport) holePunch(ctx context.Context, peerName string, peerAddr *ne
 	// Send hole-punch packets
 	for i := 0; i < t.config.HolePunchRetries; i++ {
 		// Send a small packet to punch the hole
-		t.conn.WriteToUDP([]byte{0}, peerAddr)
+		_, _ = t.conn.WriteToUDP([]byte{0}, peerAddr)
 		time.Sleep(100 * time.Millisecond)
 
 		select {
@@ -673,14 +670,12 @@ func (c *Connection) Read(p []byte) (int, error) {
 	}
 
 	// Wait for new data
-	select {
-	case data, ok := <-c.session.Recv():
-		if !ok {
-			return 0, io.EOF
-		}
-		c.readBuf.Write(data)
-		return c.readBuf.Read(p)
+	data, ok := <-c.session.Recv()
+	if !ok {
+		return 0, io.EOF
 	}
+	c.readBuf.Write(data)
+	return c.readBuf.Read(p)
 }
 
 // Write writes data to the connection.
