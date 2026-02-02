@@ -1013,6 +1013,9 @@ func networkChangeLoop(ctx context.Context, events <-chan netmon.Event,
 				Bool("behind_nat", behindNAT).
 				Msg("updated local IPs")
 
+			// Close stale HTTP connections from the old network before re-registering
+			client.CloseIdleConnections()
+
 			// Re-register with coordination server
 			resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, behindNAT)
 			if err != nil {
