@@ -729,6 +729,16 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	})
 	node.TransportNegotiator = transportNegotiator
 
+	// Connect persistent relay for DERP-like instant connectivity
+	// This provides immediate relay routing while direct connections are established in parallel
+	if err := node.ConnectPersistentRelay(ctx); err != nil {
+		log.Warn().Err(err).Msg("persistent relay not available, will use sequential fallback")
+	} else {
+		// Set the relay on the forwarder for fallback routing
+		forwarder.SetRelay(node.PersistentRelay)
+		log.Info().Msg("persistent relay enabled for instant connectivity")
+	}
+
 	// Start DNS resolver if enabled
 	var dnsConfigured bool
 	if cfg.DNS.Enabled {

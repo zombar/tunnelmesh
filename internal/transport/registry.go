@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -172,6 +173,21 @@ func (r *Registry) ClearNetworkState() {
 	for _, t := range r.transports {
 		if resetter, ok := t.(NetworkStateResetter); ok {
 			resetter.ClearNetworkState()
+		}
+	}
+}
+
+// RefreshEndpoints refreshes endpoint registrations on all transports that support it.
+// This should be called after network changes to get fresh external addresses.
+func (r *Registry) RefreshEndpoints(ctx context.Context, peerName string) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, t := range r.transports {
+		if refresher, ok := t.(EndpointRefresher); ok {
+			// Log error but continue with other transports
+			// The transport will retry on next dial
+			_ = refresher.RefreshEndpoint(ctx, peerName)
 		}
 	}
 }

@@ -226,3 +226,130 @@ func (n *Negotiator) SelectBest(results []ProbeResult, order []TransportType) Tr
 
 	return TransportRelay // Fallback to relay
 }
+
+// DirectUpgradeResult is sent when a direct connection succeeds after initial relay.
+type DirectUpgradeResult struct {
+	Connection Connection
+	Transport  TransportType
+	Error      error
+}
+
+// NegotiateRelayFirst returns immediately with relay, then races direct transports in background.
+// This is DERP-like behavior: instant connectivity via relay, upgrade to direct when available.
+// The upgradeChan receives a result when a direct connection succeeds (or all fail).
+func (n *Negotiator) NegotiateRelayFirst(ctx context.Context, peerInfo *PeerInfo, dialOpts DialOptions, upgradeChan chan<- DirectUpgradeResult) (*NegotiationResult, error) {
+	order := n.registry.GetPreferredOrder(peerInfo.Name)
+	if len(order) == 0 {
+		return nil, fmt.Errorf("no transports available for peer %s", peerInfo.Name)
+	}
+
+	log.Debug().
+		Str("peer", peerInfo.Name).
+		Interface("order", order).
+		Msg("relay-first negotiation starting")
+
+	// Separate relay from direct transports
+	var directTransports []TransportType
+	for _, t := range order {
+		if t != TransportRelay {
+			directTransports = append(directTransports, t)
+		}
+	}
+
+	// Start background direct connection attempts
+	if len(directTransports) > 0 && upgradeChan != nil {
+		go n.raceDirectTransports(ctx, peerInfo, dialOpts, directTransports, upgradeChan)
+	}
+
+	// Return relay as the immediate result
+	return &NegotiationResult{
+		Transport:  TransportRelay,
+		Connection: nil, // Caller will use persistent relay
+		Upgradable: len(directTransports) > 0,
+	}, nil
+}
+
+// raceDirectTransports tries direct transports in order and sends result to upgradeChan.
+func (n *Negotiator) raceDirectTransports(ctx context.Context, peerInfo *PeerInfo, dialOpts DialOptions, transports []TransportType, upgradeChan chan<- DirectUpgradeResult) {
+	defer close(upgradeChan)
+
+	log.Debug().
+		Str("peer", peerInfo.Name).
+		Interface("transports", transports).
+		Msg("starting direct transport race")
+
+	var lastErr error
+	for _, transportType := range transports {
+		// Check if context is cancelled
+		select {
+		case <-ctx.Done():
+			upgradeChan <- DirectUpgradeResult{Error: ctx.Err()}
+			return
+		default:
+		}
+
+		transport, ok := n.registry.Get(transportType)
+		if !ok {
+			continue
+		}
+
+		opts := dialOpts
+		opts.PeerInfo = peerInfo
+		opts.PeerName = peerInfo.Name
+		if opts.Timeout == 0 {
+			opts.Timeout = n.config.ConnectionTimeout
+		}
+
+		// Try with retries (but fewer than normal since we have relay working)
+		maxRetries := 2 // Reduced from normal since relay is working
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			if attempt > 0 {
+				select {
+				case <-ctx.Done():
+					upgradeChan <- DirectUpgradeResult{Error: ctx.Err()}
+					return
+				case <-time.After(n.config.RetryDelay):
+				}
+			}
+
+			log.Debug().
+				Str("peer", peerInfo.Name).
+				Str("transport", string(transportType)).
+				Int("attempt", attempt+1).
+				Msg("attempting direct connection (relay-first mode)")
+
+			conn, err := transport.Dial(ctx, opts)
+			if err == nil {
+				log.Info().
+					Str("peer", peerInfo.Name).
+					Str("transport", string(transportType)).
+					Msg("direct connection established, upgrade available")
+
+				upgradeChan <- DirectUpgradeResult{
+					Connection: conn,
+					Transport:  transportType,
+				}
+				return
+			}
+
+			lastErr = err
+			log.Debug().
+				Err(err).
+				Str("peer", peerInfo.Name).
+				Str("transport", string(transportType)).
+				Int("attempt", attempt+1).
+				Msg("direct connection attempt failed")
+		}
+
+		if !n.config.EnableFallback {
+			break
+		}
+	}
+
+	// All direct transports failed - relay continues working
+	log.Debug().
+		Str("peer", peerInfo.Name).
+		Msg("all direct transports failed, continuing with relay")
+
+	upgradeChan <- DirectUpgradeResult{Error: lastErr}
+}

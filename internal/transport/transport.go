@@ -127,3 +127,11 @@ type NetworkStateResetter interface {
 	// STUN-discovered external addresses. Called after network changes.
 	ClearNetworkState()
 }
+
+// EndpointRefresher is an optional interface for transports that need to
+// refresh their endpoint registration after network changes.
+type EndpointRefresher interface {
+	// RefreshEndpoint re-registers the endpoint with coordination server.
+	// Called after network changes to get fresh external addresses.
+	RefreshEndpoint(ctx context.Context, peerName string) error
+}

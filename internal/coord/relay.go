@@ -21,11 +21,27 @@ type relayConn struct {
 	paired     chan struct{} // closed when paired
 }
 
+// persistentConn represents a peer's persistent relay connection (DERP-like).
+type persistentConn struct {
+	peerName string
+	conn     *websocket.Conn
+	writeMu  sync.Mutex // protects writes to conn
+}
+
 // relayManager handles relay connections between peers.
 type relayManager struct {
-	pending map[string]*relayConn // key: "peerA->peerB"
-	mu      sync.Mutex
+	pending    map[string]*relayConn    // key: "peerA->peerB" (legacy pairing)
+	persistent map[string]*persistentConn // key: peerName (DERP-like routing)
+	mu         sync.Mutex
 }
+
+// Persistent relay message types
+const (
+	MsgTypeSendPacket byte = 0x01 // Client -> Server: send packet to target peer
+	MsgTypeRecvPacket byte = 0x02 // Server -> Client: received packet from source peer
+	MsgTypePing       byte = 0x03 // Keepalive ping
+	MsgTypePong       byte = 0x04 // Keepalive pong
+)
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  16384,
@@ -38,8 +54,58 @@ var upgrader = websocket.Upgrader{
 // newRelayManager creates a new relay manager.
 func newRelayManager() *relayManager {
 	return &relayManager{
-		pending: make(map[string]*relayConn),
+		pending:    make(map[string]*relayConn),
+		persistent: make(map[string]*persistentConn),
 	}
+}
+
+// RegisterPersistent registers a peer's persistent relay connection.
+func (r *relayManager) RegisterPersistent(peerName string, conn *websocket.Conn) *persistentConn {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Close existing connection if any
+	if existing, ok := r.persistent[peerName]; ok {
+		existing.conn.Close()
+	}
+
+	pc := &persistentConn{
+		peerName: peerName,
+		conn:     conn,
+	}
+	r.persistent[peerName] = pc
+	return pc
+}
+
+// UnregisterPersistent removes a peer's persistent relay connection.
+func (r *relayManager) UnregisterPersistent(peerName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.persistent, peerName)
+}
+
+// GetPersistent returns a peer's persistent connection if connected.
+func (r *relayManager) GetPersistent(peerName string) (*persistentConn, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pc, ok := r.persistent[peerName]
+	return pc, ok
+}
+
+// SendToPeer sends a packet to a peer via their persistent connection.
+// Returns true if the peer is connected and the packet was sent.
+func (pc *persistentConn) SendPacket(sourcePeer string, data []byte) error {
+	pc.writeMu.Lock()
+	defer pc.writeMu.Unlock()
+
+	// Build message: [MsgTypeRecvPacket][source name len][source name][data]
+	msg := make([]byte, 2+len(sourcePeer)+len(data))
+	msg[0] = MsgTypeRecvPacket
+	msg[1] = byte(len(sourcePeer))
+	copy(msg[2:], sourcePeer)
+	copy(msg[2+len(sourcePeer):], data)
+
+	return pc.conn.WriteMessage(websocket.BinaryMessage, msg)
 }
 
 // GetPendingRequestsFor returns the list of peers waiting on relay for the given peer.
@@ -64,8 +130,156 @@ func (s *Server) setupRelayRoutes() {
 	if s.relay == nil {
 		s.relay = newRelayManager()
 	}
+	s.mux.HandleFunc("/api/v1/relay/persistent", s.handlePersistentRelay)
 	s.mux.HandleFunc("/api/v1/relay/", s.handleRelay)
 	s.mux.HandleFunc("/api/v1/relay-status", s.handleRelayStatus)
+}
+
+// handlePersistentRelay handles persistent (DERP-like) relay connections.
+// Peers connect once and stay connected. Packets are routed by peer name.
+func (s *Server) handlePersistentRelay(w http.ResponseWriter, r *http.Request) {
+	// Authenticate via JWT
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
+		http.Error(w, "missing authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	parts := strings.SplitN(auth, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		http.Error(w, "invalid authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	claims, err := s.ValidateToken(parts[1])
+	if err != nil {
+		log.Debug().Err(err).Msg("persistent relay auth failed")
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	peerName := claims.PeerName
+
+	// Verify peer is registered
+	s.peersMu.RLock()
+	_, exists := s.peers[peerName]
+	s.peersMu.RUnlock()
+
+	if !exists {
+		http.Error(w, "peer not registered", http.StatusNotFound)
+		return
+	}
+
+	// Upgrade to WebSocket
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Error().Err(err).Str("peer", peerName).Msg("persistent relay websocket upgrade failed")
+		return
+	}
+
+	log.Info().Str("peer", peerName).Msg("persistent relay connection established")
+
+	// Register the connection
+	pc := s.relay.RegisterPersistent(peerName, conn)
+	defer func() {
+		s.relay.UnregisterPersistent(peerName)
+		conn.Close()
+		log.Info().Str("peer", peerName).Msg("persistent relay connection closed")
+	}()
+
+	// Set up ping/pong handlers for keepalive
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		return nil
+	})
+
+	// Start ping ticker
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+
+	// Handle messages in a separate goroutine and use channel to coordinate
+	msgChan := make(chan []byte, 16)
+	errChan := make(chan error, 1)
+
+	go func() {
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				errChan <- err
+				return
+			}
+			msgChan <- data
+		}
+	}()
+
+	for {
+		select {
+		case <-pingTicker.C:
+			pc.writeMu.Lock()
+			err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))
+			pc.writeMu.Unlock()
+			if err != nil {
+				log.Debug().Err(err).Str("peer", peerName).Msg("persistent relay ping failed")
+				return
+			}
+
+		case data := <-msgChan:
+			s.handlePersistentRelayMessage(peerName, data)
+
+		case err := <-errChan:
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+				log.Debug().Err(err).Str("peer", peerName).Msg("persistent relay read error")
+			}
+			return
+		}
+	}
+}
+
+// handlePersistentRelayMessage processes a message from a persistent relay connection.
+func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
+	if len(data) < 3 {
+		log.Debug().Str("peer", sourcePeer).Msg("persistent relay message too short")
+		return
+	}
+
+	msgType := data[0]
+
+	switch msgType {
+	case MsgTypeSendPacket:
+		// Format: [MsgTypeSendPacket][target name len][target name][packet data]
+		targetLen := int(data[1])
+		if len(data) < 2+targetLen {
+			log.Debug().Str("peer", sourcePeer).Msg("persistent relay send packet too short")
+			return
+		}
+		targetPeer := string(data[2 : 2+targetLen])
+		packetData := data[2+targetLen:]
+
+		// Route to target peer
+		targetConn, ok := s.relay.GetPersistent(targetPeer)
+		if !ok {
+			log.Debug().
+				Str("source", sourcePeer).
+				Str("target", targetPeer).
+				Msg("persistent relay target not connected")
+			return
+		}
+
+		if err := targetConn.SendPacket(sourcePeer, packetData); err != nil {
+			log.Debug().Err(err).
+				Str("source", sourcePeer).
+				Str("target", targetPeer).
+				Msg("persistent relay forward failed")
+		}
+
+	case MsgTypePing:
+		// Respond with pong (handled at protocol level via SetPongHandler)
+		log.Debug().Str("peer", sourcePeer).Msg("persistent relay received ping")
+
+	default:
+		log.Debug().Str("peer", sourcePeer).Uint8("type", msgType).Msg("unknown persistent relay message type")
+	}
 }
 
 // handleRelayStatus returns pending relay requests for the authenticated peer.

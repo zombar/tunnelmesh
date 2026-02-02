@@ -26,6 +26,12 @@ type TunnelProvider interface {
 	Get(name string) (io.ReadWriteCloser, bool)
 }
 
+// RelayPacketSender can send packets via persistent relay when no direct tunnel exists.
+type RelayPacketSender interface {
+	SendTo(targetPeer string, data []byte) error
+	IsConnected() bool
+}
+
 // TUNDevice represents a TUN device interface.
 type TUNDevice interface {
 	Read(p []byte) (int, error)
@@ -47,16 +53,18 @@ type ForwarderStats struct {
 
 // Forwarder routes packets between the TUN device and tunnels.
 type Forwarder struct {
-	router      *Router
-	tunnels     TunnelProvider
-	tun         TUNDevice
-	bufPool     *PacketBufferPool
+	router       *Router
+	tunnels      TunnelProvider
+	tun          TUNDevice
+	relay        RelayPacketSender // Optional persistent relay for fallback
+	bufPool      *PacketBufferPool
 	zeroCopyPool *ZeroCopyBufferPool // Pool for zero-copy buffers
-	framePool   *sync.Pool           // Pool for frame buffers (header + MTU)
-	stats       ForwarderStats
-	tunMu       sync.RWMutex
-	localIP     net.IP
-	localIPMu   sync.RWMutex
+	framePool    *sync.Pool          // Pool for frame buffers (header + MTU)
+	stats        ForwarderStats
+	tunMu        sync.RWMutex
+	relayMu      sync.RWMutex
+	localIP      net.IP
+	localIPMu    sync.RWMutex
 }
 
 // NewForwarder creates a new packet forwarder.
@@ -89,6 +97,42 @@ func (f *Forwarder) SetLocalIP(ip net.IP) {
 	f.localIPMu.Lock()
 	defer f.localIPMu.Unlock()
 	f.localIP = ip
+}
+
+// SetRelay sets the persistent relay for fallback routing.
+func (f *Forwarder) SetRelay(relay RelayPacketSender) {
+	f.relayMu.Lock()
+	defer f.relayMu.Unlock()
+	f.relay = relay
+}
+
+// HandleRelayPacket processes a packet received from the persistent relay.
+// The packet should be a framed IP packet (with length prefix and protocol byte).
+func (f *Forwarder) HandleRelayPacket(sourcePeer string, data []byte) {
+	if len(data) < FrameHeaderSize {
+		log.Debug().Str("peer", sourcePeer).Int("len", len(data)).Msg("relay packet too short")
+		return
+	}
+
+	// Parse frame: [2 bytes length][1 byte proto][payload]
+	frameLen := int(binary.BigEndian.Uint16(data[0:2]))
+	if frameLen < 1 || len(data) < 2+frameLen {
+		log.Debug().Str("peer", sourcePeer).Msg("relay packet invalid frame length")
+		return
+	}
+
+	proto := data[2]
+	if proto != 0x01 {
+		log.Debug().Str("peer", sourcePeer).Uint8("proto", proto).Msg("relay packet non-IP protocol")
+		return
+	}
+
+	packet := data[FrameHeaderSize : 2+frameLen]
+
+	// Deliver to TUN
+	if err := f.ReceivePacket(packet); err != nil {
+		log.Debug().Err(err).Str("peer", sourcePeer).Msg("failed to deliver relay packet to TUN")
+	}
 }
 
 // ForwardPacket forwards a packet from the TUN to the appropriate tunnel.
@@ -130,28 +174,58 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 
 	// Get the tunnel
 	tunnel, ok := f.tunnels.Get(peerName)
-	if !ok {
-		atomic.AddUint64(&f.stats.DroppedNoTunnel, 1)
-		return fmt.Errorf("no tunnel for peer %s", peerName)
+	if ok {
+		// Direct tunnel exists - use it
+		if err := f.writeFrame(tunnel, packet); err != nil {
+			atomic.AddUint64(&f.stats.Errors, 1)
+			return fmt.Errorf("write to tunnel: %w", err)
+		}
+
+		atomic.AddUint64(&f.stats.PacketsSent, 1)
+		atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
+
+		log.Trace().
+			Str("src", info.SrcIP.String()).
+			Str("dst", info.DstIP.String()).
+			Str("peer", peerName).
+			Int("len", len(packet)).
+			Msg("forwarded packet via tunnel")
+
+		return nil
 	}
 
-	// Encode and send the packet
-	if err := f.writeFrame(tunnel, packet); err != nil {
-		atomic.AddUint64(&f.stats.Errors, 1)
-		return fmt.Errorf("write to tunnel: %w", err)
+	// No direct tunnel - try persistent relay
+	f.relayMu.RLock()
+	relay := f.relay
+	f.relayMu.RUnlock()
+
+	if relay != nil && relay.IsConnected() {
+		// Build framed packet for relay
+		frame := make([]byte, FrameHeaderSize+len(packet))
+		binary.BigEndian.PutUint16(frame[0:2], uint16(len(packet)+1))
+		frame[2] = 0x01 // IP packet
+		copy(frame[FrameHeaderSize:], packet)
+
+		if err := relay.SendTo(peerName, frame); err != nil {
+			atomic.AddUint64(&f.stats.Errors, 1)
+			return fmt.Errorf("relay to peer %s: %w", peerName, err)
+		}
+
+		atomic.AddUint64(&f.stats.PacketsSent, 1)
+		atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
+
+		log.Trace().
+			Str("src", info.SrcIP.String()).
+			Str("dst", info.DstIP.String()).
+			Str("peer", peerName).
+			Int("len", len(packet)).
+			Msg("forwarded packet via relay")
+
+		return nil
 	}
 
-	atomic.AddUint64(&f.stats.PacketsSent, 1)
-	atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
-
-	log.Trace().
-		Str("src", info.SrcIP.String()).
-		Str("dst", info.DstIP.String()).
-		Str("peer", peerName).
-		Int("len", len(packet)).
-		Msg("forwarded packet")
-
-	return nil
+	atomic.AddUint64(&f.stats.DroppedNoTunnel, 1)
+	return fmt.Errorf("no tunnel or relay for peer %s", peerName)
 }
 
 // ReceivePacket writes a received packet to the TUN device.
@@ -245,39 +319,66 @@ func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) 
 
 	// Get the tunnel
 	tunnel, ok := f.tunnels.Get(peerName)
-	if !ok {
-		atomic.AddUint64(&f.stats.DroppedNoTunnel, 1)
+	if ok {
 		log.Debug().
-			Str("peer", peerName).
+			Str("src", info.SrcIP.String()).
 			Str("dst", info.DstIP.String()).
-			Msg("no tunnel for peer")
-		return fmt.Errorf("no tunnel for peer %s", peerName)
+			Str("peer", peerName).
+			Int("len", packetLen).
+			Msg("forwarding packet to tunnel")
+
+		// Zero-copy write: frame header is already in place
+		if err := f.writeFrameZeroCopy(tunnel, zcBuf, packetLen); err != nil {
+			atomic.AddUint64(&f.stats.Errors, 1)
+			return fmt.Errorf("write to tunnel: %w", err)
+		}
+
+		atomic.AddUint64(&f.stats.PacketsSent, 1)
+		atomic.AddUint64(&f.stats.BytesSent, uint64(packetLen))
+
+		log.Debug().
+			Str("src", info.SrcIP.String()).
+			Str("dst", info.DstIP.String()).
+			Str("peer", peerName).
+			Int("len", packetLen).
+			Msg("packet forwarded to tunnel")
+
+		return nil
 	}
 
-	log.Debug().
-		Str("src", info.SrcIP.String()).
-		Str("dst", info.DstIP.String()).
-		Str("peer", peerName).
-		Int("len", packetLen).
-		Msg("forwarding packet to tunnel")
+	// No direct tunnel - try persistent relay
+	f.relayMu.RLock()
+	relay := f.relay
+	f.relayMu.RUnlock()
 
-	// Zero-copy write: frame header is already in place
-	if err := f.writeFrameZeroCopy(tunnel, zcBuf, packetLen); err != nil {
-		atomic.AddUint64(&f.stats.Errors, 1)
-		return fmt.Errorf("write to tunnel: %w", err)
+	if relay != nil && relay.IsConnected() {
+		// Get the framed data from zero-copy buffer
+		frame := zcBuf.Frame(packetLen)
+
+		if err := relay.SendTo(peerName, frame); err != nil {
+			atomic.AddUint64(&f.stats.Errors, 1)
+			return fmt.Errorf("relay to peer %s: %w", peerName, err)
+		}
+
+		atomic.AddUint64(&f.stats.PacketsSent, 1)
+		atomic.AddUint64(&f.stats.BytesSent, uint64(packetLen))
+
+		log.Debug().
+			Str("src", info.SrcIP.String()).
+			Str("dst", info.DstIP.String()).
+			Str("peer", peerName).
+			Int("len", packetLen).
+			Msg("packet forwarded via relay")
+
+		return nil
 	}
 
-	atomic.AddUint64(&f.stats.PacketsSent, 1)
-	atomic.AddUint64(&f.stats.BytesSent, uint64(packetLen))
-
+	atomic.AddUint64(&f.stats.DroppedNoTunnel, 1)
 	log.Debug().
-		Str("src", info.SrcIP.String()).
-		Str("dst", info.DstIP.String()).
 		Str("peer", peerName).
-		Int("len", packetLen).
-		Msg("packet forwarded to tunnel")
-
-	return nil
+		Str("dst", info.DstIP.String()).
+		Msg("no tunnel or relay for peer")
+	return fmt.Errorf("no tunnel or relay for peer %s", peerName)
 }
 
 // readFrame reads a length-prefixed frame from the tunnel into the provided buffer.

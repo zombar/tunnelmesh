@@ -971,6 +971,12 @@ func (t *Transport) ClearNetworkState() {
 	t.externalAddr6 = ""
 }
 
+// RefreshEndpoint re-registers the UDP endpoint with the coordination server.
+// Implements the transport.EndpointRefresher interface.
+func (t *Transport) RefreshEndpoint(ctx context.Context, peerName string) error {
+	return t.RegisterUDPEndpoint(ctx, peerName)
+}
+
 // Connection wraps a UDP session as a transport.Connection.
 type Connection struct {
 	session *Session

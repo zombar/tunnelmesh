@@ -72,6 +72,11 @@ func (m *MeshNode) HandleNetworkChange(event netmon.Event) {
 	// Record network change time for bypass window
 	m.RecordNetworkChange()
 
+	// Reconnect persistent relay (non-blocking)
+	if m.PersistentRelay != nil {
+		go m.ReconnectPersistentRelay(context.Background())
+	}
+
 	// Trigger immediate peer discovery
 	m.TriggerDiscovery()
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	sshtransport "github.com/tunnelmesh/tunnelmesh/internal/transport/ssh"
+	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
@@ -32,6 +33,9 @@ type MeshNode struct {
 	TransportRegistry   *transport.Registry
 	TransportNegotiator *transport.Negotiator
 	SSHTransport        *sshtransport.Transport // For incoming SSH and key management
+
+	// Persistent relay for DERP-like instant connectivity
+	PersistentRelay *tunnel.PersistentRelay
 
 	// Tunnel and routing
 	tunnelMgr *TunnelAdapter
@@ -247,4 +251,54 @@ func slicesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// ConnectPersistentRelay establishes the persistent relay connection.
+// This should be called after registration when we have a JWT token.
+func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
+	jwtToken := m.client.JWTToken()
+	if jwtToken == "" {
+		log.Warn().Msg("no JWT token available for persistent relay")
+		return nil
+	}
+
+	m.PersistentRelay = tunnel.NewPersistentRelay(m.client.BaseURL(), jwtToken)
+
+	// Set up packet handler to route incoming relay packets to forwarder
+	m.PersistentRelay.SetPacketHandler(func(sourcePeer string, data []byte) {
+		if m.Forwarder != nil {
+			m.Forwarder.HandleRelayPacket(sourcePeer, data)
+		}
+	})
+
+	if err := m.PersistentRelay.Connect(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to connect persistent relay")
+		return err
+	}
+
+	log.Info().Msg("persistent relay connected for DERP-like routing")
+	return nil
+}
+
+// ReconnectPersistentRelay reconnects the persistent relay after a network change.
+func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
+	if m.PersistentRelay != nil {
+		m.PersistentRelay.Close()
+	}
+
+	// Small delay to let network settle
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	if err := m.ConnectPersistentRelay(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to reconnect persistent relay after network change")
+	}
+}
+
+// IsPersistentRelayConnected returns true if the persistent relay is connected.
+func (m *MeshNode) IsPersistentRelayConnected() bool {
+	return m.PersistentRelay != nil && m.PersistentRelay.IsConnected()
 }
