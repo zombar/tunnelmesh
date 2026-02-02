@@ -80,9 +80,6 @@ func (m *MeshNode) DiscoverAndConnectPeers(ctx context.Context) {
 		existingSet[name] = true
 	}
 
-	// Check if we're in a network change bypass window
-	bypassAlphaOrdering := m.InNetworkBypassWindow()
-
 	for _, peer := range peers {
 		if peer.Name == m.identity.Name {
 			continue // Skip self
@@ -106,13 +103,27 @@ func (m *MeshNode) DiscoverAndConnectPeers(ctx context.Context) {
 			continue
 		}
 
+		// Skip if connection attempt already in progress
+		if m.IsConnecting(peer.Name) {
+			log.Debug().Str("peer", peer.Name).Msg("connection attempt already in progress, skipping")
+			continue
+		}
+
 		// Try to establish tunnel
-		go m.EstablishTunnel(ctx, peer, bypassAlphaOrdering)
+		go m.EstablishTunnel(ctx, peer)
 	}
 }
 
 // EstablishTunnel negotiates and establishes a tunnel to a peer.
-func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer, bypassAlphaOrdering bool) {
+// Both peers race to connect - first successful connection wins.
+func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer) {
+	// Mark as connecting - if already connecting, bail out
+	if !m.SetConnecting(peer.Name) {
+		log.Debug().Str("peer", peer.Name).Msg("connection attempt already in progress")
+		return
+	}
+	defer m.ClearConnecting(peer.Name)
+
 	// Check if transport negotiator is available
 	if m.TransportNegotiator == nil {
 		log.Debug().Str("peer", peer.Name).Msg("no transport negotiator available, skipping connection attempt")
@@ -132,18 +143,6 @@ func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer, bypassA
 		Bool("connectable", peerInfo.Connectable).
 		Msg("attempting to establish tunnel")
 
-	// For direct connections, apply alpha ordering to prevent duplicate tunnels
-	// (both peers trying to connect to each other simultaneously)
-	// Exception: bypass during network change recovery window
-	if m.identity.Name > peer.Name && !bypassAlphaOrdering {
-		log.Debug().Str("peer", peer.Name).Msg("waiting for peer to initiate connection (alpha ordering)")
-		return
-	}
-
-	if bypassAlphaOrdering && m.identity.Name > peer.Name {
-		log.Debug().Str("peer", peer.Name).Msg("bypassing alpha ordering due to recent network change")
-	}
-
 	// Set up dial options
 	dialOpts := transport.DialOptions{
 		LocalName: m.identity.Name,
@@ -152,10 +151,17 @@ func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer, bypassA
 		JWTToken:  m.client.JWTToken(),
 	}
 
-	// Try to negotiate a connection using the new transport layer
+	// Try to negotiate a connection using the transport layer
 	result, err := m.TransportNegotiator.Negotiate(ctx, peerInfo, dialOpts)
 	if err != nil {
 		log.Warn().Err(err).Str("peer", peer.Name).Msg("transport negotiation failed")
+		return
+	}
+
+	// Check if a tunnel was established while we were negotiating (by the other peer)
+	if _, exists := m.tunnelMgr.Get(peer.Name); exists {
+		log.Debug().Str("peer", peer.Name).Msg("tunnel already established by peer, closing our connection")
+		result.Connection.Close()
 		return
 	}
 

@@ -14,7 +14,7 @@ import (
 )
 
 // networkBypassWindow is the duration after a network change during which
-// alpha ordering is bypassed to speed up reconnection.
+// we consider the node to be in a "recovery" state. Used for logging and debugging.
 const networkBypassWindow = 10 * time.Second
 
 // MeshNode coordinates all mesh networking operations for a peer.
@@ -35,6 +35,10 @@ type MeshNode struct {
 	tunnelMgr *TunnelAdapter
 	router    *routing.Router
 	Forwarder *routing.Forwarder
+
+	// Connection state - tracks peers with connection attempts in progress
+	connectingMu sync.Mutex
+	connecting   map[string]bool
 
 	// Signals
 	triggerDiscovery chan struct{}
@@ -60,10 +64,37 @@ func NewMeshNode(identity *PeerIdentity, client *coord.Client) *MeshNode {
 		client:           client,
 		tunnelMgr:        NewTunnelAdapter(),
 		router:           routing.NewRouter(),
+		connecting:       make(map[string]bool),
 		triggerDiscovery: make(chan struct{}, 1),
 	}
 	node.lastNetworkChange.Store(time.Time{})
 	return node
+}
+
+// IsConnecting returns true if a connection attempt is already in progress for the peer.
+func (m *MeshNode) IsConnecting(peerName string) bool {
+	m.connectingMu.Lock()
+	defer m.connectingMu.Unlock()
+	return m.connecting[peerName]
+}
+
+// SetConnecting marks a peer as having a connection attempt in progress.
+// Returns true if the state was set, false if already connecting.
+func (m *MeshNode) SetConnecting(peerName string) bool {
+	m.connectingMu.Lock()
+	defer m.connectingMu.Unlock()
+	if m.connecting[peerName] {
+		return false // Already connecting
+	}
+	m.connecting[peerName] = true
+	return true
+}
+
+// ClearConnecting removes the connecting state for a peer.
+func (m *MeshNode) ClearConnecting(peerName string) {
+	m.connectingMu.Lock()
+	defer m.connectingMu.Unlock()
+	delete(m.connecting, peerName)
 }
 
 // Identity returns the peer's identity.
@@ -103,13 +134,13 @@ func (m *MeshNode) TriggerDiscovery() bool {
 }
 
 // RecordNetworkChange records that a network change has occurred.
-// This enables the network bypass window for alpha ordering.
+// This is used to track network recovery state for logging and debugging.
 func (m *MeshNode) RecordNetworkChange() {
 	m.lastNetworkChange.Store(time.Now())
 }
 
-// InNetworkBypassWindow returns true if we're within the network bypass window
-// after a network change, during which alpha ordering should be bypassed.
+// InNetworkBypassWindow returns true if we're within the recovery window
+// after a network change. Used for logging and debugging purposes.
 func (m *MeshNode) InNetworkBypassWindow() bool {
 	lastChange := m.lastNetworkChange.Load().(time.Time)
 	if lastChange.IsZero() {
