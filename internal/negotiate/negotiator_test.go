@@ -166,10 +166,10 @@ func TestNegotiator_NegotiateFallbackReverse(t *testing.T) {
 	ctx := context.Background()
 	peer := &PeerInfo{
 		ID:          "peer1",
-		PublicIP:    "192.0.2.1", // TEST-NET address, not routable
-		PrivateIPs:  []string{"10.0.0.99"},
-		SSHPort:     2222,
-		Connectable: true, // Peer can accept incoming connections
+		PublicIP:    "127.0.0.1", // Use localhost with closed port
+		PrivateIPs:  []string{"127.0.0.1"},
+		SSHPort:     59998, // Port that should not be listening
+		Connectable: true,  // Peer can accept incoming connections
 	}
 
 	// When no direct connection works and peer is connectable, should recommend reverse

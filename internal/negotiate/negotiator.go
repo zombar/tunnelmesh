@@ -60,14 +60,16 @@ func (p *PeerInfo) BestAddress() string {
 
 // AllAddresses returns all possible addresses for this peer.
 // Private IPs are listed first (LAN connectivity preferred), then public IPs.
+// If Connectable is false (peer is behind NAT), public IP is excluded since
+// the TCP probe might succeed (router responds) but SSH will fail without port forwarding.
 func (p *PeerInfo) AllAddresses() []string {
 	var addrs []string
 	// Private IPs first (same LAN = lowest latency)
 	for _, ip := range p.PrivateIPs {
 		addrs = append(addrs, fmt.Sprintf("%s:%d", ip, p.SSHPort))
 	}
-	// Public IP second
-	if p.PublicIP != "" {
+	// Public IP second - only if peer is connectable (has port forwarding or public IP)
+	if p.PublicIP != "" && p.Connectable {
 		addrs = append(addrs, fmt.Sprintf("%s:%d", p.PublicIP, p.SSHPort))
 	}
 	return addrs
