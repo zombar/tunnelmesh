@@ -954,20 +954,10 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 			continue
 		}
 
-		// Only initiate outbound connection if our name is lexicographically lower
-		// This prevents both sides from connecting simultaneously and creating duplicate tunnels
-		// Exception: after a network change, bypass this rule temporarily for faster reconnection
-		if myName > peer.Name && !bypassAlphaOrdering {
-			log.Debug().Str("peer", peer.Name).Msg("waiting for peer to initiate connection")
-			continue
-		}
-
-		if bypassAlphaOrdering {
-			log.Debug().Str("peer", peer.Name).Msg("bypassing alpha ordering due to recent network change")
-		}
-
 		// Try to establish tunnel
-		go establishTunnel(ctx, peer, myName, sshClient, negotiator, tunnelMgr, forwarder, client)
+		// Alpha ordering is checked inside establishTunnel and only applies to direct SSH connections.
+		// For relay connections, both peers must connect to the relay server, so alpha ordering is bypassed.
+		go establishTunnel(ctx, peer, myName, sshClient, negotiator, tunnelMgr, forwarder, client, bypassAlphaOrdering)
 	}
 }
 
@@ -1053,7 +1043,7 @@ func networkChangeLoop(ctx context.Context, events <-chan netmon.Event,
 
 func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshClient *tunnel.SSHClient,
 	negotiator *negotiate.Negotiator, tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder,
-	client *coord.Client) {
+	client *coord.Client, bypassAlphaOrdering bool) {
 
 	peerInfo := &negotiate.PeerInfo{
 		ID:          peer.Name,
@@ -1114,6 +1104,18 @@ func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshCli
 		return
 
 	case negotiate.StrategyDirect:
+		// For direct SSH connections, apply alpha ordering to prevent duplicate tunnels
+		// (both peers trying to SSH to each other simultaneously)
+		// Exception: bypass during network change recovery window
+		if myName > peer.Name && !bypassAlphaOrdering {
+			log.Debug().Str("peer", peer.Name).Msg("waiting for peer to initiate direct connection")
+			return
+		}
+
+		if bypassAlphaOrdering && myName > peer.Name {
+			log.Debug().Str("peer", peer.Name).Msg("bypassing alpha ordering due to recent network change")
+		}
+
 		// Direct SSH connection
 		log.Info().
 			Str("peer", peer.Name).
