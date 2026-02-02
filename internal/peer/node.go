@@ -296,6 +296,11 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 		return err
 	}
 
+	// Update forwarder with new relay reference
+	if m.Forwarder != nil {
+		m.Forwarder.SetRelay(m.PersistentRelay)
+	}
+
 	log.Info().Msg("persistent relay connected for DERP-like routing")
 	return nil
 }

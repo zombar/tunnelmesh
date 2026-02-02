@@ -51,6 +51,9 @@ type Session struct {
 	// Channels
 	recvChan chan []byte // Decrypted data packets
 	closeCh  chan struct{}
+
+	// Cleanup callback (called when session is closed)
+	onClose func(localIndex uint32, peerName string)
 }
 
 // SessionConfig holds configuration for creating a session.
@@ -94,6 +97,14 @@ func (s *Session) SetCrypto(crypto *CryptoState, remoteIndex uint32) {
 	s.remoteIndex = remoteIndex
 	s.state = SessionStateEstablished
 	s.established = time.Now()
+}
+
+// SetOnClose sets a callback to be invoked when the session is closed.
+// The callback receives the session's local index and peer name.
+func (s *Session) SetOnClose(cb func(localIndex uint32, peerName string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onClose = cb
 }
 
 // State returns the current session state.
@@ -260,15 +271,26 @@ func (s *Session) SendKeepalive() error {
 // Close closes the session.
 func (s *Session) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.state == SessionStateClosed {
+		s.mu.Unlock()
 		return nil
 	}
 
 	s.state = SessionStateClosed
 	close(s.closeCh)
 	close(s.recvChan)
+
+	// Capture callback and values before unlocking
+	cb := s.onClose
+	localIndex := s.localIndex
+	peerName := s.peerName
+	s.mu.Unlock()
+
+	// Call cleanup callback outside lock to avoid deadlock
+	if cb != nil {
+		cb(localIndex, peerName)
+	}
 
 	return nil
 }

@@ -530,6 +530,7 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 		Conn:       conn,
 	})
 	session.SetCrypto(crypto, hs.RemoteIndex())
+	session.SetOnClose(t.removeSession)
 
 	t.mu.Lock()
 	t.sessions[session.LocalIndex()] = session
@@ -832,6 +833,7 @@ func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peer
 		Conn:       conn,
 	})
 	session.SetCrypto(crypto, hs.RemoteIndex())
+	session.SetOnClose(t.removeSession)
 
 	t.mu.Lock()
 	t.sessions[session.LocalIndex()] = session
@@ -1077,6 +1079,22 @@ func (t *Transport) Close() error {
 	}
 
 	return nil
+}
+
+// removeSession removes a session from the transport's maps.
+// This is called by the session's onClose callback.
+func (t *Transport) removeSession(localIndex uint32, peerName string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	delete(t.sessions, localIndex)
+	// Only delete from peerSessions if it still points to this session
+	// (a new session may have already replaced it)
+	if existing, ok := t.peerSessions[peerName]; ok {
+		if existing.LocalIndex() == localIndex {
+			delete(t.peerSessions, peerName)
+		}
+	}
 }
 
 // ClearNetworkState clears cached network state such as STUN-discovered external addresses.
