@@ -41,6 +41,10 @@ func (m *MeshNode) handleUDPConnection(ctx context.Context, conn transport.Conne
 	// Cancel any outbound connection attempt to this peer
 	m.CancelOutboundConnection(peerName)
 
+	// Fetch peer info from coordination server to get mesh IP and add route
+	// This ensures routing works immediately, without waiting for next discovery cycle
+	m.ensurePeerRoute(peerName)
+
 	// Wrap connection as a tunnel
 	tun := tunnel.NewTunnelFromTransport(conn)
 

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/rs/zerolog/log"
+	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 )
@@ -41,6 +42,10 @@ func (m *MeshNode) handleSSHConnection(ctx context.Context, conn transport.Conne
 	// Cancel any outbound connection attempt to this peer
 	m.CancelOutboundConnection(peerName)
 
+	// Fetch peer info from coordination server to get mesh IP and add route
+	// This ensures routing works immediately, without waiting for next discovery cycle
+	m.ensurePeerRoute(peerName)
+
 	// Wrap connection as a tunnel
 	tun := tunnel.NewTunnelFromTransport(conn)
 
@@ -56,4 +61,41 @@ func (m *MeshNode) handleSSHConnection(ctx context.Context, conn transport.Conne
 			m.tunnelMgr.RemoveIfMatch(name, t)
 		}(peerName, tun)
 	}
+}
+
+// ensurePeerRoute fetches peer info from coordination server and ensures the route exists.
+func (m *MeshNode) ensurePeerRoute(peerName string) {
+	if m.client == nil {
+		return
+	}
+
+	peers, err := m.client.ListPeers()
+	if err != nil {
+		log.Warn().Err(err).Str("peer", peerName).Msg("failed to fetch peer info for routing")
+		return
+	}
+
+	for _, peer := range peers {
+		if peer.Name == peerName {
+			// Add route for this peer's mesh IP
+			m.router.AddRoute(peer.MeshIP, peer.Name)
+			log.Debug().
+				Str("peer", peer.Name).
+				Str("mesh_ip", peer.MeshIP).
+				Msg("route added for incoming connection")
+
+			// Also add authorized key if we have the SSH transport
+			if peer.PublicKey != "" && m.SSHTransport != nil {
+				pubKey, err := config.DecodePublicKey(peer.PublicKey)
+				if err != nil {
+					log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to decode peer public key")
+				} else {
+					m.SSHTransport.AddAuthorizedKey(pubKey)
+				}
+			}
+			return
+		}
+	}
+
+	log.Warn().Str("peer", peerName).Msg("peer not found on coordination server")
 }
