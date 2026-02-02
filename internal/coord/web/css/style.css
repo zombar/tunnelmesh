@@ -106,7 +106,7 @@ main {
     color: #3fb950;
 }
 
-#peers-section, #dns-section {
+#peers-section, #dns-section, #settings-section {
     background: #0d1117;
     border-radius: 6px;
     padding: 0;
@@ -114,7 +114,7 @@ main {
     margin-bottom: 1.5rem;
 }
 
-#peers-section h2, #dns-section h2 {
+#peers-section h2, #dns-section h2, #settings-section h2 {
     font-size: 1rem;
     font-weight: 600;
     padding: 1rem;
@@ -123,6 +123,91 @@ main {
     background: #161b22;
     border-bottom: 1px solid #30363d;
     border-radius: 6px 6px 0 0;
+}
+
+/* Settings form styles */
+.settings-form {
+    padding: 1rem;
+}
+
+.setting-row {
+    margin-bottom: 1rem;
+}
+
+.setting-row:last-child {
+    margin-bottom: 0;
+}
+
+.setting-row label {
+    display: block;
+    color: #e6edf3;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+}
+
+.setting-row .help-text {
+    color: #8b949e;
+    font-size: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.setting-row select,
+.setting-row textarea {
+    width: 100%;
+    max-width: 400px;
+    padding: 0.5rem;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: inherit;
+    font-size: 0.875rem;
+}
+
+.setting-row textarea {
+    max-width: 500px;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    resize: vertical;
+}
+
+.setting-row select:focus,
+.setting-row textarea:focus {
+    outline: none;
+    border-color: #58a6ff;
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.3);
+}
+
+.btn-primary {
+    background: #238636;
+    color: #ffffff;
+    border: 1px solid rgba(240, 246, 252, 0.1);
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.btn-primary:hover {
+    background: #2ea043;
+}
+
+.btn-primary:active {
+    background: #238636;
+}
+
+.save-status {
+    margin-left: 1rem;
+    font-size: 0.875rem;
+}
+
+.save-status.success {
+    color: #3fb950;
+}
+
+.save-status.error {
+    color: #f85149;
 }
 
 table {

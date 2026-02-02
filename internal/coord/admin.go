@@ -15,13 +15,14 @@ import (
 
 // AdminOverview is the response for the admin overview endpoint.
 type AdminOverview struct {
-	ServerUptime    string          `json:"server_uptime"`
-	TotalPeers      int             `json:"total_peers"`
-	OnlinePeers     int             `json:"online_peers"`
-	TotalHeartbeats uint64          `json:"total_heartbeats"`
-	MeshCIDR        string          `json:"mesh_cidr"`
-	DomainSuffix    string          `json:"domain_suffix"`
-	Peers           []AdminPeerInfo `json:"peers"`
+	ServerUptime    string           `json:"server_uptime"`
+	TotalPeers      int              `json:"total_peers"`
+	OnlinePeers     int              `json:"online_peers"`
+	TotalHeartbeats uint64           `json:"total_heartbeats"`
+	MeshCIDR        string           `json:"mesh_cidr"`
+	DomainSuffix    string           `json:"domain_suffix"`
+	Peers           []AdminPeerInfo  `json:"peers"`
+	NetworkSettings *networkSettings `json:"network_settings,omitempty"`
 }
 
 // AdminPeerInfo contains peer information for the admin UI.
@@ -109,14 +110,78 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		return bytes.Compare(ipI.To16(), ipJ.To16()) < 0
 	})
 
+	// Include network settings
+	s.netSettingsMu.RLock()
+	settings := s.netSettings
+	s.netSettingsMu.RUnlock()
+	if settings.ExitNodePeer != "" || len(settings.Exceptions) > 0 {
+		overview.NetworkSettings = &settings
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(overview)
+}
+
+// handleGetNetworkSettings returns the current network settings.
+func (s *Server) handleGetNetworkSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.netSettingsMu.RLock()
+	settings := s.netSettings
+	s.netSettingsMu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(settings)
+}
+
+// handleSetNetworkSettings updates the network settings.
+func (s *Server) handleSetNetworkSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req networkSettings
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate exceptions are valid CIDRs
+	for _, cidr := range req.Exceptions {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			s.jsonError(w, "invalid CIDR: "+cidr, http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Validate exit node peer exists (if specified)
+	if req.ExitNodePeer != "" {
+		s.peersMu.RLock()
+		_, exists := s.peers[req.ExitNodePeer]
+		s.peersMu.RUnlock()
+		if !exists {
+			s.jsonError(w, "exit node peer not found: "+req.ExitNodePeer, http.StatusBadRequest)
+			return
+		}
+	}
+
+	s.netSettingsMu.Lock()
+	s.netSettings = req
+	s.netSettingsMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // setupAdminRoutes registers the admin API routes and static file server.
 func (s *Server) setupAdminRoutes() {
 	// API endpoints
 	s.mux.HandleFunc("/admin/api/overview", s.handleAdminOverview)
+	s.mux.HandleFunc("/admin/api/network-settings", s.handleNetworkSettings)
 
 	// Serve embedded static files
 	staticFS, _ := fs.Sub(web.Assets, ".")
@@ -127,4 +192,16 @@ func (s *Server) setupAdminRoutes() {
 		http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
 	})
 	s.mux.Handle("/admin/", http.StripPrefix("/admin/", fileServer))
+}
+
+// handleNetworkSettings handles both GET and POST for network settings.
+func (s *Server) handleNetworkSettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleGetNetworkSettings(w, r)
+	case http.MethodPost:
+		s.handleSetNetworkSettings(w, r)
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }

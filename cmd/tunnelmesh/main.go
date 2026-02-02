@@ -543,6 +543,10 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		forwarder.SetLocalIP(net.ParseIP(resp.MeshIP))
 	}
 
+	// Create exit handler for exit node functionality
+	exitHandler := routing.NewExitHandler(routing.ExitConfig{}, tunnelMgr, forwarder)
+	defer exitHandler.Stop()
+
 	// Create SSH server for incoming connections
 	sshServer := tunnel.NewSSHServer(signer, nil) // Will add authorized keys dynamically
 
@@ -633,7 +637,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	}
 
 	// Start peer discovery and tunnel establishment loop
-	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, triggerDiscovery, netChangeState)
+	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, triggerDiscovery, netChangeState, exitHandler)
 
 	// Start heartbeat loop
 	go heartbeatLoop(ctx, client, cfg.Name, pubKeyEncoded, cfg.SSHPort, resp.MeshCIDR, resolver, forwarder, tunnelMgr)
@@ -856,7 +860,7 @@ func peerDiscoveryLoop(ctx context.Context, client *coord.Client, myName string,
 	sshClient *tunnel.SSHClient, negotiator *negotiate.Negotiator,
 	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder,
 	sshServer *tunnel.SSHServer, triggerDiscovery <-chan struct{},
-	netChangeState *networkChangeState) {
+	netChangeState *networkChangeState, exitHandler *routing.DefaultExitHandler) {
 
 	// Add random jitter (0-3 seconds) before initial discovery to stagger startup
 	jitter := time.Duration(rand.Intn(3000)) * time.Millisecond
@@ -868,7 +872,7 @@ func peerDiscoveryLoop(ctx context.Context, client *coord.Client, myName string,
 	}
 
 	// Initial peer discovery
-	discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
+	discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState, exitHandler)
 
 	// Fast retry phase: discover every 5 seconds for the first 30 seconds
 	// This helps establish connections quickly after startup
@@ -885,10 +889,10 @@ fastLoop:
 			fastTicker.Stop()
 			break fastLoop
 		case <-fastTicker.C:
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState, exitHandler)
 		case <-triggerDiscovery:
 			log.Debug().Msg("peer discovery triggered by network change")
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState, exitHandler)
 		}
 	}
 
@@ -901,10 +905,10 @@ fastLoop:
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState, exitHandler)
 		case <-triggerDiscovery:
 			log.Debug().Msg("peer discovery triggered by network change")
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState, exitHandler)
 		}
 	}
 }
@@ -912,13 +916,16 @@ fastLoop:
 func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName string,
 	sshClient *tunnel.SSHClient, negotiator *negotiate.Negotiator,
 	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder,
-	sshServer *tunnel.SSHServer, netChangeState *networkChangeState) {
+	sshServer *tunnel.SSHServer, netChangeState *networkChangeState, exitHandler *routing.DefaultExitHandler) {
 
-	peers, err := client.ListPeers()
+	resp, err := client.ListPeersResponse()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to list peers")
 		return
 	}
+
+	// Apply network settings from server
+	applyNetworkSettings(myName, resp.NetworkSettings, negotiator, forwarder, exitHandler)
 
 	existingTunnels := tunnelMgr.List()
 	existingSet := make(map[string]bool)
@@ -931,7 +938,7 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 	const bypassWindow = 10 * time.Second
 	bypassAlphaOrdering := netChangeState.inBypassWindow(bypassWindow)
 
-	for _, peer := range peers {
+	for _, peer := range resp.Peers {
 		if peer.Name == myName {
 			continue // Skip self
 		}
@@ -968,6 +975,49 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 
 		// Try to establish tunnel
 		go establishTunnel(ctx, peer, myName, sshClient, negotiator, tunnelMgr, forwarder, client)
+	}
+}
+
+// applyNetworkSettings applies network settings from the coordination server.
+func applyNetworkSettings(myName string, settings *proto.NetworkSettings, negotiator *negotiate.Negotiator,
+	forwarder *routing.Forwarder, exitHandler *routing.DefaultExitHandler) {
+
+	if settings == nil {
+		// Clear any exit node settings
+		if err := forwarder.SetExitNode("", nil); err != nil {
+			log.Warn().Err(err).Msg("failed to clear exit node settings")
+		}
+		forwarder.SetIsExitNode(false, nil)
+		return
+	}
+
+	// Apply exception CIDRs to negotiator (for tunnel connection filtering)
+	if err := negotiator.SetExceptionCIDRs(settings.Exceptions); err != nil {
+		log.Warn().Err(err).Msg("failed to set exception CIDRs for negotiator")
+	}
+
+	// Apply exit node settings
+	if settings.ExitNodePeer == myName {
+		// We are the exit node
+		log.Info().Msg("this node is configured as the exit node")
+		if err := forwarder.SetExitNode("", nil); err != nil {
+			log.Warn().Err(err).Msg("failed to clear exit node routing")
+		}
+		forwarder.SetIsExitNode(true, exitHandler)
+	} else if settings.ExitNodePeer != "" {
+		// Use the designated exit node
+		log.Info().Str("exit_node", settings.ExitNodePeer).Msg("using designated exit node")
+		forwarder.SetIsExitNode(false, nil)
+		if err := forwarder.SetExitNode(settings.ExitNodePeer, settings.Exceptions); err != nil {
+			log.Warn().Err(err).Msg("failed to set exit node")
+		}
+	} else {
+		// Exit node disabled
+		log.Debug().Msg("exit node routing disabled")
+		if err := forwarder.SetExitNode("", nil); err != nil {
+			log.Warn().Err(err).Msg("failed to clear exit node settings")
+		}
+		forwarder.SetIsExitNode(false, nil)
 	}
 }
 

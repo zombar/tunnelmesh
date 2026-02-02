@@ -63,6 +63,27 @@
                 No DNS records yet.
             </div>
         </section>
+
+        <section id="settings-section">
+            <h2>Network Settings</h2>
+            <div class="settings-form">
+                <div class="setting-row">
+                    <label for="exit-node-select">Exit Node:</label>
+                    <select id="exit-node-select">
+                        <option value="">Disabled</option>
+                    </select>
+                </div>
+                <div class="setting-row">
+                    <label for="network-exceptions">Network Exceptions (CIDRs):</label>
+                    <p class="help-text">Traffic to these ranges bypasses exit node. Peer IPs in these ranges are skipped for tunnel connections.</p>
+                    <textarea id="network-exceptions" rows="6" placeholder="100.64.0.0/10&#10;10.0.0.0/8&#10;172.16.0.0/12&#10;192.168.0.0/16"></textarea>
+                </div>
+                <div class="setting-row">
+                    <button id="save-settings" class="btn-primary">Save Settings</button>
+                    <span id="save-status" class="save-status"></span>
+                </div>
+            </div>
+        </section>
     </main>
 
     <footer>

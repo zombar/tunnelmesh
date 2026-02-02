@@ -432,3 +432,212 @@ func TestServer_AdminStaticFiles(t *testing.T) {
 	srv.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 }
+
+func TestServer_GetNetworkSettings_Empty(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/network-settings", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp networkSettings
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	assert.Empty(t, resp.ExitNodePeer)
+	assert.Empty(t, resp.Exceptions)
+}
+
+func TestServer_SetNetworkSettings(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Register the exit node peer first (required for validation)
+	regReq := proto.RegisterRequest{
+		Name:      "exit-node",
+		PublicKey: "SHA256:exitkey",
+		SSHPort:   2222,
+	}
+	body, _ := json.Marshal(regReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Set network settings
+	settings := networkSettings{
+		ExitNodePeer: "exit-node",
+		Exceptions:   []string{"192.168.0.0/16", "10.0.0.0/8"},
+	}
+	body, _ = json.Marshal(settings)
+
+	req = httptest.NewRequest(http.MethodPost, "/admin/api/network-settings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Get and verify
+	req = httptest.NewRequest(http.MethodGet, "/admin/api/network-settings", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	var resp networkSettings
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, "exit-node", resp.ExitNodePeer)
+	assert.Equal(t, []string{"192.168.0.0/16", "10.0.0.0/8"}, resp.Exceptions)
+}
+
+func TestServer_SetNetworkSettings_ClearExitNode(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Register the exit node peer first (required for validation)
+	regReq := proto.RegisterRequest{
+		Name:      "exit-node",
+		PublicKey: "SHA256:exitkey",
+		SSHPort:   2222,
+	}
+	body, _ := json.Marshal(regReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// First, set exit node
+	settings := networkSettings{
+		ExitNodePeer: "exit-node",
+	}
+	body, _ = json.Marshal(settings)
+
+	req = httptest.NewRequest(http.MethodPost, "/admin/api/network-settings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Clear exit node
+	settings = networkSettings{
+		ExitNodePeer: "",
+		Exceptions:   []string{"100.64.0.0/10"},
+	}
+	body, _ = json.Marshal(settings)
+
+	req = httptest.NewRequest(http.MethodPost, "/admin/api/network-settings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Verify
+	req = httptest.NewRequest(http.MethodGet, "/admin/api/network-settings", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	var resp networkSettings
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	assert.Empty(t, resp.ExitNodePeer)
+	assert.Equal(t, []string{"100.64.0.0/10"}, resp.Exceptions)
+}
+
+func TestServer_PeersIncludeNetworkSettings(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Register the exit node peer first (required for validation)
+	regReq := proto.RegisterRequest{
+		Name:      "exit-node",
+		PublicKey: "SHA256:exitkey",
+		SSHPort:   2222,
+	}
+	body, _ := json.Marshal(regReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Set network settings
+	settings := networkSettings{
+		ExitNodePeer: "exit-node",
+		Exceptions:   []string{"192.168.0.0/16"},
+	}
+	body, _ = json.Marshal(settings)
+
+	req = httptest.NewRequest(http.MethodPost, "/admin/api/network-settings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Get peers - should include network settings
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp proto.PeerListResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	require.NotNil(t, resp.NetworkSettings)
+	assert.Equal(t, "exit-node", resp.NetworkSettings.ExitNodePeer)
+	assert.Equal(t, []string{"192.168.0.0/16"}, resp.NetworkSettings.Exceptions)
+}
+
+func TestServer_AdminOverviewIncludesNetworkSettings(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Register the exit node peer first (required for validation)
+	regReq := proto.RegisterRequest{
+		Name:      "vps-exit",
+		PublicKey: "SHA256:exitkey",
+		SSHPort:   2222,
+	}
+	body, _ := json.Marshal(regReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Set network settings
+	settings := networkSettings{
+		ExitNodePeer: "vps-exit",
+		Exceptions:   []string{"10.0.0.0/8"},
+	}
+	body, _ = json.Marshal(settings)
+
+	req = httptest.NewRequest(http.MethodPost, "/admin/api/network-settings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Get admin overview - should include network settings
+	req = httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp AdminOverview
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	require.NotNil(t, resp.NetworkSettings)
+	assert.Equal(t, "vps-exit", resp.NetworkSettings.ExitNodePeer)
+	assert.Equal(t, []string{"10.0.0.0/8"}, resp.NetworkSettings.Exceptions)
+}

@@ -121,10 +121,11 @@ func (r *Router) ListRoutes() map[string]string {
 
 // PacketInfo contains parsed information from an IPv4 packet.
 type PacketInfo struct {
-	SrcIP    net.IP
-	DstIP    net.IP
-	Protocol uint8
-	Payload  []byte
+	SrcIP     net.IP
+	DstIP     net.IP
+	Protocol  uint8
+	HeaderLen int // IP header length in bytes
+	Payload   []byte
 }
 
 // BuildIPv4Packet constructs a minimal IPv4 packet.
@@ -191,9 +192,10 @@ func ParseIPv4Packet(packet []byte) (*PacketInfo, error) {
 	}
 
 	info := &PacketInfo{
-		SrcIP:    net.IP(packet[12:16]),
-		DstIP:    net.IP(packet[16:20]),
-		Protocol: packet[9],
+		SrcIP:     net.IP(packet[12:16]),
+		DstIP:     net.IP(packet[16:20]),
+		Protocol:  packet[9],
+		HeaderLen: ihl,
 	}
 
 	if len(packet) > ihl {

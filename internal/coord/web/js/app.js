@@ -1,7 +1,9 @@
 // Dashboard state - track history per peer
 const state = {
     peerHistory: {}, // { peerName: { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] } }
-    maxHistoryPoints: 20
+    maxHistoryPoints: 20,
+    networkSettings: null, // Current network settings from server
+    settingsLoaded: false  // Track if settings have been loaded initially
 };
 
 // Fetch and update dashboard
@@ -75,6 +77,20 @@ function updateDashboard(data) {
                 <td><code>${peer.mesh_ip}</code></td>
             </tr>
         `).join('');
+    }
+
+    // Update exit node dropdown with current peers
+    updateExitNodeDropdown(data.peers);
+
+    // Update network settings display if included in response
+    if (data.network_settings && !state.settingsLoaded) {
+        state.networkSettings = data.network_settings;
+        if (data.network_settings.exit_node_peer) {
+            document.getElementById('exit-node-select').value = data.network_settings.exit_node_peer;
+        }
+        if (data.network_settings.exceptions && data.network_settings.exceptions.length > 0) {
+            document.getElementById('network-exceptions').value = data.network_settings.exceptions.join('\n');
+        }
     }
 
     // Update peers table
@@ -193,8 +209,104 @@ function formatAdvertisedIPs(peer) {
     return parts.length > 0 ? parts.join('<br>') : '<span class="no-ips">-</span>';
 }
 
+// Update exit node dropdown with online peers
+function updateExitNodeDropdown(peers) {
+    const select = document.getElementById('exit-node-select');
+    const currentValue = select.value;
+
+    // Get list of online peers
+    const onlinePeers = peers.filter(p => p.online);
+
+    // Rebuild options
+    select.innerHTML = '<option value="">Disabled</option>';
+    onlinePeers.forEach(peer => {
+        const option = document.createElement('option');
+        option.value = peer.name;
+        option.textContent = `${peer.name} (${peer.mesh_ip})`;
+        select.appendChild(option);
+    });
+
+    // Restore selection if still valid
+    if (currentValue && onlinePeers.some(p => p.name === currentValue)) {
+        select.value = currentValue;
+    } else if (state.networkSettings?.exit_node_peer) {
+        // Set to saved value if it exists
+        select.value = state.networkSettings.exit_node_peer;
+    }
+}
+
+// Load network settings from server
+async function loadNetworkSettings() {
+    try {
+        const resp = await fetch('/admin/api/network-settings');
+        if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}`);
+        }
+        const settings = await resp.json();
+        state.networkSettings = settings;
+
+        // Update UI
+        const select = document.getElementById('exit-node-select');
+        if (settings.exit_node_peer) {
+            select.value = settings.exit_node_peer;
+        }
+
+        const textarea = document.getElementById('network-exceptions');
+        if (settings.exceptions && settings.exceptions.length > 0) {
+            textarea.value = settings.exceptions.join('\n');
+        }
+
+        state.settingsLoaded = true;
+    } catch (err) {
+        console.error('Failed to load network settings:', err);
+    }
+}
+
+// Save network settings to server
+async function saveNetworkSettings() {
+    const statusEl = document.getElementById('save-status');
+    const exitNodePeer = document.getElementById('exit-node-select').value;
+    const exceptionsText = document.getElementById('network-exceptions').value;
+    const exceptions = exceptionsText
+        .split('\n')
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+
+    statusEl.textContent = 'Saving...';
+    statusEl.className = 'save-status';
+
+    try {
+        const resp = await fetch('/admin/api/network-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                exit_node_peer: exitNodePeer,
+                exceptions: exceptions
+            })
+        });
+
+        if (!resp.ok) {
+            const error = await resp.json();
+            throw new Error(error.message || `HTTP ${resp.status}`);
+        }
+
+        state.networkSettings = { exit_node_peer: exitNodePeer, exceptions };
+        statusEl.textContent = 'Saved!';
+        statusEl.className = 'save-status success';
+        setTimeout(() => { statusEl.textContent = ''; }, 2000);
+    } catch (err) {
+        console.error('Failed to save network settings:', err);
+        statusEl.textContent = 'Error: ' + err.message;
+        statusEl.className = 'save-status error';
+    }
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     fetchData();
+    loadNetworkSettings();
     setInterval(fetchData, 5000); // Refresh every 5 seconds
+
+    // Set up save button handler
+    document.getElementById('save-settings').addEventListener('click', saveNetworkSettings);
 });

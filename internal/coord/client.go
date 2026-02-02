@@ -73,6 +73,15 @@ func (c *Client) Register(name, publicKey string, publicIPs, privateIPs []string
 
 // ListPeers returns a list of all registered peers.
 func (c *Client) ListPeers() ([]proto.Peer, error) {
+	resp, err := c.ListPeersResponse()
+	if err != nil {
+		return nil, err
+	}
+	return resp.Peers, nil
+}
+
+// ListPeersResponse returns the full peer list response including network settings.
+func (c *Client) ListPeersResponse() (*proto.PeerListResponse, error) {
 	resp, err := c.doRequest(http.MethodGet, "/api/v1/peers", nil)
 	if err != nil {
 		return nil, err
@@ -88,7 +97,7 @@ func (c *Client) ListPeers() ([]proto.Peer, error) {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	return result.Peers, nil
+	return &result, nil
 }
 
 // Heartbeat sends a heartbeat to maintain presence.

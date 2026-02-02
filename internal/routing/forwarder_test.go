@@ -285,3 +285,240 @@ func TestForwarderLoop(t *testing.T) {
 	// The packet should have been forwarded to the tunnel
 	// Note: Due to timing, this may or may not have data
 }
+
+// TestForwarder_SetExitNode tests exit node configuration.
+func TestForwarder_SetExitNode(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// Set exit node with exceptions
+	err := fwd.SetExitNode("exit-peer", []string{"192.168.0.0/16", "10.0.0.0/8"})
+	require.NoError(t, err)
+
+	// Verify settings
+	fwd.exitMu.RLock()
+	assert.Equal(t, "exit-peer", fwd.exitPeerName)
+	assert.Len(t, fwd.exitExceptions, 2)
+	fwd.exitMu.RUnlock()
+}
+
+func TestForwarder_SetExitNode_InvalidCIDR(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+
+	err := fwd.SetExitNode("exit-peer", []string{"not-a-cidr"})
+	assert.Error(t, err)
+}
+
+func TestForwarder_SetExitNode_Disable(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// Enable exit node
+	err := fwd.SetExitNode("exit-peer", nil)
+	require.NoError(t, err)
+
+	// Disable exit node
+	err = fwd.SetExitNode("", nil)
+	require.NoError(t, err)
+
+	fwd.exitMu.RLock()
+	assert.Equal(t, "", fwd.exitPeerName)
+	fwd.exitMu.RUnlock()
+}
+
+func TestForwarder_isExcepted(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// Set exceptions
+	err := fwd.SetExitNode("exit-peer", []string{"192.168.0.0/16", "10.0.0.0/8"})
+	require.NoError(t, err)
+
+	// Test IPs that should be excepted
+	assert.True(t, fwd.isExcepted(net.ParseIP("192.168.1.1")))
+	assert.True(t, fwd.isExcepted(net.ParseIP("10.0.0.1")))
+
+	// Test IPs that should NOT be excepted
+	assert.False(t, fwd.isExcepted(net.ParseIP("8.8.8.8")))
+	assert.False(t, fwd.isExcepted(net.ParseIP("1.1.1.1")))
+}
+
+func TestForwarder_ForwardPacket_ToExitNode(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// Set up exit node
+	err := fwd.SetExitNode("exit-peer", []string{"192.168.0.0/16"})
+	require.NoError(t, err)
+
+	// Add tunnel for exit peer
+	tunnel := newMockTunnel()
+	tunnelMgr.Add("exit-peer", tunnel)
+
+	// Create packet to external IP (not in exception list, not in routing table)
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("8.8.8.8").To4() // External IP
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
+
+	// Forward should succeed (goes to exit node)
+	err = fwd.ForwardPacket(packet)
+	require.NoError(t, err)
+
+	// Verify packet was sent to exit tunnel with exit protocol
+	tunnelData := tunnel.GetData()
+	assert.NotEmpty(t, tunnelData)
+
+	// Check frame header
+	assert.True(t, len(tunnelData) >= 3)
+	protoType := tunnelData[2]
+	assert.Equal(t, byte(ProtoExitPacket), protoType, "Should use exit protocol type")
+}
+
+func TestForwarder_ForwardPacket_ExceptionBypasses(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// Set up exit node with exception
+	err := fwd.SetExitNode("exit-peer", []string{"192.168.0.0/16"})
+	require.NoError(t, err)
+
+	tunnel := newMockTunnel()
+	tunnelMgr.Add("exit-peer", tunnel)
+
+	// Create packet to excepted IP
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("192.168.1.1").To4() // Excepted IP
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
+
+	// Forward should silently drop (let OS handle via default route)
+	err = fwd.ForwardPacket(packet)
+	assert.NoError(t, err) // No error, just silent drop
+
+	// Verify packet was NOT sent to exit tunnel
+	tunnelData := tunnel.GetData()
+	assert.Empty(t, tunnelData)
+}
+
+func TestForwarder_SetIsExitNode(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// Initially not an exit node
+	fwd.exitMu.RLock()
+	assert.False(t, fwd.isExitNode)
+	fwd.exitMu.RUnlock()
+
+	// Set as exit node
+	fwd.SetIsExitNode(true, nil)
+
+	fwd.exitMu.RLock()
+	assert.True(t, fwd.isExitNode)
+	fwd.exitMu.RUnlock()
+}
+
+// mockExitHandler implements ExitHandler for testing.
+type mockExitHandler struct {
+	packets [][]byte
+	mu      sync.Mutex
+}
+
+func (m *mockExitHandler) HandleExitPacket(peerName string, packet []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.packets = append(m.packets, append([]byte{}, packet...))
+	return nil
+}
+
+func (m *mockExitHandler) GetPackets() [][]byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.packets
+}
+
+func TestForwarder_HandleTunnel_ExitPacket(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+	mockTun := newMockTUN()
+	fwd.SetTUN(mockTun)
+
+	// Set up as exit node with handler
+	handler := &mockExitHandler{}
+	fwd.SetIsExitNode(true, handler)
+
+	// Create a tunnel that provides an exit packet frame
+	tunnel := newMockTunnel()
+
+	// Build exit packet frame: [2 bytes length][1 byte proto=0x02][payload]
+	srcIP := net.ParseIP("10.99.0.2").To4()
+	dstIP := net.ParseIP("8.8.8.8").To4()
+	payload := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("exit-traffic"))
+
+	frameLen := len(payload) + 1
+	frame := make([]byte, 3+len(payload))
+	frame[0] = byte(frameLen >> 8)
+	frame[1] = byte(frameLen)
+	frame[2] = ProtoExitPacket
+	copy(frame[3:], payload)
+
+	tunnel.InjectData(frame)
+
+	// Handle tunnel in goroutine
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	go fwd.HandleTunnel(ctx, "peer1", tunnel)
+
+	// Wait a bit for processing
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify handler received the packet
+	packets := handler.GetPackets()
+	assert.Len(t, packets, 1)
+	assert.Equal(t, payload, packets[0])
+}
+
+func TestForwarder_HandleTunnel_MeshPacket(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+	mockTun := newMockTUN()
+	fwd.SetTUN(mockTun)
+
+	// Create a tunnel that provides a mesh packet frame
+	tunnel := newMockTunnel()
+
+	// Build mesh packet frame: [2 bytes length][1 byte proto=0x01][payload]
+	srcIP := net.ParseIP("10.99.0.2").To4()
+	dstIP := net.ParseIP("10.99.0.1").To4()
+	payload := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("mesh-traffic"))
+
+	frameLen := len(payload) + 1
+	frame := make([]byte, 3+len(payload))
+	frame[0] = byte(frameLen >> 8)
+	frame[1] = byte(frameLen)
+	frame[2] = ProtoMeshPacket
+	copy(frame[3:], payload)
+
+	tunnel.InjectData(frame)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	go fwd.HandleTunnel(ctx, "peer1", tunnel)
+
+	// Wait a bit for processing
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify packet was written to TUN
+	written := mockTun.GetWrittenPackets()
+	assert.Equal(t, payload, written)
+}

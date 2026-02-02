@@ -66,7 +66,14 @@ type HeartbeatResponse struct {
 
 // PeerListResponse contains the list of all mesh peers.
 type PeerListResponse struct {
-	Peers []Peer `json:"peers"`
+	Peers           []Peer           `json:"peers"`
+	NetworkSettings *NetworkSettings `json:"network_settings,omitempty"`
+}
+
+// NetworkSettings contains centralized network configuration from the server.
+type NetworkSettings struct {
+	ExitNodePeer string   `json:"exit_node_peer"` // Which peer is the exit node (empty = disabled)
+	Exceptions   []string `json:"exceptions"`     // CIDRs for exit bypass and tunnel connection skip
 }
 
 // DNSRecord represents a hostname to IP mapping.

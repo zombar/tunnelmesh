@@ -31,16 +31,24 @@ type serverStats struct {
 	totalHeartbeats uint64
 }
 
+// networkSettings holds centralized network configuration.
+type networkSettings struct {
+	ExitNodePeer string   `json:"exit_node_peer"` // Name of exit node peer (empty = disabled)
+	Exceptions   []string `json:"exceptions"`     // CIDRs for exit bypass and tunnel skip
+}
+
 // Server is the coordination server that manages peer registration and discovery.
 type Server struct {
-	cfg         *config.ServerConfig
-	mux         *http.ServeMux
-	peers       map[string]*peerInfo
-	peersMu     sync.RWMutex
-	ipAlloc     *ipAllocator
-	dnsCache    map[string]string // hostname -> mesh IP
-	serverStats serverStats
-	relay       *relayManager
+	cfg           *config.ServerConfig
+	mux           *http.ServeMux
+	peers         map[string]*peerInfo
+	peersMu       sync.RWMutex
+	ipAlloc       *ipAllocator
+	dnsCache      map[string]string // hostname -> mesh IP
+	serverStats   serverStats
+	relay         *relayManager
+	netSettings   networkSettings
+	netSettingsMu sync.RWMutex
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -264,14 +272,25 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.peersMu.RLock()
-	defer s.peersMu.RUnlock()
-
 	peers := make([]proto.Peer, 0, len(s.peers))
 	for _, info := range s.peers {
 		peers = append(peers, *info.peer)
 	}
+	s.peersMu.RUnlock()
+
+	// Include network settings in response
+	s.netSettingsMu.RLock()
+	settings := s.netSettings
+	s.netSettingsMu.RUnlock()
 
 	resp := proto.PeerListResponse{Peers: peers}
+	if settings.ExitNodePeer != "" || len(settings.Exceptions) > 0 {
+		resp.NetworkSettings = &proto.NetworkSettings{
+			ExitNodePeer: settings.ExitNodePeer,
+			Exceptions:   settings.Exceptions,
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }

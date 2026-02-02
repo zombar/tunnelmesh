@@ -19,6 +19,10 @@ const (
 	DefaultMTU = 1400
 	// FrameHeaderSize is the size of the frame header.
 	FrameHeaderSize = 3
+
+	// Protocol types for frame header
+	ProtoMeshPacket = 0x01 // Regular mesh traffic
+	ProtoExitPacket = 0x02 // Exit node traffic (forward to internet)
 )
 
 // TunnelProvider provides access to tunnels by peer name.
@@ -45,6 +49,13 @@ type ForwarderStats struct {
 	Errors          uint64
 }
 
+// ExitHandler is called when exit traffic needs to be handled.
+// The handler receives the packet and the peer name that sent it.
+// It should forward the packet to the internet and route responses back.
+type ExitHandler interface {
+	HandleExitPacket(peerName string, packet []byte) error
+}
+
 // Forwarder routes packets between the TUN device and tunnels.
 type Forwarder struct {
 	router    *Router
@@ -56,6 +67,13 @@ type Forwarder struct {
 	tunMu     sync.RWMutex
 	localIP   net.IP
 	localIPMu sync.RWMutex
+
+	// Exit node state
+	exitPeerName   string       // Name of exit node peer (empty = disabled)
+	exitExceptions []*net.IPNet // CIDRs that bypass exit node
+	isExitNode     bool         // True if this node is an exit node
+	exitHandler    ExitHandler  // Handler for exit traffic (set when isExitNode is true)
+	exitMu         sync.RWMutex
 }
 
 // NewForwarder creates a new packet forwarder.
@@ -87,6 +105,60 @@ func (f *Forwarder) SetLocalIP(ip net.IP) {
 	f.localIPMu.Lock()
 	defer f.localIPMu.Unlock()
 	f.localIP = ip
+}
+
+// SetExitNode configures exit node routing.
+// peerName is the name of the peer to use as exit node (empty to disable).
+// exceptions are CIDRs that bypass the exit node.
+func (f *Forwarder) SetExitNode(peerName string, exceptions []string) error {
+	var parsed []*net.IPNet
+	for _, cidr := range exceptions {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return fmt.Errorf("invalid CIDR %q: %w", cidr, err)
+		}
+		parsed = append(parsed, ipNet)
+	}
+
+	f.exitMu.Lock()
+	f.exitPeerName = peerName
+	f.exitExceptions = parsed
+	f.exitMu.Unlock()
+
+	if peerName != "" {
+		log.Info().
+			Str("exit_peer", peerName).
+			Int("exceptions", len(exceptions)).
+			Msg("exit node routing enabled")
+	} else {
+		log.Info().Msg("exit node routing disabled")
+	}
+
+	return nil
+}
+
+// SetIsExitNode configures this node to act as an exit node.
+func (f *Forwarder) SetIsExitNode(enabled bool, handler ExitHandler) {
+	f.exitMu.Lock()
+	f.isExitNode = enabled
+	f.exitHandler = handler
+	f.exitMu.Unlock()
+
+	if enabled {
+		log.Info().Msg("exit node mode enabled")
+	} else {
+		log.Info().Msg("exit node mode disabled")
+	}
+}
+
+// isExcepted checks if a destination IP should bypass the exit node.
+func (f *Forwarder) isExcepted(ip net.IP) bool {
+	for _, cidr := range f.exitExceptions {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // ForwardPacket forwards a packet from the TUN to the appropriate tunnel.
@@ -122,8 +194,34 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 	// Look up the route
 	peerName, ok := f.router.Lookup(info.DstIP)
 	if !ok {
-		atomic.AddUint64(&f.stats.DroppedNoRoute, 1)
-		return fmt.Errorf("no route for %s", info.DstIP)
+		// Not a mesh destination - check exit node routing
+		f.exitMu.RLock()
+		exitPeer := f.exitPeerName
+		exceptions := f.exitExceptions
+		f.exitMu.RUnlock()
+
+		if exitPeer == "" {
+			// No exit node configured, drop as before
+			atomic.AddUint64(&f.stats.DroppedNoRoute, 1)
+			return fmt.Errorf("no route for %s", info.DstIP)
+		}
+
+		// Check if destination is in exception list
+		excepted := false
+		for _, cidr := range exceptions {
+			if cidr.Contains(info.DstIP) {
+				excepted = true
+				break
+			}
+		}
+		if excepted {
+			// Let this go out the normal way (OS routing)
+			atomic.AddUint64(&f.stats.DroppedNoRoute, 1)
+			return nil // Silent drop - OS will handle via default route
+		}
+
+		// Route via exit node
+		return f.forwardToExitNode(packet, exitPeer)
 	}
 
 	// Get the tunnel
@@ -174,8 +272,13 @@ func (f *Forwarder) ReceivePacket(packet []byte) error {
 	return nil
 }
 
-// writeFrame writes a length-prefixed frame to the tunnel.
+// writeFrame writes a length-prefixed frame to the tunnel with mesh protocol type.
 func (f *Forwarder) writeFrame(w io.Writer, packet []byte) error {
+	return f.writeFrameWithProto(w, packet, ProtoMeshPacket)
+}
+
+// writeFrameWithProto writes a length-prefixed frame to the tunnel with specified protocol.
+func (f *Forwarder) writeFrameWithProto(w io.Writer, packet []byte, protoType byte) error {
 	// Frame format: [2 bytes length][1 byte proto][payload]
 	// Use pooled buffer to avoid allocations and combine into single write
 	bufPtr := f.framePool.Get().(*[]byte)
@@ -184,39 +287,66 @@ func (f *Forwarder) writeFrame(w io.Writer, packet []byte) error {
 
 	frameLen := len(packet) + 1
 	binary.BigEndian.PutUint16(buf[0:2], uint16(frameLen))
-	buf[2] = 0x01 // IP packet
+	buf[2] = protoType
 	copy(buf[FrameHeaderSize:], packet)
 
 	_, err := w.Write(buf[:FrameHeaderSize+len(packet)])
 	return err
 }
 
+// forwardToExitNode forwards a packet to the exit node for internet routing.
+func (f *Forwarder) forwardToExitNode(packet []byte, exitPeer string) error {
+	tunnel, ok := f.tunnels.Get(exitPeer)
+	if !ok {
+		atomic.AddUint64(&f.stats.DroppedNoTunnel, 1)
+		return fmt.Errorf("no tunnel for exit peer %s", exitPeer)
+	}
+
+	// Send with exit protocol type
+	if err := f.writeFrameWithProto(tunnel, packet, ProtoExitPacket); err != nil {
+		atomic.AddUint64(&f.stats.Errors, 1)
+		return fmt.Errorf("write to exit tunnel: %w", err)
+	}
+
+	atomic.AddUint64(&f.stats.PacketsSent, 1)
+	atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
+
+	log.Trace().
+		Str("exit_peer", exitPeer).
+		Int("len", len(packet)).
+		Msg("forwarded packet to exit node")
+
+	return nil
+}
+
 // readFrame reads a length-prefixed frame from the tunnel into the provided buffer.
-// Returns the number of payload bytes read (excluding protocol byte).
-func (f *Forwarder) readFrame(r io.Reader, buf []byte) (int, error) {
+// Returns the number of payload bytes read (excluding protocol byte) and the protocol type.
+func (f *Forwarder) readFrame(r io.Reader, buf []byte) (int, byte, error) {
 	// Use stack-allocated header to avoid allocation
 	var header [FrameHeaderSize]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
 	frameLen := int(binary.BigEndian.Uint16(header[0:2]))
 	if frameLen < 1 {
-		return 0, fmt.Errorf("invalid frame length: %d", frameLen)
+		return 0, 0, fmt.Errorf("invalid frame length: %d", frameLen)
 	}
+
+	protoType := header[2]
 
 	// frameLen includes the protocol byte
 	payloadLen := frameLen - 1
 	if payloadLen > len(buf) {
-		return 0, fmt.Errorf("frame too large: %d bytes", payloadLen)
+		return 0, 0, fmt.Errorf("frame too large: %d bytes", payloadLen)
 	}
 
 	// Read payload directly into buffer
 	if _, err := io.ReadFull(r, buf[:payloadLen]); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
-	return payloadLen, nil
+	return payloadLen, protoType, nil
 }
 
 // Stats returns a copy of the forwarding statistics.
@@ -294,7 +424,7 @@ func (f *Forwarder) HandleTunnel(ctx context.Context, peerName string, tunnel io
 		}
 
 		// Read frame from tunnel into pooled buffer
-		n, err := f.readFrame(tunnel, buf.Data())
+		n, protoType, err := f.readFrame(tunnel, buf.Data())
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -307,9 +437,32 @@ func (f *Forwarder) HandleTunnel(ctx context.Context, peerName string, tunnel io
 			return
 		}
 
-		// Write to TUN (use slice of buffer, no copy needed)
-		if err := f.ReceivePacket(buf.Data()[:n]); err != nil {
-			log.Debug().Err(err).Msg("receive packet failed")
+		packet := buf.Data()[:n]
+
+		switch protoType {
+		case ProtoMeshPacket:
+			// Regular mesh traffic - write to TUN
+			if err := f.ReceivePacket(packet); err != nil {
+				log.Debug().Err(err).Msg("receive packet failed")
+			}
+
+		case ProtoExitPacket:
+			// Exit traffic - forward to internet if we're an exit node
+			f.exitMu.RLock()
+			isExitNode := f.isExitNode
+			handler := f.exitHandler
+			f.exitMu.RUnlock()
+
+			if isExitNode && handler != nil {
+				if err := handler.HandleExitPacket(peerName, packet); err != nil {
+					log.Debug().Err(err).Str("peer", peerName).Msg("exit packet handling failed")
+				}
+			} else {
+				log.Warn().Str("peer", peerName).Msg("received exit packet but not configured as exit node")
+			}
+
+		default:
+			log.Warn().Uint8("proto", protoType).Msg("unknown protocol type")
 		}
 	}
 }

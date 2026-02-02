@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -118,13 +119,86 @@ func (c *Config) Validate() error {
 
 // Negotiator handles connection negotiation.
 type Negotiator struct {
-	config Config
+	config         Config
+	exceptionCIDRs []*net.IPNet
+	exceptionMu    sync.RWMutex
 }
 
 // NewNegotiator creates a new Negotiator with the given config.
 func NewNegotiator(cfg Config) *Negotiator {
 	_ = cfg.Validate()
 	return &Negotiator{config: cfg}
+}
+
+// SetExceptionCIDRs sets the CIDRs to exclude from connection attempts.
+// IPs in these ranges will be skipped when probing peer addresses.
+func (n *Negotiator) SetExceptionCIDRs(cidrs []string) error {
+	var parsed []*net.IPNet
+	for _, cidr := range cidrs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return fmt.Errorf("invalid CIDR %q: %w", cidr, err)
+		}
+		parsed = append(parsed, ipNet)
+	}
+
+	n.exceptionMu.Lock()
+	n.exceptionCIDRs = parsed
+	n.exceptionMu.Unlock()
+
+	log.Debug().
+		Strs("cidrs", cidrs).
+		Msg("updated exception CIDRs for negotiator")
+
+	return nil
+}
+
+// isExcepted checks if an IP address is in an excepted CIDR range.
+func (n *Negotiator) isExcepted(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+
+	n.exceptionMu.RLock()
+	defer n.exceptionMu.RUnlock()
+
+	for _, cidr := range n.exceptionCIDRs {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// filterAddresses removes addresses with IPs in excepted CIDR ranges.
+func (n *Negotiator) filterAddresses(addrs []string) []string {
+	n.exceptionMu.RLock()
+	hasExceptions := len(n.exceptionCIDRs) > 0
+	n.exceptionMu.RUnlock()
+
+	if !hasExceptions {
+		return addrs
+	}
+
+	var filtered []string
+	for _, addr := range addrs {
+		// Parse host from host:port
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			// If no port, treat the whole thing as host
+			host = addr
+		}
+
+		if !n.isExcepted(host) {
+			filtered = append(filtered, addr)
+		} else {
+			log.Debug().
+				Str("address", addr).
+				Msg("skipping address in excepted CIDR range")
+		}
+	}
+	return filtered
 }
 
 // ProbeAddress tests if an address is reachable.
@@ -163,15 +237,24 @@ func (n *Negotiator) ProbeAddress(ctx context.Context, addr string) ProbeResult 
 	return result
 }
 
-// ProbeAll probes all addresses for a peer.
+// ProbeAll probes all addresses for a peer, filtering out excepted CIDRs.
 func (n *Negotiator) ProbeAll(ctx context.Context, peer *PeerInfo) []ProbeResult {
-	addrs := peer.AllAddresses()
+	allAddrs := peer.AllAddresses()
+	addrs := n.filterAddresses(allAddrs)
 	results := make([]ProbeResult, 0, len(addrs))
+
+	if len(addrs) < len(allAddrs) {
+		log.Debug().
+			Str("peer", peer.ID).
+			Int("total", len(allAddrs)).
+			Int("after_filter", len(addrs)).
+			Msg("filtered addresses based on exception CIDRs")
+	}
 
 	log.Debug().
 		Str("peer", peer.ID).
 		Strs("addresses", addrs).
-		Msg("probing all addresses")
+		Msg("probing addresses")
 
 	for _, addr := range addrs {
 		result := n.ProbeAddress(ctx, addr)
