@@ -680,6 +680,24 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 					if err := udpTransport.RegisterUDPEndpoint(ctx, cfg.Name); err != nil {
 						log.Warn().Err(err).Msg("failed to register UDP endpoint")
 					}
+
+					// Start periodic UDP endpoint refresh (endpoints expire after 5 minutes)
+					go func() {
+						ticker := time.NewTicker(2 * time.Minute)
+						defer ticker.Stop()
+						for {
+							select {
+							case <-ctx.Done():
+								return
+							case <-ticker.C:
+								if err := udpTransport.RegisterUDPEndpoint(ctx, cfg.Name); err != nil {
+									log.Debug().Err(err).Msg("failed to refresh UDP endpoint registration")
+								} else {
+									log.Debug().Msg("UDP endpoint registration refreshed")
+								}
+							}
+						}
+					}()
 				}
 			}
 		}
