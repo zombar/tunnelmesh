@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
+	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
 // handshakeResponse is used to pass handshake responses from receiveLoop to initiators.
@@ -518,26 +519,27 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 
 	// Check if peer is on the same network (same public IP = same NAT)
 	// If so, use private IPs to avoid NAT hairpinning issues
+	// Use fresh IP detection to avoid stale cached addresses after network changes
 	var peerEndpoint string
 	if opts.PeerInfo != nil && len(opts.PeerInfo.PrivateIPs) > 0 && opts.PeerInfo.UDPPort > 0 {
-		t.mu.RLock()
-		ourExternalAddr := t.externalAddr
-		t.mu.RUnlock()
-
-		if ourExternalAddr != "" {
-			ourExternalIP, _, _ := net.SplitHostPort(ourExternalAddr)
+		// Get our current public IPs freshly to handle network changes
+		ourPublicIPs, _, _ := proto.GetLocalIPs()
+		for _, ourPublicIP := range ourPublicIPs {
 			for _, peerPublicIP := range opts.PeerInfo.PublicIPs {
-				if ourExternalIP == peerPublicIP {
+				if ourPublicIP == peerPublicIP {
 					// Same public IP means same LAN - use private IP to avoid hairpinning
 					peerEndpoint = net.JoinHostPort(opts.PeerInfo.PrivateIPs[0], fmt.Sprint(opts.PeerInfo.UDPPort))
 					log.Debug().
 						Str("peer", opts.PeerName).
-						Str("our_external_ip", ourExternalIP).
+						Str("our_public_ip", ourPublicIP).
 						Str("peer_public_ip", peerPublicIP).
 						Str("using_private_addr", peerEndpoint).
 						Msg("detected same-network peer, using private IP to avoid NAT hairpinning")
 					break
 				}
+			}
+			if peerEndpoint != "" {
+				break
 			}
 		}
 	}
