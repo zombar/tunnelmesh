@@ -128,11 +128,19 @@ func (d *Device) configureDarwin() error {
 	}
 
 	// Add route for the mesh network
+	// First delete any existing route to avoid conflicts with other VPNs or stale routes
 	ones, _ := d.network.Mask.Size()
-	cmd = exec.Command("route", "add", "-net", d.network.IP.String()+"/"+fmt.Sprintf("%d", ones), "-interface", d.name)
+	routeNet := d.network.IP.String() + "/" + fmt.Sprintf("%d", ones)
+	cmd = exec.Command("route", "delete", "-net", routeNet)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		// Route might already exist
-		log.Debug().Str("output", string(out)).Msg("route add (may already exist)")
+		log.Debug().Str("output", string(out)).Msg("route delete (may not exist)")
+	}
+
+	cmd = exec.Command("route", "add", "-net", routeNet, "-interface", d.name)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Warn().Str("output", string(out)).Msg("route add failed")
+	} else {
+		log.Debug().Str("route", routeNet).Str("interface", d.name).Msg("route added")
 	}
 
 	return nil
