@@ -3,10 +3,8 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"os"
 	"os/exec"
@@ -14,8 +12,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -27,12 +23,12 @@ import (
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
 	"github.com/tunnelmesh/tunnelmesh/internal/negotiate"
 	"github.com/tunnelmesh/tunnelmesh/internal/netmon"
+	"github.com/tunnelmesh/tunnelmesh/internal/peer"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/svc"
 	"github.com/tunnelmesh/tunnelmesh/internal/tun"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
-	"golang.org/x/crypto/ssh"
 )
 
 var (
@@ -534,17 +530,21 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 			Msg("TUN device created")
 	}
 
-	// Initialize routing and tunnel management
-	router := routing.NewRouter()
-	tunnelMgr := NewTunnelAdapter()
-	forwarder := routing.NewForwarder(router, tunnelMgr)
+	// Create peer identity and mesh node
+	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, resp)
+	node := peer.NewMeshNode(identity, client)
+
+	// Set up forwarder with node's tunnel manager and router
+	forwarder := routing.NewForwarder(node.Router(), node.TunnelMgr())
 	if tunDev != nil {
 		forwarder.SetTUN(tunDev)
 		forwarder.SetLocalIP(net.ParseIP(resp.MeshIP))
 	}
+	node.Forwarder = forwarder
 
 	// Create SSH server for incoming connections
 	sshServer := tunnel.NewSSHServer(signer, nil) // Will add authorized keys dynamically
+	node.SSHServer = sshServer
 
 	// Start SSH listener
 	sshListener, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.SSHPort))
@@ -555,7 +555,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	log.Info().Int("port", cfg.SSHPort).Msg("SSH server listening")
 
 	// Handle incoming SSH connections
-	go handleSSHConnections(ctx, sshListener, sshServer, tunnelMgr, forwarder, router, client)
+	go node.HandleIncomingSSH(ctx, sshListener)
 
 	// Create negotiator for outbound connections
 	negotiator := negotiate.NewNegotiator(negotiate.Config{
@@ -565,15 +565,17 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		AllowReverse: true,
 		AllowRelay:   true, // Enable relay through coordination server
 	})
+	node.Negotiator = negotiator
 
 	// Create SSH client for outbound connections
 	sshClient := tunnel.NewSSHClient(signer, nil) // Accept any host key for now
+	node.SSHClient = sshClient
 
 	// Start DNS resolver if enabled
-	var resolver *meshdns.Resolver
 	var dnsConfigured bool
 	if cfg.DNS.Enabled {
-		resolver = meshdns.NewResolver(resp.Domain, cfg.DNS.CacheTTL)
+		resolver := meshdns.NewResolver(resp.Domain, cfg.DNS.CacheTTL)
+		node.Resolver = resolver
 
 		// Initial DNS sync
 		if err := syncDNS(client, resolver); err != nil {
@@ -604,20 +606,14 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		}()
 	}
 
-	// Create network monitor for detecting network changes
-	triggerDiscovery := make(chan struct{}, 1)
-	netChangeState := newNetworkChangeState()
-
 	// Set up callback to trigger discovery when a tunnel is removed
-	tunnelMgr.SetOnRemove(func() {
-		select {
-		case triggerDiscovery <- struct{}{}:
+	node.TunnelMgr().SetOnRemove(func() {
+		if node.TriggerDiscovery() {
 			log.Debug().Msg("triggered discovery due to tunnel removal")
-		default:
-			// Discovery already pending
 		}
 	})
 
+	// Create network monitor for detecting network changes
 	netMonitor, err := netmon.New(netmon.DefaultConfig())
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to create network monitor, changes won't be detected")
@@ -628,15 +624,15 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 			netMonitor.Close()
 		} else {
 			defer netMonitor.Close()
-			go networkChangeLoop(ctx, networkChanges, client, cfg, pubKeyEncoded, resp.MeshCIDR, tunnelMgr, triggerDiscovery, netChangeState)
+			go node.RunNetworkMonitor(ctx, networkChanges)
 		}
 	}
 
 	// Start peer discovery and tunnel establishment loop
-	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, triggerDiscovery, netChangeState)
+	go node.RunPeerDiscovery(ctx)
 
 	// Start heartbeat loop
-	go heartbeatLoop(ctx, client, cfg.Name, pubKeyEncoded, cfg.SSHPort, resp.MeshCIDR, resolver, forwarder, tunnelMgr, triggerDiscovery)
+	go node.RunHeartbeat(ctx)
 
 	// Wait for context cancellation (shutdown signal)
 	<-ctx.Done()
@@ -649,524 +645,17 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	}
 
 	// Close all tunnels
-	tunnelMgr.CloseAll()
+	node.TunnelMgr().CloseAll()
 
 	// Don't deregister on shutdown - keep the peer record so we get the same
 	// mesh IP when we reconnect. Use 'tunnelmesh leave' for intentional removal.
 	log.Info().Msg("disconnected from mesh (peer record retained for sticky IP)")
 
-	if resolver != nil {
-		_ = resolver.Shutdown()
+	if node.Resolver != nil {
+		_ = node.Resolver.Shutdown()
 	}
 
 	return nil
-}
-
-// networkChangeState tracks when the last network change occurred.
-// Used to temporarily bypass alpha ordering for faster reconnection after resume.
-type networkChangeState struct {
-	lastChange atomic.Value // stores time.Time
-}
-
-func newNetworkChangeState() *networkChangeState {
-	state := &networkChangeState{}
-	state.lastChange.Store(time.Time{})
-	return state
-}
-
-func (s *networkChangeState) recordChange() {
-	s.lastChange.Store(time.Now())
-}
-
-// inBypassWindow returns true if within the bypass window after a network change.
-func (s *networkChangeState) inBypassWindow(window time.Duration) bool {
-	lastChange := s.lastChange.Load().(time.Time)
-	if lastChange.IsZero() {
-		return false
-	}
-	return time.Since(lastChange) < window
-}
-
-// TunnelAdapter wraps tunnel.TunnelManager to implement routing.TunnelProvider
-type TunnelAdapter struct {
-	tunnels  map[string]io.ReadWriteCloser
-	mu       sync.RWMutex
-	onRemove func() // Called when a tunnel is removed (for triggering reconnection)
-}
-
-func NewTunnelAdapter() *TunnelAdapter {
-	return &TunnelAdapter{
-		tunnels: make(map[string]io.ReadWriteCloser),
-	}
-}
-
-// SetOnRemove sets a callback that is called when a tunnel is removed.
-func (t *TunnelAdapter) SetOnRemove(callback func()) {
-	t.onRemove = callback
-}
-
-func (t *TunnelAdapter) Get(name string) (io.ReadWriteCloser, bool) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	tunnel, ok := t.tunnels[name]
-	return tunnel, ok
-}
-
-func (t *TunnelAdapter) Add(name string, tunnel io.ReadWriteCloser) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	// Close existing tunnel if present
-	if existing, ok := t.tunnels[name]; ok {
-		existing.Close()
-	}
-	t.tunnels[name] = tunnel
-	log.Debug().Str("peer", name).Msg("tunnel added")
-}
-
-func (t *TunnelAdapter) Remove(name string) {
-	t.mu.Lock()
-	callback := t.onRemove
-	if tunnel, ok := t.tunnels[name]; ok {
-		tunnel.Close()
-		delete(t.tunnels, name)
-		log.Debug().Str("peer", name).Msg("tunnel removed")
-	}
-	t.mu.Unlock()
-
-	// Trigger reconnection callback outside the lock
-	if callback != nil {
-		callback()
-	}
-}
-
-// RemoveIfMatch removes a tunnel only if the current tunnel for this peer matches
-// the provided tunnel. This prevents removing a replacement tunnel when the old
-// tunnel's handler goroutine exits.
-func (t *TunnelAdapter) RemoveIfMatch(name string, tun io.ReadWriteCloser) {
-	t.mu.Lock()
-	callback := t.onRemove
-	removed := false
-	if existing, ok := t.tunnels[name]; ok && existing == tun {
-		// Don't close - it's already closed (that's why we're here)
-		delete(t.tunnels, name)
-		log.Debug().Str("peer", name).Msg("tunnel removed")
-		removed = true
-	}
-	t.mu.Unlock()
-
-	// Only trigger reconnection if we actually removed the tunnel
-	if removed && callback != nil {
-		callback()
-	}
-}
-
-func (t *TunnelAdapter) CloseAll() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for name, tunnel := range t.tunnels {
-		tunnel.Close()
-		delete(t.tunnels, name)
-	}
-	log.Debug().Msg("all tunnels closed")
-}
-
-func (t *TunnelAdapter) List() []string {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	names := make([]string, 0, len(t.tunnels))
-	for name := range t.tunnels {
-		names = append(names, name)
-	}
-	return names
-}
-
-// handleSSHConnections handles incoming SSH connections
-func handleSSHConnections(ctx context.Context, listener net.Listener, sshServer *tunnel.SSHServer,
-	tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder, router *routing.Router,
-	coordClient *coord.Client) {
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			log.Error().Err(err).Msg("accept error")
-			continue
-		}
-
-		go handleSSHConnection(ctx, conn, sshServer, tunnelMgr, forwarder, router, coordClient)
-	}
-}
-
-func handleSSHConnection(ctx context.Context, conn net.Conn, sshServer *tunnel.SSHServer,
-	tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder, router *routing.Router,
-	coordClient *coord.Client) {
-
-	sshConn, err := sshServer.Accept(conn)
-	if err != nil {
-		// If handshake failed, try refreshing authorized keys and log for retry
-		log.Warn().Err(err).Str("remote", conn.RemoteAddr().String()).Msg("SSH handshake failed, refreshing peer keys")
-		refreshAuthorizedKeys(coordClient, sshServer, router)
-		conn.Close()
-		return
-	}
-
-	log.Info().
-		Str("remote", conn.RemoteAddr().String()).
-		Str("user", sshConn.Conn.User()).
-		Msg("incoming SSH connection")
-
-	// Handle channels
-	for newChannel := range sshConn.Channels {
-		if newChannel.ChannelType() != tunnel.ChannelType {
-			_ = newChannel.Reject(ssh.UnknownChannelType, "unknown channel type")
-			continue
-		}
-
-		channel, _, err := newChannel.Accept()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to accept channel")
-			continue
-		}
-
-		// Get peer name from extra data (sent by client when opening channel)
-		peerName := string(newChannel.ExtraData())
-		if peerName == "" {
-			peerName = sshConn.Conn.User() // Fallback to user name
-		}
-
-		tun := tunnel.NewTunnel(channel, peerName)
-
-		// Add to tunnel manager
-		tunnelMgr.Add(peerName, tun)
-
-		log.Info().Str("peer", peerName).Msg("tunnel established from incoming connection")
-
-		// Handle incoming packets from this tunnel
-		go func(name string, t io.ReadWriteCloser) {
-			forwarder.HandleTunnel(ctx, name, t)
-			tunnelMgr.RemoveIfMatch(name, t)
-		}(peerName, tun)
-	}
-}
-
-// peerDiscoveryLoop periodically discovers peers and establishes tunnels
-func peerDiscoveryLoop(ctx context.Context, client *coord.Client, myName string,
-	sshClient *tunnel.SSHClient, negotiator *negotiate.Negotiator,
-	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder,
-	sshServer *tunnel.SSHServer, triggerDiscovery <-chan struct{},
-	netChangeState *networkChangeState) {
-
-	// Add random jitter (0-3 seconds) before initial discovery to stagger startup
-	jitter := time.Duration(rand.Intn(3000)) * time.Millisecond
-	log.Debug().Dur("jitter", jitter).Msg("waiting before initial peer discovery")
-	select {
-	case <-ctx.Done():
-		return
-	case <-time.After(jitter):
-	}
-
-	// Initial peer discovery
-	discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
-
-	// Fast retry phase: discover every 5 seconds for the first 30 seconds
-	// This helps establish connections quickly after startup
-	fastTicker := time.NewTicker(5 * time.Second)
-	fastPhaseEnd := time.After(30 * time.Second)
-
-fastLoop:
-	for {
-		select {
-		case <-ctx.Done():
-			fastTicker.Stop()
-			return
-		case <-fastPhaseEnd:
-			fastTicker.Stop()
-			break fastLoop
-		case <-fastTicker.C:
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
-			// Also check for relay requests during fast phase to speed up relay pairing
-			checkAndHandleRelayRequests(ctx, client, tunnelMgr, forwarder)
-		case <-triggerDiscovery:
-			log.Debug().Msg("peer discovery triggered by network change")
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
-			checkAndHandleRelayRequests(ctx, client, tunnelMgr, forwarder)
-		}
-	}
-
-	// Normal phase: discover every 60 seconds
-	ticker := time.NewTicker(60 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
-		case <-triggerDiscovery:
-			log.Debug().Msg("peer discovery triggered by network change")
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
-		}
-	}
-}
-
-func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName string,
-	sshClient *tunnel.SSHClient, negotiator *negotiate.Negotiator,
-	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder,
-	sshServer *tunnel.SSHServer, netChangeState *networkChangeState) {
-
-	peers, err := client.ListPeers()
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to list peers")
-		return
-	}
-
-	existingTunnels := tunnelMgr.List()
-	existingSet := make(map[string]bool)
-	for _, name := range existingTunnels {
-		existingSet[name] = true
-	}
-
-	// Check if we're in a network change bypass window (10 seconds)
-	// During this window, both peers attempt connection to speed up reconnection
-	const bypassWindow = 10 * time.Second
-	bypassAlphaOrdering := netChangeState.inBypassWindow(bypassWindow)
-
-	for _, peer := range peers {
-		if peer.Name == myName {
-			continue // Skip self
-		}
-
-		// Add peer's public key to authorized keys for incoming connections
-		if peer.PublicKey != "" {
-			pubKey, err := config.DecodePublicKey(peer.PublicKey)
-			if err != nil {
-				log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to decode peer public key")
-			} else {
-				sshServer.AddAuthorizedKey(pubKey)
-			}
-		}
-
-		// Update routing table with peer's mesh IP
-		router.AddRoute(peer.MeshIP, peer.Name)
-
-		// Skip if tunnel already exists
-		if existingSet[peer.Name] {
-			continue
-		}
-
-		// Try to establish tunnel
-		// Alpha ordering is checked inside establishTunnel and only applies to direct SSH connections.
-		// For relay connections, both peers must connect to the relay server, so alpha ordering is bypassed.
-		go establishTunnel(ctx, peer, myName, sshClient, negotiator, tunnelMgr, forwarder, client, bypassAlphaOrdering)
-	}
-}
-
-// checkAndHandleRelayRequests polls for relay requests and connects to relay for waiting peers.
-// This is called during the fast discovery phase to speed up relay pairing.
-func checkAndHandleRelayRequests(ctx context.Context, client *coord.Client,
-	tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder) {
-	relayRequests, err := client.CheckRelayRequests()
-	if err != nil {
-		log.Debug().Err(err).Msg("failed to check relay requests")
-		return
-	}
-	handleRelayRequests(ctx, relayRequests, client, tunnelMgr, forwarder)
-}
-
-// refreshAuthorizedKeys fetches peer keys from coordination server and adds them to SSH server.
-// This is called when an SSH handshake fails to ensure we have the latest keys.
-func refreshAuthorizedKeys(client *coord.Client, sshServer *tunnel.SSHServer, router *routing.Router) {
-	peers, err := client.ListPeers()
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to refresh peer keys")
-		return
-	}
-
-	for _, peer := range peers {
-		if peer.PublicKey != "" {
-			pubKey, err := config.DecodePublicKey(peer.PublicKey)
-			if err != nil {
-				log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to decode peer public key")
-			} else {
-				sshServer.AddAuthorizedKey(pubKey)
-			}
-		}
-		// Also update routing table
-		router.AddRoute(peer.MeshIP, peer.Name)
-	}
-	log.Debug().Int("peers", len(peers)).Msg("refreshed authorized keys")
-}
-
-// networkChangeLoop handles network interface change events
-func networkChangeLoop(ctx context.Context, events <-chan netmon.Event,
-	client *coord.Client, cfg *config.PeerConfig, pubKeyEncoded string,
-	meshCIDR string, tunnelMgr *TunnelAdapter, triggerDiscovery chan<- struct{},
-	netChangeState *networkChangeState) {
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-events:
-			if !ok {
-				return
-			}
-
-			log.Info().
-				Str("type", event.Type.String()).
-				Str("interface", event.Interface).
-				Msg("network change detected")
-
-			// Get new IP addresses, excluding mesh network IPs
-			publicIPs, privateIPs, behindNAT := proto.GetLocalIPsExcluding(meshCIDR)
-			log.Debug().
-				Strs("public", publicIPs).
-				Strs("private", privateIPs).
-				Bool("behind_nat", behindNAT).
-				Msg("updated local IPs")
-
-			// Close stale HTTP connections from the old network before re-registering
-			client.CloseIdleConnections()
-
-			// Re-register with coordination server
-			resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, behindNAT)
-			if err != nil {
-				log.Error().Err(err).Msg("failed to re-register after network change")
-				continue
-			}
-
-			log.Info().
-				Str("mesh_ip", resp.MeshIP).
-				Msg("re-registered with coordination server")
-
-			// Close all existing tunnels (they may be using stale IPs)
-			tunnelMgr.CloseAll()
-			log.Debug().Msg("closed stale tunnels after network change")
-
-			// Record network change time for bypass window
-			netChangeState.recordChange()
-
-			// Trigger immediate peer discovery
-			select {
-			case triggerDiscovery <- struct{}{}:
-			default:
-				// Discovery already pending
-			}
-		}
-	}
-}
-
-func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshClient *tunnel.SSHClient,
-	negotiator *negotiate.Negotiator, tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder,
-	client *coord.Client, bypassAlphaOrdering bool) {
-
-	peerInfo := &negotiate.PeerInfo{
-		ID:          peer.Name,
-		PublicIP:    "",
-		PrivateIPs:  peer.PrivateIPs,
-		SSHPort:     peer.SSHPort,
-		Connectable: peer.Connectable,
-	}
-	if len(peer.PublicIPs) > 0 {
-		peerInfo.PublicIP = peer.PublicIPs[0]
-	}
-
-	// Log detailed peer info for debugging
-	log.Debug().
-		Str("peer", peer.Name).
-		Str("public_ip", peerInfo.PublicIP).
-		Strs("private_ips", peerInfo.PrivateIPs).
-		Int("ssh_port", peerInfo.SSHPort).
-		Bool("connectable", peerInfo.Connectable).
-		Msg("attempting to establish tunnel")
-
-	// Negotiate connection
-	result, err := negotiator.Negotiate(ctx, peerInfo)
-	if err != nil {
-		log.Warn().Err(err).Str("peer", peer.Name).Msg("negotiation failed")
-		return
-	}
-
-	switch result.Strategy {
-	case negotiate.StrategyReverse:
-		log.Info().Str("peer", peer.Name).Msg("peer requires reverse connection, waiting for incoming")
-		return
-
-	case negotiate.StrategyRelay:
-		// Use relay through coordination server
-		log.Info().Str("peer", peer.Name).Msg("using relay connection through coordination server")
-
-		jwtToken := client.JWTToken()
-		if jwtToken == "" {
-			log.Warn().Str("peer", peer.Name).Msg("no JWT token available for relay")
-			return
-		}
-
-		relayTunnel, err := tunnel.NewRelayTunnel(ctx, client.BaseURL(), peer.Name, jwtToken)
-		if err != nil {
-			log.Warn().Err(err).Str("peer", peer.Name).Msg("relay connection failed")
-			return
-		}
-
-		tunnelMgr.Add(peer.Name, relayTunnel)
-		log.Info().Str("peer", peer.Name).Msg("relay tunnel established")
-
-		// Handle incoming packets from this tunnel
-		go func(name string, t io.ReadWriteCloser) {
-			forwarder.HandleTunnel(ctx, name, t)
-			tunnelMgr.RemoveIfMatch(name, t)
-		}(peer.Name, relayTunnel)
-		return
-
-	case negotiate.StrategyDirect:
-		// For direct SSH connections, apply alpha ordering to prevent duplicate tunnels
-		// (both peers trying to SSH to each other simultaneously)
-		// Exception: bypass during network change recovery window
-		if myName > peer.Name && !bypassAlphaOrdering {
-			log.Debug().Str("peer", peer.Name).Msg("waiting for peer to initiate direct connection")
-			return
-		}
-
-		if bypassAlphaOrdering && myName > peer.Name {
-			log.Debug().Str("peer", peer.Name).Msg("bypassing alpha ordering due to recent network change")
-		}
-
-		// Direct SSH connection
-		log.Info().
-			Str("peer", peer.Name).
-			Str("addr", result.Address).
-			Msg("connecting to peer via direct SSH")
-
-		sshConn, err := sshClient.Connect(result.Address)
-		if err != nil {
-			log.Warn().Err(err).Str("peer", peer.Name).Msg("SSH connection failed")
-			return
-		}
-
-		// Open data channel with our name as extra data so the peer knows who we are
-		channel, _, err := sshConn.OpenChannel(tunnel.ChannelType, []byte(myName))
-		if err != nil {
-			log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to open channel")
-			sshConn.Close()
-			return
-		}
-
-		// Create tunnel and add to manager
-		// Use NewTunnelWithClient to keep SSH connection alive (prevents GC from closing it)
-		tun := tunnel.NewTunnelWithClient(channel, peer.Name, sshConn)
-		tunnelMgr.Add(peer.Name, tun)
-
-		log.Info().Str("peer", peer.Name).Msg("tunnel established")
-
-		// Handle incoming packets from this tunnel
-		go func(name string, t io.ReadWriteCloser) {
-			forwarder.HandleTunnel(ctx, name, t)
-			tunnelMgr.RemoveIfMatch(name, t)
-		}(peer.Name, tun)
-	}
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
@@ -1391,217 +880,6 @@ func loadConfig() (*config.PeerConfig, error) {
 			CacheTTL: 300,
 		},
 	}, nil
-}
-
-func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncoded string,
-	sshPort int, meshCIDR string, resolver *meshdns.Resolver, forwarder *routing.Forwarder,
-	tunnelMgr *TunnelAdapter, triggerDiscovery chan<- struct{}) {
-	// Track last known IPs to detect changes
-	var lastPublicIPs, lastPrivateIPs []string
-	var lastBehindNAT bool
-
-	// Shared heartbeat state
-	heartbeatState := &heartbeatState{
-		lastPublicIPs:  &lastPublicIPs,
-		lastPrivateIPs: &lastPrivateIPs,
-		lastBehindNAT:  &lastBehindNAT,
-	}
-
-	// Fast phase: 5-second interval for first 60 seconds
-	fastTicker := time.NewTicker(5 * time.Second)
-	fastPhaseEnd := time.After(60 * time.Second)
-
-fastLoop:
-	for {
-		select {
-		case <-ctx.Done():
-			fastTicker.Stop()
-			return
-		case <-fastPhaseEnd:
-			fastTicker.Stop()
-			break fastLoop
-		case <-fastTicker.C:
-			performHeartbeat(ctx, client, name, pubKeyEncoded, sshPort, meshCIDR,
-				resolver, forwarder, tunnelMgr, triggerDiscovery, heartbeatState)
-		}
-	}
-
-	// Normal phase: 30-second interval
-	normalTicker := time.NewTicker(30 * time.Second)
-	defer normalTicker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-normalTicker.C:
-			performHeartbeat(ctx, client, name, pubKeyEncoded, sshPort, meshCIDR,
-				resolver, forwarder, tunnelMgr, triggerDiscovery, heartbeatState)
-		}
-	}
-}
-
-// heartbeatState tracks state between heartbeat ticks.
-type heartbeatState struct {
-	lastPublicIPs  *[]string
-	lastPrivateIPs *[]string
-	lastBehindNAT  *bool
-}
-
-// performHeartbeat performs a single heartbeat tick.
-func performHeartbeat(ctx context.Context, client *coord.Client, name, pubKeyEncoded string,
-	sshPort int, meshCIDR string, resolver *meshdns.Resolver, forwarder *routing.Forwarder,
-	tunnelMgr *TunnelAdapter, triggerDiscovery chan<- struct{}, state *heartbeatState) {
-
-	lastPublicIPs := *state.lastPublicIPs
-	lastPrivateIPs := *state.lastPrivateIPs
-	lastBehindNAT := *state.lastBehindNAT
-	// Check if IPs have changed (network switch, ISP change, etc.)
-	publicIPs, privateIPs, behindNAT := proto.GetLocalIPsExcluding(meshCIDR)
-	ipsChanged := !slicesEqual(publicIPs, lastPublicIPs) || !slicesEqual(privateIPs, lastPrivateIPs) || behindNAT != lastBehindNAT
-
-	if ipsChanged && lastPublicIPs != nil {
-		// IPs changed - re-register to update the coordination server
-		log.Info().
-			Strs("old_public", lastPublicIPs).
-			Strs("new_public", publicIPs).
-			Strs("old_private", lastPrivateIPs).
-			Strs("new_private", privateIPs).
-			Msg("IP addresses changed, re-registering...")
-
-		// Close stale HTTP connections from the old network
-		client.CloseIdleConnections()
-
-		// Close all existing tunnels (they're using stale network paths)
-		tunnelMgr.CloseAll()
-		log.Debug().Msg("closed stale tunnels due to IP change")
-
-		if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort, behindNAT); regErr != nil {
-			log.Error().Err(regErr).Msg("failed to re-register after IP change")
-		} else {
-			log.Info().Msg("re-registered with new IP addresses")
-			*state.lastPublicIPs = publicIPs
-			*state.lastPrivateIPs = privateIPs
-			*state.lastBehindNAT = behindNAT
-
-			// Trigger discovery to establish new tunnels
-			select {
-			case triggerDiscovery <- struct{}{}:
-				log.Debug().Msg("triggered discovery after IP change")
-			default:
-				// Discovery already pending
-			}
-		}
-	} else if lastPublicIPs == nil {
-		// First heartbeat - just record the IPs
-		*state.lastPublicIPs = publicIPs
-		*state.lastPrivateIPs = privateIPs
-		*state.lastBehindNAT = behindNAT
-	}
-
-	// Collect stats from forwarder
-	var stats *proto.PeerStats
-	if forwarder != nil {
-		fwdStats := forwarder.Stats()
-		stats = &proto.PeerStats{
-			PacketsSent:     fwdStats.PacketsSent,
-			PacketsReceived: fwdStats.PacketsReceived,
-			BytesSent:       fwdStats.BytesSent,
-			BytesReceived:   fwdStats.BytesReceived,
-			DroppedNoRoute:  fwdStats.DroppedNoRoute,
-			DroppedNoTunnel: fwdStats.DroppedNoTunnel,
-			Errors:          fwdStats.Errors,
-			ActiveTunnels:   len(tunnelMgr.List()),
-		}
-	}
-
-	heartbeatResp, err := client.HeartbeatWithStats(name, pubKeyEncoded, stats)
-	if err != nil {
-		if errors.Is(err, coord.ErrPeerNotFound) {
-			// Server restarted or peer was removed - re-register
-			log.Info().Msg("peer not found on server, re-registering...")
-			publicIPs, privateIPs, behindNAT := proto.GetLocalIPsExcluding(meshCIDR)
-			if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort, behindNAT); regErr != nil {
-				log.Error().Err(regErr).Msg("failed to re-register")
-			} else {
-				log.Info().Msg("re-registered with coordination server")
-				*state.lastPublicIPs = publicIPs
-				*state.lastPrivateIPs = privateIPs
-				*state.lastBehindNAT = behindNAT
-			}
-		} else {
-			log.Warn().Err(err).Msg("heartbeat failed")
-		}
-		return
-	}
-
-	// Handle relay requests - other peers are waiting on relay for us
-	handleRelayRequests(ctx, heartbeatResp.RelayRequests, client, tunnelMgr, forwarder)
-
-	// Sync DNS records
-	if resolver != nil {
-		if err := syncDNS(client, resolver); err != nil {
-			log.Warn().Err(err).Msg("DNS sync failed")
-		}
-	}
-}
-
-// handleRelayRequests connects to relay for peers that are waiting for us.
-func handleRelayRequests(ctx context.Context, relayRequests []string, client *coord.Client,
-	tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder) {
-	if len(relayRequests) == 0 {
-		return
-	}
-
-	existingTunnels := tunnelMgr.List()
-	existingSet := make(map[string]bool)
-	for _, t := range existingTunnels {
-		existingSet[t] = true
-	}
-
-	for _, peerName := range relayRequests {
-		// Skip if we already have a tunnel to this peer
-		if existingSet[peerName] {
-			continue
-		}
-
-		log.Info().Str("peer", peerName).Msg("peer is waiting on relay for us, connecting...")
-
-		jwtToken := client.JWTToken()
-		if jwtToken == "" {
-			log.Warn().Str("peer", peerName).Msg("no JWT token available for relay")
-			continue
-		}
-
-		// Connect to relay in a goroutine to not block
-		go func(peer string) {
-			relayTunnel, err := tunnel.NewRelayTunnel(ctx, client.BaseURL(), peer, jwtToken)
-			if err != nil {
-				log.Warn().Err(err).Str("peer", peer).Msg("relay connection failed")
-				return
-			}
-
-			tunnelMgr.Add(peer, relayTunnel)
-			log.Info().Str("peer", peer).Msg("relay tunnel established via notification")
-
-			// Handle incoming packets from this tunnel
-			forwarder.HandleTunnel(ctx, peer, relayTunnel)
-			tunnelMgr.RemoveIfMatch(peer, relayTunnel)
-		}(peerName)
-	}
-}
-
-// slicesEqual compares two string slices for equality.
-func slicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func syncDNS(client *coord.Client, resolver *meshdns.Resolver) error {
