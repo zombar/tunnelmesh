@@ -13,11 +13,16 @@ import (
 )
 
 // UDPEndpoint represents a peer's UDP endpoint information.
+// Stores both IPv4 and IPv6 addresses separately for dual-stack support.
 type UDPEndpoint struct {
 	PeerName       string    `json:"peer_name"`
-	LocalAddr      string    `json:"local_addr"`       // Local UDP address (e.g., "0.0.0.0:51820")
-	ExternalAddr   string    `json:"external_addr"`    // Discovered external address
+	LocalAddr      string    `json:"local_addr"`        // Local UDP address (e.g., "0.0.0.0:51820")
+	ExternalAddr   string    `json:"external_addr"`     // Primary external address (for backwards compat)
+	ExternalAddr4  string    `json:"external_addr4"`    // IPv4 external address
+	ExternalAddr6  string    `json:"external_addr6"`    // IPv6 external address
 	LastSeen       time.Time `json:"last_seen"`
+	LastSeen4      time.Time `json:"last_seen4"`        // Last time IPv4 was updated
+	LastSeen6      time.Time `json:"last_seen6"`        // Last time IPv6 was updated
 	NATType        string    `json:"nat_type,omitempty"` // "none", "full_cone", "restricted", "symmetric"
 }
 
@@ -67,25 +72,62 @@ func newHolePunchManager() *holePunchManager {
 }
 
 // RegisterEndpoint registers or updates a peer's UDP endpoint.
+// The external address is stored in the appropriate field based on address family.
 func (m *holePunchManager) RegisterEndpoint(peerName, localAddr, externalAddr string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.endpoints[peerName] = &UDPEndpoint{
-		PeerName:     peerName,
-		LocalAddr:    localAddr,
-		ExternalAddr: externalAddr,
-		LastSeen:     time.Now(),
+	now := time.Now()
+
+	// Get or create endpoint
+	ep, ok := m.endpoints[peerName]
+	if !ok {
+		ep = &UDPEndpoint{
+			PeerName: peerName,
+		}
+		m.endpoints[peerName] = ep
 	}
 
-	log.Debug().
-		Str("peer", peerName).
-		Str("local", localAddr).
-		Str("external", externalAddr).
-		Msg("UDP endpoint registered")
+	ep.LocalAddr = localAddr
+	ep.ExternalAddr = externalAddr // Keep for backwards compatibility
+	ep.LastSeen = now
+
+	// Parse the external address to determine if it's IPv4 or IPv6
+	host, _, err := net.SplitHostPort(externalAddr)
+	if err != nil {
+		// Try without port
+		host = externalAddr
+	}
+
+	ip := net.ParseIP(host)
+	if ip != nil {
+		if ip.To4() != nil {
+			// IPv4 address
+			ep.ExternalAddr4 = externalAddr
+			ep.LastSeen4 = now
+			log.Debug().
+				Str("peer", peerName).
+				Str("external_ipv4", externalAddr).
+				Msg("UDP IPv4 endpoint registered")
+		} else {
+			// IPv6 address
+			ep.ExternalAddr6 = externalAddr
+			ep.LastSeen6 = now
+			log.Debug().
+				Str("peer", peerName).
+				Str("external_ipv6", externalAddr).
+				Msg("UDP IPv6 endpoint registered")
+		}
+	} else {
+		log.Debug().
+			Str("peer", peerName).
+			Str("external", externalAddr).
+			Msg("UDP endpoint registered (unknown address family)")
+	}
 }
 
 // GetEndpoint returns a peer's UDP endpoint.
+// Returns the endpoint if at least one address (IPv4 or IPv6) is still fresh.
 func (m *holePunchManager) GetEndpoint(peerName string) (*UDPEndpoint, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -95,8 +137,15 @@ func (m *holePunchManager) GetEndpoint(peerName string) (*UDPEndpoint, bool) {
 		return nil, false
 	}
 
-	// Check if endpoint is stale (older than 5 minutes)
-	if time.Since(ep.LastSeen) > 5*time.Minute {
+	// Check if at least one address is fresh (not older than 5 minutes)
+	staleThreshold := 5 * time.Minute
+	ipv4Fresh := ep.ExternalAddr4 != "" && time.Since(ep.LastSeen4) <= staleThreshold
+	ipv6Fresh := ep.ExternalAddr6 != "" && time.Since(ep.LastSeen6) <= staleThreshold
+
+	// Also check legacy LastSeen for backwards compatibility
+	legacyFresh := time.Since(ep.LastSeen) <= staleThreshold
+
+	if !ipv4Fresh && !ipv6Fresh && !legacyFresh {
 		return nil, false
 	}
 
@@ -117,7 +166,18 @@ func (m *holePunchManager) CleanupStale() {
 
 	cutoff := time.Now().Add(-5 * time.Minute)
 	for name, ep := range m.endpoints {
-		if ep.LastSeen.Before(cutoff) {
+		// Clear stale individual addresses
+		if ep.ExternalAddr4 != "" && ep.LastSeen4.Before(cutoff) {
+			ep.ExternalAddr4 = ""
+			log.Debug().Str("peer", name).Msg("cleared stale IPv4 UDP endpoint")
+		}
+		if ep.ExternalAddr6 != "" && ep.LastSeen6.Before(cutoff) {
+			ep.ExternalAddr6 = ""
+			log.Debug().Str("peer", name).Msg("cleared stale IPv6 UDP endpoint")
+		}
+
+		// Remove entire endpoint if both are stale and legacy is stale
+		if ep.ExternalAddr4 == "" && ep.ExternalAddr6 == "" && ep.LastSeen.Before(cutoff) {
 			delete(m.endpoints, name)
 			log.Debug().Str("peer", name).Msg("removed stale UDP endpoint")
 		}

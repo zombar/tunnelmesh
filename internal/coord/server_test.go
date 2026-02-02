@@ -533,3 +533,114 @@ func TestServer_HolePunchBidirectionalCoordination(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, hbResp2.HolePunchRequests, "hole-punch request should be consumed after first heartbeat")
 }
+
+func TestServer_DualStackUDPEndpointRegistration(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Register a peer
+	regReq := proto.RegisterRequest{
+		Name:       "dual-stack-peer",
+		PublicKey:  "SHA256:dual-stack-peer",
+		PublicIPs:  []string{"1.2.3.4"},
+		PrivateIPs: []string{"192.168.1.100"},
+		SSHPort:    2222,
+		UDPPort:    2223,
+	}
+	body, _ := json.Marshal(regReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Register IPv4 UDP endpoint
+	udpReq := RegisterUDPRequest{
+		PeerName:  "dual-stack-peer",
+		LocalAddr: "0.0.0.0:51820",
+		UDPPort:   51820,
+	}
+	body, _ = json.Marshal(udpReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/udp/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Real-IP", "203.0.113.50") // IPv4 address
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Register IPv6 UDP endpoint (same peer, different address family)
+	body, _ = json.Marshal(udpReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/udp/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Real-IP", "2001:db8::1") // IPv6 address
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Get the endpoint and verify both addresses are stored
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/udp/endpoint/dual-stack-peer", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var endpoint UDPEndpoint
+	err := json.Unmarshal(w.Body.Bytes(), &endpoint)
+	require.NoError(t, err)
+
+	assert.Equal(t, "dual-stack-peer", endpoint.PeerName)
+	assert.Equal(t, "203.0.113.50:51820", endpoint.ExternalAddr4, "IPv4 address should be stored in ExternalAddr4")
+	assert.Equal(t, "[2001:db8::1]:51820", endpoint.ExternalAddr6, "IPv6 address should be stored in ExternalAddr6")
+}
+
+func TestServer_IPv4OnlyEndpointRegistration(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Register a peer
+	regReq := proto.RegisterRequest{
+		Name:       "ipv4-only-peer",
+		PublicKey:  "SHA256:ipv4-only-peer",
+		PublicIPs:  []string{"1.2.3.4"},
+		PrivateIPs: []string{"192.168.1.100"},
+		SSHPort:    2222,
+		UDPPort:    2223,
+	}
+	body, _ := json.Marshal(regReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Register only IPv4 UDP endpoint
+	udpReq := RegisterUDPRequest{
+		PeerName:  "ipv4-only-peer",
+		LocalAddr: "0.0.0.0:51820",
+		UDPPort:   51820,
+	}
+	body, _ = json.Marshal(udpReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/udp/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Real-IP", "198.51.100.25") // IPv4 only
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Get the endpoint and verify only IPv4 is stored
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/udp/endpoint/ipv4-only-peer", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var endpoint UDPEndpoint
+	err := json.Unmarshal(w.Body.Bytes(), &endpoint)
+	require.NoError(t, err)
+
+	assert.Equal(t, "198.51.100.25:51820", endpoint.ExternalAddr4, "IPv4 address should be stored")
+	assert.Empty(t, endpoint.ExternalAddr6, "IPv6 address should be empty")
+}

@@ -148,17 +148,14 @@ func (t *Transport) Type() transport.TransportType {
 
 // selectSocketForPeer returns the appropriate socket for communicating with the peer.
 // Returns the IPv4 socket for IPv4 addresses, IPv6 socket for IPv6 addresses.
+// Returns nil if no suitable socket is available (e.g., no IPv6 socket for IPv6 peer).
 func (t *Transport) selectSocketForPeer(peerAddr *net.UDPAddr) *net.UDPConn {
 	if peerAddr.IP.To4() != nil {
 		// Peer is IPv4
 		return t.conn
 	}
-	// Peer is IPv6
-	if t.conn6 != nil {
-		return t.conn6
-	}
-	// Fall back to main connection if no IPv6 socket (might be dual-stack)
-	return t.conn
+	// Peer is IPv6 - must have IPv6 socket (IPv4 socket cannot reach IPv6 addresses)
+	return t.conn6
 }
 
 // Start starts the UDP transport (listening for incoming packets).
@@ -774,6 +771,7 @@ func (t *Transport) holePunch(ctx context.Context, peerName string, peerAddr *ne
 }
 
 // getPeerEndpoint retrieves the peer's UDP endpoint from coordination server.
+// Returns the endpoint address that matches local connectivity (IPv4 or IPv6).
 func (t *Transport) getPeerEndpoint(ctx context.Context, peerName string) (string, error) {
 	if t.config.CoordServerURL == "" {
 		return "", fmt.Errorf("coordination server URL not configured")
@@ -800,17 +798,50 @@ func (t *Transport) getPeerEndpoint(ctx context.Context, peerName string) (strin
 	}
 
 	var endpoint struct {
-		ExternalAddr string `json:"external_addr"`
-		LocalAddr    string `json:"local_addr"`
+		ExternalAddr  string `json:"external_addr"`   // Legacy field
+		ExternalAddr4 string `json:"external_addr4"`  // IPv4 address
+		ExternalAddr6 string `json:"external_addr6"`  // IPv6 address
+		LocalAddr     string `json:"local_addr"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&endpoint); err != nil {
 		return "", err
 	}
 
+	// Select address based on local connectivity
+	// Prefer IPv4 if we have an IPv4 socket (more reliable NAT traversal)
+	if t.conn != nil && endpoint.ExternalAddr4 != "" {
+		log.Debug().
+			Str("peer", peerName).
+			Str("addr", endpoint.ExternalAddr4).
+			Msg("selected IPv4 endpoint for peer")
+		return endpoint.ExternalAddr4, nil
+	}
+
+	// Use IPv6 if we have an IPv6 socket and peer has IPv6
+	if t.conn6 != nil && endpoint.ExternalAddr6 != "" {
+		log.Debug().
+			Str("peer", peerName).
+			Str("addr", endpoint.ExternalAddr6).
+			Msg("selected IPv6 endpoint for peer")
+		return endpoint.ExternalAddr6, nil
+	}
+
+	// Fall back to legacy field or any available address
+	if endpoint.ExternalAddr4 != "" && t.conn != nil {
+		return endpoint.ExternalAddr4, nil
+	}
+	if endpoint.ExternalAddr6 != "" && t.conn6 != nil {
+		return endpoint.ExternalAddr6, nil
+	}
 	if endpoint.ExternalAddr != "" {
 		return endpoint.ExternalAddr, nil
 	}
-	return endpoint.LocalAddr, nil
+	if endpoint.LocalAddr != "" {
+		return endpoint.LocalAddr, nil
+	}
+
+	return "", fmt.Errorf("no compatible endpoint for peer %s (have IPv4: %v, have IPv6: %v, peer IPv4: %v, peer IPv6: %v)",
+		peerName, t.conn != nil, t.conn6 != nil, endpoint.ExternalAddr4 != "", endpoint.ExternalAddr6 != "")
 }
 
 // Listen returns a listener for incoming connections.
@@ -977,14 +1008,10 @@ func (l *Listener) Close() error {
 }
 
 // RegisterUDPEndpoint registers our UDP endpoint with the coordination server.
+// Attempts to register via both IPv4 and IPv6 to support dual-stack connectivity.
 func (t *Transport) RegisterUDPEndpoint(ctx context.Context, peerName string) error {
 	if t.config.CoordServerURL == "" {
 		return fmt.Errorf("coordination server URL not configured")
-	}
-
-	localAddr := ""
-	if t.conn != nil {
-		localAddr = t.conn.LocalAddr().String()
 	}
 
 	// Get local port
@@ -995,6 +1022,45 @@ func (t *Transport) RegisterUDPEndpoint(ctx context.Context, peerName string) er
 		}
 	}
 
+	var lastErr error
+	registered := false
+
+	// Try to register via IPv4 if we have an IPv4 socket
+	if t.conn != nil {
+		localAddr := t.conn.LocalAddr().String()
+		if err := t.registerEndpointVia(ctx, peerName, localAddr, port, "tcp4"); err != nil {
+			log.Debug().Err(err).Msg("IPv4 UDP registration failed")
+			lastErr = err
+		} else {
+			registered = true
+		}
+	}
+
+	// Try to register via IPv6 if we have an IPv6 socket
+	if t.conn6 != nil {
+		localAddr := t.conn6.LocalAddr().String()
+		if err := t.registerEndpointVia(ctx, peerName, localAddr, port, "tcp6"); err != nil {
+			log.Debug().Err(err).Msg("IPv6 UDP registration failed")
+			if lastErr == nil {
+				lastErr = err
+			}
+		} else {
+			registered = true
+		}
+	}
+
+	if !registered {
+		if lastErr != nil {
+			return lastErr
+		}
+		return fmt.Errorf("no UDP sockets available for registration")
+	}
+
+	return nil
+}
+
+// registerEndpointVia registers endpoint via specific network (tcp4 or tcp6).
+func (t *Transport) registerEndpointVia(ctx context.Context, peerName, localAddr string, port int, network string) error {
 	reqBody := map[string]interface{}{
 		"peer_name":  peerName,
 		"local_addr": localAddr,
@@ -1014,7 +1080,18 @@ func (t *Transport) RegisterUDPEndpoint(ctx context.Context, peerName string) er
 		req.Header.Set("Authorization", "Bearer "+t.config.AuthToken)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	// Create HTTP client that forces specific network
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+				d := net.Dialer{}
+				return d.DialContext(ctx, network, addr)
+			},
+		},
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -1035,10 +1112,24 @@ func (t *Transport) RegisterUDPEndpoint(ctx context.Context, peerName string) er
 
 	// Store our external address for hole-punching
 	t.mu.Lock()
-	t.externalAddr = result.ExternalAddr
+	// Parse to determine address family and store in appropriate field
+	host, _, parseErr := net.SplitHostPort(result.ExternalAddr)
+	if parseErr == nil {
+		ip := net.ParseIP(host)
+		if ip != nil && ip.To4() != nil {
+			t.externalAddr = result.ExternalAddr
+		} else if ip != nil {
+			t.externalAddr6 = result.ExternalAddr
+		}
+	}
+	// Also keep legacy field updated
+	if t.externalAddr == "" {
+		t.externalAddr = result.ExternalAddr
+	}
 	t.mu.Unlock()
 
 	log.Debug().
+		Str("network", network).
 		Str("external_addr", result.ExternalAddr).
 		Msg("UDP endpoint registered")
 

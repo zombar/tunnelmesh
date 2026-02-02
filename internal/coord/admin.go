@@ -33,6 +33,8 @@ type AdminPeerInfo struct {
 	PrivateIPs          []string         `json:"private_ips"`
 	SSHPort             int              `json:"ssh_port"`
 	UDPPort             int              `json:"udp_port"`
+	UDPExternalAddr4    string           `json:"udp_external_addr4,omitempty"`
+	UDPExternalAddr6    string           `json:"udp_external_addr6,omitempty"`
 	LastSeen            time.Time        `json:"last_seen"`
 	Online              bool             `json:"online"`
 	Connectable         bool             `json:"connectable"`
@@ -95,6 +97,14 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			HeartbeatCount:     info.heartbeatCount,
 			Stats:              info.stats,
 			PreferredTransport: preferredTransport,
+		}
+
+		// Get UDP endpoint addresses if available
+		if s.holePunch != nil {
+			if ep, ok := s.holePunch.GetEndpoint(info.peer.Name); ok {
+				peerInfo.UDPExternalAddr4 = ep.ExternalAddr4
+				peerInfo.UDPExternalAddr6 = ep.ExternalAddr6
+			}
 		}
 
 		// Calculate rates if we have previous stats

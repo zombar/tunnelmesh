@@ -1129,7 +1129,7 @@ func TestSelectSocketForPeer_IPv6(t *testing.T) {
 	}
 }
 
-func TestSelectSocketForPeer_FallbackToIPv4(t *testing.T) {
+func TestSelectSocketForPeer_NoIPv6Socket(t *testing.T) {
 	priv, pub, _ := X25519KeyPair()
 	transport := &Transport{
 		staticPrivate: priv,
@@ -1146,11 +1146,11 @@ func TestSelectSocketForPeer_FallbackToIPv4(t *testing.T) {
 	transport.conn = conn4
 	transport.conn6 = nil // No IPv6 socket
 
-	// IPv6 peer should fall back to IPv4 socket
+	// IPv6 peer should return nil (IPv4 socket cannot reach IPv6 addresses)
 	peerAddr6, _ := net.ResolveUDPAddr("udp", "[2001:db8::1]:2228")
 	selected := transport.selectSocketForPeer(peerAddr6)
-	if selected != conn4 {
-		t.Error("IPv6 peer should fall back to IPv4 socket when no IPv6 available")
+	if selected != nil {
+		t.Error("IPv6 peer should return nil when no IPv6 socket available")
 	}
 }
 
