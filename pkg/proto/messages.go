@@ -61,7 +61,8 @@ type HeartbeatRequest struct {
 
 // HeartbeatResponse is returned after successful heartbeat.
 type HeartbeatResponse struct {
-	OK bool `json:"ok"`
+	OK            bool     `json:"ok"`
+	RelayRequests []string `json:"relay_requests,omitempty"` // Peers waiting on relay for us
 }
 
 // PeerListResponse contains the list of all mesh peers.

@@ -1439,7 +1439,8 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncode
 				}
 			}
 
-			if err := client.HeartbeatWithStats(name, pubKeyEncoded, stats); err != nil {
+			heartbeatResp, err := client.HeartbeatWithStats(name, pubKeyEncoded, stats)
+			if err != nil {
 				if errors.Is(err, coord.ErrPeerNotFound) {
 					// Server restarted or peer was removed - re-register
 					log.Info().Msg("peer not found on server, re-registering...")
@@ -1456,6 +1457,46 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncode
 					log.Warn().Err(err).Msg("heartbeat failed")
 				}
 				continue
+			}
+
+			// Handle relay requests - other peers are waiting on relay for us
+			if len(heartbeatResp.RelayRequests) > 0 {
+				existingTunnels := tunnelMgr.List()
+				existingSet := make(map[string]bool)
+				for _, t := range existingTunnels {
+					existingSet[t] = true
+				}
+
+				for _, peerName := range heartbeatResp.RelayRequests {
+					// Skip if we already have a tunnel to this peer
+					if existingSet[peerName] {
+						continue
+					}
+
+					log.Info().Str("peer", peerName).Msg("peer is waiting on relay for us, connecting...")
+
+					jwtToken := client.JWTToken()
+					if jwtToken == "" {
+						log.Warn().Str("peer", peerName).Msg("no JWT token available for relay")
+						continue
+					}
+
+					// Connect to relay in a goroutine to not block heartbeat
+					go func(peer string) {
+						relayTunnel, err := tunnel.NewRelayTunnel(ctx, client.BaseURL(), peer, jwtToken)
+						if err != nil {
+							log.Warn().Err(err).Str("peer", peer).Msg("relay connection failed")
+							return
+						}
+
+						tunnelMgr.Add(peer, relayTunnel)
+						log.Info().Str("peer", peer).Msg("relay tunnel established via notification")
+
+						// Handle incoming packets from this tunnel
+						forwarder.HandleTunnel(ctx, peer, relayTunnel)
+						tunnelMgr.RemoveIfMatch(peer, relayTunnel)
+					}(peerName)
+				}
 			}
 
 			// Sync DNS records

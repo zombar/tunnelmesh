@@ -354,6 +354,12 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := proto.HeartbeatResponse{OK: true}
+
+	// Check if any peers are waiting on relay for this peer
+	if s.relay != nil {
+		resp.RelayRequests = s.relay.GetPendingRequestsFor(req.Name)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }

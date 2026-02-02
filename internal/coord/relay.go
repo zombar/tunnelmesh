@@ -40,6 +40,23 @@ func newRelayManager() *relayManager {
 	}
 }
 
+// GetPendingRequestsFor returns the list of peers waiting on relay for the given peer.
+// For example, if "oldie" is waiting on relay for "roku", calling GetPendingRequestsFor("roku")
+// returns ["oldie"].
+func (r *relayManager) GetPendingRequestsFor(peerName string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var requests []string
+	suffix := "->" + peerName
+	for key, conn := range r.pending {
+		if len(key) > len(suffix) && key[len(key)-len(suffix):] == suffix {
+			requests = append(requests, conn.peerName)
+		}
+	}
+	return requests
+}
+
 // setupRelayRoutes registers the relay WebSocket endpoint.
 func (s *Server) setupRelayRoutes() {
 	if s.relay == nil {

@@ -82,7 +82,7 @@ func TestClient_Heartbeat(t *testing.T) {
 	require.NoError(t, err)
 
 	// Heartbeat
-	err = client.Heartbeat("mynode", "SHA256:key")
+	_, err = client.Heartbeat("mynode", "SHA256:key")
 	assert.NoError(t, err)
 }
 
@@ -102,7 +102,7 @@ func TestClient_HeartbeatNotFound(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Heartbeat without registering should return ErrPeerNotFound
-	err = client.Heartbeat("unknown-node", "SHA256:key")
+	_, err = client.Heartbeat("unknown-node", "SHA256:key")
 	assert.ErrorIs(t, err, ErrPeerNotFound)
 }
 
