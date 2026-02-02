@@ -54,13 +54,15 @@ type RegisterUDPResponse struct {
 
 // holePunchManager manages UDP endpoint registration and hole-punch coordination.
 type holePunchManager struct {
-	endpoints map[string]*UDPEndpoint // peer name -> endpoint
-	mu        sync.RWMutex
+	endpoints         map[string]*UDPEndpoint // peer name -> endpoint
+	pendingHolePunches map[string]map[string]time.Time // target peer -> (requesting peer -> request time)
+	mu                sync.RWMutex
 }
 
 func newHolePunchManager() *holePunchManager {
 	return &holePunchManager{
-		endpoints: make(map[string]*UDPEndpoint),
+		endpoints:         make(map[string]*UDPEndpoint),
+		pendingHolePunches: make(map[string]map[string]time.Time),
 	}
 }
 
@@ -108,7 +110,7 @@ func (m *holePunchManager) RemoveEndpoint(peerName string) {
 	delete(m.endpoints, peerName)
 }
 
-// CleanupStale removes stale endpoints.
+// CleanupStale removes stale endpoints and hole-punch requests.
 func (m *holePunchManager) CleanupStale() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,6 +122,57 @@ func (m *holePunchManager) CleanupStale() {
 			log.Debug().Str("peer", name).Msg("removed stale UDP endpoint")
 		}
 	}
+
+	// Clean up stale hole-punch requests (older than 30 seconds)
+	holePunchCutoff := time.Now().Add(-30 * time.Second)
+	for targetPeer, requests := range m.pendingHolePunches {
+		for fromPeer, requestTime := range requests {
+			if requestTime.Before(holePunchCutoff) {
+				delete(requests, fromPeer)
+			}
+		}
+		if len(requests) == 0 {
+			delete(m.pendingHolePunches, targetPeer)
+		}
+	}
+}
+
+// RecordHolePunchRequest records that fromPeer wants to hole-punch to toPeer.
+// This allows toPeer to be notified and initiate hole-punching back.
+func (m *holePunchManager) RecordHolePunchRequest(fromPeer, toPeer string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.pendingHolePunches[toPeer] == nil {
+		m.pendingHolePunches[toPeer] = make(map[string]time.Time)
+	}
+	m.pendingHolePunches[toPeer][fromPeer] = time.Now()
+
+	log.Debug().
+		Str("from", fromPeer).
+		Str("to", toPeer).
+		Msg("recorded hole-punch request for notification")
+}
+
+// GetPendingHolePunches returns and clears the list of peers wanting to hole-punch
+// with the given peer.
+func (m *holePunchManager) GetPendingHolePunches(peerName string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	requests, ok := m.pendingHolePunches[peerName]
+	if !ok || len(requests) == 0 {
+		return nil
+	}
+
+	// Collect peer names and clear the pending list
+	result := make([]string, 0, len(requests))
+	for fromPeer := range requests {
+		result = append(result, fromPeer)
+	}
+	delete(m.pendingHolePunches, peerName)
+
+	return result
 }
 
 // setupHolePunchRoutes registers the hole-punch API routes.
@@ -221,6 +274,11 @@ func (s *Server) handleHolePunch(w http.ResponseWriter, r *http.Request) {
 		req.ExternalAddr = externalIP
 	}
 	s.holePunch.RegisterEndpoint(req.FromPeer, req.LocalAddr, req.ExternalAddr)
+
+	// Record this request so the target peer can be notified to hole-punch back
+	if req.FromPeer != "" && req.ToPeer != "" {
+		s.holePunch.RecordHolePunchRequest(req.FromPeer, req.ToPeer)
+	}
 
 	// Get target peer's endpoint
 	targetEp, ok := s.holePunch.GetEndpoint(req.ToPeer)

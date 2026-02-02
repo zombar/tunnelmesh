@@ -38,6 +38,9 @@ func (m *MeshNode) handleSSHConnection(ctx context.Context, conn transport.Conne
 		Str("transport", string(conn.Type())).
 		Msg("incoming SSH connection")
 
+	// Cancel any outbound connection attempt to this peer
+	m.CancelOutboundConnection(peerName)
+
 	// Wrap connection as a tunnel
 	tun := tunnel.NewTunnelFromTransport(conn)
 

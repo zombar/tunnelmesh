@@ -648,6 +648,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 
 			udpTransport, err := udptransport.New(udptransport.Config{
 				Port:           cfg.SSHPort + 1, // Use SSH port + 1 for UDP
+				LocalPeerName:  cfg.Name,
 				StaticPrivate:  privKey,
 				StaticPublic:   pubKey,
 				CoordServerURL: cfg.Server,

@@ -65,9 +65,10 @@ type HeartbeatRequest struct {
 
 // HeartbeatResponse is returned after successful heartbeat.
 type HeartbeatResponse struct {
-	OK            bool     `json:"ok"`
-	RelayRequests []string `json:"relay_requests,omitempty"` // Peers waiting on relay for us
-	Reconnect     bool     `json:"reconnect,omitempty"`      // Signal to reconnect all tunnels
+	OK                bool     `json:"ok"`
+	RelayRequests     []string `json:"relay_requests,omitempty"`      // Peers waiting on relay for us
+	HolePunchRequests []string `json:"hole_punch_requests,omitempty"` // Peers wanting to UDP hole-punch with us
+	Reconnect         bool     `json:"reconnect,omitempty"`           // Signal to reconnect all tunnels
 }
 
 // RelayStatusResponse contains pending relay requests for a peer.

@@ -98,6 +98,9 @@ func (m *MeshNode) PerformHeartbeat(ctx context.Context) {
 	// Handle relay requests
 	m.HandleRelayRequests(ctx, heartbeatResp.RelayRequests)
 
+	// Handle hole-punch requests
+	m.HandleHolePunchRequests(ctx, heartbeatResp.HolePunchRequests)
+
 	// Sync DNS
 	m.syncDNS()
 }
@@ -174,6 +177,9 @@ func (m *MeshNode) HandleRelayRequests(ctx context.Context, relayRequests []stri
 
 // connectRelay connects to a relay for the given peer.
 func (m *MeshNode) connectRelay(ctx context.Context, peerName, jwtToken string) {
+	// Cancel any outbound connection attempt to this peer (relay is server-mediated inbound)
+	m.CancelOutboundConnection(peerName)
+
 	relayTunnel, err := tunnel.NewRelayTunnel(ctx, m.client.BaseURL(), peerName, jwtToken)
 	if err != nil {
 		log.Warn().Err(err).Str("peer", peerName).Msg("relay connection failed")
@@ -218,4 +224,39 @@ func (m *MeshNode) CheckAndHandleRelayRequests(ctx context.Context) {
 		return
 	}
 	m.HandleRelayRequests(ctx, relayRequests)
+}
+
+// HandleHolePunchRequests initiates hole-punching to peers that have requested it.
+// When peer A tries to hole-punch to peer B, the server notifies B so it can
+// simultaneously punch back to A, enabling NAT traversal.
+func (m *MeshNode) HandleHolePunchRequests(ctx context.Context, holePunchRequests []string) {
+	if len(holePunchRequests) == 0 {
+		return
+	}
+
+	existingTunnels := m.tunnelMgr.List()
+	existingSet := make(map[string]bool)
+	for _, t := range existingTunnels {
+		existingSet[t] = true
+	}
+
+	for _, peerName := range holePunchRequests {
+		// Skip if we already have a tunnel to this peer
+		if existingSet[peerName] {
+			log.Debug().Str("peer", peerName).Msg("skipping hole-punch request, tunnel already exists")
+			continue
+		}
+
+		// Skip if we're already connecting to this peer
+		if m.IsConnecting(peerName) {
+			log.Debug().Str("peer", peerName).Msg("skipping hole-punch request, already connecting")
+			continue
+		}
+
+		log.Info().Str("peer", peerName).Msg("peer wants to hole-punch with us, initiating connection")
+
+		// Get the peer info and start a connection attempt
+		// This will use the negotiator which will try UDP hole-punching
+		go m.ConnectToPeerByName(ctx, peerName)
+	}
 }

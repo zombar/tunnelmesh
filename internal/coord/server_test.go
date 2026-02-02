@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -431,4 +432,104 @@ func TestServer_AdminStaticFiles(t *testing.T) {
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestServer_HolePunchBidirectionalCoordination(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Register two peers
+	for _, name := range []string{"peerA", "peerB"} {
+		regReq := proto.RegisterRequest{
+			Name:       name,
+			PublicKey:  "SHA256:" + name,
+			PublicIPs:  []string{"1.2.3.4"},
+			PrivateIPs: []string{"192.168.1.100"},
+			SSHPort:    2222,
+			UDPPort:    2223,
+		}
+		body, _ := json.Marshal(regReq)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+	}
+
+	// Register UDP endpoints for both peers
+	for _, peerData := range []struct {
+		name        string
+		externalAddr string
+	}{
+		{"peerA", "1.1.1.1:5000"},
+		{"peerB", "2.2.2.2:5001"},
+	} {
+		udpReq := RegisterUDPRequest{
+			PeerName:  peerData.name,
+			LocalAddr: "0.0.0.0:51820",
+			UDPPort:   51820,
+		}
+		body, _ := json.Marshal(udpReq)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/udp/register", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Real-IP", peerData.externalAddr[:strings.Index(peerData.externalAddr, ":")])
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+	}
+
+	// PeerA initiates hole-punch to PeerB
+	holePunchReq := HolePunchRequest{
+		FromPeer:     "peerA",
+		ToPeer:       "peerB",
+		LocalAddr:    "0.0.0.0:51820",
+		ExternalAddr: "1.1.1.1:5000",
+	}
+	body, _ := json.Marshal(holePunchReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/udp/holepunch", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var holePunchResp HolePunchResponse
+	err := json.Unmarshal(w.Body.Bytes(), &holePunchResp)
+	require.NoError(t, err)
+	assert.True(t, holePunchResp.OK)
+	assert.True(t, holePunchResp.Ready)
+
+	// PeerB sends heartbeat and should receive hole-punch request notification
+	hbReq := proto.HeartbeatRequest{
+		Name:      "peerB",
+		PublicKey: "SHA256:peerB",
+	}
+	body, _ = json.Marshal(hbReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/heartbeat", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var hbResp proto.HeartbeatResponse
+	err = json.Unmarshal(w.Body.Bytes(), &hbResp)
+	require.NoError(t, err)
+	assert.True(t, hbResp.OK)
+	assert.Contains(t, hbResp.HolePunchRequests, "peerA", "peerB should be notified that peerA wants to hole-punch")
+
+	// Second heartbeat should not have the same request (it was consumed)
+	body, _ = json.Marshal(hbReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/heartbeat", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var hbResp2 proto.HeartbeatResponse
+	err = json.Unmarshal(w.Body.Bytes(), &hbResp2)
+	require.NoError(t, err)
+	assert.Empty(t, hbResp2.HolePunchRequests, "hole-punch request should be consumed after first heartbeat")
 }

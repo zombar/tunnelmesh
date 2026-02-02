@@ -116,9 +116,14 @@ func (m *MeshNode) DiscoverAndConnectPeers(ctx context.Context) {
 
 // EstablishTunnel negotiates and establishes a tunnel to a peer.
 // Both peers race to connect - first successful connection wins.
+// The connection attempt can be cancelled if an inbound connection arrives.
 func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer) {
-	// Mark as connecting - if already connecting, bail out
-	if !m.SetConnecting(peer.Name) {
+	// Create a cancellable context for this outbound connection
+	connCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Mark as connecting with cancel function - if already connecting, bail out
+	if !m.SetConnectingWithCancel(peer.Name, cancel) {
 		log.Debug().Str("peer", peer.Name).Msg("connection attempt already in progress")
 		return
 	}
@@ -152,8 +157,13 @@ func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer) {
 	}
 
 	// Try to negotiate a connection using the transport layer
-	result, err := m.TransportNegotiator.Negotiate(ctx, peerInfo, dialOpts)
+	result, err := m.TransportNegotiator.Negotiate(connCtx, peerInfo, dialOpts)
 	if err != nil {
+		// Check if we were cancelled due to inbound connection
+		if connCtx.Err() == context.Canceled {
+			log.Debug().Str("peer", peer.Name).Msg("outbound connection cancelled (inbound connection established)")
+			return
+		}
 		log.Warn().Err(err).Str("peer", peer.Name).Msg("transport negotiation failed")
 		return
 	}
@@ -176,7 +186,7 @@ func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer) {
 
 	// Handle incoming packets from this tunnel
 	if m.Forwarder != nil {
-		m.Forwarder.HandleTunnel(ctx, peer.Name, tun)
+		m.Forwarder.HandleTunnel(connCtx, peer.Name, tun)
 	}
 	m.tunnelMgr.RemoveIfMatch(peer.Name, tun)
 }
@@ -224,6 +234,40 @@ func transportTypeFromString(s string) transport.TransportType {
 	default:
 		return ""
 	}
+}
+
+// ConnectToPeerByName fetches the peer info from the coordination server and establishes a tunnel.
+// This is used when we're notified that a peer wants to connect to us (e.g., hole-punch notification).
+func (m *MeshNode) ConnectToPeerByName(ctx context.Context, peerName string) {
+	// Skip if tunnel already exists
+	if _, exists := m.tunnelMgr.Get(peerName); exists {
+		log.Debug().Str("peer", peerName).Msg("tunnel already exists, skipping connection attempt")
+		return
+	}
+
+	// Fetch peer info from coordination server
+	peers, err := m.client.ListPeers()
+	if err != nil {
+		log.Warn().Err(err).Str("peer", peerName).Msg("failed to fetch peer info for connection")
+		return
+	}
+
+	// Find the target peer
+	var targetPeer *proto.Peer
+	for _, p := range peers {
+		if p.Name == peerName {
+			targetPeer = &p
+			break
+		}
+	}
+
+	if targetPeer == nil {
+		log.Warn().Str("peer", peerName).Msg("peer not found on coordination server")
+		return
+	}
+
+	// Establish tunnel
+	m.EstablishTunnel(ctx, *targetPeer)
 }
 
 // RefreshAuthorizedKeys fetches peer keys from coordination server and adds them to SSH transport.

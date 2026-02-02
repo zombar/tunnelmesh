@@ -384,6 +384,11 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		resp.RelayRequests = s.relay.GetPendingRequestsFor(req.Name)
 	}
 
+	// Check if any peers are waiting to hole-punch with this peer
+	if s.holePunch != nil {
+		resp.HolePunchRequests = s.holePunch.GetPendingHolePunches(req.Name)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }

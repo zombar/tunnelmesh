@@ -1,7 +1,10 @@
 package peer
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -169,4 +172,157 @@ func TestMeshNode_IPsChanged(t *testing.T) {
 
 	// Different NAT status should show change
 	assert.True(t, node.IPsChanged([]string{"1.2.3.4"}, []string{"192.168.1.1"}, true))
+}
+
+func TestMeshNode_CancelOutboundConnection(t *testing.T) {
+	identity := &PeerIdentity{
+		Name: "test-node",
+		Config: &config.PeerConfig{
+			Name: "test-node",
+		},
+	}
+	client := coord.NewClient("http://localhost:8080", "test-token")
+	node := NewMeshNode(identity, client)
+
+	// Create a context that can be cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Track if context was cancelled
+	var cancelled atomic.Bool
+	go func() {
+		<-ctx.Done()
+		cancelled.Store(true)
+	}()
+
+	// Mark as connecting with cancel function
+	set := node.SetConnectingWithCancel("peer1", cancel)
+	assert.True(t, set, "should be able to mark as connecting")
+
+	// Verify peer is marked as connecting
+	assert.True(t, node.IsConnecting("peer1"))
+
+	// Cancel the outbound connection (simulating inbound success)
+	wasCancelled := node.CancelOutboundConnection("peer1")
+	assert.True(t, wasCancelled, "should cancel the connection")
+
+	// Wait a bit for goroutine to process
+	time.Sleep(10 * time.Millisecond)
+
+	// Context should be cancelled
+	assert.True(t, cancelled.Load(), "context should be cancelled")
+
+	// Second cancel should return false (already consumed)
+	wasCancelled = node.CancelOutboundConnection("peer1")
+	assert.False(t, wasCancelled, "second cancel should return false")
+}
+
+func TestMeshNode_CancelOutboundConnection_NoCancel(t *testing.T) {
+	identity := &PeerIdentity{
+		Name: "test-node",
+		Config: &config.PeerConfig{
+			Name: "test-node",
+		},
+	}
+	client := coord.NewClient("http://localhost:8080", "test-token")
+	node := NewMeshNode(identity, client)
+
+	// Cancel for non-existent peer should return false
+	wasCancelled := node.CancelOutboundConnection("nonexistent")
+	assert.False(t, wasCancelled)
+}
+
+func TestMeshNode_SetConnectingWithCancel_AlreadyConnecting(t *testing.T) {
+	identity := &PeerIdentity{
+		Name: "test-node",
+		Config: &config.PeerConfig{
+			Name: "test-node",
+		},
+	}
+	client := coord.NewClient("http://localhost:8080", "test-token")
+	node := NewMeshNode(identity, client)
+
+	// First set should succeed
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	set1 := node.SetConnectingWithCancel("peer1", cancel1)
+	assert.True(t, set1)
+
+	// Second set should fail (already connecting)
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	set2 := node.SetConnectingWithCancel("peer1", cancel2)
+	assert.False(t, set2, "should not be able to set connecting twice")
+
+	// Verify only the first context is tracked
+	_ = ctx1
+	_ = ctx2
+
+	// Clear connecting and verify we can set again
+	node.ClearConnecting("peer1")
+	set3 := node.SetConnectingWithCancel("peer1", cancel1)
+	assert.True(t, set3, "should be able to set connecting after clear")
+}
+
+func TestMeshNode_InboundCancelsOutbound_Integration(t *testing.T) {
+	// This test simulates the full flow:
+	// 1. Start an outbound connection (slow, takes 100ms)
+	// 2. Inbound connection arrives
+	// 3. Outbound should be cancelled
+	identity := &PeerIdentity{
+		Name: "test-node",
+		Config: &config.PeerConfig{
+			Name: "test-node",
+		},
+	}
+	client := coord.NewClient("http://localhost:8080", "test-token")
+	node := NewMeshNode(identity, client)
+
+	// Create a context for the outbound connection
+	connCtx, cancel := context.WithCancel(context.Background())
+
+	// Track the state
+	var outboundStarted atomic.Bool
+	var outboundCancelled atomic.Bool
+	outboundDone := make(chan struct{})
+
+	// Start simulated outbound connection
+	if !node.SetConnectingWithCancel("peer1", cancel) {
+		t.Fatal("should be able to set connecting")
+	}
+
+	go func() {
+		defer close(outboundDone)
+		outboundStarted.Store(true)
+
+		// Simulate slow connection attempt
+		select {
+		case <-connCtx.Done():
+			outboundCancelled.Store(true)
+			return
+		case <-time.After(5 * time.Second):
+			// Connection would succeed but we expect cancellation
+			t.Error("outbound was not cancelled")
+		}
+	}()
+
+	// Wait for outbound to start
+	for !outboundStarted.Load() {
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// Simulate inbound connection arriving
+	wasCancelled := node.CancelOutboundConnection("peer1")
+	assert.True(t, wasCancelled, "should cancel outbound")
+
+	// Wait for outbound to complete
+	select {
+	case <-outboundDone:
+		// OK
+	case <-time.After(1 * time.Second):
+		t.Fatal("outbound goroutine did not complete")
+	}
+
+	// Verify outbound was cancelled
+	assert.True(t, outboundCancelled.Load(), "outbound should have been cancelled")
 }

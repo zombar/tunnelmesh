@@ -38,6 +38,9 @@ func (m *MeshNode) handleUDPConnection(ctx context.Context, conn transport.Conne
 		Str("transport", string(conn.Type())).
 		Msg("incoming UDP connection")
 
+	// Cancel any outbound connection attempt to this peer
+	m.CancelOutboundConnection(peerName)
+
 	// Wrap connection as a tunnel
 	tun := tunnel.NewTunnelFromTransport(conn)
 

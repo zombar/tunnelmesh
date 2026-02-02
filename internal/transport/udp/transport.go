@@ -40,6 +40,9 @@ type Transport struct {
 	staticPrivate [32]byte
 	staticPublic  [32]byte
 
+	// Our discovered external address (set after registration)
+	externalAddr string
+
 	// Sessions (indexed by local index)
 	sessions map[uint32]*Session
 
@@ -61,6 +64,9 @@ type Config struct {
 
 	// Port is the UDP port (if ListenAddr not specified)
 	Port int
+
+	// LocalPeerName is our own peer name (used for hole-punch coordination)
+	LocalPeerName string
 
 	// StaticPrivate is our X25519 private key
 	StaticPrivate [32]byte
@@ -619,13 +625,25 @@ func (t *Transport) holePunch(ctx context.Context, peerName string, peerAddr *ne
 		return nil // No coordination server, skip hole-punch
 	}
 
+	// Get our stored external address
+	t.mu.RLock()
+	externalAddr := t.externalAddr
+	t.mu.RUnlock()
+
 	// Request hole-punch coordination from server
 	reqBody := map[string]string{
-		"from_peer":     "", // TODO: get our peer name
+		"from_peer":     t.config.LocalPeerName,
 		"to_peer":       peerName,
 		"local_addr":    t.conn.LocalAddr().String(),
-		"external_addr": "", // TODO: get our external addr
+		"external_addr": externalAddr,
 	}
+
+	log.Debug().
+		Str("from", t.config.LocalPeerName).
+		Str("to", peerName).
+		Str("our_external", externalAddr).
+		Str("peer_addr", peerAddr.String()).
+		Msg("initiating hole-punch coordination")
 
 	bodyBytes, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(ctx, "POST",
@@ -645,6 +663,31 @@ func (t *Transport) holePunch(ctx context.Context, peerName string, peerAddr *ne
 		return err
 	}
 	defer resp.Body.Close()
+
+	// Parse hole-punch response
+	var hpResp struct {
+		OK            bool   `json:"ok"`
+		Ready         bool   `json:"ready"`
+		PeerAddr      string `json:"peer_addr"`
+		PeerLocalAddr string `json:"peer_local_addr"`
+		Message       string `json:"message"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&hpResp); err != nil {
+		return fmt.Errorf("decode hole-punch response: %w", err)
+	}
+
+	if !hpResp.Ready {
+		log.Debug().
+			Str("peer", peerName).
+			Str("message", hpResp.Message).
+			Msg("peer not ready for hole-punch")
+		return fmt.Errorf("peer not ready: %s", hpResp.Message)
+	}
+
+	log.Debug().
+		Str("peer", peerName).
+		Str("peer_external", hpResp.PeerAddr).
+		Msg("hole-punch coordination successful, sending packets")
 
 	// Send hole-punch packets
 	for i := 0; i < t.config.HolePunchRetries; i++ {
@@ -913,6 +956,11 @@ func (t *Transport) RegisterUDPEndpoint(ctx context.Context, peerName string) er
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return err
 	}
+
+	// Store our external address for hole-punching
+	t.mu.Lock()
+	t.externalAddr = result.ExternalAddr
+	t.mu.Unlock()
 
 	log.Debug().
 		Str("external_addr", result.ExternalAddr).
