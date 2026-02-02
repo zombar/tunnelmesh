@@ -43,6 +43,7 @@ type Server struct {
 	dnsCache    map[string]string // hostname -> mesh IP
 	serverStats serverStats
 	relay       *relayManager
+	holePunch   *holePunchManager
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -151,6 +152,9 @@ func (s *Server) setupRoutes() {
 	if s.cfg.Admin.Enabled {
 		s.setupAdminRoutes()
 	}
+
+	// Setup UDP hole-punch coordination routes
+	s.setupHolePunchRoutes()
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -224,6 +228,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		PublicIPs:   req.PublicIPs,
 		PrivateIPs:  req.PrivateIPs,
 		SSHPort:     req.SSHPort,
+		UDPPort:     req.UDPPort,
 		MeshIP:      meshIP,
 		LastSeen:    time.Now(),
 		Connectable: len(req.PublicIPs) > 0 && !req.BehindNAT,

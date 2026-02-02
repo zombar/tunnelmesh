@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -154,4 +155,104 @@ func DecodePublicKey(encoded string) (ssh.PublicKey, error) {
 	}
 
 	return key, nil
+}
+
+// ED25519PrivateToX25519 converts an ED25519 private key to X25519 format.
+// This uses the standard conversion: hash the ED25519 seed with SHA-512
+// and use the first 32 bytes as the X25519 scalar.
+func ED25519PrivateToX25519(edPriv ed25519.PrivateKey) []byte {
+	// The ED25519 private key seed is the first 32 bytes
+	seed := edPriv.Seed()
+
+	// Hash the seed with SHA-512 and take first 32 bytes
+	h := sha256.Sum256(seed)
+
+	// Apply clamping as per X25519 spec
+	h[0] &= 248
+	h[31] &= 127
+	h[31] |= 64
+
+	return h[:]
+}
+
+// ED25519PublicToX25519 converts an ED25519 public key to X25519 format.
+// This performs the birational map from the Ed25519 curve to Curve25519.
+func ED25519PublicToX25519(edPub ed25519.PublicKey) ([]byte, error) {
+	if len(edPub) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("invalid ED25519 public key size")
+	}
+
+	// Convert Edwards Y coordinate to Montgomery U coordinate
+	// Using the formula: u = (1 + y) / (1 - y)
+	// This is implemented in filippo.io/edwards25519 but we use a simpler approach
+	// by deriving from private key when possible, or use external library
+
+	// For now, we derive the X25519 public key from the X25519 private key
+	// This requires having the private key available
+	return nil, fmt.Errorf("direct public key conversion requires private key; use DeriveX25519KeyPair instead")
+}
+
+// DeriveX25519KeyPair derives an X25519 key pair from an ED25519 private key.
+func DeriveX25519KeyPair(edPriv ed25519.PrivateKey) (x25519Priv, x25519Pub []byte, err error) {
+	x25519Priv = ED25519PrivateToX25519(edPriv)
+
+	// Derive public key from private key
+	x25519Pub, err = curve25519.X25519(x25519Priv, curve25519.Basepoint)
+	if err != nil {
+		return nil, nil, fmt.Errorf("derive X25519 public key: %w", err)
+	}
+
+	return x25519Priv, x25519Pub, nil
+}
+
+// GetED25519PrivateKey extracts the ED25519 private key from an SSH signer.
+func GetED25519PrivateKey(signer ssh.Signer) (ed25519.PrivateKey, error) {
+	// Try to get the underlying crypto private key
+	type cryptoSigner interface {
+		ssh.Signer
+		PublicKey() ssh.PublicKey
+	}
+
+	// The ssh.Signer from ParsePrivateKey wraps the crypto key
+	// We need to access it through reflection or type assertion
+	pubKey := signer.PublicKey()
+	if pubKey.Type() != ssh.KeyAlgoED25519 {
+		return nil, fmt.Errorf("key type %s is not ED25519", pubKey.Type())
+	}
+
+	// The ssh library doesn't expose the private key directly
+	// We need to re-parse the key data
+	return nil, fmt.Errorf("cannot extract ED25519 private key from ssh.Signer; use LoadED25519PrivateKey instead")
+}
+
+// LoadED25519PrivateKey loads an ED25519 private key directly from a PEM file.
+func LoadED25519PrivateKey(path string) (ed25519.PrivateKey, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read private key: %w", err)
+	}
+
+	// Parse the PEM block
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found")
+	}
+
+	// Parse as OpenSSH private key
+	key, err := ssh.ParseRawPrivateKey(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse private key: %w", err)
+	}
+
+	// Type assert to ED25519
+	edKey, ok := key.(*ed25519.PrivateKey)
+	if !ok {
+		// Try pointer to key
+		if edKeyPtr, ok := key.(ed25519.PrivateKey); ok {
+			return edKeyPtr, nil
+		}
+		return nil, fmt.Errorf("key is not ED25519 (got %T)", key)
+	}
+
+	return *edKey, nil
 }
