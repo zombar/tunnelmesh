@@ -13,10 +13,10 @@ import (
 
 // relayConn represents a peer's relay connection.
 type relayConn struct {
-	peerName string
+	peerName   string
 	targetPeer string
-	conn     *websocket.Conn
-	paired   chan *relayConn
+	conn       *websocket.Conn
+	paired     chan struct{} // closed when paired
 }
 
 // relayManager handles relay connections between peers.
@@ -114,15 +114,10 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 		delete(s.relay.pending, reverseKey)
 		s.relay.mu.Unlock()
 
-		// Signal the waiting peer
-		thisConn := &relayConn{
-			peerName:   fromPeer,
-			targetPeer: targetPeer,
-			conn:       conn,
-		}
-		pending.paired <- thisConn
+		// Signal the waiting peer that pairing is complete
+		close(pending.paired)
 
-		// Bridge the connections
+		// Bridge the connections (only this goroutine does it, not the waiting one)
 		s.bridgeConnections(pending.conn, conn, pending.peerName, fromPeer)
 		return
 	}
@@ -133,7 +128,7 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 		peerName:   fromPeer,
 		targetPeer: targetPeer,
 		conn:       conn,
-		paired:     make(chan *relayConn, 1),
+		paired:     make(chan struct{}),
 	}
 	s.relay.pending[forwardKey] = rc
 	s.relay.mu.Unlock()
@@ -147,9 +142,9 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	select {
-	case partner := <-rc.paired:
-		// Successfully paired - bridge started by the other goroutine
-		s.bridgeConnections(conn, partner.conn, fromPeer, partner.peerName)
+	case <-rc.paired:
+		// Successfully paired - the other goroutine handles bridging
+		// Just return, our connection is being handled
 		return
 
 	case <-time.After(pairTimeout):
