@@ -320,6 +320,11 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 		}
 		s.peersMu.Unlock()
 
+		// Also remove UDP endpoint
+		if s.holePunch != nil {
+			s.holePunch.RemoveEndpoint(name)
+		}
+
 		if !exists {
 			s.jsonError(w, "peer not found", http.StatusNotFound)
 			return
