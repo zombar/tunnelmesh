@@ -128,19 +128,46 @@ func (d *Device) configureDarwin() error {
 	}
 
 	// Add route for the mesh network
-	// First delete any existing route to avoid conflicts with other VPNs or stale routes
 	ones, _ := d.network.Mask.Size()
 	routeNet := d.network.IP.String() + "/" + fmt.Sprintf("%d", ones)
-	cmd = exec.Command("route", "delete", "-net", routeNet)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Debug().Str("output", string(out)).Msg("route delete (may not exist)")
+
+	// Delete ALL existing routes to this network (there could be multiple from other VPNs)
+	// Keep deleting until no more routes exist
+	for i := 0; i < 50; i++ { // Max 50 attempts to avoid infinite loop
+		cmd = exec.Command("route", "delete", "-net", routeNet)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			// No more routes to delete
+			log.Debug().Int("deleted", i).Msg("cleared existing network routes")
+			break
+		}
+		log.Debug().Str("output", strings.TrimSpace(string(out))).Msg("deleted existing route")
 	}
 
+	// Also flush the route cache for this network to clear cloned host routes
+	// This removes cached entries like "10.99.0.2 -> utun5" that can override our route
+	cmd = exec.Command("route", "-n", "flush")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Debug().Str("output", string(out)).Msg("route flush (may fail on some systems)")
+	}
+
+	// Add our route
 	cmd = exec.Command("route", "add", "-net", routeNet, "-interface", d.name)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Warn().Str("output", string(out)).Msg("route add failed")
 	} else {
 		log.Debug().Str("route", routeNet).Str("interface", d.name).Msg("route added")
+	}
+
+	// Verify the route was added correctly
+	cmd = exec.Command("route", "-n", "get", d.network.IP.String())
+	if out, err := cmd.CombinedOutput(); err == nil {
+		outStr := string(out)
+		if strings.Contains(outStr, d.name) {
+			log.Info().Str("route", routeNet).Str("interface", d.name).Msg("route verified")
+		} else {
+			log.Warn().Str("output", outStr).Str("expected", d.name).Msg("route may not be using correct interface")
+		}
 	}
 
 	return nil
