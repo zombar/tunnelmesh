@@ -615,6 +615,10 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 					log.Warn().Err(err).Msg("failed to register UDP transport")
 				} else {
 					log.Info().Int("port", cfg.SSHPort+1).Msg("UDP transport registered")
+					// Register UDP endpoint with coordination server for hole-punching
+					if err := udpTransport.RegisterUDPEndpoint(ctx, cfg.Name); err != nil {
+						log.Warn().Err(err).Msg("failed to register UDP endpoint")
+					}
 				}
 			}
 		}
