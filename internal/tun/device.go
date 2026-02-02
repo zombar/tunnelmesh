@@ -145,13 +145,6 @@ func (d *Device) configureDarwin() error {
 		log.Debug().Str("output", outStr).Msg("deleted existing route")
 	}
 
-	// Also flush the route cache for this network to clear cloned host routes
-	// This removes cached entries like "10.99.0.2 -> utun5" that can override our route
-	cmd = exec.Command("route", "-n", "flush")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Debug().Str("output", string(out)).Msg("route flush (may fail on some systems)")
-	}
-
 	// Add our route
 	cmd = exec.Command("route", "add", "-net", routeNet, "-interface", d.name)
 	if out, err := cmd.CombinedOutput(); err != nil {
