@@ -4,15 +4,17 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 
 ## Features
 
-- **P2P Encrypted Tunnels** - Direct SSH-based connections between peers
-- **Coordination Server** - Central hub for peer discovery and IP allocation (not a traffic router)
+- **P2P Encrypted Tunnels** - Direct connections between peers using pluggable transports
+- **Pluggable Transport Layer** - Supports SSH, UDP (WireGuard-like), and WebSocket relay transports with automatic fallback
+- **Coordination Server** - Central hub for peer discovery, IP allocation, and NAT traversal coordination (not a traffic router)
 - **TUN Interface** - Virtual network interface for transparent IP routing
 - **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh`)
 - **Network Monitoring** - Automatic detection of network changes with re-connection
-- **NAT Traversal** - Supports both direct and reverse connections for peers behind NAT
+- **NAT Traversal** - UDP hole-punching with STUN-like endpoint discovery, plus relay fallback
 - **Multi-Platform** - Linux, macOS, and Windows support
-- **Admin Dashboard** - Web interface showing mesh status, peers, and traffic statistics
+- **Admin Dashboard** - Web interface showing mesh status, peers, traffic statistics, and per-peer transport controls
 - **Server-as-Client** - Coordination server can also participate as a mesh node
+- **High Performance** - Zero-copy packet forwarding with lock-free routing table
 
 ![Admin Dashboard](docs/images/admin-dashboard.png)
 
@@ -26,15 +28,17 @@ For a complete step-by-step setup guide including downloading releases, configur
 ┌─────────────────┐                      ┌─────────────────┐
 │   Peer Node A   │                      │   Peer Node B   │
 │   (10.99.0.1)   │                      │   (10.99.0.2)   │
-│                 │    SSH Tunnel        │                 │
+│                 │  Encrypted Tunnel    │                 │
 │  ┌───────────┐  │◄────────────────────►│  ┌───────────┐  │
-│  │ TUN Device│  │     (Encrypted)      │  │ TUN Device│  │
+│  │ TUN Device│  │  (SSH/UDP/Relay)     │  │ TUN Device│  │
 │  │  Router   │  │                      │  │  Router   │  │
 │  │ Forwarder │  │                      │  │ Forwarder │  │
+│  │ Transport │  │                      │  │ Transport │  │
 │  └───────────┘  │                      │  └───────────┘  │
 └────────┬────────┘                      └────────┬────────┘
          │                                        │
          │  Register/Heartbeat/Discovery          │
+         │  Hole-punch Coordination               │
          │                                        │
          └──────────────┬─────────────────────────┘
                         │
@@ -46,15 +50,20 @@ For a complete step-by-step setup guide including downloading releases, configur
               │ • Peer Registry │
               │ • IP Allocation │
               │ • DNS Records   │
+              │ • Hole-punch    │
               │ • Admin UI      │
+              │ • WebSocket     │
+              │   Relay         │
               └─────────────────┘
 ```
 
 **Key points:**
-- Traffic flows directly between peers via SSH tunnels
-- The coordination server only handles discovery and registration
+- Traffic flows directly between peers via encrypted tunnels
+- Multiple transport options: SSH, UDP (ChaCha20-Poly1305), or WebSocket relay
+- Transport negotiation with automatic fallback (UDP → SSH → Relay)
+- The coordination server handles discovery, registration, and NAT traversal coordination
 - Each peer runs a TUN interface for transparent IP routing
-- Peers establish connections using negotiated strategies (direct or reverse)
+- Peers behind NAT use hole-punching or relay as fallback
 
 ## Configuration
 
@@ -119,6 +128,24 @@ dns:
   listen: "127.0.0.53:5353"
   cache_ttl: 300
 ```
+
+### Transport Layer
+
+TunnelMesh supports multiple transport types with automatic negotiation and fallback:
+
+| Transport | Description | Use Case |
+|-----------|-------------|----------|
+| **SSH** | SSH-based tunnels (default) | Reliable, works through most firewalls |
+| **UDP** | WireGuard-like encrypted UDP | Lower latency, better throughput |
+| **Relay** | WebSocket through coordination server | Fallback when direct connection fails |
+
+The default transport order is: SSH → Relay. UDP transport can be enabled for better performance when both peers support it.
+
+**Transport features:**
+- Automatic fallback: If the preferred transport fails, the next one is tried
+- Per-peer preferences: Configure different transports for specific peers via admin UI
+- NAT traversal: Built-in STUN-like endpoint discovery and UDP hole-punching
+- Zero-copy forwarding: Optimized packet path for high throughput
 
 ### Config File Locations
 
