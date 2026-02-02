@@ -3,6 +3,7 @@ package udp
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,12 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 )
+
+// handshakeResponse is used to pass handshake responses from receiveLoop to initiators.
+type handshakeResponse struct {
+	data       []byte
+	remoteAddr *net.UDPAddr
+}
 
 // Transport implements encrypted UDP transport.
 type Transport struct {
@@ -38,6 +45,9 @@ type Transport struct {
 
 	// Peer lookup (peer name -> session)
 	peerSessions map[string]*Session
+
+	// Pending handshakes (local index -> response channel)
+	pendingHandshakes map[uint32]chan handshakeResponse
 
 	// State
 	running atomic.Bool
@@ -107,12 +117,13 @@ func New(cfg Config) (*Transport, error) {
 	}
 
 	t := &Transport{
-		config:       cfg,
-		staticPrivate: cfg.StaticPrivate,
-		staticPublic:  cfg.StaticPublic,
-		sessions:     make(map[uint32]*Session),
-		peerSessions: make(map[string]*Session),
-		closeCh:      make(chan struct{}),
+		config:            cfg,
+		staticPrivate:     cfg.StaticPrivate,
+		staticPublic:      cfg.StaticPublic,
+		sessions:          make(map[uint32]*Session),
+		peerSessions:      make(map[string]*Session),
+		pendingHandshakes: make(map[uint32]chan handshakeResponse),
+		closeCh:           make(chan struct{}),
 	}
 
 	return t, nil
@@ -186,20 +197,30 @@ func (t *Transport) receiveLoop() {
 
 // handlePacket processes a single incoming packet.
 func (t *Transport) handlePacket(data []byte, remoteAddr *net.UDPAddr) {
-	header, err := UnmarshalHeader(data)
-	if err != nil {
+	if len(data) < 1 {
 		return
 	}
 
-	switch header.Type {
+	// Check packet type from first byte
+	packetType := data[0]
+
+	switch packetType {
 	case PacketTypeHandshakeInit:
-		t.handleHandshakeInit(data, remoteAddr)
+		// Handshake packets have 1-byte type prefix + handshake message
+		t.handleHandshakeInit(data[1:], remoteAddr)
 	case PacketTypeHandshakeResponse:
-		t.handleHandshakeResponse(data, remoteAddr)
-	case PacketTypeData:
-		t.handleDataPacket(header, data[HeaderSize:], remoteAddr)
-	case PacketTypeKeepalive:
-		t.handleKeepalive(header, remoteAddr)
+		t.handleHandshakeResponse(data[1:], remoteAddr)
+	case PacketTypeData, PacketTypeKeepalive:
+		// Data/keepalive packets have 16-byte header
+		header, err := UnmarshalHeader(data)
+		if err != nil {
+			return
+		}
+		if packetType == PacketTypeData {
+			t.handleDataPacket(header, data[HeaderSize:], remoteAddr)
+		} else {
+			t.handleKeepalive(header, remoteAddr)
+		}
 	}
 }
 
@@ -308,8 +329,35 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr) {
 
 // handleHandshakeResponse processes an incoming handshake response.
 func (t *Transport) handleHandshakeResponse(data []byte, remoteAddr *net.UDPAddr) {
-	// This is handled by the dial goroutine waiting for response
-	// For now, we'll use a simple callback mechanism
+	if len(data) < 72 {
+		return
+	}
+
+	// Extract receiver index (bytes 4-8) - this is the initiator's local index
+	receiverIndex := binary.LittleEndian.Uint32(data[4:8])
+
+	t.mu.RLock()
+	respChan, ok := t.pendingHandshakes[receiverIndex]
+	t.mu.RUnlock()
+
+	if ok {
+		// Non-blocking send - if channel is full or closed, we drop the response
+		select {
+		case respChan <- handshakeResponse{data: data, remoteAddr: remoteAddr}:
+			log.Debug().
+				Uint32("receiver_index", receiverIndex).
+				Str("remote", remoteAddr.String()).
+				Msg("handshake response routed to initiator")
+		default:
+			log.Debug().
+				Uint32("receiver_index", receiverIndex).
+				Msg("handshake response channel full or closed")
+		}
+	} else {
+		log.Debug().
+			Uint32("receiver_index", receiverIndex).
+			Msg("no pending handshake for response")
+	}
 }
 
 // keepaliveLoop sends periodic keepalives to maintain NAT mappings.
@@ -444,6 +492,21 @@ func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peer
 		return nil, err
 	}
 
+	// Register pending handshake before sending
+	respChan := make(chan handshakeResponse, 1)
+	localIndex := hs.LocalIndex()
+
+	t.mu.Lock()
+	t.pendingHandshakes[localIndex] = respChan
+	t.mu.Unlock()
+
+	// Clean up pending handshake when done
+	defer func() {
+		t.mu.Lock()
+		delete(t.pendingHandshakes, localIndex)
+		t.mu.Unlock()
+	}()
+
 	// Prepend packet type header
 	packet := make([]byte, 1+len(initMsg))
 	packet[0] = PacketTypeHandshakeInit
@@ -462,42 +525,22 @@ func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peer
 		}
 	}
 
-	// Set read deadline for receiving response
-	_ = t.conn.SetReadDeadline(time.Now().Add(timeout))
-	defer func() { _ = t.conn.SetReadDeadline(time.Time{}) }()
-
-	// Read response
-	buf := make([]byte, 256)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		n, from, err := t.conn.ReadFromUDP(buf)
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				return nil, fmt.Errorf("handshake timeout")
-			}
-			return nil, err
-		}
-
-		// Verify it's from the expected peer and is a response
-		if from.String() != peerAddr.String() {
-			continue // Ignore packets from other sources
-		}
-
-		if n < 73 || buf[0] != PacketTypeHandshakeResponse {
-			continue // Not a valid response
+	// Wait for response via channel (routed by receiveLoop)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("handshake timeout")
+	case resp := <-respChan:
+		// Verify it's from the expected peer
+		if resp.remoteAddr.String() != peerAddr.String() {
+			return nil, fmt.Errorf("response from unexpected peer: %s", resp.remoteAddr)
 		}
 
 		// Process response
-		if err := hs.ConsumeResponse(buf[1:n]); err != nil {
+		if err := hs.ConsumeResponse(resp.data); err != nil {
 			return nil, fmt.Errorf("invalid response: %w", err)
 		}
-
-		break
 	}
 
 	// Derive keys
