@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"filippo.io/edwards25519"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ssh"
 )
@@ -165,31 +167,32 @@ func ED25519PrivateToX25519(edPriv ed25519.PrivateKey) []byte {
 	seed := edPriv.Seed()
 
 	// Hash the seed with SHA-512 and take first 32 bytes
-	h := sha256.Sum256(seed)
+	h := sha512.Sum512(seed)
 
-	// Apply clamping as per X25519 spec
+	// Apply clamping as per X25519 spec (first 32 bytes)
 	h[0] &= 248
 	h[31] &= 127
 	h[31] |= 64
 
-	return h[:]
+	return h[:32]
 }
 
 // ED25519PublicToX25519 converts an ED25519 public key to X25519 format.
 // This performs the birational map from the Ed25519 curve to Curve25519.
+// The formula is: u = (1 + y) / (1 - y) mod p
 func ED25519PublicToX25519(edPub ed25519.PublicKey) ([]byte, error) {
 	if len(edPub) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("invalid ED25519 public key size")
 	}
 
-	// Convert Edwards Y coordinate to Montgomery U coordinate
-	// Using the formula: u = (1 + y) / (1 - y)
-	// This is implemented in filippo.io/edwards25519 but we use a simpler approach
-	// by deriving from private key when possible, or use external library
+	// Parse the ED25519 public key as an edwards25519 point
+	point, err := new(edwards25519.Point).SetBytes(edPub)
+	if err != nil {
+		return nil, fmt.Errorf("parse ED25519 public key: %w", err)
+	}
 
-	// For now, we derive the X25519 public key from the X25519 private key
-	// This requires having the private key available
-	return nil, fmt.Errorf("direct public key conversion requires private key; use DeriveX25519KeyPair instead")
+	// Convert to Montgomery u-coordinate (X25519 format)
+	return point.BytesMontgomery(), nil
 }
 
 // DeriveX25519KeyPair derives an X25519 key pair from an ED25519 private key.

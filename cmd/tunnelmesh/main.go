@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"crypto"
+	"crypto/ed25519"
 	"fmt"
 	"io"
 	"net"
@@ -600,6 +602,16 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 			var privKey, pubKey [32]byte
 			copy(privKey[:], x25519Priv)
 			copy(pubKey[:], x25519Pub)
+
+			// Debug: Also convert ED25519 public key directly to verify matching
+			ed25519Pub := edPrivKey.Public().(crypto.PublicKey)
+			ed25519PubBytes := ed25519Pub.(ed25519.PublicKey)
+			x25519FromEd, _ := config.ED25519PublicToX25519(ed25519PubBytes)
+			log.Debug().
+				Hex("x25519_from_priv", x25519Pub).
+				Hex("x25519_from_ed_pub", x25519FromEd).
+				Bool("match", string(x25519Pub) == string(x25519FromEd)).
+				Msg("X25519 key derivation check")
 
 			udpTransport, err := udptransport.New(udptransport.Config{
 				Port:           cfg.SSHPort + 1, // Use SSH port + 1 for UDP

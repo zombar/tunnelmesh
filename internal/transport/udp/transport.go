@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 )
 
@@ -243,20 +244,13 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr) {
 		return
 	}
 
-	// Create handshake state for responding
-	// We don't know the peer's static key yet, it's encrypted in the message
-	var zeroPeerKey [32]byte
-	hs, err := NewHandshakeState(t.staticPrivate, t.staticPublic, zeroPeerKey)
+	// Create responder handshake state
+	// Responder doesn't know initiator's static key until they decrypt it from the message
+	hs, err := NewResponderHandshake(t.staticPrivate, t.staticPublic)
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to create handshake state")
 		return
 	}
-
-	// Re-initialize for responder mode (we're not the initiator)
-	hs.hash = blake2sHash(NoiseConstruction)
-	hs.chainingKey = hs.hash
-	hs.hash = blake2sHash(append(hs.hash[:], NoiseIdentifier...))
-	hs.hash = blake2sHash(append(hs.hash[:], t.staticPublic[:]...))
 
 	if err := hs.ConsumeInitiation(data); err != nil {
 		log.Debug().Err(err).Msg("failed to consume initiation")
@@ -280,15 +274,14 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr) {
 		return
 	}
 
-	// Derive keys
+	// Derive keys (DeriveKeys handles initiator/responder key ordering)
 	sendKey, recvKey, err := hs.DeriveKeys()
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to derive keys")
 		return
 	}
 
-	// Note: For responder, keys are swapped
-	crypto, err := NewCryptoState(recvKey, sendKey)
+	crypto, err := NewCryptoState(sendKey, recvKey)
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to create crypto state")
 		return
@@ -357,6 +350,11 @@ func (t *Transport) sendKeepalives() {
 
 // Dial creates an outbound connection to a peer.
 func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (transport.Connection, error) {
+	log.Debug().
+		Str("peer", opts.PeerName).
+		Bool("has_peer_info", opts.PeerInfo != nil).
+		Msg("UDP Dial called")
+
 	if !t.running.Load() {
 		// Start transport if not already running
 		if err := t.Start(); err != nil {
@@ -376,10 +374,44 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 		return nil, fmt.Errorf("resolve peer address: %w", err)
 	}
 
-	// Get peer's X25519 public key
-	// Note: For now we use zero key; actual key exchange happens in handshake
+	// Get peer's X25519 public key from ED25519 public key
 	var peerPublic [32]byte
-	// TODO: Implement proper ED25519 to X25519 conversion for known peers
+	if opts.PeerInfo != nil && opts.PeerInfo.PublicKey != "" {
+		sshPubKey, err := config.DecodePublicKey(opts.PeerInfo.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("decode peer public key: %w", err)
+		}
+
+		// Extract the raw ED25519 key and convert to X25519
+		ed25519Key := sshPubKey.Marshal()
+		// SSH format: 4 bytes length + "ssh-ed25519" + 4 bytes length + 32 bytes key
+		// Skip the SSH wire format header to get raw ED25519 key
+		keyLen := len(ed25519Key)
+		if keyLen < 32 {
+			return nil, fmt.Errorf("invalid ED25519 key length: %d", keyLen)
+		}
+		rawED25519 := ed25519Key[keyLen-32:]
+
+		log.Debug().
+			Int("ssh_key_len", keyLen).
+			Hex("raw_ed25519", rawED25519).
+			Str("key_type", sshPubKey.Type()).
+			Msg("extracting ED25519 public key for X25519 conversion")
+
+		x25519Key, err := config.ED25519PublicToX25519(rawED25519)
+		if err != nil {
+			return nil, fmt.Errorf("convert ED25519 to X25519: %w", err)
+		}
+
+		log.Debug().
+			Hex("x25519_pub", x25519Key).
+			Str("peer", opts.PeerName).
+			Msg("converted ED25519 to X25519 public key")
+
+		copy(peerPublic[:], x25519Key)
+	} else {
+		return nil, fmt.Errorf("peer public key not available")
+	}
 
 	// Attempt hole-punch if needed
 	if err := t.holePunch(ctx, opts.PeerName, peerAddr); err != nil {
@@ -401,7 +433,7 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 
 // initiateHandshake performs the Noise IK handshake as initiator.
 func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peerPublic [32]byte, peerAddr *net.UDPAddr) (*Session, error) {
-	hs, err := NewHandshakeState(t.staticPrivate, t.staticPublic, peerPublic)
+	hs, err := NewInitiatorHandshake(t.staticPrivate, t.staticPublic, peerPublic)
 	if err != nil {
 		return nil, err
 	}

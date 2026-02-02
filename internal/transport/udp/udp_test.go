@@ -166,22 +166,17 @@ func TestHandshakeState(t *testing.T) {
 		t.Fatalf("generate responder keys: %v", err)
 	}
 
-	// Create handshake states
-	initiator, err := NewHandshakeState(initPriv, initPub, respPub)
+	// Create initiator handshake state (knows responder's public key)
+	initiator, err := NewInitiatorHandshake(initPriv, initPub, respPub)
 	if err != nil {
 		t.Fatalf("create initiator state: %v", err)
 	}
 
-	// For responder, create a fresh state for consuming initiation
-	responder, err := NewHandshakeState(respPriv, respPub, initPub)
+	// Create responder handshake state (doesn't know initiator's public key yet)
+	responder, err := NewResponderHandshake(respPriv, respPub)
 	if err != nil {
 		t.Fatalf("create responder state: %v", err)
 	}
-	// Re-init for responder mode
-	responder.hash = blake2sHash(NoiseConstruction)
-	responder.chainingKey = responder.hash
-	responder.hash = blake2sHash(append(responder.hash[:], NoiseIdentifier...))
-	responder.hash = blake2sHash(append(responder.hash[:], respPub[:]...))
 
 	// Create initiation
 	initMsg, err := initiator.CreateInitiation()

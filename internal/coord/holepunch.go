@@ -156,6 +156,19 @@ func (s *Server) handleUDPRegister(w http.ResponseWriter, r *http.Request) {
 
 	// Discover external address from the request
 	externalIP := getClientIP(r)
+
+	// If the detected IP is localhost (peer is on same machine as server),
+	// try to use the peer's registered private IP instead
+	if externalIP == "127.0.0.1" || externalIP == "::1" {
+		s.peersMu.RLock()
+		if info, ok := s.peers[req.PeerName]; ok && len(info.peer.PrivateIPs) > 0 {
+			externalIP = info.peer.PrivateIPs[0]
+		} else if info != nil && len(info.peer.PublicIPs) > 0 {
+			externalIP = info.peer.PublicIPs[0]
+		}
+		s.peersMu.RUnlock()
+	}
+
 	externalAddr := net.JoinHostPort(externalIP, "0") // Port unknown at this point
 
 	// If peer provided their local port, we can estimate external port
