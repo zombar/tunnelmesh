@@ -136,12 +136,13 @@ func (d *Device) configureDarwin() error {
 	for i := 0; i < 50; i++ { // Max 50 attempts to avoid infinite loop
 		cmd = exec.Command("route", "delete", "-net", routeNet)
 		out, err := cmd.CombinedOutput()
-		if err != nil {
-			// No more routes to delete
+		outStr := strings.TrimSpace(string(out))
+		// Check both error and output - macOS route delete returns 0 even when route doesn't exist
+		if err != nil || strings.Contains(outStr, "not in table") {
 			log.Debug().Int("deleted", i).Msg("cleared existing network routes")
 			break
 		}
-		log.Debug().Str("output", strings.TrimSpace(string(out))).Msg("deleted existing route")
+		log.Debug().Str("output", outStr).Msg("deleted existing route")
 	}
 
 	// Also flush the route cache for this network to clear cloned host routes
