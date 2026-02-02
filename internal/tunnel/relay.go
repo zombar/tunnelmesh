@@ -178,6 +178,13 @@ func (t *RelayTunnel) PeerName() string {
 	return t.peerName
 }
 
+// IsClosed returns true if the relay tunnel has been closed.
+func (t *RelayTunnel) IsClosed() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
+}
+
 // httpToWSURL converts an HTTP(S) URL to a WebSocket URL.
 func httpToWSURL(httpURL string) (string, error) {
 	u, err := url.Parse(httpURL)

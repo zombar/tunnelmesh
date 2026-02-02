@@ -82,6 +82,10 @@ func (c *mockConnection) RemoteAddr() net.Addr {
 	return mockAddr{}
 }
 
+func (c *mockConnection) IsHealthy() bool {
+	return !c.closeCalled
+}
+
 func TestMeshNode_HandleIncomingSSH_ContextCancel(t *testing.T) {
 	identity := &PeerIdentity{
 		Name: "test-node",

@@ -868,6 +868,11 @@ func (c *Connection) RemoteAddr() net.Addr {
 	return c.session.RemoteAddr()
 }
 
+// IsHealthy returns true if the UDP session is established and ready for data.
+func (c *Connection) IsHealthy() bool {
+	return c.session.State() == SessionStateEstablished
+}
+
 // Listener accepts incoming UDP connections.
 type Listener struct {
 	transport *Transport

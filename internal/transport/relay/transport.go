@@ -135,3 +135,8 @@ func (c *Connection) LocalAddr() net.Addr {
 func (c *Connection) RemoteAddr() net.Addr {
 	return nil
 }
+
+// IsHealthy returns true if the relay connection is open and ready for data.
+func (c *Connection) IsHealthy() bool {
+	return !c.relay.IsClosed()
+}

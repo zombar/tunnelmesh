@@ -219,7 +219,7 @@ func (m *MeshNode) IPsChanged(publicIPs, privateIPs []string, behindNAT bool) bo
 // CollectStats collects stats from the forwarder and tunnel manager.
 func (m *MeshNode) CollectStats() *proto.PeerStats {
 	stats := &proto.PeerStats{
-		ActiveTunnels: len(m.tunnelMgr.List()),
+		ActiveTunnels: m.tunnelMgr.CountHealthy(),
 	}
 
 	if m.Forwarder != nil {

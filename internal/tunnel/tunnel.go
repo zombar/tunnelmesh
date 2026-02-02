@@ -33,6 +33,11 @@ type TransportConn interface {
 	PeerName() string
 }
 
+// HealthChecker is an optional interface for connections that can report health.
+type HealthChecker interface {
+	IsHealthy() bool
+}
+
 // NewTunnelFromTransport creates a tunnel from a transport connection.
 func NewTunnelFromTransport(conn TransportConn) *Tunnel {
 	return &Tunnel{
@@ -260,6 +265,30 @@ func (t *Tunnel) Close() error {
 // PeerName returns the name of the peer at the other end.
 func (t *Tunnel) PeerName() string {
 	return t.peerName
+}
+
+// IsHealthy returns true if the tunnel is ready for data transmission.
+// For transport-based tunnels, this delegates to the underlying connection's health check.
+// For SSH-based tunnels, this checks if the tunnel hasn't been closed.
+func (t *Tunnel) IsHealthy() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.closed {
+		return false
+	}
+
+	// Check transport connection health if available
+	if t.transportConn != nil {
+		if hc, ok := t.transportConn.(HealthChecker); ok {
+			return hc.IsHealthy()
+		}
+		// Transport connection without health checker is assumed healthy if not closed
+		return true
+	}
+
+	// SSH channel is healthy if tunnel isn't closed
+	return t.channel != nil
 }
 
 // TunnelManager manages multiple tunnels to peers.

@@ -35,6 +35,11 @@ type Connection interface {
 
 	// RemoteAddr returns the remote network address, if applicable.
 	RemoteAddr() net.Addr
+
+	// IsHealthy returns true if the connection is ready to send/receive data.
+	// For UDP, this means the crypto session is established.
+	// For SSH, this means the channel is open.
+	IsHealthy() bool
 }
 
 // Transport is the factory interface for creating connections.

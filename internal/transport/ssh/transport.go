@@ -330,3 +330,8 @@ func (c *Connection) LocalAddr() net.Addr {
 func (c *Connection) RemoteAddr() net.Addr {
 	return c.remoteAddr
 }
+
+// IsHealthy returns true if the SSH channel is open and ready for data.
+func (c *Connection) IsHealthy() bool {
+	return !c.closed
+}

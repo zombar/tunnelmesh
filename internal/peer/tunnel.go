@@ -107,3 +107,46 @@ func (t *TunnelAdapter) List() []string {
 	}
 	return names
 }
+
+// HealthChecker is an optional interface for tunnels that can report health.
+type HealthChecker interface {
+	IsHealthy() bool
+}
+
+// CountHealthy returns the number of healthy tunnels.
+// A tunnel is considered healthy if it implements HealthChecker and returns true,
+// or if it doesn't implement HealthChecker (assumed healthy).
+func (t *TunnelAdapter) CountHealthy() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	count := 0
+	for _, tun := range t.tunnels {
+		if hc, ok := tun.(HealthChecker); ok {
+			if hc.IsHealthy() {
+				count++
+			}
+		} else {
+			// Tunnels without health check capability are assumed healthy
+			count++
+		}
+	}
+	return count
+}
+
+// ListHealthy returns the names of all healthy peers.
+func (t *TunnelAdapter) ListHealthy() []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	names := make([]string, 0, len(t.tunnels))
+	for name, tun := range t.tunnels {
+		if hc, ok := tun.(HealthChecker); ok {
+			if hc.IsHealthy() {
+				names = append(names, name)
+			}
+		} else {
+			// Tunnels without health check capability are assumed healthy
+			names = append(names, name)
+		}
+	}
+	return names
+}
