@@ -7,7 +7,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
-	"github.com/tunnelmesh/tunnelmesh/internal/negotiate"
+	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -113,106 +113,60 @@ func (m *MeshNode) DiscoverAndConnectPeers(ctx context.Context) {
 
 // EstablishTunnel negotiates and establishes a tunnel to a peer.
 func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer, bypassAlphaOrdering bool) {
-	// Check if negotiator is available
-	if m.Negotiator == nil {
-		log.Debug().Str("peer", peer.Name).Msg("no negotiator available, skipping connection attempt")
+	// Check if transport negotiator is available
+	if m.TransportNegotiator == nil {
+		log.Debug().Str("peer", peer.Name).Msg("no transport negotiator available, skipping connection attempt")
 		return
 	}
 
 	// Build peer info for negotiation
-	peerInfo := m.buildPeerInfo(peer)
+	peerInfo := m.buildTransportPeerInfo(peer)
 
 	// Log detailed peer info for debugging
 	log.Debug().
 		Str("peer", peer.Name).
-		Str("public_ip", peerInfo.PublicIP).
+		Strs("public_ips", peerInfo.PublicIPs).
 		Strs("private_ips", peerInfo.PrivateIPs).
 		Int("ssh_port", peerInfo.SSHPort).
+		Int("udp_port", peerInfo.UDPPort).
 		Bool("connectable", peerInfo.Connectable).
 		Msg("attempting to establish tunnel")
 
-	// Try to negotiate a connection
-	result, err := m.Negotiator.Negotiate(ctx, peerInfo)
+	// For direct connections, apply alpha ordering to prevent duplicate tunnels
+	// (both peers trying to connect to each other simultaneously)
+	// Exception: bypass during network change recovery window
+	if m.identity.Name > peer.Name && !bypassAlphaOrdering {
+		log.Debug().Str("peer", peer.Name).Msg("waiting for peer to initiate connection (alpha ordering)")
+		return
+	}
+
+	if bypassAlphaOrdering && m.identity.Name > peer.Name {
+		log.Debug().Str("peer", peer.Name).Msg("bypassing alpha ordering due to recent network change")
+	}
+
+	// Set up dial options
+	dialOpts := transport.DialOptions{
+		LocalName: m.identity.Name,
+		PeerName:  peer.Name,
+		ServerURL: m.client.BaseURL(),
+		JWTToken:  m.client.JWTToken(),
+	}
+
+	// Try to negotiate a connection using the new transport layer
+	result, err := m.TransportNegotiator.Negotiate(ctx, peerInfo, dialOpts)
 	if err != nil {
-		log.Warn().Err(err).Str("peer", peer.Name).Msg("negotiation failed")
+		log.Warn().Err(err).Str("peer", peer.Name).Msg("transport negotiation failed")
 		return
 	}
 
-	// Handle based on negotiation result
-	switch result.Strategy {
-	case negotiate.StrategyReverse:
-		log.Info().Str("peer", peer.Name).Msg("peer requires reverse connection, waiting for incoming")
-		return
-
-	case negotiate.StrategyRelay:
-		m.handleRelayConnection(ctx, peer)
-
-	case negotiate.StrategyDirect:
-		// For direct SSH connections, apply alpha ordering to prevent duplicate tunnels
-		// (both peers trying to SSH to each other simultaneously)
-		// Exception: bypass during network change recovery window
-		if m.identity.Name > peer.Name && !bypassAlphaOrdering {
-			log.Debug().Str("peer", peer.Name).Msg("waiting for peer to initiate direct connection")
-			return
-		}
-
-		if bypassAlphaOrdering && m.identity.Name > peer.Name {
-			log.Debug().Str("peer", peer.Name).Msg("bypassing alpha ordering due to recent network change")
-		}
-
-		m.handleDirectConnection(ctx, peer, result)
-	}
-}
-
-// buildPeerInfo builds a negotiate.PeerInfo from a proto.Peer.
-func (m *MeshNode) buildPeerInfo(peer proto.Peer) *negotiate.PeerInfo {
-	var publicIP string
-	if len(peer.PublicIPs) > 0 {
-		publicIP = peer.PublicIPs[0]
-	}
-
-	return &negotiate.PeerInfo{
-		ID:          peer.Name,
-		PublicIP:    publicIP,
-		PrivateIPs:  peer.PrivateIPs,
-		SSHPort:     peer.SSHPort,
-		Connectable: peer.Connectable,
-	}
-}
-
-// handleDirectConnection handles establishing a direct SSH tunnel.
-func (m *MeshNode) handleDirectConnection(ctx context.Context, peer proto.Peer, result *negotiate.NegotiationResult) {
-	if m.SSHClient == nil {
-		log.Debug().Str("peer", peer.Name).Msg("no SSH client available")
-		return
-	}
-
-	// Direct SSH connection
-	log.Info().
-		Str("peer", peer.Name).
-		Str("addr", result.Address).
-		Msg("connecting to peer via direct SSH")
-
-	sshConn, err := m.SSHClient.Connect(result.Address)
-	if err != nil {
-		log.Warn().Err(err).Str("peer", peer.Name).Msg("SSH connection failed")
-		return
-	}
-
-	// Open data channel with our name as extra data so the peer knows who we are
-	channel, _, err := sshConn.OpenChannel(tunnel.ChannelType, []byte(m.identity.Name))
-	if err != nil {
-		log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to open channel")
-		sshConn.Close()
-		return
-	}
-
-	// Create tunnel and add to manager
-	// Use NewTunnelWithClient to keep SSH connection alive (prevents GC from closing it)
-	tun := tunnel.NewTunnelWithClient(channel, peer.Name, sshConn)
+	// Wrap the transport.Connection in a tunnel adapter
+	tun := tunnel.NewConnectionAdapter(result.Connection, peer.Name)
 	m.tunnelMgr.Add(peer.Name, tun)
 
-	log.Info().Str("peer", peer.Name).Msg("tunnel established")
+	log.Info().
+		Str("peer", peer.Name).
+		Str("transport", string(result.Transport)).
+		Msg("tunnel established via transport layer")
 
 	// Handle incoming packets from this tunnel
 	if m.Forwarder != nil {
@@ -221,29 +175,49 @@ func (m *MeshNode) handleDirectConnection(ctx context.Context, peer proto.Peer, 
 	m.tunnelMgr.RemoveIfMatch(peer.Name, tun)
 }
 
-// handleRelayConnection handles establishing a relay tunnel.
-func (m *MeshNode) handleRelayConnection(ctx context.Context, peer proto.Peer) {
-	log.Info().Str("peer", peer.Name).Msg("using relay connection through coordination server")
-
-	jwtToken := m.client.JWTToken()
-	if jwtToken == "" {
-		log.Warn().Str("peer", peer.Name).Msg("no JWT token available for relay")
-		return
+// buildTransportPeerInfo builds a transport.PeerInfo from a proto.Peer.
+func (m *MeshNode) buildTransportPeerInfo(peer proto.Peer) *transport.PeerInfo {
+	info := &transport.PeerInfo{
+		Name:             peer.Name,
+		PublicIPs:        peer.PublicIPs,
+		PrivateIPs:       peer.PrivateIPs,
+		SSHPort:          peer.SSHPort,
+		UDPPort:          peer.UDPPort,
+		Connectable:      peer.Connectable,
+		BehindNAT:        !peer.Connectable,
+		PublicKey:        peer.PublicKey,
+		ExternalEndpoint: peer.ExternalEndpoint,
 	}
 
-	relayTunnel, err := tunnel.NewRelayTunnel(ctx, m.client.BaseURL(), peer.Name, jwtToken)
-	if err != nil {
-		log.Warn().Err(err).Str("peer", peer.Name).Msg("relay connection failed")
-		return
+	// Apply admin-set transport preference to the registry
+	if peer.PreferredTransport != "" && peer.PreferredTransport != "auto" && m.TransportRegistry != nil {
+		preferred := transportTypeFromString(peer.PreferredTransport)
+		if preferred != "" {
+			m.TransportRegistry.SetPeerConfig(peer.Name, transport.PeerTransportConfig{
+				Preferred: []transport.TransportType{preferred, transport.TransportSSH, transport.TransportRelay},
+			})
+			log.Debug().
+				Str("peer", peer.Name).
+				Str("transport", peer.PreferredTransport).
+				Msg("applied admin transport preference")
+		}
 	}
 
-	m.tunnelMgr.Add(peer.Name, relayTunnel)
-	log.Info().Str("peer", peer.Name).Msg("relay tunnel established")
+	return info
+}
 
-	if m.Forwarder != nil {
-		m.Forwarder.HandleTunnel(ctx, peer.Name, relayTunnel)
+// transportTypeFromString converts a string to TransportType.
+func transportTypeFromString(s string) transport.TransportType {
+	switch s {
+	case "ssh":
+		return transport.TransportSSH
+	case "udp":
+		return transport.TransportUDP
+	case "relay":
+		return transport.TransportRelay
+	default:
+		return ""
 	}
-	m.tunnelMgr.RemoveIfMatch(peer.Name, relayTunnel)
 }
 
 // RefreshAuthorizedKeys fetches peer keys from coordination server and adds them to SSH server.

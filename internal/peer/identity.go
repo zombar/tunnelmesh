@@ -12,6 +12,7 @@ type PeerIdentity struct {
 	Name          string
 	PubKeyEncoded string
 	SSHPort       int
+	UDPPort       int
 	MeshCIDR      string
 	MeshIP        string
 	Domain        string
@@ -19,11 +20,12 @@ type PeerIdentity struct {
 }
 
 // NewPeerIdentity creates a PeerIdentity from config and registration response.
-func NewPeerIdentity(cfg *config.PeerConfig, pubKeyEncoded string, resp *proto.RegisterResponse) *PeerIdentity {
+func NewPeerIdentity(cfg *config.PeerConfig, pubKeyEncoded string, udpPort int, resp *proto.RegisterResponse) *PeerIdentity {
 	return &PeerIdentity{
 		Name:          cfg.Name,
 		PubKeyEncoded: pubKeyEncoded,
 		SSHPort:       cfg.SSHPort,
+		UDPPort:       udpPort,
 		MeshCIDR:      resp.MeshCIDR,
 		MeshIP:        resp.MeshIP,
 		Domain:        resp.Domain,

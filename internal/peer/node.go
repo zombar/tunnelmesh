@@ -7,8 +7,8 @@ import (
 
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	"github.com/tunnelmesh/tunnelmesh/internal/dns"
-	"github.com/tunnelmesh/tunnelmesh/internal/negotiate"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
+	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -26,10 +26,13 @@ type MeshNode struct {
 	// Coordination server client
 	client *coord.Client
 
-	// SSH components
-	SSHClient  *tunnel.SSHClient
-	SSHServer  *tunnel.SSHServer
-	Negotiator *negotiate.Negotiator
+	// SSH components (legacy, used by HandleIncomingSSH)
+	SSHClient *tunnel.SSHClient
+	SSHServer *tunnel.SSHServer
+
+	// Transport layer (new pluggable transport system)
+	TransportRegistry   *transport.Registry
+	TransportNegotiator *transport.Negotiator
 
 	// Tunnel and routing
 	tunnelMgr *TunnelAdapter

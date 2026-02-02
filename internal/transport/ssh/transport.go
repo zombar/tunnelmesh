@@ -95,8 +95,8 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 			return nil, r.err
 		}
 
-		// Open the tunnelmesh data channel
-		channel, reqs, err := r.client.OpenChannel(tunnel.ChannelType, []byte(opts.PeerName))
+		// Open the tunnelmesh data channel, sending our identity as extra data
+		channel, reqs, err := r.client.OpenChannel(tunnel.ChannelType, []byte(opts.LocalName))
 		if err != nil {
 			r.client.Close()
 			return nil, fmt.Errorf("open channel: %w", err)

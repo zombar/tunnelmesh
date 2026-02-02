@@ -32,6 +32,7 @@ type AdminPeerInfo struct {
 	PublicIPs           []string         `json:"public_ips"`
 	PrivateIPs          []string         `json:"private_ips"`
 	SSHPort             int              `json:"ssh_port"`
+	UDPPort             int              `json:"udp_port"`
 	LastSeen            time.Time        `json:"last_seen"`
 	Online              bool             `json:"online"`
 	Connectable         bool             `json:"connectable"`
@@ -85,6 +86,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			PublicIPs:          info.peer.PublicIPs,
 			PrivateIPs:         info.peer.PrivateIPs,
 			SSHPort:            info.peer.SSHPort,
+			UDPPort:            info.peer.UDPPort,
 			LastSeen:           info.peer.LastSeen,
 			Online:             online,
 			Connectable:        info.peer.Connectable,

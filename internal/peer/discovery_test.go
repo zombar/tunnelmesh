@@ -9,14 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
-	"github.com/tunnelmesh/tunnelmesh/internal/negotiate"
+	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
 // mockTunnel is used in tests to simulate a tunnel connection.
 // Defined in heartbeat_test.go
 
-func TestMeshNode_buildPeerInfo(t *testing.T) {
+func TestMeshNode_buildTransportPeerInfo(t *testing.T) {
 	identity := &PeerIdentity{
 		Name: "test-node",
 		Config: &config.PeerConfig{
@@ -27,25 +27,29 @@ func TestMeshNode_buildPeerInfo(t *testing.T) {
 	node := NewMeshNode(identity, client)
 
 	peer := proto.Peer{
-		Name:        "peer1",
-		PublicIPs:   []string{"1.2.3.4", "5.6.7.8"},
-		PrivateIPs:  []string{"192.168.1.10"},
-		SSHPort:     2222,
-		MeshIP:      "10.99.0.5",
-		Connectable: true,
+		Name:             "peer1",
+		PublicIPs:        []string{"1.2.3.4", "5.6.7.8"},
+		PrivateIPs:       []string{"192.168.1.10"},
+		SSHPort:          2222,
+		UDPPort:          51820,
+		MeshIP:           "10.99.0.5",
+		Connectable:      true,
+		ExternalEndpoint: "1.2.3.4:51820",
 	}
 
-	peerInfo := node.buildPeerInfo(peer)
+	peerInfo := node.buildTransportPeerInfo(peer)
 
 	require.NotNil(t, peerInfo)
-	assert.Equal(t, "peer1", peerInfo.ID)
-	assert.Equal(t, "1.2.3.4", peerInfo.PublicIP) // Should use first public IP
+	assert.Equal(t, "peer1", peerInfo.Name)
+	assert.Equal(t, []string{"1.2.3.4", "5.6.7.8"}, peerInfo.PublicIPs)
 	assert.Equal(t, []string{"192.168.1.10"}, peerInfo.PrivateIPs)
 	assert.Equal(t, 2222, peerInfo.SSHPort)
+	assert.Equal(t, 51820, peerInfo.UDPPort)
 	assert.True(t, peerInfo.Connectable)
+	assert.Equal(t, "1.2.3.4:51820", peerInfo.ExternalEndpoint)
 }
 
-func TestMeshNode_buildPeerInfo_NoPublicIP(t *testing.T) {
+func TestMeshNode_buildTransportPeerInfo_NoPublicIP(t *testing.T) {
 	identity := &PeerIdentity{
 		Name: "test-node",
 		Config: &config.PeerConfig{
@@ -62,12 +66,13 @@ func TestMeshNode_buildPeerInfo_NoPublicIP(t *testing.T) {
 		SSHPort:    2222,
 	}
 
-	peerInfo := node.buildPeerInfo(peer)
+	peerInfo := node.buildTransportPeerInfo(peer)
 
-	assert.Equal(t, "", peerInfo.PublicIP) // Should be empty when no public IPs
+	assert.Empty(t, peerInfo.PublicIPs) // Should be empty when no public IPs
+	assert.False(t, peerInfo.Connectable)
 }
 
-func TestMeshNode_EstablishTunnel_NoNegotiator(t *testing.T) {
+func TestMeshNode_EstablishTunnel_NoTransportNegotiator(t *testing.T) {
 	identity := &PeerIdentity{
 		Name: "test-node",
 		Config: &config.PeerConfig{
@@ -76,7 +81,7 @@ func TestMeshNode_EstablishTunnel_NoNegotiator(t *testing.T) {
 	}
 	client := coord.NewClient("http://localhost:8080", "test-token")
 	node := NewMeshNode(identity, client)
-	// Don't set a negotiator
+	// Don't set a transport negotiator
 
 	peer := proto.Peer{
 		Name:       "peer1",
@@ -125,7 +130,7 @@ func TestMeshNode_EstablishTunnel_AlphaOrdering(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// We test the alpha ordering condition directly
-			// This is the same condition used in EstablishTunnel for StrategyDirect
+			// This is the same condition used in EstablishTunnel
 			shouldSkipDueToAlpha := tt.myName > tt.peerName && !tt.bypassAlphaOrdering
 			assert.Equal(t, tt.shouldSkip, shouldSkipDueToAlpha)
 		})
@@ -175,14 +180,10 @@ func TestMeshNode_RefreshAuthorizedKeys_NoSSHServer(t *testing.T) {
 	node.RefreshAuthorizedKeys()
 }
 
-func TestNegotiationStrategyConstants(t *testing.T) {
-	// Verify the strategy constants are what we expect
-	assert.Equal(t, negotiate.Strategy(0), negotiate.StrategyDirect)
-	assert.Equal(t, negotiate.Strategy(1), negotiate.StrategyReverse)
-	assert.Equal(t, negotiate.Strategy(2), negotiate.StrategyRelay)
-
-	// Verify string representations
-	assert.Equal(t, "direct", negotiate.StrategyDirect.String())
-	assert.Equal(t, "reverse", negotiate.StrategyReverse.String())
-	assert.Equal(t, "relay", negotiate.StrategyRelay.String())
+func TestTransportTypeConstants(t *testing.T) {
+	// Verify the transport type constants are what we expect
+	assert.Equal(t, "ssh", string(transport.TransportSSH))
+	assert.Equal(t, "udp", string(transport.TransportUDP))
+	assert.Equal(t, "relay", string(transport.TransportRelay))
+	assert.Equal(t, "auto", string(transport.TransportAuto))
 }

@@ -66,7 +66,7 @@ func (m *MeshNode) PerformHeartbeat(ctx context.Context) {
 			// Re-register with server
 			if _, err := m.client.Register(
 				m.identity.Name, m.identity.PubKeyEncoded,
-				publicIPs, privateIPs, m.identity.SSHPort, behindNAT,
+				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT,
 			); err != nil {
 				log.Error().Err(err).Msg("failed to re-register after IP change")
 			} else {
@@ -86,6 +86,13 @@ func (m *MeshNode) PerformHeartbeat(ctx context.Context) {
 	if err != nil {
 		m.handleHeartbeatError(err, publicIPs, privateIPs, behindNAT)
 		return
+	}
+
+	// Handle reconnect signal from admin
+	if heartbeatResp.Reconnect {
+		log.Info().Msg("reconnect requested by admin, closing all tunnels")
+		m.tunnelMgr.CloseAll()
+		m.TriggerDiscovery()
 	}
 
 	// Handle relay requests
@@ -122,7 +129,7 @@ func (m *MeshNode) handleHeartbeatError(err error, publicIPs, privateIPs []strin
 		nat := behindNAT
 		if _, regErr := m.client.Register(
 			m.identity.Name, m.identity.PubKeyEncoded,
-			ips, privIPs, m.identity.SSHPort, nat,
+			ips, privIPs, m.identity.SSHPort, m.identity.UDPPort, nat,
 		); regErr != nil {
 			log.Error().Err(regErr).Msg("failed to re-register")
 		} else {

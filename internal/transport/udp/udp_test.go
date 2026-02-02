@@ -1,0 +1,1059 @@
+package udp
+
+import (
+	"bytes"
+	"net"
+	"testing"
+	"time"
+
+	"golang.org/x/crypto/blake2s"
+)
+
+func TestPacketHeader(t *testing.T) {
+	header := PacketHeader{
+		Type:     PacketTypeData,
+		Receiver: 0x12345678,
+		Counter:  0xABCDEF0123456789,
+	}
+
+	data := header.Marshal()
+	if len(data) != HeaderSize {
+		t.Errorf("expected header size %d, got %d", HeaderSize, len(data))
+	}
+
+	parsed, err := UnmarshalHeader(data)
+	if err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if parsed.Type != header.Type {
+		t.Errorf("type mismatch: expected %d, got %d", header.Type, parsed.Type)
+	}
+	if parsed.Receiver != header.Receiver {
+		t.Errorf("receiver mismatch: expected %x, got %x", header.Receiver, parsed.Receiver)
+	}
+	if parsed.Counter != header.Counter {
+		t.Errorf("counter mismatch: expected %x, got %x", header.Counter, parsed.Counter)
+	}
+}
+
+func TestReplayWindow(t *testing.T) {
+	w := NewReplayWindow(64)
+
+	// First packet should be accepted
+	if !w.Check(1) {
+		t.Error("first packet should be accepted")
+	}
+
+	// Duplicate should be rejected
+	if w.Check(1) {
+		t.Error("duplicate packet should be rejected")
+	}
+
+	// Sequential packets should be accepted
+	for i := uint64(2); i <= 10; i++ {
+		if !w.Check(i) {
+			t.Errorf("packet %d should be accepted", i)
+		}
+	}
+
+	// Out of order within window should be accepted
+	// (already received 1-10, so 11 should work)
+	if !w.Check(11) {
+		t.Error("packet 11 should be accepted")
+	}
+
+	// Packet 0 is always invalid
+	if w.Check(0) {
+		t.Error("packet 0 should be rejected")
+	}
+
+	// Far future packet should be accepted and advance window
+	if !w.Check(100) {
+		t.Error("far future packet should be accepted")
+	}
+
+	// Now very old packets should be rejected
+	if w.Check(1) {
+		t.Error("very old packet should be rejected after window advance")
+	}
+}
+
+func TestCryptoRoundtrip(t *testing.T) {
+	// Generate keys
+	priv1, pub1, err := X25519KeyPair()
+	if err != nil {
+		t.Fatalf("generate key pair 1: %v", err)
+	}
+
+	priv2, pub2, err := X25519KeyPair()
+	if err != nil {
+		t.Fatalf("generate key pair 2: %v", err)
+	}
+
+	// Compute shared secrets
+	shared1, err := X25519SharedSecret(priv1, pub2)
+	if err != nil {
+		t.Fatalf("shared secret 1: %v", err)
+	}
+
+	shared2, err := X25519SharedSecret(priv2, pub1)
+	if err != nil {
+		t.Fatalf("shared secret 2: %v", err)
+	}
+
+	// Shared secrets should match
+	if shared1 != shared2 {
+		t.Error("shared secrets don't match")
+	}
+
+	// Derive keys
+	sendKey1, recvKey1, err := DeriveKeys(shared1, pub1, pub2, true)
+	if err != nil {
+		t.Fatalf("derive keys 1: %v", err)
+	}
+
+	sendKey2, recvKey2, err := DeriveKeys(shared2, pub1, pub2, false)
+	if err != nil {
+		t.Fatalf("derive keys 2: %v", err)
+	}
+
+	// Send key of one side should be receive key of other
+	if sendKey1 != recvKey2 {
+		t.Error("key derivation mismatch: sendKey1 != recvKey2")
+	}
+	if recvKey1 != sendKey2 {
+		t.Error("key derivation mismatch: recvKey1 != sendKey2")
+	}
+
+	// Create crypto states
+	crypto1, err := NewCryptoState(sendKey1, recvKey1)
+	if err != nil {
+		t.Fatalf("create crypto 1: %v", err)
+	}
+
+	crypto2, err := NewCryptoState(sendKey2, recvKey2)
+	if err != nil {
+		t.Fatalf("create crypto 2: %v", err)
+	}
+
+	// Test encryption/decryption
+	plaintext := []byte("Hello, World!")
+	var counter uint64 = 1
+	var additionalData []byte
+
+	ciphertext := crypto1.Encrypt(counter, plaintext, additionalData)
+	decrypted, err := crypto2.Decrypt(counter, ciphertext, additionalData)
+	if err != nil {
+		t.Fatalf("decrypt failed: %v", err)
+	}
+
+	if string(decrypted) != string(plaintext) {
+		t.Errorf("decrypted mismatch: expected %q, got %q", plaintext, decrypted)
+	}
+
+	// Test wrong counter
+	_, err = crypto2.Decrypt(counter+1, ciphertext, additionalData)
+	if err == nil {
+		t.Error("decrypt with wrong counter should fail")
+	}
+}
+
+func TestHandshakeState(t *testing.T) {
+	// Generate key pairs for initiator and responder
+	initPriv, initPub, err := X25519KeyPair()
+	if err != nil {
+		t.Fatalf("generate initiator keys: %v", err)
+	}
+
+	respPriv, respPub, err := X25519KeyPair()
+	if err != nil {
+		t.Fatalf("generate responder keys: %v", err)
+	}
+
+	// Create initiator handshake state (knows responder's public key)
+	initiator, err := NewInitiatorHandshake(initPriv, initPub, respPub)
+	if err != nil {
+		t.Fatalf("create initiator state: %v", err)
+	}
+
+	// Create responder handshake state (doesn't know initiator's public key yet)
+	responder, err := NewResponderHandshake(respPriv, respPub)
+	if err != nil {
+		t.Fatalf("create responder state: %v", err)
+	}
+
+	// Create initiation
+	initMsg, err := initiator.CreateInitiation()
+	if err != nil {
+		t.Fatalf("create initiation: %v", err)
+	}
+
+	// Consume initiation
+	if err := responder.ConsumeInitiation(initMsg); err != nil {
+		t.Fatalf("consume initiation: %v", err)
+	}
+
+	// Create response
+	respMsg, err := responder.CreateResponse()
+	if err != nil {
+		t.Fatalf("create response: %v", err)
+	}
+
+	// Consume response
+	if err := initiator.ConsumeResponse(respMsg); err != nil {
+		t.Fatalf("consume response: %v", err)
+	}
+
+	// Derive keys
+	initSend, initRecv, err := initiator.DeriveKeys()
+	if err != nil {
+		t.Fatalf("initiator derive keys: %v", err)
+	}
+
+	respSend, respRecv, err := responder.DeriveKeys()
+	if err != nil {
+		t.Fatalf("responder derive keys: %v", err)
+	}
+
+	// Verify keys match (initiator send = responder recv, etc.)
+	if initSend != respRecv {
+		t.Error("initiator send key != responder recv key")
+	}
+	if initRecv != respSend {
+		t.Error("initiator recv key != responder send key")
+	}
+}
+
+func BenchmarkEncrypt(b *testing.B) {
+	priv1, _, _ := X25519KeyPair()
+	_, pub2, _ := X25519KeyPair()
+	shared, _ := X25519SharedSecret(priv1, pub2)
+
+	var sendKey, recvKey [32]byte
+	copy(sendKey[:], shared[:])
+	copy(recvKey[:], shared[:])
+
+	crypto, _ := NewCryptoState(sendKey, recvKey)
+	plaintext := make([]byte, 1400) // Typical MTU-sized packet
+
+	b.ResetTimer()
+	b.SetBytes(int64(len(plaintext)))
+
+	for i := 0; i < b.N; i++ {
+		crypto.Encrypt(uint64(i), plaintext, nil)
+	}
+}
+
+func BenchmarkDecrypt(b *testing.B) {
+	priv1, _, _ := X25519KeyPair()
+	_, pub2, _ := X25519KeyPair()
+	shared, _ := X25519SharedSecret(priv1, pub2)
+
+	var sendKey, recvKey [32]byte
+	copy(sendKey[:], shared[:])
+	copy(recvKey[:], shared[:])
+
+	crypto, _ := NewCryptoState(sendKey, recvKey)
+	plaintext := make([]byte, 1400)
+	ciphertext := crypto.Encrypt(1, plaintext, nil)
+
+	b.ResetTimer()
+	b.SetBytes(int64(len(plaintext)))
+
+	for i := 0; i < b.N; i++ {
+		_, _ = crypto.Decrypt(1, ciphertext, nil)
+	}
+}
+
+// =============================================================================
+// KDF Function Tests (WireGuard-style key derivation)
+// =============================================================================
+
+func TestKDF1(t *testing.T) {
+	key := []byte("test key for kdf1")
+	input := []byte("input data")
+
+	var result1, result2 [blake2s.Size]byte
+	KDF1(&result1, key, input)
+	KDF1(&result2, key, input)
+
+	// Same inputs should produce same output
+	if result1 != result2 {
+		t.Error("KDF1 should be deterministic")
+	}
+
+	// Different inputs should produce different outputs
+	var result3 [blake2s.Size]byte
+	KDF1(&result3, key, []byte("different input"))
+	if result1 == result3 {
+		t.Error("KDF1 should produce different output for different input")
+	}
+
+	// Different keys should produce different outputs
+	var result4 [blake2s.Size]byte
+	KDF1(&result4, []byte("different key"), input)
+	if result1 == result4 {
+		t.Error("KDF1 should produce different output for different key")
+	}
+}
+
+func TestKDF2(t *testing.T) {
+	key := []byte("test key for kdf2")
+	input := []byte("input data")
+
+	var t0a, t1a, t0b, t1b [blake2s.Size]byte
+	KDF2(&t0a, &t1a, key, input)
+	KDF2(&t0b, &t1b, key, input)
+
+	// Deterministic
+	if t0a != t0b || t1a != t1b {
+		t.Error("KDF2 should be deterministic")
+	}
+
+	// Two outputs should be different
+	if t0a == t1a {
+		t.Error("KDF2 should produce two different keys")
+	}
+
+	// Empty input should work (used in final key derivation)
+	var t0c, t1c [blake2s.Size]byte
+	KDF2(&t0c, &t1c, key, nil)
+	if t0c == t0a {
+		t.Error("KDF2 with nil input should differ from non-nil input")
+	}
+}
+
+func TestKDF3(t *testing.T) {
+	key := []byte("test key for kdf3")
+	input := []byte("input data")
+
+	var t0a, t1a, t2a [blake2s.Size]byte
+	KDF3(&t0a, &t1a, &t2a, key, input)
+
+	// Three outputs should all be different
+	if t0a == t1a || t1a == t2a || t0a == t2a {
+		t.Error("KDF3 should produce three different keys")
+	}
+
+	// Deterministic
+	var t0b, t1b, t2b [blake2s.Size]byte
+	KDF3(&t0b, &t1b, &t2b, key, input)
+	if t0a != t0b || t1a != t1b || t2a != t2b {
+		t.Error("KDF3 should be deterministic")
+	}
+}
+
+// =============================================================================
+// HMAC Function Tests
+// =============================================================================
+
+func TestHMAC1(t *testing.T) {
+	key := []byte("hmac test key")
+	data := []byte("test data")
+
+	var sum1, sum2 [blake2s.Size]byte
+	HMAC1(&sum1, key, data)
+	HMAC1(&sum2, key, data)
+
+	if sum1 != sum2 {
+		t.Error("HMAC1 should be deterministic")
+	}
+
+	// Different data should produce different MAC
+	var sum3 [blake2s.Size]byte
+	HMAC1(&sum3, key, []byte("different data"))
+	if sum1 == sum3 {
+		t.Error("HMAC1 should produce different output for different data")
+	}
+}
+
+func TestHMAC2(t *testing.T) {
+	key := []byte("hmac test key")
+	in0 := []byte("first input")
+	in1 := []byte("second input")
+
+	var sum1, sum2 [blake2s.Size]byte
+	HMAC2(&sum1, key, in0, in1)
+	HMAC2(&sum2, key, in0, in1)
+
+	if sum1 != sum2 {
+		t.Error("HMAC2 should be deterministic")
+	}
+
+	// Order matters
+	var sum3 [blake2s.Size]byte
+	HMAC2(&sum3, key, in1, in0)
+	if sum1 == sum3 {
+		t.Error("HMAC2 should be order-sensitive")
+	}
+}
+
+// =============================================================================
+// TAI64N Timestamp Tests
+// =============================================================================
+
+func TestTAI64N(t *testing.T) {
+	ts1 := TAI64N()
+	time.Sleep(10 * time.Millisecond)
+	ts2 := TAI64N()
+
+	// Timestamps should be different (monotonically increasing)
+	if ts1 == ts2 {
+		t.Error("consecutive TAI64N timestamps should differ")
+	}
+
+	// Later timestamp should be greater (comparing as big-endian)
+	if bytes.Compare(ts2[:], ts1[:]) <= 0 {
+		t.Error("later TAI64N timestamp should be greater")
+	}
+
+	// Should be 12 bytes (8 seconds + 4 nanoseconds)
+	if len(ts1) != 12 {
+		t.Errorf("TAI64N should be 12 bytes, got %d", len(ts1))
+	}
+}
+
+// =============================================================================
+// counterToNonce Tests
+// =============================================================================
+
+func TestCounterToNonce(t *testing.T) {
+	// Test zero counter
+	nonce0 := counterToNonce(0)
+	expected0 := [NonceSize]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	if nonce0 != expected0 {
+		t.Errorf("counter 0: expected %x, got %x", expected0, nonce0)
+	}
+
+	// Test counter 1
+	nonce1 := counterToNonce(1)
+	expected1 := [NonceSize]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+	if nonce1 != expected1 {
+		t.Errorf("counter 1: expected %x, got %x", expected1, nonce1)
+	}
+
+	// Test large counter
+	nonce := counterToNonce(0x0102030405060708)
+	expected := [NonceSize]byte{0, 0, 0, 0, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	if nonce != expected {
+		t.Errorf("large counter: expected %x, got %x", expected, nonce)
+	}
+
+	// Different counters should produce different nonces
+	if counterToNonce(1) == counterToNonce(2) {
+		t.Error("different counters should produce different nonces")
+	}
+}
+
+// =============================================================================
+// Mix Function Tests
+// =============================================================================
+
+func TestMixHashStatic(t *testing.T) {
+	var hash1, hash2 [blake2s.Size]byte
+	var initial [blake2s.Size]byte
+	copy(initial[:], []byte("initial hash value"))
+
+	data := []byte("data to mix")
+
+	hash1 = initial
+	hash2 = initial
+	mixHashStatic(&hash1, &hash1, data)
+	mixHashStatic(&hash2, &hash2, data)
+
+	// Deterministic
+	if hash1 != hash2 {
+		t.Error("mixHashStatic should be deterministic")
+	}
+
+	// Should change the hash
+	if hash1 == initial {
+		t.Error("mixHashStatic should change the hash")
+	}
+
+	// Different data should produce different hash
+	hash2 = initial
+	mixHashStatic(&hash2, &hash2, []byte("different data"))
+	if hash1 == hash2 {
+		t.Error("mixHashStatic with different data should produce different result")
+	}
+}
+
+func TestMixKeyStatic(t *testing.T) {
+	var key1, key2 [blake2s.Size]byte
+	var initial [blake2s.Size]byte
+	copy(initial[:], []byte("initial chain key"))
+
+	data := []byte("data to mix")
+
+	key1 = initial
+	key2 = initial
+	mixKeyStatic(&key1, &key1, data)
+	mixKeyStatic(&key2, &key2, data)
+
+	// Deterministic
+	if key1 != key2 {
+		t.Error("mixKeyStatic should be deterministic")
+	}
+
+	// Should change the key
+	if key1 == initial {
+		t.Error("mixKeyStatic should change the key")
+	}
+}
+
+// =============================================================================
+// Data Packet Tests
+// =============================================================================
+
+func TestDataPacketMarshalUnmarshal(t *testing.T) {
+	packet := &DataPacket{
+		Header: PacketHeader{
+			Type:     PacketTypeData,
+			Receiver: 0x12345678,
+			Counter:  0xABCDEF0123456789,
+		},
+		Ciphertext: []byte("encrypted payload data here"),
+	}
+
+	data := packet.Marshal()
+
+	parsed, err := UnmarshalDataPacket(data)
+	if err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	if parsed.Header.Type != packet.Header.Type {
+		t.Errorf("type mismatch: expected %d, got %d", packet.Header.Type, parsed.Header.Type)
+	}
+	if parsed.Header.Receiver != packet.Header.Receiver {
+		t.Errorf("receiver mismatch: expected %x, got %x", packet.Header.Receiver, parsed.Header.Receiver)
+	}
+	if parsed.Header.Counter != packet.Header.Counter {
+		t.Errorf("counter mismatch: expected %x, got %x", packet.Header.Counter, parsed.Header.Counter)
+	}
+	if !bytes.Equal(parsed.Ciphertext, packet.Ciphertext) {
+		t.Errorf("ciphertext mismatch")
+	}
+}
+
+func TestDataPacketTooShort(t *testing.T) {
+	_, err := UnmarshalDataPacket([]byte{0x04}) // Too short
+	if err == nil {
+		t.Error("should fail on too-short packet")
+	}
+}
+
+func TestDataPacketWrongType(t *testing.T) {
+	// Create packet with handshake type
+	header := PacketHeader{
+		Type:     PacketTypeHandshakeInit,
+		Receiver: 0x12345678,
+		Counter:  1,
+	}
+	data := append(header.Marshal(), make([]byte, 16)...) // Add auth tag bytes
+
+	_, err := UnmarshalDataPacket(data)
+	if err == nil {
+		t.Error("should fail on wrong packet type")
+	}
+}
+
+// =============================================================================
+// Keepalive Packet Tests
+// =============================================================================
+
+func TestKeepalivePacket(t *testing.T) {
+	pkt := NewKeepalivePacket(0xDEADBEEF)
+
+	if pkt.Header.Type != PacketTypeKeepalive {
+		t.Errorf("expected keepalive type %d, got %d", PacketTypeKeepalive, pkt.Header.Type)
+	}
+	if pkt.Header.Receiver != 0xDEADBEEF {
+		t.Errorf("expected receiver 0xDEADBEEF, got %x", pkt.Header.Receiver)
+	}
+	if pkt.Header.Counter != 0 {
+		t.Errorf("keepalive counter should be 0, got %d", pkt.Header.Counter)
+	}
+}
+
+// =============================================================================
+// Replay Window Edge Case Tests
+// =============================================================================
+
+func TestReplayWindowOutOfOrder(t *testing.T) {
+	w := NewReplayWindow(64)
+
+	// Receive packets out of order within window
+	if !w.Check(5) {
+		t.Error("packet 5 should be accepted")
+	}
+	if !w.Check(3) {
+		t.Error("packet 3 (out of order) should be accepted")
+	}
+	if !w.Check(7) {
+		t.Error("packet 7 should be accepted")
+	}
+	if !w.Check(4) {
+		t.Error("packet 4 (out of order) should be accepted")
+	}
+
+	// Duplicates should still be rejected
+	if w.Check(5) {
+		t.Error("duplicate packet 5 should be rejected")
+	}
+	if w.Check(3) {
+		t.Error("duplicate packet 3 should be rejected")
+	}
+}
+
+func TestReplayWindowLargeGap(t *testing.T) {
+	w := NewReplayWindow(64)
+
+	// Receive packet 1
+	if !w.Check(1) {
+		t.Error("packet 1 should be accepted")
+	}
+
+	// Jump way ahead (larger than window)
+	if !w.Check(1000) {
+		t.Error("packet 1000 should be accepted")
+	}
+
+	// Old packet should now be rejected
+	if w.Check(1) {
+		t.Error("packet 1 should be rejected after large jump")
+	}
+
+	// Packet just within new window should still work
+	if !w.Check(950) {
+		t.Error("packet 950 (within window) should be accepted")
+	}
+}
+
+func TestReplayWindowReset(t *testing.T) {
+	w := NewReplayWindow(64)
+
+	w.Check(10)
+	w.Check(20)
+	w.Check(30)
+
+	w.Reset()
+
+	// After reset, should accept packet 10 again
+	if !w.Check(10) {
+		t.Error("after reset, packet 10 should be accepted")
+	}
+}
+
+func TestReplayWindowMaxSequence(t *testing.T) {
+	w := NewReplayWindow(64)
+
+	// Test with very large sequence numbers
+	large := uint64(1) << 62
+	if !w.Check(large) {
+		t.Error("large sequence should be accepted")
+	}
+	if w.Check(large) {
+		t.Error("duplicate large sequence should be rejected")
+	}
+	if !w.Check(large + 1) {
+		t.Error("large+1 should be accepted")
+	}
+}
+
+// =============================================================================
+// Session Tests
+// =============================================================================
+
+func TestSessionStateTransitions(t *testing.T) {
+	// Create a mock UDP connection
+	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		t.Fatalf("create UDP conn: %v", err)
+	}
+	defer conn.Close()
+
+	remoteAddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
+
+	session := NewSession(SessionConfig{
+		LocalIndex: 1234,
+		PeerName:   "test-peer",
+		RemoteAddr: remoteAddr,
+		Conn:       conn,
+	})
+
+	// Initial state
+	if session.State() != SessionStateNew {
+		t.Errorf("expected initial state New, got %d", session.State())
+	}
+
+	// Set to handshaking
+	session.SetState(SessionStateHandshaking)
+	if session.State() != SessionStateHandshaking {
+		t.Errorf("expected state Handshaking, got %d", session.State())
+	}
+
+	// Set crypto (transitions to Established)
+	priv1, pub1, _ := X25519KeyPair()
+	_, pub2, _ := X25519KeyPair()
+	shared, _ := X25519SharedSecret(priv1, pub2)
+	sendKey, recvKey, _ := DeriveKeys(shared, pub1, pub2, true)
+	crypto, _ := NewCryptoState(sendKey, recvKey)
+
+	session.SetCrypto(crypto, 5678)
+	if session.State() != SessionStateEstablished {
+		t.Errorf("expected state Established after SetCrypto, got %d", session.State())
+	}
+	if session.RemoteIndex() != 5678 {
+		t.Errorf("expected remote index 5678, got %d", session.RemoteIndex())
+	}
+
+	// Close
+	session.Close()
+	if session.State() != SessionStateClosed {
+		t.Errorf("expected state Closed, got %d", session.State())
+	}
+}
+
+func TestSessionSendBeforeEstablished(t *testing.T) {
+	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	conn, _ := net.ListenUDP("udp", addr)
+	defer conn.Close()
+
+	remoteAddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
+
+	session := NewSession(SessionConfig{
+		LocalIndex: 1234,
+		PeerName:   "test-peer",
+		RemoteAddr: remoteAddr,
+		Conn:       conn,
+	})
+
+	err := session.Send([]byte("test data"))
+	if err != ErrSessionNotEstablished {
+		t.Errorf("expected ErrSessionNotEstablished, got %v", err)
+	}
+}
+
+func TestSessionHandlePacketBeforeEstablished(t *testing.T) {
+	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	conn, _ := net.ListenUDP("udp", addr)
+	defer conn.Close()
+
+	remoteAddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
+
+	session := NewSession(SessionConfig{
+		LocalIndex: 1234,
+		PeerName:   "test-peer",
+		RemoteAddr: remoteAddr,
+		Conn:       conn,
+	})
+
+	header := &PacketHeader{Type: PacketTypeData, Receiver: 1234, Counter: 1}
+	err := session.HandlePacket(header, []byte("encrypted"))
+	if err != ErrSessionNotEstablished {
+		t.Errorf("expected ErrSessionNotEstablished, got %v", err)
+	}
+}
+
+func TestSessionStats(t *testing.T) {
+	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	conn, _ := net.ListenUDP("udp", addr)
+	defer conn.Close()
+
+	remoteAddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
+
+	session := NewSession(SessionConfig{
+		LocalIndex: 1234,
+		PeerName:   "test-peer",
+		RemoteAddr: remoteAddr,
+		Conn:       conn,
+	})
+
+	stats := session.Stats()
+	if stats.BytesIn != 0 || stats.BytesOut != 0 {
+		t.Error("initial stats should be zero")
+	}
+	if stats.PacketsIn != 0 || stats.PacketsOut != 0 {
+		t.Error("initial packet counts should be zero")
+	}
+}
+
+func TestSessionUpdateRemoteAddr(t *testing.T) {
+	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	conn, _ := net.ListenUDP("udp", addr)
+	defer conn.Close()
+
+	remoteAddr1, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
+	remoteAddr2, _ := net.ResolveUDPAddr("udp", "192.168.1.1:54321")
+
+	session := NewSession(SessionConfig{
+		LocalIndex: 1234,
+		PeerName:   "test-peer",
+		RemoteAddr: remoteAddr1,
+		Conn:       conn,
+	})
+
+	if session.RemoteAddr().String() != remoteAddr1.String() {
+		t.Error("initial remote addr mismatch")
+	}
+
+	session.UpdateRemoteAddr(remoteAddr2)
+	if session.RemoteAddr().String() != remoteAddr2.String() {
+		t.Error("updated remote addr mismatch")
+	}
+}
+
+// =============================================================================
+// Handshake Error Case Tests
+// =============================================================================
+
+func TestHandshakeInitiationTooShort(t *testing.T) {
+	_, _, err := X25519KeyPair()
+	if err != nil {
+		t.Fatalf("generate keys: %v", err)
+	}
+
+	respPriv, respPub, _ := X25519KeyPair()
+	responder, _ := NewResponderHandshake(respPriv, respPub)
+
+	// Try to consume a too-short message
+	err = responder.ConsumeInitiation([]byte("too short"))
+	if err == nil {
+		t.Error("should reject too-short initiation")
+	}
+}
+
+func TestHandshakeResponseTooShort(t *testing.T) {
+	initPriv, initPub, _ := X25519KeyPair()
+	_, respPub, _ := X25519KeyPair()
+
+	initiator, _ := NewInitiatorHandshake(initPriv, initPub, respPub)
+	_, _ = initiator.CreateInitiation()
+
+	// Try to consume a too-short response
+	err := initiator.ConsumeResponse([]byte("too short"))
+	if err == nil {
+		t.Error("should reject too-short response")
+	}
+}
+
+func TestHandshakeResponseWrongReceiverIndex(t *testing.T) {
+	initPriv, initPub, _ := X25519KeyPair()
+	respPriv, respPub, _ := X25519KeyPair()
+
+	initiator, _ := NewInitiatorHandshake(initPriv, initPub, respPub)
+	initMsg, _ := initiator.CreateInitiation()
+
+	responder, _ := NewResponderHandshake(respPriv, respPub)
+	_ = responder.ConsumeInitiation(initMsg)
+	respMsg, _ := responder.CreateResponse()
+
+	// Corrupt the receiver index (bytes 4-8)
+	respMsg[4] = 0xFF
+	respMsg[5] = 0xFF
+	respMsg[6] = 0xFF
+	respMsg[7] = 0xFF
+
+	err := initiator.ConsumeResponse(respMsg)
+	if err == nil {
+		t.Error("should reject response with wrong receiver index")
+	}
+}
+
+func TestHandshakeIndexMethods(t *testing.T) {
+	initPriv, initPub, _ := X25519KeyPair()
+	respPriv, respPub, _ := X25519KeyPair()
+
+	initiator, _ := NewInitiatorHandshake(initPriv, initPub, respPub)
+	responder, _ := NewResponderHandshake(respPriv, respPub)
+
+	initMsg, _ := initiator.CreateInitiation()
+	localIdx := initiator.LocalIndex()
+	if localIdx == 0 {
+		t.Error("local index should be non-zero after CreateInitiation")
+	}
+
+	_ = responder.ConsumeInitiation(initMsg)
+	if responder.RemoteIndex() != localIdx {
+		t.Error("responder remote index should match initiator local index")
+	}
+
+	respMsg, _ := responder.CreateResponse()
+	_ = initiator.ConsumeResponse(respMsg)
+
+	if initiator.RemoteIndex() != responder.LocalIndex() {
+		t.Error("initiator remote index should match responder local index")
+	}
+
+	// PeerStaticPublic
+	if initiator.PeerStaticPublic() != respPub {
+		t.Error("initiator peer public should match responder's public key")
+	}
+	if responder.PeerStaticPublic() != initPub {
+		t.Error("responder peer public should match initiator's public key")
+	}
+}
+
+// =============================================================================
+// Full Handshake + Session Crypto Roundtrip Test
+// =============================================================================
+
+func TestFullHandshakeWithSessionCrypto(t *testing.T) {
+	// Generate identity keys
+	initPriv, initPub, _ := X25519KeyPair()
+	respPriv, respPub, _ := X25519KeyPair()
+
+	// Create handshake states
+	initiator, _ := NewInitiatorHandshake(initPriv, initPub, respPub)
+	responder, _ := NewResponderHandshake(respPriv, respPub)
+
+	// Perform handshake
+	initMsg, _ := initiator.CreateInitiation()
+	_ = responder.ConsumeInitiation(initMsg)
+	respMsg, _ := responder.CreateResponse()
+	_ = initiator.ConsumeResponse(respMsg)
+
+	// Derive session keys
+	initSend, initRecv, _ := initiator.DeriveKeys()
+	respSend, respRecv, _ := responder.DeriveKeys()
+
+	// Create crypto states
+	initCrypto, _ := NewCryptoState(initSend, initRecv)
+	respCrypto, _ := NewCryptoState(respSend, respRecv)
+
+	// Test bidirectional communication
+	testData := []byte("Hello from initiator to responder!")
+	counter := uint64(1)
+	hdr := PacketHeader{Type: PacketTypeData, Receiver: 1234, Counter: counter}
+	header := hdr.Marshal()
+
+	// Initiator encrypts, responder decrypts
+	ciphertext := initCrypto.Encrypt(counter, testData, header)
+	plaintext, err := respCrypto.Decrypt(counter, ciphertext, header)
+	if err != nil {
+		t.Fatalf("responder decrypt failed: %v", err)
+	}
+	if !bytes.Equal(plaintext, testData) {
+		t.Errorf("decrypted data mismatch: expected %q, got %q", testData, plaintext)
+	}
+
+	// Responder encrypts, initiator decrypts
+	testData2 := []byte("Hello back from responder!")
+	counter2 := uint64(2)
+	hdr2 := PacketHeader{Type: PacketTypeData, Receiver: 5678, Counter: counter2}
+	header2 := hdr2.Marshal()
+
+	ciphertext2 := respCrypto.Encrypt(counter2, testData2, header2)
+	plaintext2, err := initCrypto.Decrypt(counter2, ciphertext2, header2)
+	if err != nil {
+		t.Fatalf("initiator decrypt failed: %v", err)
+	}
+	if !bytes.Equal(plaintext2, testData2) {
+		t.Errorf("decrypted data mismatch: expected %q, got %q", testData2, plaintext2)
+	}
+}
+
+// =============================================================================
+// Crypto Tamper Detection Tests
+// =============================================================================
+
+func TestCryptoTamperedCiphertext(t *testing.T) {
+	priv1, pub1, _ := X25519KeyPair()
+	priv2, pub2, _ := X25519KeyPair()
+
+	shared1, _ := X25519SharedSecret(priv1, pub2)
+	shared2, _ := X25519SharedSecret(priv2, pub1)
+
+	sendKey1, recvKey1, _ := DeriveKeys(shared1, pub1, pub2, true)
+	sendKey2, recvKey2, _ := DeriveKeys(shared2, pub1, pub2, false)
+
+	crypto1, _ := NewCryptoState(sendKey1, recvKey1)
+	crypto2, _ := NewCryptoState(sendKey2, recvKey2)
+
+	plaintext := []byte("sensitive data")
+	counter := uint64(1)
+	ciphertext := crypto1.Encrypt(counter, plaintext, nil)
+
+	// Tamper with ciphertext
+	ciphertext[0] ^= 0xFF
+
+	_, err := crypto2.Decrypt(counter, ciphertext, nil)
+	if err == nil {
+		t.Error("should detect tampered ciphertext")
+	}
+}
+
+func TestCryptoTamperedAdditionalData(t *testing.T) {
+	priv1, pub1, _ := X25519KeyPair()
+	priv2, pub2, _ := X25519KeyPair()
+
+	shared1, _ := X25519SharedSecret(priv1, pub2)
+	shared2, _ := X25519SharedSecret(priv2, pub1)
+
+	sendKey1, recvKey1, _ := DeriveKeys(shared1, pub1, pub2, true)
+	sendKey2, recvKey2, _ := DeriveKeys(shared2, pub1, pub2, false)
+
+	crypto1, _ := NewCryptoState(sendKey1, recvKey1)
+	crypto2, _ := NewCryptoState(sendKey2, recvKey2)
+
+	plaintext := []byte("sensitive data")
+	counter := uint64(1)
+	ad := []byte("additional data")
+	ciphertext := crypto1.Encrypt(counter, plaintext, ad)
+
+	// Use different additional data for decryption
+	_, err := crypto2.Decrypt(counter, ciphertext, []byte("wrong additional data"))
+	if err == nil {
+		t.Error("should detect wrong additional data")
+	}
+}
+
+// =============================================================================
+// GenerateSessionIndex Test
+// =============================================================================
+
+func TestGenerateSessionIndex(t *testing.T) {
+	indices := make(map[uint32]bool)
+
+	// Generate many indices and check for uniqueness
+	for i := 0; i < 100; i++ {
+		idx, err := GenerateSessionIndex()
+		if err != nil {
+			t.Fatalf("generate index: %v", err)
+		}
+		if indices[idx] {
+			t.Errorf("duplicate index generated: %d", idx)
+		}
+		indices[idx] = true
+	}
+}
+
+// =============================================================================
+// Initial State Verification
+// =============================================================================
+
+func TestInitialChainKeyAndHash(t *testing.T) {
+	// Verify initialization ran correctly
+	var zero [blake2s.Size]byte
+	if InitialChainKey == zero {
+		t.Error("InitialChainKey should not be zero")
+	}
+	if InitialHash == zero {
+		t.Error("InitialHash should not be zero")
+	}
+
+	// Verify they're different
+	if InitialChainKey == InitialHash {
+		t.Error("InitialChainKey and InitialHash should differ")
+	}
+
+	// Verify deterministic (same on each run)
+	expectedChainKey := blake2s.Sum256([]byte(NoiseConstruction))
+	if InitialChainKey != expectedChainKey {
+		t.Error("InitialChainKey doesn't match expected value")
+	}
+}

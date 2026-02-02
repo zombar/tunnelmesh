@@ -95,15 +95,8 @@ function updateDashboard(data) {
                 <td><strong>${peerNameEscaped}</strong></td>
                 <td><code>${peer.mesh_ip}</code></td>
                 <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
+                <td class="ports-cell">${formatPorts(peer)}</td>
                 <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
-                <td>
-                    <select class="transport-select" data-peer="${peerNameEscaped}" onchange="setTransport(this)">
-                        <option value="auto" ${currentTransport === 'auto' ? 'selected' : ''}>Auto</option>
-                        <option value="udp" ${currentTransport === 'udp' ? 'selected' : ''}>UDP</option>
-                        <option value="ssh" ${currentTransport === 'ssh' ? 'selected' : ''}>SSH</option>
-                        <option value="relay" ${currentTransport === 'relay' ? 'selected' : ''}>Relay</option>
-                    </select>
-                </td>
                 <td>${peer.stats?.active_tunnels ?? '-'}</td>
                 <td class="sparkline-cell">
                     ${createSparklineSVG(history.throughputTx, history.throughputRx)}
@@ -120,6 +113,14 @@ function updateDashboard(data) {
                     </div>
                 </td>
                 <td>${peer.stats?.errors ?? 0}</td>
+                <td>
+                    <select class="transport-select" data-peer="${peerNameEscaped}" onchange="setTransport(this)">
+                        <option value="auto" ${currentTransport === 'auto' ? 'selected' : ''}>Auto</option>
+                        <option value="udp" ${currentTransport === 'udp' ? 'selected' : ''}>UDP</option>
+                        <option value="ssh" ${currentTransport === 'ssh' ? 'selected' : ''}>SSH</option>
+                        <option value="relay" ${currentTransport === 'relay' ? 'selected' : ''}>Relay</option>
+                    </select>
+                </td>
                 <td class="actions-cell">
                     <button class="restart-btn" onclick="restartConnection('${peerNameEscaped}')" title="Restart connection">&#x21bb;</button>
                 </td>
@@ -193,17 +194,26 @@ function escapeHtml(text) {
 
 function formatAdvertisedIPs(peer) {
     const parts = [];
-    const port = peer.ssh_port || 2222;
 
     if (peer.public_ips && peer.public_ips.length > 0) {
-        const natBadge = peer.behind_nat ? ' <span class="nat-badge">NAT</span>' : '';
-        parts.push(`<span class="ip-label">Public${natBadge}:</span> ${peer.public_ips.map(ip => `<code>${ip}:${port}</code>`).join(', ')}`);
+        const natBadge = peer.behind_nat ? '<span class="nat-badge">NAT</span>' : '';
+        parts.push(`<span class="ip-label">Public:</span> ${peer.public_ips.map(ip => `<code>${ip}</code>`).join(', ')}${natBadge}`);
     }
     if (peer.private_ips && peer.private_ips.length > 0) {
-        parts.push(`<span class="ip-label">Private:</span> ${peer.private_ips.map(ip => `<code>${ip}:${port}</code>`).join(', ')}`);
+        parts.push(`<span class="ip-label">Private:</span> ${peer.private_ips.map(ip => `<code>${ip}</code>`).join(', ')}`);
     }
 
     return parts.length > 0 ? parts.join('<br>') : '<span class="no-ips">-</span>';
+}
+
+function formatPorts(peer) {
+    const sshPort = peer.ssh_port || 2222;
+    const udpPort = peer.udp_port || 0;
+    const parts = [`<span class="port-label">SSH:</span> <code>${sshPort}</code>`];
+    if (udpPort > 0) {
+        parts.push(`<span class="port-label">UDP:</span> <code>${udpPort}</code>`);
+    }
+    return parts.join('<br>');
 }
 
 // Set transport preference for a peer

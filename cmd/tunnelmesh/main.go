@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"io"
 	"net"
@@ -21,14 +22,18 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
-	"github.com/tunnelmesh/tunnelmesh/internal/negotiate"
 	"github.com/tunnelmesh/tunnelmesh/internal/netmon"
 	"github.com/tunnelmesh/tunnelmesh/internal/peer"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/svc"
+	"github.com/tunnelmesh/tunnelmesh/internal/transport"
+	relaytransport "github.com/tunnelmesh/tunnelmesh/internal/transport/relay"
+	sshtransport "github.com/tunnelmesh/tunnelmesh/internal/transport/ssh"
+	udptransport "github.com/tunnelmesh/tunnelmesh/internal/transport/udp"
 	"github.com/tunnelmesh/tunnelmesh/internal/tun"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
+	"golang.org/x/crypto/ssh"
 )
 
 var (
@@ -494,7 +499,9 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	// Connect to coordination server
 	client := coord.NewClient(cfg.Server, cfg.AuthToken)
 
-	resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, behindNAT)
+	// UDP port is SSH port + 1
+	udpPort := cfg.SSHPort + 1
+	resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT)
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}
@@ -531,7 +538,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	}
 
 	// Create peer identity and mesh node
-	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, resp)
+	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, udpPort, resp)
 	node := peer.NewMeshNode(identity, client)
 
 	// Set up forwarder with node's tunnel manager and router
@@ -557,17 +564,157 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	// Handle incoming SSH connections
 	go node.HandleIncomingSSH(ctx, sshListener)
 
-	// Create negotiator for outbound connections
-	negotiator := negotiate.NewNegotiator(negotiate.Config{
-		ProbeTimeout: 5 * time.Second,
-		MaxRetries:   3,
-		RetryDelay:   1 * time.Second,
-		AllowReverse: true,
-		AllowRelay:   true, // Enable relay through coordination server
+	// Create transport registry with default order: UDP -> SSH -> Relay
+	// UDP is first for better performance (lower latency, no head-of-line blocking)
+	// Falls back to SSH when UDP hole-punching fails or times out
+	transportRegistry := transport.NewRegistry(transport.RegistryConfig{
+		DefaultOrder: []transport.TransportType{
+			transport.TransportUDP,
+			transport.TransportSSH,
+			transport.TransportRelay,
+		},
 	})
-	node.Negotiator = negotiator
+	node.TransportRegistry = transportRegistry
 
-	// Create SSH client for outbound connections
+	// Create and register SSH transport
+	sshTransport, err := sshtransport.New(sshtransport.Config{
+		HostKey:      signer,
+		ClientSigner: signer,
+		ListenPort:   cfg.SSHPort,
+	})
+	if err != nil {
+		return fmt.Errorf("create SSH transport: %w", err)
+	}
+	if err := transportRegistry.Register(sshTransport); err != nil {
+		return fmt.Errorf("register SSH transport: %w", err)
+	}
+	log.Info().Msg("SSH transport registered")
+
+	// Create and register UDP transport (for lower latency when direct connection possible)
+	edPrivKey, err := config.LoadED25519PrivateKey(cfg.PrivateKey)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load ED25519 key for UDP transport, UDP disabled")
+	} else {
+		x25519Priv, x25519Pub, err := config.DeriveX25519KeyPair(edPrivKey)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to derive X25519 keys for UDP transport, UDP disabled")
+		} else {
+			var privKey, pubKey [32]byte
+			copy(privKey[:], x25519Priv)
+			copy(pubKey[:], x25519Pub)
+
+			// Debug: Also convert ED25519 public key directly to verify matching
+			ed25519PubBytes := edPrivKey.Public().(ed25519.PublicKey)
+			x25519FromEd, _ := config.ED25519PublicToX25519(ed25519PubBytes)
+			log.Debug().
+				Hex("x25519_from_priv", x25519Pub).
+				Hex("x25519_from_ed_pub", x25519FromEd).
+				Bool("match", string(x25519Pub) == string(x25519FromEd)).
+				Msg("X25519 key derivation check")
+
+			// Create peer resolver for incoming UDP connections
+			peerResolver := func(x25519PubKey [32]byte) string {
+				peers, err := client.ListPeers()
+				if err != nil {
+					log.Debug().Err(err).Msg("failed to list peers for resolver")
+					return ""
+				}
+				for _, p := range peers {
+					if p.PublicKey == "" {
+						continue
+					}
+					// Parse the peer's SSH public key
+					sshPubKey, err := config.DecodePublicKey(p.PublicKey)
+					if err != nil {
+						continue
+					}
+					// Extract the crypto.PublicKey from the SSH public key
+					cryptoPubKey, ok := sshPubKey.(ssh.CryptoPublicKey)
+					if !ok {
+						continue
+					}
+					edPubKey, ok := cryptoPubKey.CryptoPublicKey().(ed25519.PublicKey)
+					if !ok {
+						continue
+					}
+					peerX25519, err := config.ED25519PublicToX25519(edPubKey)
+					if err != nil {
+						continue
+					}
+					if len(peerX25519) == 32 {
+						var peerKey [32]byte
+						copy(peerKey[:], peerX25519)
+						if peerKey == x25519PubKey {
+							return p.Name
+						}
+					}
+				}
+				return ""
+			}
+
+			udpTransport, err := udptransport.New(udptransport.Config{
+				Port:           cfg.SSHPort + 1, // Use SSH port + 1 for UDP
+				StaticPrivate:  privKey,
+				StaticPublic:   pubKey,
+				CoordServerURL: cfg.Server,
+				AuthToken:      cfg.AuthToken,
+				PeerResolver:   peerResolver,
+			})
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to create UDP transport, UDP disabled")
+			} else {
+				if err := transportRegistry.Register(udpTransport); err != nil {
+					log.Warn().Err(err).Msg("failed to register UDP transport")
+				} else {
+					log.Info().Int("port", cfg.SSHPort+1).Msg("UDP transport registered")
+					// Start UDP transport to accept incoming connections
+					if err := udpTransport.Start(); err != nil {
+						log.Warn().Err(err).Msg("failed to start UDP transport")
+					} else {
+						log.Info().Int("port", cfg.SSHPort+1).Msg("UDP transport started")
+						// Start listening for incoming UDP connections
+						udpListener, err := udpTransport.Listen(ctx, transport.ListenOptions{})
+						if err != nil {
+							log.Warn().Err(err).Msg("failed to create UDP listener")
+						} else {
+							go node.HandleIncomingUDP(ctx, udpListener)
+							log.Info().Int("port", cfg.SSHPort+1).Msg("UDP listener started")
+						}
+					}
+					// Register UDP endpoint with coordination server for hole-punching
+					if err := udpTransport.RegisterUDPEndpoint(ctx, cfg.Name); err != nil {
+						log.Warn().Err(err).Msg("failed to register UDP endpoint")
+					}
+				}
+			}
+		}
+	}
+
+	// Create and register relay transport
+	relayTransport, err := relaytransport.New(relaytransport.Config{
+		ServerURL: cfg.Server,
+		JWTToken:  client.JWTToken(), // Will be updated after registration
+	})
+	if err != nil {
+		return fmt.Errorf("create relay transport: %w", err)
+	}
+	if err := transportRegistry.Register(relayTransport); err != nil {
+		return fmt.Errorf("register relay transport: %w", err)
+	}
+	log.Info().Msg("relay transport registered")
+
+	// Create transport negotiator
+	transportNegotiator := transport.NewNegotiator(transportRegistry, transport.NegotiatorConfig{
+		ProbeTimeout:      5 * time.Second,
+		ConnectionTimeout: 30 * time.Second,
+		MaxRetries:        3,
+		RetryDelay:        1 * time.Second,
+		ParallelProbes:    3,
+		EnableFallback:    true,
+	})
+	node.TransportNegotiator = transportNegotiator
+
+	// Create SSH client for outbound connections (used by HandleIncomingSSH)
 	sshClient := tunnel.NewSSHClient(signer, nil) // Accept any host key for now
 	node.SSHClient = sshClient
 

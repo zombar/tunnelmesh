@@ -195,19 +195,22 @@ td {
     color: #8b949e;
 }
 
-.ips-cell {
+.ips-cell,
+.ports-cell {
     font-size: 0.75rem;
     line-height: 1.4;
 }
 
-.ips-cell code {
+.ips-cell code,
+.ports-cell code {
     background: #21262d;
     padding: 0.1rem 0.3rem;
     border-radius: 3px;
     font-size: 0.7rem;
 }
 
-.ips-cell .ip-label {
+.ips-cell .ip-label,
+.ports-cell .port-label {
     color: #8b949e;
     font-weight: 500;
 }
