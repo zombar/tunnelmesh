@@ -417,23 +417,33 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 		return
 	}
 
-	// Find session by the index the peer says is unknown
-	// This is OUR local index that we sent them during handshake
+	// Find session by the index the peer says is unknown.
+	// The unknownIndex is the receiver index from packets we sent to them,
+	// which is our REMOTE index (the peer's local index from their perspective).
+	// We need to search by remoteIndex, not localIndex.
 	t.mu.Lock()
-	session, ok := t.sessions[pkt.UnknownIndex]
-	if !ok {
+	var session *Session
+	var localIndex uint32
+	for idx, s := range t.sessions {
+		if s.RemoteIndex() == pkt.UnknownIndex {
+			session = s
+			localIndex = idx
+			break
+		}
+	}
+	if session == nil {
 		t.mu.Unlock()
 		log.Debug().
-			Uint32("index", pkt.UnknownIndex).
+			Uint32("unknown_index", pkt.UnknownIndex).
 			Str("from", remoteAddr.String()).
-			Msg("rekey-required for unknown local index (already removed?)")
+			Msg("rekey-required for unknown remote index (already removed?)")
 		return
 	}
 
 	peerName := session.PeerName()
 
 	// Remove the stale session
-	delete(t.sessions, pkt.UnknownIndex)
+	delete(t.sessions, localIndex)
 	delete(t.peerSessions, peerName)
 
 	// Get callback while holding lock, then release before calling
@@ -442,7 +452,8 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 
 	log.Info().
 		Str("peer", peerName).
-		Uint32("index", pkt.UnknownIndex).
+		Uint32("local_index", localIndex).
+		Uint32("remote_index", pkt.UnknownIndex).
 		Str("from", remoteAddr.String()).
 		Msg("session invalidated by peer, re-handshake needed")
 

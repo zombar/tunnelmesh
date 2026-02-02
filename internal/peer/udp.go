@@ -5,6 +5,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
+	udptransport "github.com/tunnelmesh/tunnelmesh/internal/transport/udp"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 )
 
@@ -72,4 +73,23 @@ func (m *MeshNode) handleUDPConnection(ctx context.Context, conn transport.Conne
 			m.tunnelMgr.RemoveIfMatch(name, t)
 		}(peerName, tun)
 	}
+}
+
+// HandleUDPSessionInvalidated is called when a UDP session is invalidated by the remote peer
+// (e.g., when we receive a rekey-required message). This removes the stale tunnel and
+// triggers reconnection.
+func (m *MeshNode) HandleUDPSessionInvalidated(peerName string) {
+	log.Info().Str("peer", peerName).Msg("UDP session invalidated by peer, removing tunnel and triggering reconnection")
+
+	// Remove the tunnel for this peer (it's now stale since the underlying session is gone)
+	m.tunnelMgr.Remove(peerName)
+
+	// Trigger peer discovery to reconnect
+	m.TriggerDiscovery()
+}
+
+// SetupUDPSessionInvalidCallback wires up the UDP transport's session invalid callback
+// to handle remote session invalidation (rekey-required messages).
+func (m *MeshNode) SetupUDPSessionInvalidCallback(udpTransport *udptransport.Transport) {
+	udpTransport.SetSessionInvalidCallback(m.HandleUDPSessionInvalidated)
 }
