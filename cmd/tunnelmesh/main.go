@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -605,6 +606,18 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 
 	// Create network monitor for detecting network changes
 	triggerDiscovery := make(chan struct{}, 1)
+	netChangeState := newNetworkChangeState()
+
+	// Set up callback to trigger discovery when a tunnel is removed
+	tunnelMgr.SetOnRemove(func() {
+		select {
+		case triggerDiscovery <- struct{}{}:
+			log.Debug().Msg("triggered discovery due to tunnel removal")
+		default:
+			// Discovery already pending
+		}
+	})
+
 	netMonitor, err := netmon.New(netmon.DefaultConfig())
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to create network monitor, changes won't be detected")
@@ -615,12 +628,12 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 			netMonitor.Close()
 		} else {
 			defer netMonitor.Close()
-			go networkChangeLoop(ctx, networkChanges, client, cfg, pubKeyEncoded, resp.MeshCIDR, tunnelMgr, triggerDiscovery)
+			go networkChangeLoop(ctx, networkChanges, client, cfg, pubKeyEncoded, resp.MeshCIDR, tunnelMgr, triggerDiscovery, netChangeState)
 		}
 	}
 
 	// Start peer discovery and tunnel establishment loop
-	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, triggerDiscovery)
+	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, triggerDiscovery, netChangeState)
 
 	// Start heartbeat loop
 	go heartbeatLoop(ctx, client, cfg.Name, pubKeyEncoded, cfg.SSHPort, resp.MeshCIDR, resolver, forwarder, tunnelMgr)
@@ -652,16 +665,47 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	return nil
 }
 
+// networkChangeState tracks when the last network change occurred.
+// Used to temporarily bypass alpha ordering for faster reconnection after resume.
+type networkChangeState struct {
+	lastChange atomic.Value // stores time.Time
+}
+
+func newNetworkChangeState() *networkChangeState {
+	state := &networkChangeState{}
+	state.lastChange.Store(time.Time{})
+	return state
+}
+
+func (s *networkChangeState) recordChange() {
+	s.lastChange.Store(time.Now())
+}
+
+// inBypassWindow returns true if within the bypass window after a network change.
+func (s *networkChangeState) inBypassWindow(window time.Duration) bool {
+	lastChange := s.lastChange.Load().(time.Time)
+	if lastChange.IsZero() {
+		return false
+	}
+	return time.Since(lastChange) < window
+}
+
 // TunnelAdapter wraps tunnel.TunnelManager to implement routing.TunnelProvider
 type TunnelAdapter struct {
-	tunnels map[string]io.ReadWriteCloser
-	mu      sync.RWMutex
+	tunnels  map[string]io.ReadWriteCloser
+	mu       sync.RWMutex
+	onRemove func() // Called when a tunnel is removed (for triggering reconnection)
 }
 
 func NewTunnelAdapter() *TunnelAdapter {
 	return &TunnelAdapter{
 		tunnels: make(map[string]io.ReadWriteCloser),
 	}
+}
+
+// SetOnRemove sets a callback that is called when a tunnel is removed.
+func (t *TunnelAdapter) SetOnRemove(callback func()) {
+	t.onRemove = callback
 }
 
 func (t *TunnelAdapter) Get(name string) (io.ReadWriteCloser, bool) {
@@ -684,11 +728,17 @@ func (t *TunnelAdapter) Add(name string, tunnel io.ReadWriteCloser) {
 
 func (t *TunnelAdapter) Remove(name string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	callback := t.onRemove
 	if tunnel, ok := t.tunnels[name]; ok {
 		tunnel.Close()
 		delete(t.tunnels, name)
 		log.Debug().Str("peer", name).Msg("tunnel removed")
+	}
+	t.mu.Unlock()
+
+	// Trigger reconnection callback outside the lock
+	if callback != nil {
+		callback()
 	}
 }
 
@@ -772,7 +822,10 @@ func handleSSHConnection(ctx context.Context, conn net.Conn, sshServer *tunnel.S
 		log.Info().Str("peer", peerName).Msg("tunnel established from incoming connection")
 
 		// Handle incoming packets from this tunnel
-		go forwarder.HandleTunnel(ctx, peerName, tun)
+		go func(name string) {
+			forwarder.HandleTunnel(ctx, name, tun)
+			tunnelMgr.Remove(name)
+		}(peerName)
 	}
 }
 
@@ -780,7 +833,8 @@ func handleSSHConnection(ctx context.Context, conn net.Conn, sshServer *tunnel.S
 func peerDiscoveryLoop(ctx context.Context, client *coord.Client, myName string,
 	sshClient *tunnel.SSHClient, negotiator *negotiate.Negotiator,
 	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder,
-	sshServer *tunnel.SSHServer, triggerDiscovery <-chan struct{}) {
+	sshServer *tunnel.SSHServer, triggerDiscovery <-chan struct{},
+	netChangeState *networkChangeState) {
 
 	// Add random jitter (0-3 seconds) before initial discovery to stagger startup
 	jitter := time.Duration(rand.Intn(3000)) * time.Millisecond
@@ -792,7 +846,7 @@ func peerDiscoveryLoop(ctx context.Context, client *coord.Client, myName string,
 	}
 
 	// Initial peer discovery
-	discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
+	discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
 
 	// Fast retry phase: discover every 5 seconds for the first 30 seconds
 	// This helps establish connections quickly after startup
@@ -809,10 +863,10 @@ fastLoop:
 			fastTicker.Stop()
 			break fastLoop
 		case <-fastTicker.C:
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
 		case <-triggerDiscovery:
 			log.Debug().Msg("peer discovery triggered by network change")
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
 		}
 	}
 
@@ -825,10 +879,10 @@ fastLoop:
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
 		case <-triggerDiscovery:
 			log.Debug().Msg("peer discovery triggered by network change")
-			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer)
+			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
 		}
 	}
 }
@@ -836,7 +890,7 @@ fastLoop:
 func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName string,
 	sshClient *tunnel.SSHClient, negotiator *negotiate.Negotiator,
 	tunnelMgr *TunnelAdapter, router *routing.Router, forwarder *routing.Forwarder,
-	sshServer *tunnel.SSHServer) {
+	sshServer *tunnel.SSHServer, netChangeState *networkChangeState) {
 
 	peers, err := client.ListPeers()
 	if err != nil {
@@ -849,6 +903,11 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 	for _, name := range existingTunnels {
 		existingSet[name] = true
 	}
+
+	// Check if we're in a network change bypass window (10 seconds)
+	// During this window, both peers attempt connection to speed up reconnection
+	const bypassWindow = 10 * time.Second
+	bypassAlphaOrdering := netChangeState.inBypassWindow(bypassWindow)
 
 	for _, peer := range peers {
 		if peer.Name == myName {
@@ -875,9 +934,14 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 
 		// Only initiate outbound connection if our name is lexicographically lower
 		// This prevents both sides from connecting simultaneously and creating duplicate tunnels
-		if myName > peer.Name {
+		// Exception: after a network change, bypass this rule temporarily for faster reconnection
+		if myName > peer.Name && !bypassAlphaOrdering {
 			log.Debug().Str("peer", peer.Name).Msg("waiting for peer to initiate connection")
 			continue
+		}
+
+		if bypassAlphaOrdering {
+			log.Debug().Str("peer", peer.Name).Msg("bypassing alpha ordering due to recent network change")
 		}
 
 		// Try to establish tunnel
@@ -888,7 +952,8 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 // networkChangeLoop handles network interface change events
 func networkChangeLoop(ctx context.Context, events <-chan netmon.Event,
 	client *coord.Client, cfg *config.PeerConfig, pubKeyEncoded string,
-	meshCIDR string, tunnelMgr *TunnelAdapter, triggerDiscovery chan<- struct{}) {
+	meshCIDR string, tunnelMgr *TunnelAdapter, triggerDiscovery chan<- struct{},
+	netChangeState *networkChangeState) {
 
 	for {
 		select {
@@ -926,6 +991,9 @@ func networkChangeLoop(ctx context.Context, events <-chan netmon.Event,
 			// Close all existing tunnels (they may be using stale IPs)
 			tunnelMgr.CloseAll()
 			log.Debug().Msg("closed stale tunnels after network change")
+
+			// Record network change time for bypass window
+			netChangeState.recordChange()
 
 			// Trigger immediate peer discovery
 			select {
@@ -993,7 +1061,10 @@ func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshCli
 		log.Info().Str("peer", peer.Name).Msg("relay tunnel established")
 
 		// Handle incoming packets from this tunnel
-		go forwarder.HandleTunnel(ctx, peer.Name, relayTunnel)
+		go func(name string) {
+			forwarder.HandleTunnel(ctx, name, relayTunnel)
+			tunnelMgr.Remove(name)
+		}(peer.Name)
 		return
 
 	case negotiate.StrategyDirect:
@@ -1025,7 +1096,10 @@ func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshCli
 		log.Info().Str("peer", peer.Name).Msg("tunnel established")
 
 		// Handle incoming packets from this tunnel
-		go forwarder.HandleTunnel(ctx, peer.Name, tun)
+		go func(name string) {
+			forwarder.HandleTunnel(ctx, name, tun)
+			tunnelMgr.Remove(name)
+		}(peer.Name)
 	}
 }
 
