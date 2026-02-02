@@ -109,14 +109,24 @@ func (p *PersistentRelay) Connect(ctx context.Context) error {
 
 // readLoop reads messages from the server and dispatches them.
 func (p *PersistentRelay) readLoop() {
+	shouldReconnect := false
+
 	defer func() {
 		p.mu.Lock()
 		p.connected = false
 		if p.conn != nil {
 			p.conn.Close()
+			p.conn = nil
 		}
+		closed := p.closed
 		p.mu.Unlock()
+
 		log.Debug().Msg("persistent relay read loop exited")
+
+		// Auto-reconnect if not explicitly closed
+		if shouldReconnect && !closed {
+			go p.autoReconnect()
+		}
 	}()
 
 	for {
@@ -136,14 +146,65 @@ func (p *PersistentRelay) readLoop() {
 				return
 			}
 			p.mu.RLock()
-			if !p.closed {
-				log.Debug().Err(err).Msg("persistent relay read error")
-			}
+			wasClosed := p.closed
 			p.mu.RUnlock()
+			if !wasClosed {
+				log.Debug().Err(err).Msg("persistent relay read error")
+				shouldReconnect = true
+			}
 			return
 		}
 
 		p.handleMessage(data)
+	}
+}
+
+// autoReconnect attempts to reconnect with exponential backoff.
+func (p *PersistentRelay) autoReconnect() {
+	backoff := time.Second
+	maxBackoff := 30 * time.Second
+
+	for attempt := 1; ; attempt++ {
+		p.mu.RLock()
+		closed := p.closed
+		p.mu.RUnlock()
+
+		if closed {
+			return
+		}
+
+		log.Info().Int("attempt", attempt).Dur("backoff", backoff).Msg("attempting relay reconnection")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := p.Connect(ctx)
+		cancel()
+
+		if err == nil {
+			log.Info().Int("attempt", attempt).Msg("relay reconnected successfully")
+			return
+		}
+
+		log.Warn().Err(err).Int("attempt", attempt).Msg("relay reconnection failed")
+
+		// Wait before next attempt
+		p.mu.RLock()
+		closed = p.closed
+		p.mu.RUnlock()
+		if closed {
+			return
+		}
+
+		select {
+		case <-p.closedChan:
+			return
+		case <-time.After(backoff):
+		}
+
+		// Exponential backoff
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
 }
 

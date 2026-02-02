@@ -281,9 +281,11 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 }
 
 // ReconnectPersistentRelay reconnects the persistent relay after a network change.
+// It retries with exponential backoff until successful or context is cancelled.
 func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
 	if m.PersistentRelay != nil {
 		m.PersistentRelay.Close()
+		m.PersistentRelay = nil
 	}
 
 	// Small delay to let network settle
@@ -293,9 +295,39 @@ func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
 	case <-time.After(500 * time.Millisecond):
 	}
 
-	if err := m.ConnectPersistentRelay(ctx); err != nil {
-		log.Warn().Err(err).Msg("failed to reconnect persistent relay after network change")
+	backoff := time.Second
+	maxBackoff := 30 * time.Second
+	maxAttempts := 10
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		err := m.ConnectPersistentRelay(ctx)
+		if err == nil {
+			log.Info().Int("attempt", attempt).Msg("persistent relay reconnected after network change")
+			return
+		}
+
+		log.Warn().Err(err).Int("attempt", attempt).Msg("failed to reconnect persistent relay")
+
+		if attempt < maxAttempts {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
 	}
+
+	log.Error().Msg("gave up reconnecting persistent relay after max attempts")
 }
 
 // IsPersistentRelayConnected returns true if the persistent relay is connected.
