@@ -828,8 +828,11 @@ func (t *Transport) getPeerEndpoint(ctx context.Context, peerName string) (strin
 		return endpoint.ExternalAddr4, nil
 	}
 
-	// Use IPv6 if we have an IPv6 socket and peer has IPv6
-	if t.conn6 != nil && endpoint.ExternalAddr6 != "" {
+	// Use IPv6 if we have an IPv6 socket, successfully registered our IPv6, and peer has IPv6
+	t.mu.RLock()
+	haveIPv6External := t.externalAddr6 != ""
+	t.mu.RUnlock()
+	if t.conn6 != nil && haveIPv6External && endpoint.ExternalAddr6 != "" {
 		log.Debug().
 			Str("peer", peerName).
 			Str("addr", endpoint.ExternalAddr6).
@@ -841,7 +844,7 @@ func (t *Transport) getPeerEndpoint(ctx context.Context, peerName string) (strin
 	if endpoint.ExternalAddr4 != "" && t.conn != nil {
 		return endpoint.ExternalAddr4, nil
 	}
-	if endpoint.ExternalAddr6 != "" && t.conn6 != nil {
+	if endpoint.ExternalAddr6 != "" && t.conn6 != nil && haveIPv6External {
 		return endpoint.ExternalAddr6, nil
 	}
 	if endpoint.ExternalAddr != "" {
