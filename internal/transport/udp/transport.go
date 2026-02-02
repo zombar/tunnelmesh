@@ -254,12 +254,13 @@ func (t *Transport) receiveLoop(conn *net.UDPConn) {
 		packet := make([]byte, n)
 		copy(packet, buf[:n])
 
-		go t.handlePacket(packet, remoteAddr)
+		go t.handlePacket(packet, remoteAddr, conn)
 	}
 }
 
 // handlePacket processes a single incoming packet.
-func (t *Transport) handlePacket(data []byte, remoteAddr *net.UDPAddr) {
+// The conn parameter is the socket the packet was received on.
+func (t *Transport) handlePacket(data []byte, remoteAddr *net.UDPAddr, conn *net.UDPConn) {
 	if len(data) < 1 {
 		return
 	}
@@ -270,7 +271,7 @@ func (t *Transport) handlePacket(data []byte, remoteAddr *net.UDPAddr) {
 	switch packetType {
 	case PacketTypeHandshakeInit:
 		// Handshake packets have 1-byte type prefix + handshake message
-		t.handleHandshakeInit(data[1:], remoteAddr)
+		t.handleHandshakeInit(data[1:], remoteAddr, conn)
 	case PacketTypeHandshakeResponse:
 		t.handleHandshakeResponse(data[1:], remoteAddr)
 	case PacketTypeData, PacketTypeKeepalive:
@@ -323,7 +324,8 @@ func (t *Transport) handleKeepalive(header *PacketHeader, remoteAddr *net.UDPAdd
 }
 
 // handleHandshakeInit processes an incoming handshake initiation.
-func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr) {
+// The conn parameter is the socket the init was received on, used for responding.
+func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, conn *net.UDPConn) {
 	if len(data) < 128 {
 		return
 	}
@@ -353,7 +355,8 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr) {
 	packet[0] = PacketTypeHandshakeResponse
 	copy(packet[1:], response)
 
-	if _, err := t.conn.WriteToUDP(packet, remoteAddr); err != nil {
+	// Respond on the same socket that received the init
+	if _, err := conn.WriteToUDP(packet, remoteAddr); err != nil {
 		log.Debug().Err(err).Msg("failed to send response")
 		return
 	}
@@ -386,13 +389,13 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr) {
 		return
 	}
 
-	// Create session
+	// Create session using the same socket that received the handshake
 	session := NewSession(SessionConfig{
 		LocalIndex: hs.LocalIndex(),
 		PeerName:   peerName,
 		PeerPublic: peerPubKey,
 		RemoteAddr: remoteAddr,
-		Conn:       t.conn,
+		Conn:       conn,
 	})
 	session.SetCrypto(crypto, hs.RemoteIndex())
 
