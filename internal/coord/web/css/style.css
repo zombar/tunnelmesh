@@ -284,25 +284,29 @@ td {
 }
 
 footer {
-    text-align: center;
-    padding: 2rem 1rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 1.5rem 1rem;
     color: #8b949e;
-    font-size: 0.75rem;
+    font-size: 0.875rem;
     border-top: 1px solid #21262d;
 }
 
-footer a {
+.footer-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
     color: #58a6ff;
     text-decoration: none;
 }
 
-footer a:hover {
+.footer-link:hover {
     text-decoration: underline;
 }
 
-footer .github-logo {
-    vertical-align: middle;
-    margin-right: 0.25rem;
+.footer-link .github-logo {
+    flex-shrink: 0;
 }
 
 @media (max-width: 768px) {
