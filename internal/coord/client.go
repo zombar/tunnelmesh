@@ -35,7 +35,7 @@ func NewClient(baseURL, authToken string) *Client {
 }
 
 // Register registers this peer with the coordination server.
-func (c *Client) Register(name, publicKey string, publicIPs, privateIPs []string, sshPort, udpPort int, behindNAT bool) (*proto.RegisterResponse, error) {
+func (c *Client) Register(name, publicKey string, publicIPs, privateIPs []string, sshPort, udpPort int, behindNAT bool, version string) (*proto.RegisterResponse, error) {
 	req := proto.RegisterRequest{
 		Name:       name,
 		PublicKey:  publicKey,
@@ -44,6 +44,7 @@ func (c *Client) Register(name, publicKey string, publicIPs, privateIPs []string
 		SSHPort:    sshPort,
 		UDPPort:    udpPort,
 		BehindNAT:  behindNAT,
+		Version:    version,
 	}
 
 	body, err := json.Marshal(req)

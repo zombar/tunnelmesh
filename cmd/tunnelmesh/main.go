@@ -239,6 +239,7 @@ func runServeFromService(ctx context.Context, configPath string) error {
 	if err != nil {
 		return fmt.Errorf("create server: %w", err)
 	}
+	srv.SetVersion(Version)
 
 	log.Info().
 		Str("listen", cfg.Listen).
@@ -354,6 +355,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("create server: %w", err)
 	}
+	srv.SetVersion(Version)
 
 	// Create context for shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -500,7 +502,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 
 	// UDP port is SSH port + 1
 	udpPort := cfg.SSHPort + 1
-	resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT)
+	resp, err := client.Register(cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version)
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}
@@ -537,7 +539,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	}
 
 	// Create peer identity and mesh node
-	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, udpPort, resp)
+	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, udpPort, Version, resp)
 	node := peer.NewMeshNode(identity, client)
 
 	// Set up forwarder with node's tunnel manager and router

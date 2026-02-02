@@ -27,7 +27,7 @@ func TestClient_Register(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register
-	resp, err := client.Register("mynode", "SHA256:abc123", []string{"1.2.3.4"}, []string{"192.168.1.1"}, 2222, 0, false)
+	resp, err := client.Register("mynode", "SHA256:abc123", []string{"1.2.3.4"}, []string{"192.168.1.1"}, 2222, 0, false, "v1.0.0")
 	require.NoError(t, err)
 
 	assert.Equal(t, "10.99.0.1", resp.MeshIP)
@@ -51,7 +51,7 @@ func TestClient_ListPeers(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register a peer
-	_, err = client.Register("node1", "SHA256:key1", nil, nil, 2222, 0, false)
+	_, err = client.Register("node1", "SHA256:key1", nil, nil, 2222, 0, false, "v1.0.0")
 	require.NoError(t, err)
 
 	// List peers
@@ -78,7 +78,7 @@ func TestClient_Heartbeat(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register first
-	_, err = client.Register("mynode", "SHA256:key", nil, nil, 2222, 0, false)
+	_, err = client.Register("mynode", "SHA256:key", nil, nil, 2222, 0, false, "v1.0.0")
 	require.NoError(t, err)
 
 	// Heartbeat
@@ -122,7 +122,7 @@ func TestClient_Deregister(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register first
-	_, err = client.Register("mynode", "SHA256:key", nil, nil, 2222, 0, false)
+	_, err = client.Register("mynode", "SHA256:key", nil, nil, 2222, 0, false, "v1.0.0")
 	require.NoError(t, err)
 
 	// Verify registered
@@ -154,9 +154,9 @@ func TestClient_GetDNSRecords(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register peers
-	_, err = client.Register("node1", "SHA256:key1", nil, nil, 2222, 0, false)
+	_, err = client.Register("node1", "SHA256:key1", nil, nil, 2222, 0, false, "v1.0.0")
 	require.NoError(t, err)
-	_, err = client.Register("node2", "SHA256:key2", nil, nil, 2222, 0, false)
+	_, err = client.Register("node2", "SHA256:key2", nil, nil, 2222, 0, false, "v1.0.0")
 	require.NoError(t, err)
 
 	// Get DNS records

@@ -44,6 +44,7 @@ type Server struct {
 	serverStats serverStats
 	relay       *relayManager
 	holePunch   *holePunchManager
+	version     string // Server version for admin display
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -133,6 +134,11 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 
 	srv.setupRoutes()
 	return srv, nil
+}
+
+// SetVersion sets the server version for admin display.
+func (s *Server) SetVersion(version string) {
+	s.version = version
 }
 
 func (s *Server) setupRoutes() {
@@ -233,6 +239,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		LastSeen:    time.Now(),
 		Connectable: len(req.PublicIPs) > 0 && !req.BehindNAT,
 		BehindNAT:   req.BehindNAT,
+		Version:     req.Version,
 	}
 
 	s.peers[req.Name] = &peerInfo{

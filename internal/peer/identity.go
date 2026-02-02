@@ -16,11 +16,12 @@ type PeerIdentity struct {
 	MeshCIDR      string
 	MeshIP        string
 	Domain        string
+	Version       string
 	Config        *config.PeerConfig
 }
 
 // NewPeerIdentity creates a PeerIdentity from config and registration response.
-func NewPeerIdentity(cfg *config.PeerConfig, pubKeyEncoded string, udpPort int, resp *proto.RegisterResponse) *PeerIdentity {
+func NewPeerIdentity(cfg *config.PeerConfig, pubKeyEncoded string, udpPort int, version string, resp *proto.RegisterResponse) *PeerIdentity {
 	return &PeerIdentity{
 		Name:          cfg.Name,
 		PubKeyEncoded: pubKeyEncoded,
@@ -29,6 +30,7 @@ func NewPeerIdentity(cfg *config.PeerConfig, pubKeyEncoded string, udpPort int, 
 		MeshCIDR:      resp.MeshCIDR,
 		MeshIP:        resp.MeshIP,
 		Domain:        resp.Domain,
+		Version:       version,
 		Config:        cfg,
 	}
 }

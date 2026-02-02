@@ -66,7 +66,7 @@ func (m *MeshNode) PerformHeartbeat(ctx context.Context) {
 			// Re-register with server
 			if _, err := m.client.Register(
 				m.identity.Name, m.identity.PubKeyEncoded,
-				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT,
+				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version,
 			); err != nil {
 				log.Error().Err(err).Msg("failed to re-register after IP change")
 			} else {
@@ -132,7 +132,7 @@ func (m *MeshNode) handleHeartbeatError(err error, publicIPs, privateIPs []strin
 		nat := behindNAT
 		if _, regErr := m.client.Register(
 			m.identity.Name, m.identity.PubKeyEncoded,
-			ips, privIPs, m.identity.SSHPort, m.identity.UDPPort, nat,
+			ips, privIPs, m.identity.SSHPort, m.identity.UDPPort, nat, m.identity.Version,
 		); regErr != nil {
 			log.Error().Err(regErr).Msg("failed to re-register")
 		} else {

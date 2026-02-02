@@ -21,7 +21,7 @@ func TestNewPeerIdentity(t *testing.T) {
 		Domain:   ".tunnelmesh",
 	}
 
-	identity := NewPeerIdentity(cfg, pubKeyEncoded, 2223, resp)
+	identity := NewPeerIdentity(cfg, pubKeyEncoded, 2223, "v1.0.0", resp)
 
 	require.NotNil(t, identity)
 	assert.Equal(t, "test-node", identity.Name)
@@ -31,6 +31,7 @@ func TestNewPeerIdentity(t *testing.T) {
 	assert.Equal(t, "10.99.0.1", identity.MeshIP)
 	assert.Equal(t, "10.99.0.0/16", identity.MeshCIDR)
 	assert.Equal(t, ".tunnelmesh", identity.Domain)
+	assert.Equal(t, "v1.0.0", identity.Version)
 	assert.Same(t, cfg, identity.Config)
 }
 

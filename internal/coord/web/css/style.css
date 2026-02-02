@@ -300,6 +300,11 @@ footer a:hover {
     text-decoration: underline;
 }
 
+footer .github-logo {
+    vertical-align: middle;
+    margin-right: 0.25rem;
+}
+
 @media (max-width: 768px) {
     header {
         flex-direction: column;

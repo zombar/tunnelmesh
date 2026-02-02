@@ -17,6 +17,7 @@ import (
 // AdminOverview is the response for the admin overview endpoint.
 type AdminOverview struct {
 	ServerUptime    string          `json:"server_uptime"`
+	ServerVersion   string          `json:"server_version"`
 	TotalPeers      int             `json:"total_peers"`
 	OnlinePeers     int             `json:"online_peers"`
 	TotalHeartbeats uint64          `json:"total_heartbeats"`
@@ -47,6 +48,7 @@ type AdminPeerInfo struct {
 	PacketsSentRate     float64          `json:"packets_sent_rate"`
 	PacketsReceivedRate float64          `json:"packets_received_rate"`
 	PreferredTransport  string           `json:"preferred_transport"`
+	Version             string           `json:"version,omitempty"`
 }
 
 // handleAdminOverview returns the admin overview data.
@@ -64,6 +66,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 
 	overview := AdminOverview{
 		ServerUptime:    time.Since(s.serverStats.startTime).Round(time.Second).String(),
+		ServerVersion:   s.version,
 		TotalPeers:      len(s.peers),
 		TotalHeartbeats: s.serverStats.totalHeartbeats,
 		MeshCIDR:        s.cfg.MeshCIDR,
@@ -97,6 +100,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			HeartbeatCount:     info.heartbeatCount,
 			Stats:              info.stats,
 			PreferredTransport: preferredTransport,
+			Version:            info.peer.Version,
 		}
 
 		// Get UDP endpoint addresses if available
