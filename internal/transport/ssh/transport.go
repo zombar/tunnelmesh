@@ -256,6 +256,7 @@ func (l *Listener) Accept(ctx context.Context) (transport.Connection, error) {
 
 				return &Connection{
 					channel:    channel,
+					sshServer:  sshConn.Conn, // Keep reference to prevent GC from closing connection
 					peerName:   peerName,
 					localAddr:  r.conn.LocalAddr(),
 					remoteAddr: r.conn.RemoteAddr(),
@@ -278,7 +279,8 @@ func (l *Listener) Close() error {
 // Connection wraps an SSH channel as a transport.Connection.
 type Connection struct {
 	channel    gossh.Channel
-	sshClient  *gossh.Client // Nil for incoming connections
+	sshClient  *gossh.Client     // For outgoing connections - prevents GC
+	sshServer  *gossh.ServerConn // For incoming connections - prevents GC
 	peerName   string
 	localAddr  net.Addr
 	remoteAddr net.Addr
@@ -306,6 +308,11 @@ func (c *Connection) Close() error {
 	if c.sshClient != nil {
 		if clientErr := c.sshClient.Close(); clientErr != nil && err == nil {
 			err = clientErr
+		}
+	}
+	if c.sshServer != nil {
+		if serverErr := c.sshServer.Close(); serverErr != nil && err == nil {
+			err = serverErr
 		}
 	}
 	return err

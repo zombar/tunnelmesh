@@ -661,13 +661,13 @@ func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peer
 		return nil, err
 	}
 
-	// Create session
+	// Create session using the same socket used for handshake
 	session := NewSession(SessionConfig{
 		LocalIndex: hs.LocalIndex(),
 		PeerName:   peerName,
 		PeerPublic: peerPublic,
 		RemoteAddr: peerAddr,
-		Conn:       t.conn,
+		Conn:       conn,
 	})
 	session.SetCrypto(crypto, hs.RemoteIndex())
 
