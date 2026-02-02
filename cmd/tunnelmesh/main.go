@@ -636,7 +636,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	go peerDiscoveryLoop(ctx, client, cfg.Name, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, triggerDiscovery, netChangeState)
 
 	// Start heartbeat loop
-	go heartbeatLoop(ctx, client, cfg.Name, pubKeyEncoded, cfg.SSHPort, resp.MeshCIDR, resolver, forwarder, tunnelMgr)
+	go heartbeatLoop(ctx, client, cfg.Name, pubKeyEncoded, cfg.SSHPort, resp.MeshCIDR, resolver, forwarder, tunnelMgr, triggerDiscovery)
 
 	// Wait for context cancellation (shutdown signal)
 	<-ctx.Done()
@@ -1379,7 +1379,8 @@ func loadConfig() (*config.PeerConfig, error) {
 }
 
 func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncoded string,
-	sshPort int, meshCIDR string, resolver *meshdns.Resolver, forwarder *routing.Forwarder, tunnelMgr *TunnelAdapter) {
+	sshPort int, meshCIDR string, resolver *meshdns.Resolver, forwarder *routing.Forwarder,
+	tunnelMgr *TunnelAdapter, triggerDiscovery chan<- struct{}) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -1405,8 +1406,12 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncode
 					Strs("new_private", privateIPs).
 					Msg("IP addresses changed, re-registering...")
 
-				// Close stale connections from the old network
+				// Close stale HTTP connections from the old network
 				client.CloseIdleConnections()
+
+				// Close all existing tunnels (they're using stale network paths)
+				tunnelMgr.CloseAll()
+				log.Debug().Msg("closed stale tunnels due to IP change")
 
 				if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort, behindNAT); regErr != nil {
 					log.Error().Err(regErr).Msg("failed to re-register after IP change")
@@ -1415,6 +1420,14 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncode
 					lastPublicIPs = publicIPs
 					lastPrivateIPs = privateIPs
 					lastBehindNAT = behindNAT
+
+					// Trigger discovery to establish new tunnels
+					select {
+					case triggerDiscovery <- struct{}{}:
+						log.Debug().Msg("triggered discovery after IP change")
+					default:
+						// Discovery already pending
+					}
 				}
 			} else if lastPublicIPs == nil {
 				// First heartbeat - just record the IPs
