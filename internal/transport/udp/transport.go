@@ -86,6 +86,10 @@ type Config struct {
 	// HolePunchTimeout for NAT traversal
 	HolePunchTimeout time.Duration
 
+	// PeerResolver looks up peer name from their X25519 public key
+	// Returns empty string if peer is unknown
+	PeerResolver func(pubKey [32]byte) string
+
 	// HolePunchRetries is the number of hole-punch attempts
 	HolePunchRetries int
 }
@@ -308,10 +312,26 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr) {
 		return
 	}
 
+	// Look up peer name from public key
+	peerPubKey := hs.PeerStaticPublic()
+	peerName := ""
+	if t.config.PeerResolver != nil {
+		peerName = t.config.PeerResolver(peerPubKey)
+	}
+	if peerName == "" {
+		// If we can't identify the peer, log and return
+		log.Debug().
+			Hex("peer_pubkey", peerPubKey[:8]).
+			Str("remote", remoteAddr.String()).
+			Msg("unknown peer public key, rejecting connection")
+		return
+	}
+
 	// Create session
 	session := NewSession(SessionConfig{
 		LocalIndex: hs.LocalIndex(),
-		PeerPublic: hs.PeerStaticPublic(),
+		PeerName:   peerName,
+		PeerPublic: peerPubKey,
 		RemoteAddr: remoteAddr,
 		Conn:       t.conn,
 	})
@@ -319,12 +339,28 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr) {
 
 	t.mu.Lock()
 	t.sessions[session.LocalIndex()] = session
+	t.peerSessions[peerName] = session
 	t.mu.Unlock()
 
 	log.Debug().
 		Str("remote", remoteAddr.String()).
+		Str("peer", peerName).
 		Uint32("local_index", session.LocalIndex()).
 		Msg("incoming handshake completed")
+
+	// Push connection to listener if active
+	if t.listener != nil && !t.listener.closed.Load() {
+		conn := &Connection{
+			session: session,
+			readBuf: new(bytes.Buffer),
+		}
+		select {
+		case t.listener.acceptCh <- conn:
+			log.Debug().Str("peer", peerName).Msg("incoming connection queued for accept")
+		default:
+			log.Warn().Str("peer", peerName).Msg("listener accept channel full, dropping connection")
+		}
+	}
 }
 
 // handleHandshakeResponse processes an incoming handshake response.

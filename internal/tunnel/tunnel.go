@@ -25,6 +25,30 @@ type TunnelConnection interface {
 	PeerName() string
 }
 
+// TransportConn is a minimal interface for transport connections.
+type TransportConn interface {
+	Read(p []byte) (int, error)
+	Write(p []byte) (int, error)
+	Close() error
+	PeerName() string
+}
+
+// TransportTunnel wraps a transport connection as a TunnelConnection.
+type TransportTunnel struct {
+	conn     TransportConn
+	peerName string
+	mu       sync.Mutex
+	closed   bool
+}
+
+// NewTunnelFromTransport creates a tunnel from a transport connection.
+func NewTunnelFromTransport(conn TransportConn) *Tunnel {
+	return &Tunnel{
+		transportConn: conn,
+		peerName:      conn.PeerName(),
+	}
+}
+
 // SSHServer handles incoming SSH connections.
 type SSHServer struct {
 	config         *ssh.ServerConfig
@@ -164,13 +188,14 @@ func (c *SSHClient) hostKeyCallback() ssh.HostKeyCallback {
 	}
 }
 
-// Tunnel represents a bidirectional data tunnel over SSH.
+// Tunnel represents a bidirectional data tunnel over SSH or transport connection.
 type Tunnel struct {
-	channel   ssh.Channel
-	sshClient *ssh.Client // Keep reference to prevent GC from closing connection
-	peerName  string
-	mu        sync.Mutex
-	closed    bool
+	channel       ssh.Channel   // For SSH-based tunnels
+	transportConn TransportConn // For transport-based tunnels (UDP, etc.)
+	sshClient     *ssh.Client   // Keep reference to prevent GC from closing connection
+	peerName      string
+	mu            sync.Mutex
+	closed        bool
 }
 
 // NewTunnel creates a tunnel from an SSH channel.
@@ -193,11 +218,17 @@ func NewTunnelWithClient(channel ssh.Channel, peerName string, client *ssh.Clien
 
 // Read reads data from the tunnel.
 func (t *Tunnel) Read(p []byte) (int, error) {
+	if t.transportConn != nil {
+		return t.transportConn.Read(p)
+	}
 	return t.channel.Read(p)
 }
 
 // Write writes data to the tunnel.
 func (t *Tunnel) Write(p []byte) (int, error) {
+	if t.transportConn != nil {
+		return t.transportConn.Write(p)
+	}
 	return t.channel.Write(p)
 }
 
@@ -211,8 +242,18 @@ func (t *Tunnel) Close() error {
 	}
 	t.closed = true
 
-	// Close the channel first
-	err := t.channel.Close()
+	var err error
+
+	// Close transport connection if present
+	if t.transportConn != nil {
+		err = t.transportConn.Close()
+		return err
+	}
+
+	// Close the SSH channel
+	if t.channel != nil {
+		err = t.channel.Close()
+	}
 
 	// Close the SSH client if we own it
 	if t.sshClient != nil {

@@ -33,6 +33,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/tun"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
+	"golang.org/x/crypto/ssh"
 )
 
 var (
@@ -611,12 +612,53 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 				Bool("match", string(x25519Pub) == string(x25519FromEd)).
 				Msg("X25519 key derivation check")
 
+			// Create peer resolver for incoming UDP connections
+			peerResolver := func(x25519PubKey [32]byte) string {
+				peers, err := client.ListPeers()
+				if err != nil {
+					log.Debug().Err(err).Msg("failed to list peers for resolver")
+					return ""
+				}
+				for _, p := range peers {
+					if p.PublicKey == "" {
+						continue
+					}
+					// Parse the peer's SSH public key
+					sshPubKey, err := config.DecodePublicKey(p.PublicKey)
+					if err != nil {
+						continue
+					}
+					// Extract the crypto.PublicKey from the SSH public key
+					cryptoPubKey, ok := sshPubKey.(ssh.CryptoPublicKey)
+					if !ok {
+						continue
+					}
+					edPubKey, ok := cryptoPubKey.CryptoPublicKey().(ed25519.PublicKey)
+					if !ok {
+						continue
+					}
+					peerX25519, err := config.ED25519PublicToX25519(edPubKey)
+					if err != nil {
+						continue
+					}
+					if len(peerX25519) == 32 {
+						var peerKey [32]byte
+						copy(peerKey[:], peerX25519)
+						if peerKey == x25519PubKey {
+							return p.Name
+						}
+					}
+				}
+				return ""
+			}
+
 			udpTransport, err := udptransport.New(udptransport.Config{
 				Port:           cfg.SSHPort + 1, // Use SSH port + 1 for UDP
 				StaticPrivate:  privKey,
 				StaticPublic:   pubKey,
 				CoordServerURL: cfg.Server,
 				AuthToken:      cfg.AuthToken,
+				PeerResolver:   peerResolver,
 			})
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to create UDP transport, UDP disabled")
@@ -630,6 +672,14 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 						log.Warn().Err(err).Msg("failed to start UDP transport")
 					} else {
 						log.Info().Int("port", cfg.SSHPort+1).Msg("UDP transport started")
+						// Start listening for incoming UDP connections
+						udpListener, err := udpTransport.Listen(ctx, transport.ListenOptions{})
+						if err != nil {
+							log.Warn().Err(err).Msg("failed to create UDP listener")
+						} else {
+							go node.HandleIncomingUDP(ctx, udpListener)
+							log.Info().Int("port", cfg.SSHPort+1).Msg("UDP listener started")
+						}
 					}
 					// Register UDP endpoint with coordination server for hole-punching
 					if err := udpTransport.RegisterUDPEndpoint(ctx, cfg.Name); err != nil {
