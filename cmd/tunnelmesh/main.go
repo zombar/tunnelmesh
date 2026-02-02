@@ -651,12 +651,9 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	// Close all tunnels
 	tunnelMgr.CloseAll()
 
-	// Deregister
-	if err := client.Deregister(cfg.Name); err != nil {
-		log.Warn().Err(err).Msg("failed to deregister")
-	} else {
-		log.Info().Msg("deregistered from mesh")
-	}
+	// Don't deregister on shutdown - keep the peer record so we get the same
+	// mesh IP when we reconnect. Use 'tunnelmesh leave' for intentional removal.
+	log.Info().Msg("disconnected from mesh (peer record retained for sticky IP)")
 
 	if resolver != nil {
 		_ = resolver.Shutdown()
