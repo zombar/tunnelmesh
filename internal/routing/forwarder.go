@@ -237,6 +237,9 @@ func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) 
 	peerName, ok := f.router.Lookup(info.DstIP)
 	if !ok {
 		atomic.AddUint64(&f.stats.DroppedNoRoute, 1)
+		log.Debug().
+			Str("dst", info.DstIP.String()).
+			Msg("no route for destination")
 		return fmt.Errorf("no route for %s", info.DstIP)
 	}
 
@@ -244,8 +247,19 @@ func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) 
 	tunnel, ok := f.tunnels.Get(peerName)
 	if !ok {
 		atomic.AddUint64(&f.stats.DroppedNoTunnel, 1)
+		log.Debug().
+			Str("peer", peerName).
+			Str("dst", info.DstIP.String()).
+			Msg("no tunnel for peer")
 		return fmt.Errorf("no tunnel for peer %s", peerName)
 	}
+
+	log.Debug().
+		Str("src", info.SrcIP.String()).
+		Str("dst", info.DstIP.String()).
+		Str("peer", peerName).
+		Int("len", packetLen).
+		Msg("forwarding packet to tunnel")
 
 	// Zero-copy write: frame header is already in place
 	if err := f.writeFrameZeroCopy(tunnel, zcBuf, packetLen); err != nil {
@@ -256,12 +270,12 @@ func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) 
 	atomic.AddUint64(&f.stats.PacketsSent, 1)
 	atomic.AddUint64(&f.stats.BytesSent, uint64(packetLen))
 
-	log.Trace().
+	log.Debug().
 		Str("src", info.SrcIP.String()).
 		Str("dst", info.DstIP.String()).
 		Str("peer", peerName).
 		Int("len", packetLen).
-		Msg("forwarded packet (zero-copy)")
+		Msg("packet forwarded to tunnel")
 
 	return nil
 }
@@ -349,9 +363,11 @@ func (f *Forwarder) Run(ctx context.Context) error {
 
 		zcBuf.SetLength(n)
 
+		log.Debug().Int("len", n).Msg("read packet from TUN")
+
 		// Forward the packet using zero-copy path
 		if err := f.ForwardPacketZeroCopy(zcBuf, n); err != nil {
-			log.Debug().Err(err).Msg("forward packet failed")
+			log.Debug().Err(err).Int("len", n).Msg("forward packet failed")
 		}
 	}
 }
