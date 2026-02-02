@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 )
 
 // Protocol constants for IP packets.
@@ -19,16 +20,18 @@ const (
 type ipv4Key [4]byte
 
 // Router manages routes from mesh IPs to peer IDs.
+// Uses copy-on-write for lock-free reads in the hot path.
 type Router struct {
-	mu     sync.RWMutex
-	routes map[ipv4Key]string // Binary IPv4 -> peer ID
+	routes atomic.Pointer[map[ipv4Key]string] // Lock-free reads
+	mu     sync.Mutex                         // Serializes writes only
 }
 
 // NewRouter creates a new Router.
 func NewRouter() *Router {
-	return &Router{
-		routes: make(map[ipv4Key]string),
-	}
+	r := &Router{}
+	routes := make(map[ipv4Key]string)
+	r.routes.Store(&routes)
+	return r
 }
 
 // parseIPv4Key converts an IP string to a binary key.
@@ -57,6 +60,7 @@ func netIPToKey(ip net.IP) ipv4Key {
 }
 
 // AddRoute adds a route for an IP to a peer.
+// Uses copy-on-write: creates a new map with the addition.
 func (r *Router) AddRoute(ip string, peerID string) {
 	key, ok := parseIPv4Key(ip)
 	if !ok {
@@ -64,10 +68,19 @@ func (r *Router) AddRoute(ip string, peerID string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.routes[key] = peerID
+
+	// Copy-on-write: create new map with the addition
+	oldRoutes := r.routes.Load()
+	newRoutes := make(map[ipv4Key]string, len(*oldRoutes)+1)
+	for k, v := range *oldRoutes {
+		newRoutes[k] = v
+	}
+	newRoutes[key] = peerID
+	r.routes.Store(&newRoutes)
 }
 
 // RemoveRoute removes a route for an IP.
+// Uses copy-on-write: creates a new map without the route.
 func (r *Router) RemoveRoute(ip string) {
 	key, ok := parseIPv4Key(ip)
 	if !ok {
@@ -75,44 +88,59 @@ func (r *Router) RemoveRoute(ip string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.routes, key)
+
+	oldRoutes := r.routes.Load()
+	if _, exists := (*oldRoutes)[key]; !exists {
+		return // Nothing to remove
+	}
+
+	// Copy-on-write: create new map without the route
+	newRoutes := make(map[ipv4Key]string, len(*oldRoutes))
+	for k, v := range *oldRoutes {
+		if k != key {
+			newRoutes[k] = v
+		}
+	}
+	r.routes.Store(&newRoutes)
 }
 
 // Lookup finds the peer ID for a destination IP.
-// Uses binary key lookup to avoid string allocation.
+// Lock-free: uses atomic load for maximum throughput in hot path.
 func (r *Router) Lookup(ip net.IP) (string, bool) {
 	key := netIPToKey(ip)
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	peerID, ok := r.routes[key]
+	routes := r.routes.Load()
+	peerID, ok := (*routes)[key]
 	return peerID, ok
 }
 
 // Count returns the number of routes.
+// Lock-free: uses atomic load.
 func (r *Router) Count() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return len(r.routes)
+	routes := r.routes.Load()
+	return len(*routes)
 }
 
 // UpdateRoutes replaces all routes with a new set.
+// Atomically swaps in the new routing table.
 func (r *Router) UpdateRoutes(routes map[string]string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.routes = make(map[ipv4Key]string)
+
+	newRoutes := make(map[ipv4Key]string, len(routes))
 	for ip, peerID := range routes {
 		if key, ok := parseIPv4Key(ip); ok {
-			r.routes[key] = peerID
+			newRoutes[key] = peerID
 		}
 	}
+	r.routes.Store(&newRoutes)
 }
 
 // ListRoutes returns a copy of all routes.
+// Lock-free: uses atomic load.
 func (r *Router) ListRoutes() map[string]string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	result := make(map[string]string)
-	for key, peerID := range r.routes {
+	routes := r.routes.Load()
+	result := make(map[string]string, len(*routes))
+	for key, peerID := range *routes {
 		ip := net.IP(key[:]).String()
 		result[ip] = peerID
 	}

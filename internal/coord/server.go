@@ -17,12 +17,14 @@ import (
 
 // peerInfo wraps a peer with stats and metadata for admin UI.
 type peerInfo struct {
-	peer           *proto.Peer
-	stats          *proto.PeerStats
-	prevStats      *proto.PeerStats
-	heartbeatCount uint64
-	registeredAt   time.Time
-	lastStatsTime  time.Time
+	peer               *proto.Peer
+	stats              *proto.PeerStats
+	prevStats          *proto.PeerStats
+	heartbeatCount     uint64
+	registeredAt       time.Time
+	lastStatsTime      time.Time
+	preferredTransport string // "auto", "udp", "ssh", "relay"
+	reconnectRequested bool   // Flag to signal peer to reconnect
 }
 
 // serverStats tracks server-level statistics.

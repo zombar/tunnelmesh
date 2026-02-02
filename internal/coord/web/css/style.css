@@ -216,6 +216,59 @@ td {
     color: #8b949e;
 }
 
+/* Transport select dropdown */
+.transport-select {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #e6edf3;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    min-width: 70px;
+}
+
+.transport-select:hover {
+    border-color: #58a6ff;
+}
+
+.transport-select:focus {
+    outline: none;
+    border-color: #58a6ff;
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.3);
+}
+
+.transport-select:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Actions cell */
+.actions-cell {
+    white-space: nowrap;
+}
+
+.restart-btn {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #8b949e;
+    padding: 0.25rem 0.5rem;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.restart-btn:hover {
+    background: #30363d;
+    border-color: #58a6ff;
+    color: #58a6ff;
+}
+
+.restart-btn:active {
+    transform: scale(0.95);
+}
+
 footer {
     text-align: center;
     padding: 2rem 1rem;

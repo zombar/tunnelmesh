@@ -88,12 +88,22 @@ function updateDashboard(data) {
         noPeers.style.display = 'none';
         tbody.innerHTML = data.peers.map(peer => {
             const history = state.peerHistory[peer.name];
+            const peerNameEscaped = escapeHtml(peer.name);
+            const currentTransport = peer.preferred_transport || 'auto';
             return `
             <tr>
-                <td><strong>${escapeHtml(peer.name)}</strong></td>
+                <td><strong>${peerNameEscaped}</strong></td>
                 <td><code>${peer.mesh_ip}</code></td>
                 <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
                 <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
+                <td>
+                    <select class="transport-select" data-peer="${peerNameEscaped}" onchange="setTransport(this)">
+                        <option value="auto" ${currentTransport === 'auto' ? 'selected' : ''}>Auto</option>
+                        <option value="udp" ${currentTransport === 'udp' ? 'selected' : ''}>UDP</option>
+                        <option value="ssh" ${currentTransport === 'ssh' ? 'selected' : ''}>SSH</option>
+                        <option value="relay" ${currentTransport === 'relay' ? 'selected' : ''}>Relay</option>
+                    </select>
+                </td>
                 <td>${peer.stats?.active_tunnels ?? '-'}</td>
                 <td class="sparkline-cell">
                     ${createSparklineSVG(history.throughputTx, history.throughputRx)}
@@ -110,6 +120,9 @@ function updateDashboard(data) {
                     </div>
                 </td>
                 <td>${peer.stats?.errors ?? 0}</td>
+                <td class="actions-cell">
+                    <button class="restart-btn" onclick="restartConnection('${peerNameEscaped}')" title="Restart connection">&#x21bb;</button>
+                </td>
             </tr>
         `}).join('');
     }
@@ -191,6 +204,60 @@ function formatAdvertisedIPs(peer) {
     }
 
     return parts.length > 0 ? parts.join('<br>') : '<span class="no-ips">-</span>';
+}
+
+// Set transport preference for a peer
+async function setTransport(selectElement) {
+    const peerName = selectElement.dataset.peer;
+    const transport = selectElement.value;
+
+    selectElement.disabled = true;
+
+    try {
+        const resp = await fetch(`/admin/api/peers/${encodeURIComponent(peerName)}/transport`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ preferred: transport })
+        });
+
+        if (!resp.ok) {
+            const error = await resp.text();
+            throw new Error(error || `HTTP ${resp.status}`);
+        }
+
+        console.log(`Transport set to ${transport} for ${peerName}`);
+    } catch (err) {
+        console.error('Failed to set transport:', err);
+        alert(`Failed to set transport: ${err.message}`);
+        // Revert to previous selection on error
+        fetchData();
+    } finally {
+        selectElement.disabled = false;
+    }
+}
+
+// Restart connection for a peer
+async function restartConnection(peerName) {
+    if (!confirm(`Restart connection for ${peerName}?`)) {
+        return;
+    }
+
+    try {
+        const resp = await fetch(`/admin/api/peers/${encodeURIComponent(peerName)}/reconnect`, {
+            method: 'POST'
+        });
+
+        if (!resp.ok) {
+            const error = await resp.text();
+            throw new Error(error || `HTTP ${resp.status}`);
+        }
+
+        const result = await resp.json();
+        console.log(`Reconnect initiated for ${peerName}:`, result.message);
+    } catch (err) {
+        console.error('Failed to restart connection:', err);
+        alert(`Failed to restart connection: ${err.message}`);
+    }
 }
 
 // Initialize

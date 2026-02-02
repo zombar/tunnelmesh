@@ -1,0 +1,332 @@
+// Package ssh implements the SSH transport for tunnelmesh.
+package ssh
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"time"
+
+	"github.com/rs/zerolog/log"
+	gossh "golang.org/x/crypto/ssh"
+
+	"github.com/tunnelmesh/tunnelmesh/internal/transport"
+	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
+)
+
+// Transport implements the SSH transport.
+type Transport struct {
+	sshServer *tunnel.SSHServer
+	sshClient *tunnel.SSHClient
+	listener  net.Listener
+	closed    bool
+}
+
+// Config holds SSH transport configuration.
+type Config struct {
+	HostKey        gossh.Signer
+	ClientSigner   gossh.Signer
+	AuthorizedKeys []gossh.PublicKey
+	ListenPort     int
+}
+
+// New creates a new SSH transport.
+func New(cfg Config) (*Transport, error) {
+	if cfg.HostKey == nil {
+		return nil, fmt.Errorf("host key is required")
+	}
+	if cfg.ClientSigner == nil {
+		return nil, fmt.Errorf("client signer is required")
+	}
+
+	return &Transport{
+		sshServer: tunnel.NewSSHServer(cfg.HostKey, cfg.AuthorizedKeys),
+		sshClient: tunnel.NewSSHClient(cfg.ClientSigner, nil),
+	}, nil
+}
+
+// Type returns the transport type.
+func (t *Transport) Type() transport.TransportType {
+	return transport.TransportSSH
+}
+
+// Dial creates an outbound SSH connection to the peer.
+func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (transport.Connection, error) {
+	if opts.PeerInfo == nil {
+		return nil, fmt.Errorf("peer info is required")
+	}
+
+	// Determine address to connect to (prefer private IPs for lower latency)
+	addr := t.selectAddress(opts.PeerInfo)
+	if addr == "" {
+		return nil, fmt.Errorf("no connectable address for peer %s", opts.PeerName)
+	}
+
+	log.Debug().
+		Str("peer", opts.PeerName).
+		Str("addr", addr).
+		Msg("dialing SSH")
+
+	// Connect with timeout
+	dialCtx := ctx
+	if opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		dialCtx, cancel = context.WithTimeout(ctx, opts.Timeout)
+		defer cancel()
+	}
+
+	// SSH dial doesn't support context directly, so we use a goroutine
+	type result struct {
+		client *gossh.Client
+		err    error
+	}
+	ch := make(chan result, 1)
+
+	go func() {
+		client, err := t.sshClient.Connect(addr)
+		ch <- result{client, err}
+	}()
+
+	select {
+	case <-dialCtx.Done():
+		return nil, dialCtx.Err()
+	case r := <-ch:
+		if r.err != nil {
+			return nil, r.err
+		}
+
+		// Open the tunnelmesh data channel
+		channel, reqs, err := r.client.OpenChannel(tunnel.ChannelType, []byte(opts.PeerName))
+		if err != nil {
+			r.client.Close()
+			return nil, fmt.Errorf("open channel: %w", err)
+		}
+
+		// Discard channel requests
+		go gossh.DiscardRequests(reqs)
+
+		return &Connection{
+			channel:   channel,
+			sshClient: r.client,
+			peerName:  opts.PeerName,
+			localAddr: r.client.LocalAddr(),
+			remoteAddr: r.client.RemoteAddr(),
+		}, nil
+	}
+}
+
+// selectAddress chooses the best address to connect to.
+func (t *Transport) selectAddress(info *transport.PeerInfo) string {
+	port := info.SSHPort
+	if port == 0 {
+		port = 22
+	}
+
+	// Prefer private IPs (same LAN)
+	for _, ip := range info.PrivateIPs {
+		return net.JoinHostPort(ip, fmt.Sprint(port))
+	}
+
+	// Fall back to public IPs
+	for _, ip := range info.PublicIPs {
+		return net.JoinHostPort(ip, fmt.Sprint(port))
+	}
+
+	return ""
+}
+
+// Listen starts listening for incoming SSH connections.
+func (t *Transport) Listen(ctx context.Context, opts transport.ListenOptions) (transport.Listener, error) {
+	addr := opts.Address
+	if addr == "" {
+		addr = fmt.Sprintf(":%d", opts.Port)
+	}
+
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
+
+	t.listener = listener
+
+	return &Listener{
+		transport: t,
+		listener:  listener,
+	}, nil
+}
+
+// Probe tests if the peer is reachable via SSH.
+func (t *Transport) Probe(ctx context.Context, opts transport.ProbeOptions) (time.Duration, error) {
+	if opts.PeerInfo == nil {
+		return 0, fmt.Errorf("peer info is required")
+	}
+
+	addr := t.selectAddress(opts.PeerInfo)
+	if addr == "" {
+		return 0, fmt.Errorf("no connectable address")
+	}
+
+	// Simple TCP probe with timing
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return 0, err
+	}
+	latency := time.Since(start)
+	conn.Close()
+
+	return latency, nil
+}
+
+// AddAuthorizedKey adds a public key to the authorized keys.
+func (t *Transport) AddAuthorizedKey(key gossh.PublicKey) {
+	t.sshServer.AddAuthorizedKey(key)
+}
+
+// Close shuts down the transport.
+func (t *Transport) Close() error {
+	t.closed = true
+	if t.listener != nil {
+		return t.listener.Close()
+	}
+	return nil
+}
+
+// Listener implements the transport.Listener interface for SSH.
+type Listener struct {
+	transport *Transport
+	listener  net.Listener
+}
+
+// Accept waits for and returns the next connection.
+func (l *Listener) Accept(ctx context.Context) (transport.Connection, error) {
+	for {
+		// Accept with context support
+		type acceptResult struct {
+			conn net.Conn
+			err  error
+		}
+		ch := make(chan acceptResult, 1)
+
+		go func() {
+			conn, err := l.listener.Accept()
+			ch <- acceptResult{conn, err}
+		}()
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case r := <-ch:
+			if r.err != nil {
+				return nil, r.err
+			}
+
+			// Perform SSH handshake
+			sshConn, err := l.transport.sshServer.Accept(r.conn)
+			if err != nil {
+				log.Debug().Err(err).Msg("SSH handshake failed")
+				r.conn.Close()
+				continue // Try next connection
+			}
+
+			// Wait for channel
+			for newChannel := range sshConn.Channels {
+				if newChannel.ChannelType() != tunnel.ChannelType {
+					newChannel.Reject(gossh.UnknownChannelType, "unknown channel type")
+					continue
+				}
+
+				// Accept the channel
+				channel, reqs, err := newChannel.Accept()
+				if err != nil {
+					log.Debug().Err(err).Msg("failed to accept channel")
+					continue
+				}
+
+				// Discard channel requests
+				go gossh.DiscardRequests(reqs)
+
+				// Get peer name from channel extra data
+				peerName := string(newChannel.ExtraData())
+
+				return &Connection{
+					channel:    channel,
+					peerName:   peerName,
+					localAddr:  r.conn.LocalAddr(),
+					remoteAddr: r.conn.RemoteAddr(),
+				}, nil
+			}
+		}
+	}
+}
+
+// Addr returns the listener's network address.
+func (l *Listener) Addr() net.Addr {
+	return l.listener.Addr()
+}
+
+// Close stops listening.
+func (l *Listener) Close() error {
+	return l.listener.Close()
+}
+
+// Connection wraps an SSH channel as a transport.Connection.
+type Connection struct {
+	channel    gossh.Channel
+	sshClient  *gossh.Client // Nil for incoming connections
+	peerName   string
+	localAddr  net.Addr
+	remoteAddr net.Addr
+	closed     bool
+}
+
+// Read reads data from the connection.
+func (c *Connection) Read(p []byte) (int, error) {
+	return c.channel.Read(p)
+}
+
+// Write writes data to the connection.
+func (c *Connection) Write(p []byte) (int, error) {
+	return c.channel.Write(p)
+}
+
+// Close closes the connection.
+func (c *Connection) Close() error {
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+
+	err := c.channel.Close()
+	if c.sshClient != nil {
+		if clientErr := c.sshClient.Close(); clientErr != nil && err == nil {
+			err = clientErr
+		}
+	}
+	return err
+}
+
+// PeerName returns the peer name.
+func (c *Connection) PeerName() string {
+	return c.peerName
+}
+
+// Type returns the transport type.
+func (c *Connection) Type() transport.TransportType {
+	return transport.TransportSSH
+}
+
+// LocalAddr returns the local network address.
+func (c *Connection) LocalAddr() net.Addr {
+	return c.localAddr
+}
+
+// RemoteAddr returns the remote network address.
+func (c *Connection) RemoteAddr() net.Addr {
+	return c.remoteAddr
+}
