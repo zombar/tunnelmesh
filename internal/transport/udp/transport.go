@@ -148,17 +148,14 @@ func (t *Transport) Type() transport.TransportType {
 
 // selectSocketForPeer returns the appropriate socket for communicating with the peer.
 // Returns the IPv4 socket for IPv4 addresses, IPv6 socket for IPv6 addresses.
+// Returns nil if no suitable socket is available (e.g., no IPv6 socket for IPv6 peer).
 func (t *Transport) selectSocketForPeer(peerAddr *net.UDPAddr) *net.UDPConn {
 	if peerAddr.IP.To4() != nil {
 		// Peer is IPv4
 		return t.conn
 	}
-	// Peer is IPv6
-	if t.conn6 != nil {
-		return t.conn6
-	}
-	// Fall back to main connection if no IPv6 socket (might be dual-stack)
-	return t.conn
+	// Peer is IPv6 - must have IPv6 socket (IPv4 socket cannot reach IPv6 addresses)
+	return t.conn6
 }
 
 // Start starts the UDP transport (listening for incoming packets).
