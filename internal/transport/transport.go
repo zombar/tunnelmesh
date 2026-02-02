@@ -119,3 +119,11 @@ type TransportCapabilities struct {
 	ReliableDelivery bool
 	OrderedDelivery  bool
 }
+
+// NetworkStateResetter is an optional interface for transports that cache network state.
+// Transports implementing this interface can clear their cached state when network changes.
+type NetworkStateResetter interface {
+	// ClearNetworkState clears any cached network-related state such as
+	// STUN-discovered external addresses. Called after network changes.
+	ClearNetworkState()
+}

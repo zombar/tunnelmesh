@@ -162,3 +162,16 @@ func (r *Registry) Close() error {
 	}
 	return lastErr
 }
+
+// ClearNetworkState clears cached network state on all transports that support it.
+// This should be called after network changes to ensure fresh address discovery.
+func (r *Registry) ClearNetworkState() {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, t := range r.transports {
+		if resetter, ok := t.(NetworkStateResetter); ok {
+			resetter.ClearNetworkState()
+		}
+	}
+}

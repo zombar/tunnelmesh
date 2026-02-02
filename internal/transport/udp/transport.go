@@ -956,6 +956,21 @@ func (t *Transport) Close() error {
 	return nil
 }
 
+// ClearNetworkState clears cached network state such as STUN-discovered external addresses.
+// This should be called after network changes to ensure fresh address discovery.
+func (t *Transport) ClearNetworkState() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	log.Debug().
+		Str("old_ipv4", t.externalAddr).
+		Str("old_ipv6", t.externalAddr6).
+		Msg("clearing cached UDP external addresses")
+
+	t.externalAddr = ""
+	t.externalAddr6 = ""
+}
+
 // Connection wraps a UDP session as a transport.Connection.
 type Connection struct {
 	session *Session

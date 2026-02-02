@@ -108,6 +108,11 @@ func (m *MeshNode) PerformHeartbeat(ctx context.Context) {
 // HandleIPChange handles an IP address change by closing stale connections
 // and triggering discovery.
 func (m *MeshNode) HandleIPChange(publicIPs, privateIPs []string, behindNAT bool) {
+	// Clear cached network state in transports (e.g., STUN-discovered addresses)
+	if m.TransportRegistry != nil {
+		m.TransportRegistry.ClearNetworkState()
+	}
+
 	// Close stale HTTP connections
 	m.client.CloseIdleConnections()
 

@@ -30,6 +30,11 @@ func (m *MeshNode) HandleNetworkChange(event netmon.Event) {
 		Str("interface", event.Interface).
 		Msg("network change detected")
 
+	// Clear cached network state in transports (e.g., STUN-discovered addresses)
+	if m.TransportRegistry != nil {
+		m.TransportRegistry.ClearNetworkState()
+	}
+
 	// Get new IP addresses, excluding mesh network IPs
 	publicIPs, privateIPs, behindNAT := m.identity.GetLocalIPs()
 	log.Debug().
