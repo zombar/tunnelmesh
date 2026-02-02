@@ -212,3 +212,50 @@ func (c *Client) BaseURL() string {
 func (c *Client) CloseIdleConnections() {
 	c.client.CloseIdleConnections()
 }
+
+// CheckRelayRequests checks if any peers are waiting on relay for us.
+// Returns nil if the server doesn't support this endpoint (404).
+func (c *Client) CheckRelayRequests() ([]string, error) {
+	if c.jwtToken == "" {
+		return nil, nil // No JWT token yet, can't check relay status
+	}
+
+	resp, err := c.doRequestWithJWT(http.MethodGet, "/api/v1/relay-status", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil // Server doesn't support this endpoint
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.parseError(resp)
+	}
+
+	var result proto.RelayStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return result.RelayRequests, nil
+}
+
+// doRequestWithJWT makes an HTTP request with JWT authentication.
+func (c *Client) doRequestWithJWT(method, path string, body []byte) (*http.Response, error) {
+	var bodyReader io.Reader
+	if body != nil {
+		bodyReader = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequest(method, c.baseURL+path, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.jwtToken)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	return c.client.Do(req)
+}

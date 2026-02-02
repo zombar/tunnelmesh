@@ -65,6 +65,11 @@ type HeartbeatResponse struct {
 	RelayRequests []string `json:"relay_requests,omitempty"` // Peers waiting on relay for us
 }
 
+// RelayStatusResponse contains pending relay requests for a peer.
+type RelayStatusResponse struct {
+	RelayRequests []string `json:"relay_requests"`
+}
+
 // PeerListResponse contains the list of all mesh peers.
 type PeerListResponse struct {
 	Peers []Peer `json:"peers"`

@@ -83,7 +83,7 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 		cfg.Relay.Enabled = true
 	}
 	if cfg.Relay.PairTimeout == "" {
-		cfg.Relay.PairTimeout = "30s"
+		cfg.Relay.PairTimeout = "90s"
 	}
 
 	// Apply defaults to JoinMesh if configured

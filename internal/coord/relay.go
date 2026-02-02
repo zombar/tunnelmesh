@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
+	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
 // relayConn represents a peer's relay connection.
@@ -63,6 +65,45 @@ func (s *Server) setupRelayRoutes() {
 		s.relay = newRelayManager()
 	}
 	s.mux.HandleFunc("/api/v1/relay/", s.handleRelay)
+	s.mux.HandleFunc("/api/v1/relay-status", s.handleRelayStatus)
+}
+
+// handleRelayStatus returns pending relay requests for the authenticated peer.
+// This allows peers to poll for relay requests without waiting for the heartbeat interval.
+func (s *Server) handleRelayStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Authenticate via JWT
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
+		s.jsonError(w, "missing authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	parts := strings.SplitN(auth, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		s.jsonError(w, "invalid authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	claims, err := s.ValidateToken(parts[1])
+	if err != nil {
+		log.Debug().Err(err).Msg("relay-status auth failed")
+		s.jsonError(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	peerName := claims.PeerName
+
+	// Get pending relay requests for this peer
+	requests := s.relay.GetPendingRequestsFor(peerName)
+
+	resp := proto.RelayStatusResponse{RelayRequests: requests}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleRelay handles WebSocket relay connections.

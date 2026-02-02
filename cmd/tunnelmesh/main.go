@@ -886,9 +886,12 @@ fastLoop:
 			break fastLoop
 		case <-fastTicker.C:
 			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
+			// Also check for relay requests during fast phase to speed up relay pairing
+			checkAndHandleRelayRequests(ctx, client, tunnelMgr, forwarder)
 		case <-triggerDiscovery:
 			log.Debug().Msg("peer discovery triggered by network change")
 			discoverAndConnectPeers(ctx, client, myName, sshClient, negotiator, tunnelMgr, router, forwarder, sshServer, netChangeState)
+			checkAndHandleRelayRequests(ctx, client, tunnelMgr, forwarder)
 		}
 	}
 
@@ -959,6 +962,18 @@ func discoverAndConnectPeers(ctx context.Context, client *coord.Client, myName s
 		// For relay connections, both peers must connect to the relay server, so alpha ordering is bypassed.
 		go establishTunnel(ctx, peer, myName, sshClient, negotiator, tunnelMgr, forwarder, client, bypassAlphaOrdering)
 	}
+}
+
+// checkAndHandleRelayRequests polls for relay requests and connects to relay for waiting peers.
+// This is called during the fast discovery phase to speed up relay pairing.
+func checkAndHandleRelayRequests(ctx context.Context, client *coord.Client,
+	tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder) {
+	relayRequests, err := client.CheckRelayRequests()
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to check relay requests")
+		return
+	}
+	handleRelayRequests(ctx, relayRequests, client, tunnelMgr, forwarder)
 }
 
 // refreshAuthorizedKeys fetches peer keys from coordination server and adds them to SSH server.
@@ -1381,144 +1396,198 @@ func loadConfig() (*config.PeerConfig, error) {
 func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncoded string,
 	sshPort int, meshCIDR string, resolver *meshdns.Resolver, forwarder *routing.Forwarder,
 	tunnelMgr *TunnelAdapter, triggerDiscovery chan<- struct{}) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
 	// Track last known IPs to detect changes
 	var lastPublicIPs, lastPrivateIPs []string
 	var lastBehindNAT bool
+
+	// Shared heartbeat state
+	heartbeatState := &heartbeatState{
+		lastPublicIPs:  &lastPublicIPs,
+		lastPrivateIPs: &lastPrivateIPs,
+		lastBehindNAT:  &lastBehindNAT,
+	}
+
+	// Fast phase: 5-second interval for first 60 seconds
+	fastTicker := time.NewTicker(5 * time.Second)
+	fastPhaseEnd := time.After(60 * time.Second)
+
+fastLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			fastTicker.Stop()
+			return
+		case <-fastPhaseEnd:
+			fastTicker.Stop()
+			break fastLoop
+		case <-fastTicker.C:
+			performHeartbeat(ctx, client, name, pubKeyEncoded, sshPort, meshCIDR,
+				resolver, forwarder, tunnelMgr, triggerDiscovery, heartbeatState)
+		}
+	}
+
+	// Normal phase: 30-second interval
+	normalTicker := time.NewTicker(30 * time.Second)
+	defer normalTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			// Check if IPs have changed (network switch, ISP change, etc.)
-			publicIPs, privateIPs, behindNAT := proto.GetLocalIPsExcluding(meshCIDR)
-			ipsChanged := !slicesEqual(publicIPs, lastPublicIPs) || !slicesEqual(privateIPs, lastPrivateIPs) || behindNAT != lastBehindNAT
+		case <-normalTicker.C:
+			performHeartbeat(ctx, client, name, pubKeyEncoded, sshPort, meshCIDR,
+				resolver, forwarder, tunnelMgr, triggerDiscovery, heartbeatState)
+		}
+	}
+}
 
-			if ipsChanged && lastPublicIPs != nil {
-				// IPs changed - re-register to update the coordination server
-				log.Info().
-					Strs("old_public", lastPublicIPs).
-					Strs("new_public", publicIPs).
-					Strs("old_private", lastPrivateIPs).
-					Strs("new_private", privateIPs).
-					Msg("IP addresses changed, re-registering...")
+// heartbeatState tracks state between heartbeat ticks.
+type heartbeatState struct {
+	lastPublicIPs  *[]string
+	lastPrivateIPs *[]string
+	lastBehindNAT  *bool
+}
 
-				// Close stale HTTP connections from the old network
-				client.CloseIdleConnections()
+// performHeartbeat performs a single heartbeat tick.
+func performHeartbeat(ctx context.Context, client *coord.Client, name, pubKeyEncoded string,
+	sshPort int, meshCIDR string, resolver *meshdns.Resolver, forwarder *routing.Forwarder,
+	tunnelMgr *TunnelAdapter, triggerDiscovery chan<- struct{}, state *heartbeatState) {
 
-				// Close all existing tunnels (they're using stale network paths)
-				tunnelMgr.CloseAll()
-				log.Debug().Msg("closed stale tunnels due to IP change")
+	lastPublicIPs := *state.lastPublicIPs
+	lastPrivateIPs := *state.lastPrivateIPs
+	lastBehindNAT := *state.lastBehindNAT
+	// Check if IPs have changed (network switch, ISP change, etc.)
+	publicIPs, privateIPs, behindNAT := proto.GetLocalIPsExcluding(meshCIDR)
+	ipsChanged := !slicesEqual(publicIPs, lastPublicIPs) || !slicesEqual(privateIPs, lastPrivateIPs) || behindNAT != lastBehindNAT
 
-				if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort, behindNAT); regErr != nil {
-					log.Error().Err(regErr).Msg("failed to re-register after IP change")
-				} else {
-					log.Info().Msg("re-registered with new IP addresses")
-					lastPublicIPs = publicIPs
-					lastPrivateIPs = privateIPs
-					lastBehindNAT = behindNAT
+	if ipsChanged && lastPublicIPs != nil {
+		// IPs changed - re-register to update the coordination server
+		log.Info().
+			Strs("old_public", lastPublicIPs).
+			Strs("new_public", publicIPs).
+			Strs("old_private", lastPrivateIPs).
+			Strs("new_private", privateIPs).
+			Msg("IP addresses changed, re-registering...")
 
-					// Trigger discovery to establish new tunnels
-					select {
-					case triggerDiscovery <- struct{}{}:
-						log.Debug().Msg("triggered discovery after IP change")
-					default:
-						// Discovery already pending
-					}
-				}
-			} else if lastPublicIPs == nil {
-				// First heartbeat - just record the IPs
-				lastPublicIPs = publicIPs
-				lastPrivateIPs = privateIPs
-				lastBehindNAT = behindNAT
-			}
+		// Close stale HTTP connections from the old network
+		client.CloseIdleConnections()
 
-			// Collect stats from forwarder
-			var stats *proto.PeerStats
-			if forwarder != nil {
-				fwdStats := forwarder.Stats()
-				stats = &proto.PeerStats{
-					PacketsSent:     fwdStats.PacketsSent,
-					PacketsReceived: fwdStats.PacketsReceived,
-					BytesSent:       fwdStats.BytesSent,
-					BytesReceived:   fwdStats.BytesReceived,
-					DroppedNoRoute:  fwdStats.DroppedNoRoute,
-					DroppedNoTunnel: fwdStats.DroppedNoTunnel,
-					Errors:          fwdStats.Errors,
-					ActiveTunnels:   len(tunnelMgr.List()),
-				}
-			}
+		// Close all existing tunnels (they're using stale network paths)
+		tunnelMgr.CloseAll()
+		log.Debug().Msg("closed stale tunnels due to IP change")
 
-			heartbeatResp, err := client.HeartbeatWithStats(name, pubKeyEncoded, stats)
-			if err != nil {
-				if errors.Is(err, coord.ErrPeerNotFound) {
-					// Server restarted or peer was removed - re-register
-					log.Info().Msg("peer not found on server, re-registering...")
-					publicIPs, privateIPs, behindNAT := proto.GetLocalIPsExcluding(meshCIDR)
-					if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort, behindNAT); regErr != nil {
-						log.Error().Err(regErr).Msg("failed to re-register")
-					} else {
-						log.Info().Msg("re-registered with coordination server")
-						lastPublicIPs = publicIPs
-						lastPrivateIPs = privateIPs
-						lastBehindNAT = behindNAT
-					}
-				} else {
-					log.Warn().Err(err).Msg("heartbeat failed")
-				}
-				continue
-			}
+		if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort, behindNAT); regErr != nil {
+			log.Error().Err(regErr).Msg("failed to re-register after IP change")
+		} else {
+			log.Info().Msg("re-registered with new IP addresses")
+			*state.lastPublicIPs = publicIPs
+			*state.lastPrivateIPs = privateIPs
+			*state.lastBehindNAT = behindNAT
 
-			// Handle relay requests - other peers are waiting on relay for us
-			if len(heartbeatResp.RelayRequests) > 0 {
-				existingTunnels := tunnelMgr.List()
-				existingSet := make(map[string]bool)
-				for _, t := range existingTunnels {
-					existingSet[t] = true
-				}
-
-				for _, peerName := range heartbeatResp.RelayRequests {
-					// Skip if we already have a tunnel to this peer
-					if existingSet[peerName] {
-						continue
-					}
-
-					log.Info().Str("peer", peerName).Msg("peer is waiting on relay for us, connecting...")
-
-					jwtToken := client.JWTToken()
-					if jwtToken == "" {
-						log.Warn().Str("peer", peerName).Msg("no JWT token available for relay")
-						continue
-					}
-
-					// Connect to relay in a goroutine to not block heartbeat
-					go func(peer string) {
-						relayTunnel, err := tunnel.NewRelayTunnel(ctx, client.BaseURL(), peer, jwtToken)
-						if err != nil {
-							log.Warn().Err(err).Str("peer", peer).Msg("relay connection failed")
-							return
-						}
-
-						tunnelMgr.Add(peer, relayTunnel)
-						log.Info().Str("peer", peer).Msg("relay tunnel established via notification")
-
-						// Handle incoming packets from this tunnel
-						forwarder.HandleTunnel(ctx, peer, relayTunnel)
-						tunnelMgr.RemoveIfMatch(peer, relayTunnel)
-					}(peerName)
-				}
-			}
-
-			// Sync DNS records
-			if resolver != nil {
-				if err := syncDNS(client, resolver); err != nil {
-					log.Warn().Err(err).Msg("DNS sync failed")
-				}
+			// Trigger discovery to establish new tunnels
+			select {
+			case triggerDiscovery <- struct{}{}:
+				log.Debug().Msg("triggered discovery after IP change")
+			default:
+				// Discovery already pending
 			}
 		}
+	} else if lastPublicIPs == nil {
+		// First heartbeat - just record the IPs
+		*state.lastPublicIPs = publicIPs
+		*state.lastPrivateIPs = privateIPs
+		*state.lastBehindNAT = behindNAT
+	}
+
+	// Collect stats from forwarder
+	var stats *proto.PeerStats
+	if forwarder != nil {
+		fwdStats := forwarder.Stats()
+		stats = &proto.PeerStats{
+			PacketsSent:     fwdStats.PacketsSent,
+			PacketsReceived: fwdStats.PacketsReceived,
+			BytesSent:       fwdStats.BytesSent,
+			BytesReceived:   fwdStats.BytesReceived,
+			DroppedNoRoute:  fwdStats.DroppedNoRoute,
+			DroppedNoTunnel: fwdStats.DroppedNoTunnel,
+			Errors:          fwdStats.Errors,
+			ActiveTunnels:   len(tunnelMgr.List()),
+		}
+	}
+
+	heartbeatResp, err := client.HeartbeatWithStats(name, pubKeyEncoded, stats)
+	if err != nil {
+		if errors.Is(err, coord.ErrPeerNotFound) {
+			// Server restarted or peer was removed - re-register
+			log.Info().Msg("peer not found on server, re-registering...")
+			publicIPs, privateIPs, behindNAT := proto.GetLocalIPsExcluding(meshCIDR)
+			if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort, behindNAT); regErr != nil {
+				log.Error().Err(regErr).Msg("failed to re-register")
+			} else {
+				log.Info().Msg("re-registered with coordination server")
+				*state.lastPublicIPs = publicIPs
+				*state.lastPrivateIPs = privateIPs
+				*state.lastBehindNAT = behindNAT
+			}
+		} else {
+			log.Warn().Err(err).Msg("heartbeat failed")
+		}
+		return
+	}
+
+	// Handle relay requests - other peers are waiting on relay for us
+	handleRelayRequests(ctx, heartbeatResp.RelayRequests, client, tunnelMgr, forwarder)
+
+	// Sync DNS records
+	if resolver != nil {
+		if err := syncDNS(client, resolver); err != nil {
+			log.Warn().Err(err).Msg("DNS sync failed")
+		}
+	}
+}
+
+// handleRelayRequests connects to relay for peers that are waiting for us.
+func handleRelayRequests(ctx context.Context, relayRequests []string, client *coord.Client,
+	tunnelMgr *TunnelAdapter, forwarder *routing.Forwarder) {
+	if len(relayRequests) == 0 {
+		return
+	}
+
+	existingTunnels := tunnelMgr.List()
+	existingSet := make(map[string]bool)
+	for _, t := range existingTunnels {
+		existingSet[t] = true
+	}
+
+	for _, peerName := range relayRequests {
+		// Skip if we already have a tunnel to this peer
+		if existingSet[peerName] {
+			continue
+		}
+
+		log.Info().Str("peer", peerName).Msg("peer is waiting on relay for us, connecting...")
+
+		jwtToken := client.JWTToken()
+		if jwtToken == "" {
+			log.Warn().Str("peer", peerName).Msg("no JWT token available for relay")
+			continue
+		}
+
+		// Connect to relay in a goroutine to not block
+		go func(peer string) {
+			relayTunnel, err := tunnel.NewRelayTunnel(ctx, client.BaseURL(), peer, jwtToken)
+			if err != nil {
+				log.Warn().Err(err).Str("peer", peer).Msg("relay connection failed")
+				return
+			}
+
+			tunnelMgr.Add(peer, relayTunnel)
+			log.Info().Str("peer", peer).Msg("relay tunnel established via notification")
+
+			// Handle incoming packets from this tunnel
+			forwarder.HandleTunnel(ctx, peer, relayTunnel)
+			tunnelMgr.RemoveIfMatch(peer, relayTunnel)
+		}(peerName)
 	}
 }
 
