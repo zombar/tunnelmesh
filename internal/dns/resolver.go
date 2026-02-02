@@ -67,6 +67,10 @@ func (r *Resolver) UpdateRecords(records map[string]string) {
 	for hostname, ip := range records {
 		hostname = r.stripSuffix(hostname)
 		r.records[hostname] = ip
+		log.Debug().
+			Str("hostname", hostname).
+			Str("ip", ip).
+			Msg("DNS record synced")
 	}
 
 	log.Debug().

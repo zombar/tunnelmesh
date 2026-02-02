@@ -742,6 +742,27 @@ func (t *TunnelAdapter) Remove(name string) {
 	}
 }
 
+// RemoveIfMatch removes a tunnel only if the current tunnel for this peer matches
+// the provided tunnel. This prevents removing a replacement tunnel when the old
+// tunnel's handler goroutine exits.
+func (t *TunnelAdapter) RemoveIfMatch(name string, tun io.ReadWriteCloser) {
+	t.mu.Lock()
+	callback := t.onRemove
+	removed := false
+	if existing, ok := t.tunnels[name]; ok && existing == tun {
+		// Don't close - it's already closed (that's why we're here)
+		delete(t.tunnels, name)
+		log.Debug().Str("peer", name).Msg("tunnel removed")
+		removed = true
+	}
+	t.mu.Unlock()
+
+	// Only trigger reconnection if we actually removed the tunnel
+	if removed && callback != nil {
+		callback()
+	}
+}
+
 func (t *TunnelAdapter) CloseAll() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -826,10 +847,10 @@ func handleSSHConnection(ctx context.Context, conn net.Conn, sshServer *tunnel.S
 		log.Info().Str("peer", peerName).Msg("tunnel established from incoming connection")
 
 		// Handle incoming packets from this tunnel
-		go func(name string) {
-			forwarder.HandleTunnel(ctx, name, tun)
-			tunnelMgr.Remove(name)
-		}(peerName)
+		go func(name string, t io.ReadWriteCloser) {
+			forwarder.HandleTunnel(ctx, name, t)
+			tunnelMgr.RemoveIfMatch(name, t)
+		}(peerName, tun)
 	}
 }
 
@@ -1089,10 +1110,10 @@ func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshCli
 		log.Info().Str("peer", peer.Name).Msg("relay tunnel established")
 
 		// Handle incoming packets from this tunnel
-		go func(name string) {
-			forwarder.HandleTunnel(ctx, name, relayTunnel)
-			tunnelMgr.Remove(name)
-		}(peer.Name)
+		go func(name string, t io.ReadWriteCloser) {
+			forwarder.HandleTunnel(ctx, name, t)
+			tunnelMgr.RemoveIfMatch(name, t)
+		}(peer.Name, relayTunnel)
 		return
 
 	case negotiate.StrategyDirect:
@@ -1124,10 +1145,10 @@ func establishTunnel(ctx context.Context, peer proto.Peer, myName string, sshCli
 		log.Info().Str("peer", peer.Name).Msg("tunnel established")
 
 		// Handle incoming packets from this tunnel
-		go func(name string) {
-			forwarder.HandleTunnel(ctx, name, tun)
-			tunnelMgr.Remove(name)
-		}(peer.Name)
+		go func(name string, t io.ReadWriteCloser) {
+			forwarder.HandleTunnel(ctx, name, t)
+			tunnelMgr.RemoveIfMatch(name, t)
+		}(peer.Name, tun)
 	}
 }
 

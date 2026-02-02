@@ -79,7 +79,6 @@ func viewLogsDarwin(opts LogOptions) error {
 
 	// Show stderr first (errors), then stdout
 	if errExists {
-		fmt.Println("=== Errors ===")
 		cmd := exec.Command("tail", "-n", strconv.Itoa(opts.Lines), errLog)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -87,9 +86,6 @@ func viewLogsDarwin(opts LogOptions) error {
 	}
 
 	if outExists {
-		if errExists {
-			fmt.Println("\n=== Output ===")
-		}
 		cmd := exec.Command("tail", "-n", strconv.Itoa(opts.Lines), outLog)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
