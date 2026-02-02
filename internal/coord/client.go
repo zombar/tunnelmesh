@@ -200,3 +200,9 @@ func (c *Client) JWTToken() string {
 func (c *Client) BaseURL() string {
 	return c.baseURL
 }
+
+// CloseIdleConnections closes any idle connections in the HTTP client pool.
+// This should be called after network changes to prevent stale connections.
+func (c *Client) CloseIdleConnections() {
+	c.client.CloseIdleConnections()
+}

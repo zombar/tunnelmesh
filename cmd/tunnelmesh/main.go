@@ -1399,6 +1399,10 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncode
 					Strs("old_private", lastPrivateIPs).
 					Strs("new_private", privateIPs).
 					Msg("IP addresses changed, re-registering...")
+
+				// Close stale connections from the old network
+				client.CloseIdleConnections()
+
 				if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort, behindNAT); regErr != nil {
 					log.Error().Err(regErr).Msg("failed to re-register after IP change")
 				} else {
