@@ -579,6 +579,43 @@ func TestKeepalivePacket(t *testing.T) {
 }
 
 // =============================================================================
+// Rekey Required Packet Tests
+// =============================================================================
+
+func TestRekeyRequiredPacket(t *testing.T) {
+	pkt := NewRekeyRequiredPacket(0x12345678)
+
+	data := pkt.Marshal()
+
+	if len(data) != RekeyRequiredSize {
+		t.Errorf("expected size %d, got %d", RekeyRequiredSize, len(data))
+	}
+
+	if data[0] != PacketTypeRekeyRequired {
+		t.Errorf("expected type %d, got %d", PacketTypeRekeyRequired, data[0])
+	}
+
+	// Parse it back
+	parsed, err := UnmarshalRekeyRequired(data)
+	if err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if parsed.UnknownIndex != 0x12345678 {
+		t.Errorf("expected index 0x12345678, got 0x%x", parsed.UnknownIndex)
+	}
+}
+
+func TestRekeyRequiredPacketTooShort(t *testing.T) {
+	data := []byte{PacketTypeRekeyRequired, 0x01, 0x02} // Only 3 bytes, need 5
+
+	_, err := UnmarshalRekeyRequired(data)
+	if err == nil {
+		t.Error("expected error for short packet")
+	}
+}
+
+// =============================================================================
 // Replay Window Edge Case Tests
 // =============================================================================
 
