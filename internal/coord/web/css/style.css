@@ -16,7 +16,7 @@ body {
 }
 
 header {
-    background: #010409;
+    background: #161b22;
     padding: 1rem 2rem;
     border-bottom: 1px solid #30363d;
     display: flex;
@@ -33,8 +33,8 @@ header .brand {
 }
 
 header .logo {
-    width: 45px;
-    height: 45px;
+    width: 54px;
+    height: 54px;
 }
 
 header h1 {
