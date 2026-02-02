@@ -1378,11 +1378,42 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncode
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
+	// Track last known IPs to detect changes
+	var lastPublicIPs, lastPrivateIPs []string
+	var lastBehindNAT bool
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Check if IPs have changed (network switch, ISP change, etc.)
+			publicIPs, privateIPs, behindNAT := proto.GetLocalIPsExcluding(meshCIDR)
+			ipsChanged := !slicesEqual(publicIPs, lastPublicIPs) || !slicesEqual(privateIPs, lastPrivateIPs) || behindNAT != lastBehindNAT
+
+			if ipsChanged && lastPublicIPs != nil {
+				// IPs changed - re-register to update the coordination server
+				log.Info().
+					Strs("old_public", lastPublicIPs).
+					Strs("new_public", publicIPs).
+					Strs("old_private", lastPrivateIPs).
+					Strs("new_private", privateIPs).
+					Msg("IP addresses changed, re-registering...")
+				if _, regErr := client.Register(name, pubKeyEncoded, publicIPs, privateIPs, sshPort, behindNAT); regErr != nil {
+					log.Error().Err(regErr).Msg("failed to re-register after IP change")
+				} else {
+					log.Info().Msg("re-registered with new IP addresses")
+					lastPublicIPs = publicIPs
+					lastPrivateIPs = privateIPs
+					lastBehindNAT = behindNAT
+				}
+			} else if lastPublicIPs == nil {
+				// First heartbeat - just record the IPs
+				lastPublicIPs = publicIPs
+				lastPrivateIPs = privateIPs
+				lastBehindNAT = behindNAT
+			}
+
 			// Collect stats from forwarder
 			var stats *proto.PeerStats
 			if forwarder != nil {
@@ -1408,6 +1439,9 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncode
 						log.Error().Err(regErr).Msg("failed to re-register")
 					} else {
 						log.Info().Msg("re-registered with coordination server")
+						lastPublicIPs = publicIPs
+						lastPrivateIPs = privateIPs
+						lastBehindNAT = behindNAT
 					}
 				} else {
 					log.Warn().Err(err).Msg("heartbeat failed")
@@ -1423,6 +1457,19 @@ func heartbeatLoop(ctx context.Context, client *coord.Client, name, pubKeyEncode
 			}
 		}
 	}
+}
+
+// slicesEqual compares two string slices for equality.
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func syncDNS(client *coord.Client, resolver *meshdns.Resolver) error {
