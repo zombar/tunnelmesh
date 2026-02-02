@@ -319,3 +319,91 @@ func (p *PacketBufferPool) Get() *PacketBuffer {
 func (p *PacketBufferPool) Put(buf *PacketBuffer) {
 	p.pool.Put(buf)
 }
+
+// ZeroCopyBuffer is a buffer that reserves space for frame headers,
+// enabling zero-copy packet forwarding by writing the packet data
+// after the reserved header space.
+type ZeroCopyBuffer struct {
+	data         []byte
+	headerOffset int // Start of reserved header space
+	dataOffset   int // Start of packet data (after header)
+	length       int // Length of valid packet data
+}
+
+// NewZeroCopyBuffer creates a new ZeroCopyBuffer with space for both
+// the frame header and packet data.
+func NewZeroCopyBuffer(headerSize, capacity int) *ZeroCopyBuffer {
+	return &ZeroCopyBuffer{
+		data:         make([]byte, headerSize+capacity),
+		headerOffset: 0,
+		dataOffset:   headerSize,
+		length:       0,
+	}
+}
+
+// DataSlice returns the slice where packet data should be written.
+// This starts after the reserved header space.
+func (b *ZeroCopyBuffer) DataSlice() []byte {
+	return b.data[b.dataOffset:]
+}
+
+// SetLength sets the length of valid packet data.
+func (b *ZeroCopyBuffer) SetLength(n int) {
+	b.length = n
+}
+
+// Frame writes the frame header and returns the complete frame
+// (header + packet data) ready for transmission. This is zero-copy
+// because the packet data was already written at the correct offset.
+func (b *ZeroCopyBuffer) Frame(packetLen int) []byte {
+	// Write frame header directly before the packet data
+	// Frame format: [2 bytes length][1 byte proto][payload]
+	frameLen := packetLen + 1 // +1 for protocol byte
+	b.data[0] = byte(frameLen >> 8)
+	b.data[1] = byte(frameLen)
+	b.data[2] = 0x01 // IP packet protocol marker
+
+	return b.data[:b.dataOffset+packetLen]
+}
+
+// PacketData returns just the packet data portion (without header).
+func (b *ZeroCopyBuffer) PacketData() []byte {
+	return b.data[b.dataOffset : b.dataOffset+b.length]
+}
+
+// Reset clears the buffer.
+func (b *ZeroCopyBuffer) Reset() {
+	b.length = 0
+}
+
+// ZeroCopyBufferPool is a pool of reusable zero-copy buffers.
+type ZeroCopyBufferPool struct {
+	pool       sync.Pool
+	headerSize int
+	capacity   int
+}
+
+// NewZeroCopyBufferPool creates a new zero-copy buffer pool.
+func NewZeroCopyBufferPool(headerSize, capacity int) *ZeroCopyBufferPool {
+	return &ZeroCopyBufferPool{
+		headerSize: headerSize,
+		capacity:   capacity,
+		pool: sync.Pool{
+			New: func() interface{} {
+				return NewZeroCopyBuffer(headerSize, capacity)
+			},
+		},
+	}
+}
+
+// Get retrieves a buffer from the pool.
+func (p *ZeroCopyBufferPool) Get() *ZeroCopyBuffer {
+	buf := p.pool.Get().(*ZeroCopyBuffer)
+	buf.Reset()
+	return buf
+}
+
+// Put returns a buffer to the pool.
+func (p *ZeroCopyBufferPool) Put(buf *ZeroCopyBuffer) {
+	p.pool.Put(buf)
+}

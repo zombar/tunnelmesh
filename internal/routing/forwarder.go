@@ -47,23 +47,25 @@ type ForwarderStats struct {
 
 // Forwarder routes packets between the TUN device and tunnels.
 type Forwarder struct {
-	router    *Router
-	tunnels   TunnelProvider
-	tun       TUNDevice
-	bufPool   *PacketBufferPool
-	framePool *sync.Pool // Pool for frame buffers (header + MTU)
-	stats     ForwarderStats
-	tunMu     sync.RWMutex
-	localIP   net.IP
-	localIPMu sync.RWMutex
+	router      *Router
+	tunnels     TunnelProvider
+	tun         TUNDevice
+	bufPool     *PacketBufferPool
+	zeroCopyPool *ZeroCopyBufferPool // Pool for zero-copy buffers
+	framePool   *sync.Pool           // Pool for frame buffers (header + MTU)
+	stats       ForwarderStats
+	tunMu       sync.RWMutex
+	localIP     net.IP
+	localIPMu   sync.RWMutex
 }
 
 // NewForwarder creates a new packet forwarder.
 func NewForwarder(router *Router, tunnels TunnelProvider) *Forwarder {
 	return &Forwarder{
-		router:  router,
-		tunnels: tunnels,
-		bufPool: NewPacketBufferPool(MaxPacketSize),
+		router:       router,
+		tunnels:      tunnels,
+		bufPool:      NewPacketBufferPool(MaxPacketSize),
+		zeroCopyPool: NewZeroCopyBufferPool(FrameHeaderSize, MaxPacketSize),
 		framePool: &sync.Pool{
 			New: func() interface{} {
 				// Allocate buffer for header + max packet size
@@ -191,6 +193,79 @@ func (f *Forwarder) writeFrame(w io.Writer, packet []byte) error {
 	return err
 }
 
+// writeFrameZeroCopy writes a pre-framed packet using zero-copy buffer.
+// The packet data must already be positioned after the frame header space.
+func (f *Forwarder) writeFrameZeroCopy(w io.Writer, zcBuf *ZeroCopyBuffer, packetLen int) error {
+	// Get the complete frame with header already written
+	frame := zcBuf.Frame(packetLen)
+	_, err := w.Write(frame)
+	return err
+}
+
+// ForwardPacketZeroCopy forwards a packet using zero-copy optimization.
+// The packet must be in a ZeroCopyBuffer with the data positioned after header space.
+func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) error {
+	packet := zcBuf.PacketData()[:packetLen]
+
+	// Check packet length and version
+	if packetLen < 1 {
+		return nil // Silently drop empty packets
+	}
+
+	version := packet[0] >> 4
+	if version != 4 {
+		atomic.AddUint64(&f.stats.DroppedNonIPv4, 1)
+		return nil
+	}
+
+	// Parse the packet
+	info, err := ParseIPv4Packet(packet)
+	if err != nil {
+		atomic.AddUint64(&f.stats.Errors, 1)
+		return fmt.Errorf("parse packet: %w", err)
+	}
+
+	// Handle packets destined for our own IP
+	f.localIPMu.RLock()
+	localIP := f.localIP
+	f.localIPMu.RUnlock()
+	if localIP != nil && info.DstIP.Equal(localIP) {
+		return f.ReceivePacket(packet)
+	}
+
+	// Look up the route
+	peerName, ok := f.router.Lookup(info.DstIP)
+	if !ok {
+		atomic.AddUint64(&f.stats.DroppedNoRoute, 1)
+		return fmt.Errorf("no route for %s", info.DstIP)
+	}
+
+	// Get the tunnel
+	tunnel, ok := f.tunnels.Get(peerName)
+	if !ok {
+		atomic.AddUint64(&f.stats.DroppedNoTunnel, 1)
+		return fmt.Errorf("no tunnel for peer %s", peerName)
+	}
+
+	// Zero-copy write: frame header is already in place
+	if err := f.writeFrameZeroCopy(tunnel, zcBuf, packetLen); err != nil {
+		atomic.AddUint64(&f.stats.Errors, 1)
+		return fmt.Errorf("write to tunnel: %w", err)
+	}
+
+	atomic.AddUint64(&f.stats.PacketsSent, 1)
+	atomic.AddUint64(&f.stats.BytesSent, uint64(packetLen))
+
+	log.Trace().
+		Str("src", info.SrcIP.String()).
+		Str("dst", info.DstIP.String()).
+		Str("peer", peerName).
+		Int("len", packetLen).
+		Msg("forwarded packet (zero-copy)")
+
+	return nil
+}
+
 // readFrame reads a length-prefixed frame from the tunnel into the provided buffer.
 // Returns the number of payload bytes read (excluding protocol byte).
 func (f *Forwarder) readFrame(r io.Reader, buf []byte) (int, error) {
@@ -245,8 +320,9 @@ func (f *Forwarder) Run(ctx context.Context) error {
 
 	log.Info().Msg("starting packet forwarder")
 
-	buf := f.bufPool.Get()
-	defer f.bufPool.Put(buf)
+	// Use zero-copy buffer for optimal performance
+	zcBuf := f.zeroCopyPool.Get()
+	defer f.zeroCopyPool.Put(zcBuf)
 
 	for {
 		select {
@@ -256,8 +332,9 @@ func (f *Forwarder) Run(ctx context.Context) error {
 		default:
 		}
 
-		// Read packet from TUN
-		n, err := tun.Read(buf.Data())
+		// Read packet from TUN into zero-copy buffer (after header space)
+		// This allows us to prepend the frame header without copying
+		n, err := tun.Read(zcBuf.DataSlice())
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -270,9 +347,10 @@ func (f *Forwarder) Run(ctx context.Context) error {
 			continue
 		}
 
-		// Forward the packet directly from buffer (no copy needed,
-		// packet is fully processed before next Read)
-		if err := f.ForwardPacket(buf.Data()[:n]); err != nil {
+		zcBuf.SetLength(n)
+
+		// Forward the packet using zero-copy path
+		if err := f.ForwardPacketZeroCopy(zcBuf, n); err != nil {
 			log.Debug().Err(err).Msg("forward packet failed")
 		}
 	}

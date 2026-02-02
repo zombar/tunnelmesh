@@ -216,3 +216,49 @@ func BenchmarkForwardPacket(b *testing.B) {
 		_ = fwd.ForwardPacket(packet)
 	}
 }
+
+// BenchmarkForwardPacketZeroCopy benchmarks zero-copy packet forwarding.
+func BenchmarkForwardPacketZeroCopy(b *testing.B) {
+	router := NewRouter()
+	router.AddRoute("10.99.0.2", "peer1")
+
+	tunnelMgr := NewMockTunnelManager()
+	tunnel := newMockTunnel()
+	tunnelMgr.Add("peer1", tunnel)
+
+	fwd := NewForwarder(router, tunnelMgr)
+
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.2").To4()
+	payload := make([]byte, 1000) // 1KB payload
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, payload)
+
+	// Create zero-copy buffer and copy packet into it (simulating TUN read)
+	zcPool := NewZeroCopyBufferPool(FrameHeaderSize, MaxPacketSize)
+	zcBuf := zcPool.Get()
+	copy(zcBuf.DataSlice(), packet)
+	zcBuf.SetLength(len(packet))
+
+	b.ResetTimer()
+	b.SetBytes(int64(len(packet)))
+
+	for i := 0; i < b.N; i++ {
+		_ = fwd.ForwardPacketZeroCopy(zcBuf, len(packet))
+	}
+
+	zcPool.Put(zcBuf)
+}
+
+// BenchmarkZeroCopyBuffer benchmarks zero-copy buffer frame creation.
+func BenchmarkZeroCopyBuffer(b *testing.B) {
+	zcBuf := NewZeroCopyBuffer(FrameHeaderSize, 1500)
+	payload := make([]byte, 1400)
+	copy(zcBuf.DataSlice(), payload)
+
+	b.ResetTimer()
+	b.SetBytes(int64(len(payload)))
+
+	for i := 0; i < b.N; i++ {
+		_ = zcBuf.Frame(len(payload))
+	}
+}
