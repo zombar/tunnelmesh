@@ -152,6 +152,27 @@ func (s *Session) UpdateRemoteAddr(addr *net.UDPAddr) {
 	s.remoteAddr = addr
 }
 
+// UpdateRemoteAddrIfChanged atomically updates the remote address if it differs
+// from the current address. Returns true if the address was updated.
+// This prevents race conditions during NAT roaming.
+func (s *Session) UpdateRemoteAddrIfChanged(addr *net.UDPAddr) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.remoteAddr == nil || s.remoteAddr.String() != addr.String() {
+		oldAddr := s.remoteAddr
+		s.remoteAddr = addr
+		if oldAddr != nil {
+			log.Debug().
+				Str("peer", s.peerName).
+				Str("old_addr", oldAddr.String()).
+				Str("new_addr", addr.String()).
+				Msg("NAT roaming detected, updated remote address")
+		}
+		return true
+	}
+	return false
+}
+
 // Send encrypts and sends a data packet.
 func (s *Session) Send(data []byte) error {
 	s.mu.RLock()
@@ -233,7 +254,11 @@ func (s *Session) HandlePacket(header *PacketHeader, data []byte) error {
 	select {
 	case s.recvChan <- plaintext:
 	default:
-		// Channel full, drop packet
+		// Channel full, drop packet - log at WARN level since this is data loss
+		log.Warn().
+			Str("peer", s.peerName).
+			Int("data_len", len(plaintext)).
+			Msg("receive buffer full, packet dropped")
 		return ErrReceiveBufferFull
 	}
 
