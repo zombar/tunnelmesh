@@ -292,8 +292,19 @@ func (t *Transport) handleDataPacket(header *PacketHeader, ciphertext []byte, re
 	t.mu.RUnlock()
 
 	if !ok {
-		return // Unknown session
+		log.Debug().
+			Uint32("receiver_index", header.Receiver).
+			Str("from", remoteAddr.String()).
+			Int("ciphertext_len", len(ciphertext)).
+			Msg("data packet for unknown session")
+		return
 	}
+
+	log.Debug().
+		Str("peer", session.PeerName()).
+		Uint32("receiver_index", header.Receiver).
+		Int("ciphertext_len", len(ciphertext)).
+		Msg("UDP data packet received")
 
 	// Update remote address (NAT roaming)
 	currentAddr := session.RemoteAddr()

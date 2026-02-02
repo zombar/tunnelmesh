@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // SessionState represents the current state of a UDP session.
@@ -171,10 +173,17 @@ func (s *Session) Send(data []byte) error {
 	copy(packet[len(headerBytes):], ciphertext)
 
 	// Send
-	_, err := s.conn.WriteToUDP(packet, remoteAddr)
+	n, err := s.conn.WriteToUDP(packet, remoteAddr)
 	if err != nil {
 		return err
 	}
+
+	log.Debug().
+		Str("peer", s.peerName).
+		Str("remote", remoteAddr.String()).
+		Int("data_len", len(data)).
+		Int("packet_len", n).
+		Msg("UDP data packet sent")
 
 	s.lastSend = time.Now()
 	s.bytesOut.Add(uint64(len(data)))
