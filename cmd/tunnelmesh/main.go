@@ -24,6 +24,7 @@ import (
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
 	"github.com/tunnelmesh/tunnelmesh/internal/netmon"
 	"github.com/tunnelmesh/tunnelmesh/internal/peer"
+	peerwg "github.com/tunnelmesh/tunnelmesh/internal/peer/wireguard"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/svc"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
@@ -47,6 +48,9 @@ var (
 	serverURL string
 	authToken string
 	nodeName  string
+
+	// WireGuard concentrator flag
+	wireguardEnabled bool
 
 	// Service mode flags (hidden, used when running as a service)
 	serviceRun     bool
@@ -101,6 +105,7 @@ It does not route traffic - peers connect directly to each other.`,
 	joinCmd.Flags().StringVarP(&serverURL, "server", "s", "", "coordination server URL")
 	joinCmd.Flags().StringVarP(&authToken, "token", "t", "", "authentication token")
 	joinCmd.Flags().StringVarP(&nodeName, "name", "n", "", "node name")
+	joinCmd.Flags().BoolVar(&wireguardEnabled, "wireguard", false, "enable WireGuard concentrator mode")
 	rootCmd.AddCommand(joinCmd)
 
 	// Status command
@@ -456,6 +461,9 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	if nodeName != "" {
 		cfg.Name = nodeName
 	}
+	if wireguardEnabled {
+		cfg.WireGuard.Enabled = true
+	}
 
 	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
 		return fmt.Errorf("server, token, and name are required")
@@ -753,6 +761,77 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		forwarder.SetRelay(node.PersistentRelay)
 		log.Info().Msg("persistent relay enabled for instant connectivity")
 	}
+
+	// Initialize WireGuard concentrator if enabled
+	var wgConcentrator *peerwg.Concentrator
+	var wgRouter *peerwg.Router
+	if cfg.WireGuard.Enabled {
+		// Parse sync interval
+		syncInterval, err := time.ParseDuration(cfg.WireGuard.SyncInterval)
+		if err != nil {
+			syncInterval = 30 * time.Second
+		}
+
+		// Set default data dir if not specified
+		dataDir := cfg.WireGuard.DataDir
+		if dataDir == "" {
+			homeDir, _ := os.UserHomeDir()
+			dataDir = filepath.Join(homeDir, ".tunnelmesh", "wireguard")
+		}
+
+		wgCfg := &peerwg.ConcentratorConfig{
+			ServerURL:    cfg.Server,
+			AuthToken:    cfg.AuthToken,
+			ListenPort:   cfg.WireGuard.ListenPort,
+			DataDir:      dataDir,
+			SyncInterval: syncInterval,
+			MeshCIDR:     resp.MeshCIDR,
+		}
+
+		wgConcentrator, err = peerwg.NewConcentrator(wgCfg)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to create WireGuard concentrator")
+		} else {
+			// Create WG router for packet routing decisions
+			wgRouter = peerwg.NewRouter(resp.MeshCIDR)
+
+			// Set callback to update router when clients change
+			wgConcentrator.SetOnClientsUpdated(func(clients []peerwg.Client) {
+				wgRouter.UpdateClients(clients)
+				log.Info().Int("clients", len(clients)).Msg("WireGuard clients updated")
+			})
+
+			// Initial sync
+			if err := wgConcentrator.Sync(ctx); err != nil {
+				log.Warn().Err(err).Msg("initial WireGuard client sync failed")
+			}
+
+			// Start periodic sync loop
+			go func() {
+				ticker := time.NewTicker(syncInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						if err := wgConcentrator.Sync(ctx); err != nil {
+							log.Debug().Err(err).Msg("WireGuard client sync failed")
+						}
+					}
+				}
+			}()
+
+			log.Info().
+				Int("port", cfg.WireGuard.ListenPort).
+				Str("public_key", wgConcentrator.PublicKey()).
+				Msg("WireGuard concentrator initialized")
+		}
+	}
+
+	// Suppress unused variable warnings for future WireGuard integration
+	_ = wgConcentrator
+	_ = wgRouter
 
 	// Start DNS resolver if enabled
 	var dnsConfigured bool
