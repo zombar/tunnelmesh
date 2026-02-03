@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -19,7 +21,7 @@ type Transport struct {
 	sshServer *tunnel.SSHServer
 	sshClient *tunnel.SSHClient
 	listener  net.Listener
-	closed    bool
+	closed    atomic.Bool
 }
 
 // Config holds SSH transport configuration.
@@ -52,6 +54,9 @@ func (t *Transport) Type() transport.TransportType {
 
 // Dial creates an outbound SSH connection to the peer.
 func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (transport.Connection, error) {
+	if t.closed.Load() {
+		return nil, fmt.Errorf("transport is closed")
+	}
 	if opts.PeerInfo == nil {
 		return nil, fmt.Errorf("peer info is required")
 	}
@@ -190,7 +195,9 @@ func (t *Transport) AddAuthorizedKey(key gossh.PublicKey) {
 
 // Close shuts down the transport.
 func (t *Transport) Close() error {
-	t.closed = true
+	if t.closed.Swap(true) {
+		return nil // Already closed
+	}
 	if t.listener != nil {
 		return t.listener.Close()
 	}
@@ -229,7 +236,7 @@ func (l *Listener) Accept(ctx context.Context) (transport.Connection, error) {
 			// Perform SSH handshake
 			sshConn, err := l.transport.sshServer.Accept(r.conn)
 			if err != nil {
-				log.Debug().Err(err).Msg("SSH handshake failed")
+				log.Warn().Err(err).Str("remote", r.conn.RemoteAddr().String()).Msg("SSH handshake failed")
 				r.conn.Close()
 				continue // Try next connection
 			}
@@ -284,6 +291,7 @@ type Connection struct {
 	peerName   string
 	localAddr  net.Addr
 	remoteAddr net.Addr
+	mu         sync.Mutex
 	closed     bool
 }
 
@@ -299,10 +307,13 @@ func (c *Connection) Write(p []byte) (int, error) {
 
 // Close closes the connection.
 func (c *Connection) Close() error {
+	c.mu.Lock()
 	if c.closed {
+		c.mu.Unlock()
 		return nil
 	}
 	c.closed = true
+	c.mu.Unlock()
 
 	err := c.channel.Close()
 	if c.sshClient != nil {
@@ -340,5 +351,7 @@ func (c *Connection) RemoteAddr() net.Addr {
 
 // IsHealthy returns true if the SSH channel is open and ready for data.
 func (c *Connection) IsHealthy() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return !c.closed
 }

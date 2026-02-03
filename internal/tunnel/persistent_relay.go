@@ -36,8 +36,11 @@ type PersistentRelay struct {
 	incomingMu sync.Mutex
 	incoming   map[string]*peerQueue // peerName -> queue of incoming packets
 
-	// Callbacks
+	// Callbacks (protected by mu)
 	onPacket func(sourcePeer string, data []byte)
+
+	// Reconnection control
+	reconnecting bool // Prevents concurrent autoReconnect goroutines
 }
 
 // peerQueue holds incoming packets from a specific peer.
@@ -125,7 +128,13 @@ func (p *PersistentRelay) readLoop() {
 
 		// Auto-reconnect if not explicitly closed
 		if shouldReconnect && !closed {
-			go p.autoReconnect()
+			// Prevent concurrent reconnection attempts
+			p.mu.Lock()
+			if !p.reconnecting {
+				p.reconnecting = true
+				go p.autoReconnect()
+			}
+			p.mu.Unlock()
 		}
 	}()
 
@@ -149,7 +158,7 @@ func (p *PersistentRelay) readLoop() {
 			wasClosed := p.closed
 			p.mu.RUnlock()
 			if !wasClosed {
-				log.Debug().Err(err).Msg("persistent relay read error")
+				log.Warn().Err(err).Msg("persistent relay read error, will reconnect")
 				shouldReconnect = true
 			}
 			return
@@ -161,6 +170,12 @@ func (p *PersistentRelay) readLoop() {
 
 // autoReconnect attempts to reconnect with exponential backoff.
 func (p *PersistentRelay) autoReconnect() {
+	defer func() {
+		p.mu.Lock()
+		p.reconnecting = false
+		p.mu.Unlock()
+	}()
+
 	backoff := time.Second
 	maxBackoff := 30 * time.Second
 
@@ -211,6 +226,7 @@ func (p *PersistentRelay) autoReconnect() {
 // handleMessage processes an incoming message from the server.
 func (p *PersistentRelay) handleMessage(data []byte) {
 	if len(data) < 3 {
+		log.Debug().Int("len", len(data)).Msg("persistent relay: message too short")
 		return
 	}
 
@@ -221,14 +237,19 @@ func (p *PersistentRelay) handleMessage(data []byte) {
 		// Format: [MsgTypeRecvPacket][source name len][source name][packet data]
 		sourceLen := int(data[1])
 		if len(data) < 2+sourceLen {
+			log.Debug().Int("len", len(data)).Int("source_len", sourceLen).Msg("persistent relay: malformed packet")
 			return
 		}
 		sourcePeer := string(data[2 : 2+sourceLen])
 		packetData := data[2+sourceLen:]
 
-		// Dispatch to callback or queue
-		if p.onPacket != nil {
-			p.onPacket(sourcePeer, packetData)
+		// Dispatch to callback or queue (read callback with lock)
+		p.mu.RLock()
+		handler := p.onPacket
+		p.mu.RUnlock()
+
+		if handler != nil {
+			handler(sourcePeer, packetData)
 		} else {
 			p.queuePacket(sourcePeer, packetData)
 		}
@@ -253,7 +274,8 @@ func (p *PersistentRelay) queuePacket(sourcePeer string, data []byte) {
 	select {
 	case q.packets <- data:
 	default:
-		// Queue full, drop oldest
+		// Queue full, drop oldest packet to make room
+		log.Warn().Str("peer", sourcePeer).Int("data_len", len(data)).Msg("relay queue full, dropping oldest packet")
 		select {
 		case <-q.packets:
 		default:
@@ -286,6 +308,8 @@ func (p *PersistentRelay) SendTo(targetPeer string, data []byte) error {
 // SetPacketHandler sets a callback for incoming packets.
 // If set, packets are dispatched to this callback instead of being queued.
 func (p *PersistentRelay) SetPacketHandler(handler func(sourcePeer string, data []byte)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.onPacket = handler
 }
 
@@ -299,22 +323,32 @@ func (p *PersistentRelay) IsConnected() bool {
 // Close closes the persistent relay connection.
 func (p *PersistentRelay) Close() error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if p.closed {
+		p.mu.Unlock()
 		return nil
 	}
 	p.closed = true
 	p.connected = false
 	close(p.closedChan)
+	conn := p.conn
+	p.conn = nil
+	p.mu.Unlock()
 
-	if p.conn != nil {
-		_ = p.conn.WriteControl(
+	// Close all peer queues to unblock readers
+	p.incomingMu.Lock()
+	for peerName, q := range p.incoming {
+		close(q.packets)
+		delete(p.incoming, peerName)
+	}
+	p.incomingMu.Unlock()
+
+	if conn != nil {
+		_ = conn.WriteControl(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 			time.Now().Add(5*time.Second),
 		)
-		return p.conn.Close()
+		return conn.Close()
 	}
 
 	return nil

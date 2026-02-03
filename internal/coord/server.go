@@ -18,14 +18,12 @@ import (
 
 // peerInfo wraps a peer with stats and metadata for admin UI.
 type peerInfo struct {
-	peer               *proto.Peer
-	stats              *proto.PeerStats
-	prevStats          *proto.PeerStats
-	heartbeatCount     uint64
-	registeredAt       time.Time
-	lastStatsTime      time.Time
-	preferredTransport string // "auto", "udp", "ssh", "relay"
-	reconnectRequested bool   // Flag to signal peer to reconnect
+	peer           *proto.Peer
+	stats          *proto.PeerStats
+	prevStats      *proto.PeerStats
+	heartbeatCount uint64
+	registeredAt   time.Time
+	lastStatsTime  time.Time
 }
 
 // serverStats tracks server-level statistics.
@@ -294,12 +292,7 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 
 	peers := make([]proto.Peer, 0, len(s.peers))
 	for _, info := range s.peers {
-		peer := *info.peer
-		// Include admin-set transport preference
-		if info.preferredTransport != "" {
-			peer.PreferredTransport = info.preferredTransport
-		}
-		peers = append(peers, peer)
+		peers = append(peers, *info.peer)
 	}
 
 	resp := proto.PeerListResponse{Peers: peers}
@@ -370,8 +363,6 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var reconnectRequested bool
-
 	s.peersMu.Lock()
 	info, exists := s.peers[req.Name]
 	if exists {
@@ -382,11 +373,6 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			info.stats = req.Stats
 			info.lastStatsTime = time.Now()
 		}
-		// Check and reset reconnect flag
-		if info.reconnectRequested {
-			reconnectRequested = true
-			info.reconnectRequested = false
-		}
 	}
 	s.serverStats.totalHeartbeats++
 	s.peersMu.Unlock()
@@ -396,7 +382,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := proto.HeartbeatResponse{OK: true, Reconnect: reconnectRequested}
+	resp := proto.HeartbeatResponse{OK: true}
 
 	// Check if any peers are waiting on relay for this peer
 	if s.relay != nil {

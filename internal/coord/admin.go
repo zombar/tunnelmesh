@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/web"
@@ -47,7 +46,6 @@ type AdminPeerInfo struct {
 	BytesReceivedRate   float64          `json:"bytes_received_rate"`
 	PacketsSentRate     float64          `json:"packets_sent_rate"`
 	PacketsReceivedRate float64          `json:"packets_received_rate"`
-	PreferredTransport  string           `json:"preferred_transport"`
 	Version             string           `json:"version,omitempty"`
 }
 
@@ -80,27 +78,21 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			overview.OnlinePeers++
 		}
 
-		preferredTransport := info.preferredTransport
-		if preferredTransport == "" {
-			preferredTransport = "auto"
-		}
-
 		peerInfo := AdminPeerInfo{
-			Name:               info.peer.Name,
-			MeshIP:             info.peer.MeshIP,
-			PublicIPs:          info.peer.PublicIPs,
-			PrivateIPs:         info.peer.PrivateIPs,
-			SSHPort:            info.peer.SSHPort,
-			UDPPort:            info.peer.UDPPort,
-			LastSeen:           info.peer.LastSeen,
-			Online:             online,
-			Connectable:        info.peer.Connectable,
-			BehindNAT:          info.peer.BehindNAT,
-			RegisteredAt:       info.registeredAt,
-			HeartbeatCount:     info.heartbeatCount,
-			Stats:              info.stats,
-			PreferredTransport: preferredTransport,
-			Version:            info.peer.Version,
+			Name:           info.peer.Name,
+			MeshIP:         info.peer.MeshIP,
+			PublicIPs:      info.peer.PublicIPs,
+			PrivateIPs:     info.peer.PrivateIPs,
+			SSHPort:        info.peer.SSHPort,
+			UDPPort:        info.peer.UDPPort,
+			LastSeen:       info.peer.LastSeen,
+			Online:         online,
+			Connectable:    info.peer.Connectable,
+			BehindNAT:      info.peer.BehindNAT,
+			RegisteredAt:   info.registeredAt,
+			HeartbeatCount: info.heartbeatCount,
+			Stats:          info.stats,
+			Version:        info.peer.Version,
 		}
 
 		// Get UDP endpoint addresses if available
@@ -137,96 +129,10 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(overview)
 }
 
-// TransportRequest is the request body for setting transport preference.
-type TransportRequest struct {
-	Preferred string `json:"preferred"`
-}
-
-// handleSetTransport sets the preferred transport for a peer.
-func (s *Server) handleSetTransport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Extract peer name from path: /admin/api/peers/{name}/transport
-	path := r.URL.Path
-	parts := strings.Split(strings.TrimPrefix(path, "/admin/api/peers/"), "/")
-	if len(parts) < 2 || parts[1] != "transport" {
-		s.jsonError(w, "invalid path", http.StatusBadRequest)
-		return
-	}
-	peerName := parts[0]
-
-	var req TransportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.jsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Validate transport type
-	validTransports := map[string]bool{"auto": true, "udp": true, "ssh": true, "relay": true}
-	if !validTransports[req.Preferred] {
-		s.jsonError(w, "invalid transport type", http.StatusBadRequest)
-		return
-	}
-
-	s.peersMu.Lock()
-	info, exists := s.peers[peerName]
-	if exists {
-		info.preferredTransport = req.Preferred
-	}
-	s.peersMu.Unlock()
-
-	if !exists {
-		s.jsonError(w, "peer not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
-}
-
-// handleReconnect signals a peer to reconnect.
-func (s *Server) handleReconnect(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Extract peer name from path: /admin/api/peers/{name}/reconnect
-	path := r.URL.Path
-	parts := strings.Split(strings.TrimPrefix(path, "/admin/api/peers/"), "/")
-	if len(parts) < 2 || parts[1] != "reconnect" {
-		s.jsonError(w, "invalid path", http.StatusBadRequest)
-		return
-	}
-	peerName := parts[0]
-
-	s.peersMu.Lock()
-	info, exists := s.peers[peerName]
-	if exists {
-		info.reconnectRequested = true
-	}
-	s.peersMu.Unlock()
-
-	if !exists {
-		s.jsonError(w, "peer not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":      true,
-		"message": "Reconnect requested for " + peerName,
-	})
-}
-
 // setupAdminRoutes registers the admin API routes and static file server.
 func (s *Server) setupAdminRoutes() {
 	// API endpoints
 	s.mux.HandleFunc("/admin/api/overview", s.handleAdminOverview)
-	s.mux.HandleFunc("/admin/api/peers/", s.handleAdminPeerAction)
 
 	// Serve embedded static files
 	staticFS, _ := fs.Sub(web.Assets, ".")
@@ -237,16 +143,4 @@ func (s *Server) setupAdminRoutes() {
 		http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
 	})
 	s.mux.Handle("/admin/", http.StripPrefix("/admin/", fileServer))
-}
-
-// handleAdminPeerAction routes peer-specific admin actions.
-func (s *Server) handleAdminPeerAction(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	if strings.HasSuffix(path, "/transport") {
-		s.handleSetTransport(w, r)
-	} else if strings.HasSuffix(path, "/reconnect") {
-		s.handleReconnect(w, r)
-	} else {
-		s.jsonError(w, "unknown action", http.StatusNotFound)
-	}
 }

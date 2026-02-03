@@ -660,6 +660,9 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 			if err != nil {
 				log.Warn().Err(err).Msg("failed to create UDP transport, UDP disabled")
 			} else {
+				// Wire up session invalidation callback for rekey-required handling
+				node.SetupUDPSessionInvalidCallback(udpTransport)
+
 				if err := transportRegistry.Register(udpTransport); err != nil {
 					log.Warn().Err(err).Msg("failed to register UDP transport")
 				} else {

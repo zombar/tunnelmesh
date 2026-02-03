@@ -330,11 +330,8 @@ func (t *Transport) handleDataPacket(header *PacketHeader, ciphertext []byte, re
 		Int("ciphertext_len", len(ciphertext)).
 		Msg("UDP data packet received")
 
-	// Update remote address (NAT roaming)
-	currentAddr := session.RemoteAddr()
-	if currentAddr == nil || currentAddr.String() != remoteAddr.String() {
-		session.UpdateRemoteAddr(remoteAddr)
-	}
+	// Update remote address atomically (NAT roaming)
+	session.UpdateRemoteAddrIfChanged(remoteAddr)
 
 	if err := session.HandlePacket(header, ciphertext); err != nil {
 		log.Debug().
@@ -351,7 +348,7 @@ func (t *Transport) handleKeepalive(header *PacketHeader, remoteAddr *net.UDPAdd
 	t.mu.RUnlock()
 
 	if ok {
-		session.UpdateRemoteAddr(remoteAddr)
+		session.UpdateRemoteAddrIfChanged(remoteAddr)
 	}
 }
 
@@ -417,23 +414,33 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 		return
 	}
 
-	// Find session by the index the peer says is unknown
-	// This is OUR local index that we sent them during handshake
+	// Find session by the index the peer says is unknown.
+	// The unknownIndex is the receiver index from packets we sent to them,
+	// which is our REMOTE index (the peer's local index from their perspective).
+	// We need to search by remoteIndex, not localIndex.
 	t.mu.Lock()
-	session, ok := t.sessions[pkt.UnknownIndex]
-	if !ok {
+	var session *Session
+	var localIndex uint32
+	for idx, s := range t.sessions {
+		if s.RemoteIndex() == pkt.UnknownIndex {
+			session = s
+			localIndex = idx
+			break
+		}
+	}
+	if session == nil {
 		t.mu.Unlock()
 		log.Debug().
-			Uint32("index", pkt.UnknownIndex).
+			Uint32("unknown_index", pkt.UnknownIndex).
 			Str("from", remoteAddr.String()).
-			Msg("rekey-required for unknown local index (already removed?)")
+			Msg("rekey-required for unknown remote index (already removed?)")
 		return
 	}
 
 	peerName := session.PeerName()
 
 	// Remove the stale session
-	delete(t.sessions, pkt.UnknownIndex)
+	delete(t.sessions, localIndex)
 	delete(t.peerSessions, peerName)
 
 	// Get callback while holding lock, then release before calling
@@ -442,7 +449,8 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 
 	log.Info().
 		Str("peer", peerName).
-		Uint32("index", pkt.UnknownIndex).
+		Uint32("local_index", localIndex).
+		Uint32("remote_index", pkt.UnknownIndex).
 		Str("from", remoteAddr.String()).
 		Msg("session invalidated by peer, re-handshake needed")
 
@@ -532,10 +540,8 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 	session.SetCrypto(crypto, hs.RemoteIndex())
 	session.SetOnClose(t.removeSession)
 
-	t.mu.Lock()
-	t.sessions[session.LocalIndex()] = session
-	t.peerSessions[peerName] = session
-	t.mu.Unlock()
+	// Register session, closing any existing session for this peer
+	t.registerSession(session)
 
 	log.Debug().
 		Str("remote", remoteAddr.String()).
@@ -544,15 +550,14 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 		Msg("incoming handshake completed")
 
 	// Push connection to listener if active
-	if t.listener != nil && !t.listener.closed.Load() {
+	if t.listener != nil {
 		conn := &Connection{
 			session: session,
 			readBuf: new(bytes.Buffer),
 		}
-		select {
-		case t.listener.acceptCh <- conn:
+		if t.listener.trySend(conn) {
 			log.Debug().Str("peer", peerName).Msg("incoming connection queued for accept")
-		default:
+		} else if !t.listener.closed.Load() {
 			log.Warn().Str("peer", peerName).Msg("listener accept channel full, dropping connection")
 		}
 	}
@@ -835,10 +840,8 @@ func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peer
 	session.SetCrypto(crypto, hs.RemoteIndex())
 	session.SetOnClose(t.removeSession)
 
-	t.mu.Lock()
-	t.sessions[session.LocalIndex()] = session
-	t.peerSessions[peerName] = session
-	t.mu.Unlock()
+	// Register session, closing any existing session for this peer
+	t.registerSession(session)
 
 	log.Debug().
 		Str("peer", peerName).
@@ -1097,6 +1100,37 @@ func (t *Transport) removeSession(localIndex uint32, peerName string) {
 	}
 }
 
+// registerSession adds a session to the transport's maps, closing any existing
+// session for the same peer to prevent orphaned sessions and memory leaks.
+// Must be called WITHOUT holding t.mu.
+func (t *Transport) registerSession(session *Session) {
+	peerName := session.PeerName()
+
+	t.mu.Lock()
+	// Check for existing session to this peer and close it
+	var oldSession *Session
+	if existing, ok := t.peerSessions[peerName]; ok {
+		if existing.LocalIndex() != session.LocalIndex() {
+			oldSession = existing
+			// Remove old session from sessions map
+			delete(t.sessions, existing.LocalIndex())
+		}
+	}
+	t.sessions[session.LocalIndex()] = session
+	t.peerSessions[peerName] = session
+	t.mu.Unlock()
+
+	// Close old session outside lock to avoid deadlock
+	if oldSession != nil {
+		log.Debug().
+			Str("peer", peerName).
+			Uint32("old_index", oldSession.LocalIndex()).
+			Uint32("new_index", session.LocalIndex()).
+			Msg("replacing existing session for peer")
+		oldSession.Close()
+	}
+}
+
 // ClearNetworkState clears cached network state such as STUN-discovered external addresses.
 // This should be called after network changes to ensure fresh address discovery.
 func (t *Transport) ClearNetworkState() {
@@ -1127,21 +1161,27 @@ type Connection struct {
 
 // Read reads data from the connection.
 func (c *Connection) Read(p []byte) (int, error) {
+	// Check buffer first (with lock)
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Return buffered data first
 	if c.readBuf.Len() > 0 {
-		return c.readBuf.Read(p)
+		n, err := c.readBuf.Read(p)
+		c.mu.Unlock()
+		return n, err
 	}
+	c.mu.Unlock()
 
-	// Wait for new data
+	// Wait for new data without holding lock to avoid deadlock
 	data, ok := <-c.session.Recv()
 	if !ok {
 		return 0, io.EOF
 	}
+
+	// Write to buffer and read (with lock)
+	c.mu.Lock()
 	c.readBuf.Write(data)
-	return c.readBuf.Read(p)
+	n, err := c.readBuf.Read(p)
+	c.mu.Unlock()
+	return n, err
 }
 
 // Write writes data to the connection.
@@ -1187,12 +1227,16 @@ type Listener struct {
 	transport *Transport
 	acceptCh  chan *Connection
 	closed    atomic.Bool
+	mu        sync.Mutex // Protects channel operations to prevent send-on-closed-channel panic
 }
 
 // Accept waits for and returns the next connection.
 func (l *Listener) Accept(ctx context.Context) (transport.Connection, error) {
 	select {
-	case conn := <-l.acceptCh:
+	case conn, ok := <-l.acceptCh:
+		if !ok {
+			return nil, fmt.Errorf("listener closed")
+		}
 		return conn, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -1209,9 +1253,30 @@ func (l *Listener) Addr() net.Addr {
 
 // Close closes the listener.
 func (l *Listener) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed.Load() {
+		return nil
+	}
 	l.closed.Store(true)
 	close(l.acceptCh)
 	return nil
+}
+
+// trySend attempts to send a connection to the accept channel.
+// Returns true if sent, false if listener is closed or channel is full.
+func (l *Listener) trySend(conn *Connection) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed.Load() {
+		return false
+	}
+	select {
+	case l.acceptCh <- conn:
+		return true
+	default:
+		return false
+	}
 }
 
 // RegisterUDPEndpoint registers our UDP endpoint with the coordination server.

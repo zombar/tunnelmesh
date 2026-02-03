@@ -207,35 +207,7 @@ func (m *MeshNode) buildTransportPeerInfo(peer proto.Peer) *transport.PeerInfo {
 		ExternalEndpoint: peer.ExternalEndpoint,
 	}
 
-	// Apply admin-set transport preference to the registry
-	if peer.PreferredTransport != "" && peer.PreferredTransport != "auto" && m.TransportRegistry != nil {
-		preferred := transportTypeFromString(peer.PreferredTransport)
-		if preferred != "" {
-			m.TransportRegistry.SetPeerConfig(peer.Name, transport.PeerTransportConfig{
-				Preferred: []transport.TransportType{preferred, transport.TransportSSH, transport.TransportRelay},
-			})
-			log.Debug().
-				Str("peer", peer.Name).
-				Str("transport", peer.PreferredTransport).
-				Msg("applied admin transport preference")
-		}
-	}
-
 	return info
-}
-
-// transportTypeFromString converts a string to TransportType.
-func transportTypeFromString(s string) transport.TransportType {
-	switch s {
-	case "ssh":
-		return transport.TransportSSH
-	case "udp":
-		return transport.TransportUDP
-	case "relay":
-		return transport.TransportRelay
-	default:
-		return ""
-	}
 }
 
 // ConnectToPeerByName fetches the peer info from the coordination server and establishes a tunnel.
