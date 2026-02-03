@@ -171,8 +171,16 @@ main {
     transition: background 0.2s;
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
     background: #2ea043;
+}
+
+.btn-primary:disabled {
+    background: #21262d;
+    border-color: #30363d;
+    color: #8b949e;
+    cursor: not-allowed;
+    opacity: 0.6;
 }
 
 .btn-secondary {

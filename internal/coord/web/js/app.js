@@ -277,7 +277,7 @@ function updateWGClientsTable() {
     // Check if concentrator is connected
     if (!state.wgConcentratorConnected) {
         tbody.innerHTML = '';
-        noClients.textContent = 'No WireGuard concentrator connected. Start a peer with --wireguard flag.';
+        noClients.textContent = 'No WireGuard concentrator connected. Start a mesh peer with --wireguard flag.';
         noClients.style.display = 'block';
         if (addBtn) addBtn.disabled = true;
         return;
@@ -287,7 +287,7 @@ function updateWGClientsTable() {
 
     if (state.wgClients.length === 0) {
         tbody.innerHTML = '';
-        noClients.textContent = 'No WireGuard clients yet. Add a client to generate a QR code.';
+        noClients.textContent = 'No WireGuard peers yet. Add a peer to generate a QR code.';
         noClients.style.display = 'block';
         return;
     }
@@ -329,7 +329,10 @@ function formatLastSeen(timestamp) {
 }
 
 function showAddWGClientModal() {
-    document.getElementById('wg-modal-title').textContent = 'Add WireGuard Client';
+    if (!state.wgConcentratorConnected) {
+        return; // Don't open modal if no concentrator
+    }
+    document.getElementById('wg-modal-title').textContent = 'Add WireGuard Peer';
     document.getElementById('wg-add-form').style.display = 'block';
     document.getElementById('wg-config-display').style.display = 'none';
     document.getElementById('wg-client-name').value = '';
@@ -422,7 +425,7 @@ async function toggleWGClient(id, enabled) {
 }
 
 async function deleteWGClient(id, name) {
-    if (!confirm(`Delete WireGuard client "${name}"?`)) {
+    if (!confirm(`Delete WireGuard peer "${name}"?`)) {
         return;
     }
 

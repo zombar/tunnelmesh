@@ -49,6 +49,29 @@
             </div>
         </section>
 
+        <section id="wireguard-section" style="display: none;">
+            <div class="section-header">
+                <h2>WireGuard Peers</h2>
+                <button id="add-wg-client-btn" class="btn-primary">+ Add Peer</button>
+            </div>
+            <table id="wireguard-clients">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Mesh IP</th>
+                        <th>DNS Name</th>
+                        <th>Status</th>
+                        <th>Last Seen</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="wg-clients-body"></tbody>
+            </table>
+            <div id="no-wg-clients" class="empty-state" style="display: none;">
+                No WireGuard peers yet. Add a peer to generate a QR code.
+            </div>
+        </section>
+
         <section id="dns-section">
             <h2>DNS Records</h2>
             <table id="dns">
@@ -65,44 +88,21 @@
             </div>
         </section>
 
-        <section id="wireguard-section" style="display: none;">
-            <div class="section-header">
-                <h2>WireGuard Clients</h2>
-                <button id="add-wg-client-btn" class="btn-primary">+ Add Client</button>
-            </div>
-            <table id="wireguard-clients">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Mesh IP</th>
-                        <th>DNS Name</th>
-                        <th>Status</th>
-                        <th>Last Seen</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="wg-clients-body"></tbody>
-            </table>
-            <div id="no-wg-clients" class="empty-state" style="display: none;">
-                No WireGuard clients yet. Add a client to generate a QR code.
-            </div>
-        </section>
-
-        <!-- WireGuard Client Modal -->
+        <!-- WireGuard Peer Modal -->
         <div id="wg-modal" class="modal" style="display: none;">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h3 id="wg-modal-title">Add WireGuard Client</h3>
+                    <h3 id="wg-modal-title">Add WireGuard Peer</h3>
                     <button class="modal-close" onclick="closeWGModal()">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <!-- Add Client Form -->
+                    <!-- Add Peer Form -->
                     <div id="wg-add-form">
                         <div class="form-group">
-                            <label for="wg-client-name">Client Name</label>
+                            <label for="wg-client-name">Peer Name</label>
                             <input type="text" id="wg-client-name" placeholder="e.g., iPhone, Laptop">
                         </div>
-                        <button id="wg-create-btn" class="btn-primary" onclick="createWGClient()">Create Client</button>
+                        <button id="wg-create-btn" class="btn-primary" onclick="createWGClient()">Create Peer</button>
                     </div>
                     <!-- Client Config Display -->
                     <div id="wg-config-display" style="display: none;">
