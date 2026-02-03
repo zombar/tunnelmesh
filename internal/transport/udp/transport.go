@@ -414,6 +414,11 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 		return
 	}
 
+	log.Debug().
+		Uint32("unknown_index", pkt.UnknownIndex).
+		Str("from", remoteAddr.String()).
+		Msg("received rekey-required from peer")
+
 	// Find session by the index the peer says is unknown.
 	// The unknownIndex is the receiver index from packets we sent to them,
 	// which is our REMOTE index (the peer's local index from their perspective).
@@ -422,6 +427,11 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 	var session *Session
 	var localIndex uint32
 	for idx, s := range t.sessions {
+		log.Trace().
+			Uint32("session_local_idx", idx).
+			Uint32("session_remote_idx", s.RemoteIndex()).
+			Str("peer", s.PeerName()).
+			Msg("checking session for rekey match")
 		if s.RemoteIndex() == pkt.UnknownIndex {
 			session = s
 			localIndex = idx
@@ -433,6 +443,7 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 		log.Debug().
 			Uint32("unknown_index", pkt.UnknownIndex).
 			Str("from", remoteAddr.String()).
+			Int("session_count", len(t.sessions)).
 			Msg("rekey-required for unknown remote index (already removed?)")
 		return
 	}
