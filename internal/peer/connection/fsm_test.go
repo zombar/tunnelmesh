@@ -493,6 +493,62 @@ func (p *pipeRWC) Close() error {
 	return p.writer.Close()
 }
 
+// Test that cancel function is cleared when transitioning to Connected
+// This prevents incoming connections from cancelling the HandleTunnel context
+func TestPeerConnection_CancelFuncClearedOnConnected(t *testing.T) {
+	pc := NewPeerConnection(PeerConnectionConfig{
+		PeerName: "test-peer",
+		MeshIP:   "10.0.0.1",
+	})
+
+	// Simulate outbound connection flow: Disconnected -> Connecting -> Connected
+	cancelled := false
+	pc.SetCancelFunc(func() { cancelled = true })
+	_ = pc.StartConnecting("dial")
+
+	// Connect with a tunnel
+	tunnel := &mockTunnel{}
+	_ = pc.Connected(tunnel, "test")
+
+	// The cancel function should have been cleared during transition to Connected
+	// Calling CancelOutbound should NOT cancel anything
+	wasCancelled := pc.CancelOutbound()
+	if wasCancelled {
+		t.Error("CancelOutbound() should return false after Connected transition")
+	}
+	if cancelled {
+		t.Error("Cancel function should NOT have been called - it should have been cleared")
+	}
+}
+
+// Test that cancel function is called when CancelOutbound is called before Connected
+func TestPeerConnection_CancelOutboundDuringConnecting(t *testing.T) {
+	pc := NewPeerConnection(PeerConnectionConfig{
+		PeerName: "test-peer",
+		MeshIP:   "10.0.0.1",
+	})
+
+	// Simulate outbound connection flow starting
+	cancelled := false
+	pc.SetCancelFunc(func() { cancelled = true })
+	_ = pc.StartConnecting("dial")
+
+	// While still connecting, cancel outbound (simulates incoming connection arriving)
+	wasCancelled := pc.CancelOutbound()
+	if !wasCancelled {
+		t.Error("CancelOutbound() should return true when cancel func is set")
+	}
+	if !cancelled {
+		t.Error("Cancel function should have been called")
+	}
+
+	// Subsequent calls should return false
+	wasCancelled = pc.CancelOutbound()
+	if wasCancelled {
+		t.Error("CancelOutbound() should return false when called again")
+	}
+}
+
 // Test that tunnels with actual data work
 func TestPeerConnection_TunnelDataFlow(t *testing.T) {
 	pc := NewPeerConnection(PeerConnectionConfig{
