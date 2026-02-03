@@ -540,6 +540,35 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 		return
 	}
 
+	// Check if we already have an active established session for this peer.
+	// If so, don't replace it - the peer is probably retrying due to packet loss.
+	// We still send the response (above) so they can complete their handshake,
+	// but we keep our existing session to avoid breaking ongoing communication.
+	t.mu.RLock()
+	existingSession, hasExisting := t.peerSessions[peerName]
+	if hasExisting && existingSession.IsEstablished() {
+		// Check if the existing session is still active (received data recently)
+		lastRecv := existingSession.LastReceive()
+		sessionAge := time.Since(lastRecv)
+		t.mu.RUnlock()
+
+		// If we received data in the last 30 seconds, keep the existing session
+		if sessionAge < 30*time.Second {
+			log.Debug().
+				Str("peer", peerName).
+				Str("remote", remoteAddr.String()).
+				Dur("session_age", sessionAge).
+				Msg("ignoring handshake init, active session exists")
+			return
+		}
+		log.Debug().
+			Str("peer", peerName).
+			Dur("session_age", sessionAge).
+			Msg("replacing stale session with new handshake")
+	} else {
+		t.mu.RUnlock()
+	}
+
 	// Create session using the same socket that received the handshake
 	session := NewSession(SessionConfig{
 		LocalIndex: hs.LocalIndex(),

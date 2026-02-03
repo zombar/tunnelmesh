@@ -133,6 +133,20 @@ func (s *Session) RemoteIndex() uint32 {
 	return s.remoteIndex
 }
 
+// IsEstablished returns true if the session is in established state.
+func (s *Session) IsEstablished() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state == SessionStateEstablished
+}
+
+// LastReceive returns the time of the last received packet.
+func (s *Session) LastReceive() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastRecv
+}
+
 // PeerName returns the peer name.
 func (s *Session) PeerName() string {
 	return s.peerName
