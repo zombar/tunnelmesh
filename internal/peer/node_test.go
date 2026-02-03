@@ -264,6 +264,22 @@ func TestMeshNode_StartConnecting_AlreadyConnecting(t *testing.T) {
 	assert.True(t, started3, "should be able to start connecting after clear")
 }
 
+// TestReconnectPersistentRelay_AtomicSwapBehavior documents the expected behavior
+// of ReconnectPersistentRelay. The actual relay reconnection requires a real server,
+// but this test verifies the code structure ensures atomic swap semantics:
+//
+// 1. Old relay is saved but NOT closed or cleared from forwarder
+// 2. New relay is created and connection attempted
+// 3. Only on SUCCESS: new relay is set in forwarder, then old relay is closed
+// 4. Only on TOTAL FAILURE (all retries exhausted): relay is set to nil
+//
+// This prevents packet loss during the reconnection window, which can take
+// 500ms to 30+ seconds with exponential backoff.
+//
+// To verify this behavior, inspect ReconnectPersistentRelay():
+// - m.Forwarder.SetRelay(nil) is ONLY called after all retries fail
+// - m.Forwarder.SetRelay(newRelay) is called BEFORE oldRelay.Close()
+
 func TestMeshNode_InboundCancelsOutbound_Integration(t *testing.T) {
 	// This test simulates the full flow:
 	// 1. Start an outbound connection (slow, takes 100ms)

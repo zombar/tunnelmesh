@@ -292,16 +292,12 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 }
 
 // ReconnectPersistentRelay reconnects the persistent relay after a network change.
-// It retries with exponential backoff until successful or context is cancelled.
+// It uses atomic swap to keep the old relay active until the new one connects,
+// preventing packet loss during the reconnection window.
 func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
-	if m.PersistentRelay != nil {
-		m.PersistentRelay.Close()
-		m.PersistentRelay = nil
-		// Clear forwarder's relay reference to prevent using stale closed relay
-		if m.Forwarder != nil {
-			m.Forwarder.SetRelay(nil)
-		}
-	}
+	oldRelay := m.PersistentRelay
+	// Note: We intentionally do NOT close or clear the old relay here.
+	// The forwarder continues using it until the new relay is ready.
 
 	// Small delay to let network settle
 	select {
@@ -321,27 +317,94 @@ func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
 		default:
 		}
 
-		err := m.ConnectPersistentRelay(ctx)
-		if err == nil {
-			log.Info().Int("attempt", attempt).Msg("persistent relay reconnected after network change")
-			return
+		// Get fresh JWT token for new connection
+		jwtToken := m.client.JWTToken()
+		if jwtToken == "" {
+			log.Warn().Int("attempt", attempt).Msg("no JWT token for relay reconnection")
+			if attempt < maxAttempts {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			continue
 		}
 
-		log.Warn().Err(err).Int("attempt", attempt).Msg("failed to reconnect persistent relay")
+		// Create new relay (don't touch old yet)
+		newRelay := tunnel.NewPersistentRelay(m.client.BaseURL(), jwtToken)
 
-		if attempt < maxAttempts {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(backoff):
+		// Set up packet handler BEFORE connecting
+		newRelay.SetPacketHandler(func(sourcePeer string, data []byte) {
+			if m.Forwarder != nil {
+				log.Debug().Str("source", sourcePeer).Int("len", len(data)).Msg("routing relay packet to forwarder")
+				m.Forwarder.HandleRelayPacket(sourcePeer, data)
+			} else {
+				log.Warn().Str("source", sourcePeer).Int("len", len(data)).Msg("dropping relay packet: forwarder not set")
 			}
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
+
+			// Invalidate stale direct tunnels when receiving relay packets
+			if pc := m.Connections.Get(sourcePeer); pc != nil {
+				if pc.HasTunnel() {
+					log.Info().Str("peer", sourcePeer).Msg("received relay packet from peer with active tunnel, invalidating stale tunnel")
+					_ = pc.Disconnect("peer using relay (asymmetric tunnel failure)", nil)
+				}
 			}
+		})
+
+		newRelay.SetPeerReconnectedHandler(func(peerName string) {
+			if pc := m.Connections.Get(peerName); pc != nil {
+				log.Info().Str("peer", peerName).Msg("peer reconnected to relay, invalidating stale tunnel")
+				_ = pc.Disconnect("peer reconnected to relay", nil)
+			}
+		})
+
+		if err := newRelay.Connect(ctx); err != nil {
+			log.Warn().Err(err).Int("attempt", attempt).Msg("relay reconnection failed")
+			newRelay.Close()
+
+			if attempt < maxAttempts {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			continue
 		}
+
+		// SUCCESS! Atomically swap relay references
+		// Forwarder will immediately start using new relay for outbound packets
+		m.PersistentRelay = newRelay
+		if m.Forwarder != nil {
+			m.Forwarder.SetRelay(newRelay)
+		}
+
+		// NOW close old relay (packets already routing to new)
+		if oldRelay != nil {
+			oldRelay.Close()
+		}
+
+		log.Info().Int("attempt", attempt).Msg("persistent relay reconnected after network change")
+		return
 	}
 
+	// All attempts failed - now clear references as last resort
+	if oldRelay != nil {
+		oldRelay.Close()
+	}
+	m.PersistentRelay = nil
+	if m.Forwarder != nil {
+		m.Forwarder.SetRelay(nil)
+	}
 	log.Error().Msg("gave up reconnecting persistent relay after max attempts")
 }
 
