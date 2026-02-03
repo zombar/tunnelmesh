@@ -24,11 +24,12 @@ type APIResponse struct {
 
 // APIHandler handles WireGuard API requests proxied through the relay.
 type APIHandler struct {
-	store           *ClientStore
-	serverPublicKey string // Concentrator's public key
-	serverEndpoint  string // WireGuard endpoint for clients to connect to
-	meshCIDR        string
-	domainSuffix    string
+	store            *ClientStore
+	serverPublicKey  string // Concentrator's public key
+	serverEndpoint   string // WireGuard endpoint for clients to connect to
+	meshCIDR         string
+	domainSuffix     string
+	onClientsChanged func(clients []Client) // Called when clients are created/updated/deleted
 }
 
 // NewAPIHandler creates a new API handler.
@@ -39,6 +40,18 @@ func NewAPIHandler(store *ClientStore, serverPublicKey, serverEndpoint, meshCIDR
 		serverEndpoint:  serverEndpoint,
 		meshCIDR:        meshCIDR,
 		domainSuffix:    domainSuffix,
+	}
+}
+
+// SetOnClientsChanged sets the callback for when clients are created, updated, or deleted.
+func (h *APIHandler) SetOnClientsChanged(fn func(clients []Client)) {
+	h.onClientsChanged = fn
+}
+
+// notifyClientsChanged calls the callback with the current client list.
+func (h *APIHandler) notifyClientsChanged() {
+	if h.onClientsChanged != nil {
+		h.onClientsChanged(h.store.List())
 	}
 }
 
@@ -138,6 +151,9 @@ func (h *APIHandler) createClient(body []byte) []byte {
 
 	log.Info().Str("client_id", client.ID).Str("name", client.Name).Msg("created WireGuard client")
 
+	// Notify about client change
+	h.notifyClientsChanged()
+
 	return h.jsonResponse(201, resp)
 }
 
@@ -169,6 +185,9 @@ func (h *APIHandler) updateClient(id string, body []byte) []byte {
 
 	log.Info().Str("client_id", id).Msg("updated WireGuard client")
 
+	// Notify about client change
+	h.notifyClientsChanged()
+
 	return h.jsonResponse(200, client)
 }
 
@@ -182,6 +201,9 @@ func (h *APIHandler) deleteClient(id string) []byte {
 	}
 
 	log.Info().Str("client_id", id).Msg("deleted WireGuard client")
+
+	// Notify about client change
+	h.notifyClientsChanged()
 
 	return h.jsonResponse(200, map[string]string{"status": "deleted"})
 }

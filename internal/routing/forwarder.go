@@ -53,18 +53,28 @@ type ForwarderStats struct {
 	Errors          uint64
 }
 
+// WGPacketHandler handles packets destined for WireGuard clients.
+type WGPacketHandler interface {
+	// IsWGClientIP returns true if the IP is a WireGuard client IP.
+	IsWGClientIP(ip string) bool
+	// SendPacket sends a packet to a WireGuard client.
+	SendPacket(packet []byte) error
+}
+
 // Forwarder routes packets between the TUN device and tunnels.
 type Forwarder struct {
 	router             *Router
 	tunnels            TunnelProvider
 	tun                TUNDevice
-	relay              RelayPacketSender // Optional persistent relay for fallback
+	relay              RelayPacketSender   // Optional persistent relay for fallback
+	wgHandler          WGPacketHandler     // Optional WireGuard handler for local WG clients
 	bufPool            *PacketBufferPool
 	zeroCopyPool       *ZeroCopyBufferPool // Pool for zero-copy buffers
 	framePool          *sync.Pool          // Pool for frame buffers (header + MTU)
 	stats              ForwarderStats
 	tunMu              sync.RWMutex
 	relayMu            sync.RWMutex
+	wgMu               sync.RWMutex
 	localIP            net.IP
 	localIPMu          sync.RWMutex
 	onDeadTunnel       func(peerName string) // Callback when tunnel write fails
@@ -119,6 +129,14 @@ func (f *Forwarder) SetRelay(relay RelayPacketSender) {
 	} else {
 		log.Debug().Bool("old_was_nil", oldRelay == nil).Msg("forwarder relay reference cleared")
 	}
+}
+
+// SetWGHandler sets the WireGuard packet handler for local WG client routing.
+func (f *Forwarder) SetWGHandler(handler WGPacketHandler) {
+	f.wgMu.Lock()
+	defer f.wgMu.Unlock()
+	f.wgHandler = handler
+	log.Debug().Bool("handler_set", handler != nil).Msg("forwarder WG handler updated")
 }
 
 // SetOnDeadTunnel sets a callback that is called when a tunnel write fails.
@@ -205,6 +223,25 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 	if localIP != nil && info.DstIP.Equal(localIP) {
 		// Write back to TUN so kernel delivers it locally
 		return f.ReceivePacket(packet)
+	}
+
+	// Check if destination is a local WireGuard client
+	f.wgMu.RLock()
+	wgHandler := f.wgHandler
+	f.wgMu.RUnlock()
+	if wgHandler != nil && wgHandler.IsWGClientIP(info.DstIP.String()) {
+		if err := wgHandler.SendPacket(packet); err != nil {
+			atomic.AddUint64(&f.stats.Errors, 1)
+			return fmt.Errorf("send to WG client: %w", err)
+		}
+		atomic.AddUint64(&f.stats.PacketsSent, 1)
+		atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
+		log.Trace().
+			Str("src", info.SrcIP.String()).
+			Str("dst", info.DstIP.String()).
+			Int("len", len(packet)).
+			Msg("forwarded packet to WG client")
+		return nil
 	}
 
 	// Look up the route
@@ -364,6 +401,25 @@ func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) 
 	f.localIPMu.RUnlock()
 	if localIP != nil && info.DstIP.Equal(localIP) {
 		return f.ReceivePacket(packet)
+	}
+
+	// Check if destination is a local WireGuard client
+	f.wgMu.RLock()
+	wgHandler := f.wgHandler
+	f.wgMu.RUnlock()
+	if wgHandler != nil && wgHandler.IsWGClientIP(info.DstIP.String()) {
+		if err := wgHandler.SendPacket(packet); err != nil {
+			atomic.AddUint64(&f.stats.Errors, 1)
+			return fmt.Errorf("send to WG client: %w", err)
+		}
+		atomic.AddUint64(&f.stats.PacketsSent, 1)
+		atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
+		log.Trace().
+			Str("src", info.SrcIP.String()).
+			Str("dst", info.DstIP.String()).
+			Int("len", packetLen).
+			Msg("forwarded packet to WG client")
+		return nil
 	}
 
 	// Look up the route

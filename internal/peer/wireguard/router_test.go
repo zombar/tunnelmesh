@@ -168,3 +168,100 @@ func TestRouterIsWGTraffic(t *testing.T) {
 		t.Error("10.99.0.1 should not be WG client IP")
 	}
 }
+
+func TestRoutePacketFromWG(t *testing.T) {
+	router := NewRouter("10.99.0.0/16")
+
+	// Create a packet from WG client (10.99.100.1) to mesh peer (10.99.0.1)
+	packet := []byte{
+		0x45, 0x00, 0x00, 0x28,
+		0x00, 0x00, 0x00, 0x00,
+		0x40, 0x06, 0x00, 0x00,
+		0x0a, 0x63, 0x64, 0x01, // source: 10.99.100.1
+		0x0a, 0x63, 0x00, 0x01, // dest: 10.99.0.1
+	}
+
+	decision, destIP := router.RoutePacket(packet, true) // fromWG = true
+	if decision != RouteToMesh {
+		t.Errorf("expected RouteToMesh, got %v", decision)
+	}
+	if destIP != "10.99.0.1" {
+		t.Errorf("expected dest 10.99.0.1, got %s", destIP)
+	}
+}
+
+func TestRoutePacketToWGClient(t *testing.T) {
+	router := NewRouter("10.99.0.0/16")
+
+	// Create a packet from mesh peer (10.99.0.1) to WG client (10.99.100.1)
+	packet := []byte{
+		0x45, 0x00, 0x00, 0x28,
+		0x00, 0x00, 0x00, 0x00,
+		0x40, 0x06, 0x00, 0x00,
+		0x0a, 0x63, 0x00, 0x01, // source: 10.99.0.1
+		0x0a, 0x63, 0x64, 0x01, // dest: 10.99.100.1
+	}
+
+	decision, destIP := router.RoutePacket(packet, false) // fromWG = false
+	if decision != RouteToWGClient {
+		t.Errorf("expected RouteToWGClient, got %v", decision)
+	}
+	if destIP != "10.99.100.1" {
+		t.Errorf("expected dest 10.99.100.1, got %s", destIP)
+	}
+}
+
+func TestRoutePacketDropNonWG(t *testing.T) {
+	router := NewRouter("10.99.0.0/16")
+
+	// Create a packet to non-WG destination (shouldn't have been sent here)
+	packet := []byte{
+		0x45, 0x00, 0x00, 0x28,
+		0x00, 0x00, 0x00, 0x00,
+		0x40, 0x06, 0x00, 0x00,
+		0x0a, 0x63, 0x00, 0x01, // source: 10.99.0.1
+		0x0a, 0x63, 0x00, 0x02, // dest: 10.99.0.2 (not a WG client)
+	}
+
+	decision, _ := router.RoutePacket(packet, false) // fromWG = false
+	if decision != RouteDrop {
+		t.Errorf("expected RouteDrop for non-WG destination, got %v", decision)
+	}
+}
+
+func TestRoutePacketInvalidPacket(t *testing.T) {
+	router := NewRouter("10.99.0.0/16")
+
+	// Too short packet
+	packet := []byte{0x45, 0x00, 0x00}
+
+	decision, _ := router.RoutePacket(packet, false)
+	if decision != RouteDrop {
+		t.Errorf("expected RouteDrop for invalid packet, got %v", decision)
+	}
+}
+
+func TestPacketHandlerIsWGClientIP(t *testing.T) {
+	router := NewRouter("10.99.0.0/16")
+	handler := NewPacketHandler(router, nil)
+
+	tests := []struct {
+		ip       string
+		expected bool
+	}{
+		{"10.99.100.1", true},
+		{"10.99.150.50", true},
+		{"10.99.0.1", false},
+		{"10.99.50.1", false},
+		{"192.168.1.1", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.ip, func(t *testing.T) {
+			result := handler.IsWGClientIP(tt.ip)
+			if result != tt.expected {
+				t.Errorf("IsWGClientIP(%s) = %v, want %v", tt.ip, result, tt.expected)
+			}
+		})
+	}
+}

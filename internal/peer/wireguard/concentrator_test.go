@@ -233,3 +233,135 @@ func TestClientsDiff(t *testing.T) {
 		t.Errorf("expected removed client ID 1, got %s", removed[0].ID)
 	}
 }
+
+func TestConcentratorSetOnPacketFromWG(t *testing.T) {
+	cfg := &ConcentratorConfig{
+		ServerURL:    "https://coord.example.com",
+		AuthToken:    "test-token",
+		ListenPort:   51820,
+		DataDir:      t.TempDir(),
+		SyncInterval: 30 * time.Second,
+	}
+
+	conc, err := NewConcentrator(cfg)
+	if err != nil {
+		t.Fatalf("failed to create concentrator: %v", err)
+	}
+
+	var callbackCalled bool
+	conc.SetOnPacketFromWG(func(packet []byte) {
+		callbackCalled = true
+	})
+
+	// Verify callback is set by accessing the field
+	if conc.onPacketFromWG == nil {
+		t.Error("onPacketFromWG callback should be set")
+	}
+
+	// Suppress unused variable warning
+	_ = callbackCalled
+}
+
+func TestConcentratorIsDeviceRunning(t *testing.T) {
+	cfg := &ConcentratorConfig{
+		ServerURL:    "https://coord.example.com",
+		AuthToken:    "test-token",
+		ListenPort:   51820,
+		DataDir:      t.TempDir(),
+		SyncInterval: 30 * time.Second,
+	}
+
+	conc, err := NewConcentrator(cfg)
+	if err != nil {
+		t.Fatalf("failed to create concentrator: %v", err)
+	}
+
+	// Device should not be running initially
+	if conc.IsDeviceRunning() {
+		t.Error("device should not be running initially")
+	}
+}
+
+func TestConcentratorSendPacketWithoutDevice(t *testing.T) {
+	cfg := &ConcentratorConfig{
+		ServerURL:    "https://coord.example.com",
+		AuthToken:    "test-token",
+		ListenPort:   51820,
+		DataDir:      t.TempDir(),
+		SyncInterval: 30 * time.Second,
+	}
+
+	conc, err := NewConcentrator(cfg)
+	if err != nil {
+		t.Fatalf("failed to create concentrator: %v", err)
+	}
+
+	// SendPacket should fail when device is not running
+	err = conc.SendPacket([]byte{0x45, 0x00, 0x00, 0x28})
+	if err == nil {
+		t.Error("expected error when sending packet without device")
+	}
+}
+
+func TestConcentratorUpdateClientsWithoutDevice(t *testing.T) {
+	cfg := &ConcentratorConfig{
+		ServerURL:    "https://coord.example.com",
+		AuthToken:    "test-token",
+		ListenPort:   51820,
+		DataDir:      t.TempDir(),
+		SyncInterval: 30 * time.Second,
+	}
+
+	conc, err := NewConcentrator(cfg)
+	if err != nil {
+		t.Fatalf("failed to create concentrator: %v", err)
+	}
+
+	// Track if callback was called
+	var callbackClients []Client
+	conc.SetOnClientsUpdated(func(clients []Client) {
+		callbackClients = clients
+	})
+
+	clients := []Client{
+		{ID: "1", Name: "iPhone", PublicKey: "key1", MeshIP: "10.99.100.1", Enabled: true},
+		{ID: "2", Name: "Android", PublicKey: "key2", MeshIP: "10.99.100.2", Enabled: true},
+	}
+
+	// UpdateClients should work even without device (just updates internal list)
+	err = conc.UpdateClients(clients)
+	if err != nil {
+		t.Errorf("UpdateClients failed: %v", err)
+	}
+
+	// Verify clients were stored
+	if len(conc.Clients()) != 2 {
+		t.Errorf("expected 2 clients, got %d", len(conc.Clients()))
+	}
+
+	// Verify callback was called
+	if len(callbackClients) != 2 {
+		t.Errorf("callback should have received 2 clients, got %d", len(callbackClients))
+	}
+}
+
+func TestConcentratorStopDeviceWhenNotRunning(t *testing.T) {
+	cfg := &ConcentratorConfig{
+		ServerURL:    "https://coord.example.com",
+		AuthToken:    "test-token",
+		ListenPort:   51820,
+		DataDir:      t.TempDir(),
+		SyncInterval: 30 * time.Second,
+	}
+
+	conc, err := NewConcentrator(cfg)
+	if err != nil {
+		t.Fatalf("failed to create concentrator: %v", err)
+	}
+
+	// StopDevice should not error when device is not running
+	err = conc.StopDevice()
+	if err != nil {
+		t.Errorf("StopDevice should not error when device not running: %v", err)
+	}
+}
