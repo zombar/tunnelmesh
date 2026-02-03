@@ -14,6 +14,16 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
+// relayPacketPool pools relay packet buffers to reduce GC pressure.
+// Max packet size is ~65KB, plus header overhead.
+var relayPacketPool = sync.Pool{
+	New: func() interface{} {
+		// Allocate buffer for max relay message: type(1) + name_len(1) + name(255) + data(65535)
+		buf := make([]byte, 65792)
+		return &buf
+	},
+}
+
 // relayConn represents a peer's relay connection.
 type relayConn struct {
 	peerName   string
@@ -24,9 +34,12 @@ type relayConn struct {
 
 // persistentConn represents a peer's persistent relay connection (DERP-like).
 type persistentConn struct {
-	peerName string
-	conn     *websocket.Conn
-	writeMu  sync.Mutex // protects writes to conn
+	peerName  string
+	conn      *websocket.Conn
+	writeChan chan []byte   // buffered channel for async writes
+	closeChan chan struct{} // signals writer goroutine to stop
+	closed    bool
+	closeMu   sync.Mutex
 }
 
 // relayManager handles relay connections between peers.
@@ -136,12 +149,12 @@ func (r *relayManager) SendAPIRequest(method string, body []byte, timeout time.D
 	copy(msg[6:], method)
 	copy(msg[6+len(method):], body)
 
-	// Send request
-	pc.writeMu.Lock()
-	err := pc.conn.WriteMessage(websocket.BinaryMessage, msg)
-	pc.writeMu.Unlock()
-	if err != nil {
-		return nil, fmt.Errorf("send API request: %w", err)
+	// Send request via async write channel
+	select {
+	case pc.writeChan <- msg:
+		// Message queued
+	default:
+		return nil, fmt.Errorf("send API request: write channel full")
 	}
 
 	// Wait for response
@@ -185,15 +198,60 @@ func (r *relayManager) RegisterPersistent(peerName string, conn *websocket.Conn)
 
 	// Close existing connection if any
 	if existing, ok := r.persistent[peerName]; ok {
-		existing.conn.Close()
+		existing.Close()
 	}
 
 	pc := &persistentConn{
-		peerName: peerName,
-		conn:     conn,
+		peerName:  peerName,
+		conn:      conn,
+		writeChan: make(chan []byte, 256), // Buffered channel to prevent blocking
+		closeChan: make(chan struct{}),
 	}
 	r.persistent[peerName] = pc
+
+	// Start the writer goroutine
+	go pc.writeLoop()
+
 	return pc
+}
+
+// writeLoop processes queued writes to avoid blocking senders.
+func (pc *persistentConn) writeLoop() {
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+
+	for {
+		select {
+		case <-pc.closeChan:
+			return
+		case <-pingTicker.C:
+			if err := pc.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+				log.Debug().Err(err).Str("peer", pc.peerName).Msg("persistent relay ping failed")
+				return
+			}
+		case data := <-pc.writeChan:
+			if err := pc.conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+				log.Debug().Err(err).Str("peer", pc.peerName).Msg("persistent relay write failed")
+				// Return buffer to pool
+				relayPacketPool.Put(&data)
+				return
+			}
+			// Return buffer to pool after successful write
+			relayPacketPool.Put(&data)
+		}
+	}
+}
+
+// Close closes the persistent connection and stops the writer goroutine.
+func (pc *persistentConn) Close() {
+	pc.closeMu.Lock()
+	defer pc.closeMu.Unlock()
+	if pc.closed {
+		return
+	}
+	pc.closed = true
+	close(pc.closeChan)
+	pc.conn.Close()
 }
 
 // UnregisterPersistent removes a peer's persistent relay connection.
@@ -223,26 +281,31 @@ func (r *relayManager) BroadcastPeerReconnected(reconnectedPeer string) {
 	}
 	r.mu.Unlock()
 
-	// Build message: [MsgTypePeerReconnected][name len][name]
-	msg := make([]byte, 2+len(reconnectedPeer))
-	msg[0] = MsgTypePeerReconnected
-	msg[1] = byte(len(reconnectedPeer))
-	copy(msg[2:], reconnectedPeer)
-
 	for _, pc := range peers {
-		pc.writeMu.Lock()
-		err := pc.conn.WriteMessage(websocket.BinaryMessage, msg)
-		pc.writeMu.Unlock()
-		if err != nil {
-			log.Debug().Err(err).
-				Str("target", pc.peerName).
-				Str("reconnected", reconnectedPeer).
-				Msg("failed to send peer reconnected notification")
-		} else {
+		// Get buffer from pool for each peer (they'll be returned after write)
+		bufPtr := relayPacketPool.Get().(*[]byte)
+		buf := *bufPtr
+
+		// Build message: [MsgTypePeerReconnected][name len][name]
+		msgLen := 2 + len(reconnectedPeer)
+		msg := buf[:msgLen]
+		msg[0] = MsgTypePeerReconnected
+		msg[1] = byte(len(reconnectedPeer))
+		copy(msg[2:], reconnectedPeer)
+
+		// Non-blocking send to write channel
+		select {
+		case pc.writeChan <- msg:
 			log.Debug().
 				Str("target", pc.peerName).
 				Str("reconnected", reconnectedPeer).
-				Msg("sent peer reconnected notification")
+				Msg("queued peer reconnected notification")
+		default:
+			relayPacketPool.Put(bufPtr)
+			log.Debug().
+				Str("target", pc.peerName).
+				Str("reconnected", reconnectedPeer).
+				Msg("failed to queue peer reconnected notification (channel full)")
 		}
 	}
 }
@@ -250,17 +313,42 @@ func (r *relayManager) BroadcastPeerReconnected(reconnectedPeer string) {
 // SendToPeer sends a packet to a peer via their persistent connection.
 // Returns true if the peer is connected and the packet was sent.
 func (pc *persistentConn) SendPacket(sourcePeer string, data []byte) error {
-	pc.writeMu.Lock()
-	defer pc.writeMu.Unlock()
+	pc.closeMu.Lock()
+	if pc.closed {
+		pc.closeMu.Unlock()
+		return io.EOF
+	}
+	pc.closeMu.Unlock()
+
+	// Get buffer from pool
+	bufPtr := relayPacketPool.Get().(*[]byte)
+	buf := *bufPtr
 
 	// Build message: [MsgTypeRecvPacket][source name len][source name][data]
-	msg := make([]byte, 2+len(sourcePeer)+len(data))
+	msgLen := 2 + len(sourcePeer) + len(data)
+	if msgLen > len(buf) {
+		// Message too large for pooled buffer, allocate new one
+		relayPacketPool.Put(bufPtr)
+		buf = make([]byte, msgLen)
+		bufPtr = &buf
+	}
+
+	msg := buf[:msgLen]
 	msg[0] = MsgTypeRecvPacket
 	msg[1] = byte(len(sourcePeer))
 	copy(msg[2:], sourcePeer)
 	copy(msg[2+len(sourcePeer):], data)
 
-	return pc.conn.WriteMessage(websocket.BinaryMessage, msg)
+	// Send to write channel (non-blocking with timeout)
+	select {
+	case pc.writeChan <- msg:
+		return nil
+	default:
+		// Channel full - drop packet to avoid blocking
+		relayPacketPool.Put(bufPtr)
+		log.Warn().Str("peer", pc.peerName).Msg("relay write channel full, dropping packet")
+		return nil
+	}
 }
 
 // GetPendingRequestsFor returns the list of peers waiting on relay for the given peer.
@@ -334,12 +422,12 @@ func (s *Server) handlePersistentRelay(w http.ResponseWriter, r *http.Request) {
 
 	log.Info().Str("peer", peerName).Msg("persistent relay connection established")
 
-	// Register the connection
+	// Register the connection (starts writer goroutine with ping ticker)
 	pc := s.relay.RegisterPersistent(peerName, conn)
 	defer func() {
 		s.relay.UnregisterPersistent(peerName)
 		s.relay.ClearWGConcentrator(peerName) // Clear if this was the concentrator
-		conn.Close()
+		pc.Close()
 		log.Info().Str("peer", peerName).Msg("persistent relay connection closed")
 	}()
 
@@ -353,46 +441,17 @@ func (s *Server) handlePersistentRelay(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	// Start ping ticker
-	pingTicker := time.NewTicker(30 * time.Second)
-	defer pingTicker.Stop()
-
-	// Handle messages in a separate goroutine and use channel to coordinate
-	msgChan := make(chan []byte, 16)
-	errChan := make(chan error, 1)
-
-	go func() {
-		for {
-			_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
-			_, data, err := conn.ReadMessage()
-			if err != nil {
-				errChan <- err
-				return
-			}
-			msgChan <- data
-		}
-	}()
-
+	// Read loop - handle messages directly (writes go through buffered channel)
 	for {
-		select {
-		case <-pingTicker.C:
-			pc.writeMu.Lock()
-			err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))
-			pc.writeMu.Unlock()
-			if err != nil {
-				log.Debug().Err(err).Str("peer", peerName).Msg("persistent relay ping failed")
-				return
-			}
-
-		case data := <-msgChan:
-			s.handlePersistentRelayMessage(peerName, data)
-
-		case err := <-errChan:
+		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		_, data, err := conn.ReadMessage()
+		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				log.Debug().Err(err).Str("peer", peerName).Msg("persistent relay read error")
 			}
 			return
 		}
+		s.handlePersistentRelayMessage(peerName, data)
 	}
 }
 
