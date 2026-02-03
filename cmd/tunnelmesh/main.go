@@ -170,6 +170,7 @@ func runAsService() {
 	// Set up logging directly to a file since launchd/kardianos-service
 	// may not properly redirect stderr
 	setupServiceLogging()
+	logStartupBanner()
 
 	// Parse the service-specific flags manually
 	var mode, configPath string
@@ -321,6 +322,7 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 
 func runServe(cmd *cobra.Command, args []string) error {
 	setupLogging()
+	logStartupBanner()
 
 	var cfg *config.ServerConfig
 	var err error
@@ -437,6 +439,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 func runJoin(cmd *cobra.Command, args []string) error {
 	setupLogging()
+	logStartupBanner()
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -1078,6 +1081,38 @@ func setupLogging() {
 	zerolog.SetGlobalLevel(level)
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+}
+
+// logStartupBanner logs the application startup banner with version information.
+func logStartupBanner() {
+	banner := `
+╔════════════════════════════════════════════════════════════════╗
+║                                                                ║
+║   ████████╗██╗   ██╗███╗   ██╗███╗   ██╗███████╗██╗            ║
+║   ╚══██╔══╝██║   ██║████╗  ██║████╗  ██║██╔════╝██║            ║
+║      ██║   ██║   ██║██╔██╗ ██║██╔██╗ ██║█████╗  ██║            ║
+║      ██║   ██║   ██║██║╚██╗██║██║╚██╗██║██╔══╝  ██║            ║
+║      ██║   ╚██████╔╝██║ ╚████║██║ ╚████║███████╗███████╗       ║
+║      ╚═╝    ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═══╝╚══════╝╚══════╝       ║
+║                                                                ║
+║            ███╗   ███╗███████╗███████╗██╗  ██╗                 ║
+║            ████╗ ████║██╔════╝██╔════╝██║  ██║                 ║
+║            ██╔████╔██║█████╗  ███████╗███████║                 ║
+║            ██║╚██╔╝██║██╔══╝  ╚════██║██╔══██║                 ║
+║            ██║ ╚═╝ ██║███████╗███████║██║  ██║                 ║
+║            ╚═╝     ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝                 ║
+║                                                                ║
+║            P2P Encrypted Mesh Network                          ║
+║                   written by zombar                            ║
+║                                                                ║
+╚════════════════════════════════════════════════════════════════╝`
+
+	fmt.Fprintln(os.Stderr, banner)
+	fmt.Fprintf(os.Stderr, "\n  Version:    %s\n", Version)
+	fmt.Fprintf(os.Stderr, "  Commit:     %s\n", Commit)
+	fmt.Fprintf(os.Stderr, "  Build Time: %s\n", BuildTime)
+	fmt.Fprintf(os.Stderr, "  Go:         %s\n", runtime.Version())
+	fmt.Fprintf(os.Stderr, "  OS/Arch:    %s/%s\n\n", runtime.GOOS, runtime.GOARCH)
 }
 
 // setupServiceLogging configures logging for service mode.
