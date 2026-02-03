@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"reflect"
 	"sync"
 	"sync/atomic"
 
@@ -105,7 +106,9 @@ func (f *Forwarder) SetRelay(relay RelayPacketSender) {
 	defer f.relayMu.Unlock()
 	oldRelay := f.relay
 	f.relay = relay
-	if relay != nil {
+	// Check for nil interface value (not just nil interface) using reflection
+	isNil := relay == nil || reflect.ValueOf(relay).IsNil()
+	if !isNil {
 		log.Debug().
 			Bool("old_was_nil", oldRelay == nil).
 			Bool("new_connected", relay.IsConnected()).
