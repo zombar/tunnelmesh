@@ -163,6 +163,9 @@ func (pc *PeerConnection) TransitionTo(target State, reason string, err error) e
 			pc.reconnectCount++
 		}
 		pc.connectedSince = now
+		// Clear cancel function - outbound dial has succeeded, don't allow cancellation
+		// This prevents incoming connections from cancelling the HandleTunnel context
+		pc.cancelFunc = nil
 	}
 
 	// Build transition event
