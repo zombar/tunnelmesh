@@ -152,14 +152,18 @@ GHCR_TAG ?= $(COMMIT)
 # Terraform targets
 TF_DIR = terraform
 
-deploy: ghcr-push
-	@echo "Deploying to DigitalOcean App Platform..."
-	cd $(TF_DIR) && terraform apply -var="image_tag=$(COMMIT)" -auto-approve
-	@echo ""
-	@cd $(TF_DIR) && terraform output admin_url
+deploy-init:
+	cd $(TF_DIR) && terraform init
 
 deploy-plan:
-	cd $(TF_DIR) && terraform plan -var="image_tag=$(COMMIT)"
+	cd $(TF_DIR) && terraform plan
+
+deploy:
+	@echo "Deploying TunnelMesh infrastructure to DigitalOcean..."
+	cd $(TF_DIR) && terraform apply -auto-approve
+	@echo ""
+	@echo "=== Deployment Complete ==="
+	@cd $(TF_DIR) && terraform output -json nodes | jq -r 'to_entries[] | "\(.key): \(.value.ip) - \(.value.hostname)"'
 
 deploy-destroy:
 	cd $(TF_DIR) && terraform destroy
@@ -263,6 +267,7 @@ help:
 	@echo "  ghcr-push      - Build and push to ghcr.io"
 	@echo ""
 	@echo "Deployment targets:"
-	@echo "  deploy         - Build, push image, and deploy to DigitalOcean"
+	@echo "  deploy-init    - Initialize terraform"
 	@echo "  deploy-plan    - Show terraform plan for deployment"
+	@echo "  deploy         - Deploy infrastructure to DigitalOcean"
 	@echo "  deploy-destroy - Destroy deployed infrastructure"
