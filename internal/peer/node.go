@@ -245,7 +245,10 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 	// Set up packet handler to route incoming relay packets to forwarder
 	m.PersistentRelay.SetPacketHandler(func(sourcePeer string, data []byte) {
 		if m.Forwarder != nil {
+			log.Debug().Str("source", sourcePeer).Int("len", len(data)).Msg("routing relay packet to forwarder")
 			m.Forwarder.HandleRelayPacket(sourcePeer, data)
+		} else {
+			log.Warn().Str("source", sourcePeer).Int("len", len(data)).Msg("dropping relay packet: forwarder not set")
 		}
 	})
 

@@ -271,6 +271,12 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 				Str("source", sourcePeer).
 				Str("target", targetPeer).
 				Msg("persistent relay forward failed")
+		} else {
+			log.Debug().
+				Str("source", sourcePeer).
+				Str("target", targetPeer).
+				Int("len", len(packetData)).
+				Msg("persistent relay forwarded packet")
 		}
 
 	case MsgTypePing:

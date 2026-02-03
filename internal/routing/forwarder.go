@@ -150,9 +150,9 @@ func (f *Forwarder) HandleRelayPacket(sourcePeer string, data []byte) {
 
 	// Deliver to TUN
 	if err := f.ReceivePacket(packet); err != nil {
-		log.Debug().Err(err).Str("peer", sourcePeer).Msg("failed to deliver relay packet to TUN")
+		log.Warn().Err(err).Str("peer", sourcePeer).Int("len", len(packet)).Msg("failed to deliver relay packet to TUN")
 	} else {
-		log.Trace().Str("peer", sourcePeer).Int("len", len(packet)).Msg("received packet via relay")
+		log.Debug().Str("peer", sourcePeer).Int("len", len(packet)).Msg("delivered relay packet to TUN")
 	}
 }
 
