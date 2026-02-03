@@ -298,17 +298,12 @@ func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
 	oldRelay := m.PersistentRelay
 	// Note: We intentionally do NOT close or clear the old relay here.
 	// The forwarder continues using it until the new relay is ready.
+	// We start reconnection immediately to minimize the window where
+	// the old relay's connection might die before new one is ready.
 
-	// Small delay to let network settle
-	select {
-	case <-ctx.Done():
-		return
-	case <-time.After(500 * time.Millisecond):
-	}
-
-	backoff := time.Second
-	maxBackoff := 30 * time.Second
-	maxAttempts := 10
+	backoff := 200 * time.Millisecond // Start with fast retries
+	maxBackoff := 10 * time.Second    // Cap backoff lower for faster recovery
+	maxAttempts := 15                 // More attempts with faster backoff
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		select {
