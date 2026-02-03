@@ -102,6 +102,6 @@ module "node" {
     lookup(each.value, "coordinator", false) ? ["coordinator"] : [],
     lookup(each.value, "peer", false) ? ["peer"] : [],
     lookup(each.value, "wireguard", false) ? ["wireguard"] : [],
-    lookup(each.value, "tags", [])
+    try(each.value.tags, [])
   )
 }
