@@ -94,7 +94,6 @@ function updateDashboard(data) {
         tbody.innerHTML = data.peers.map(peer => {
             const history = state.peerHistory[peer.name];
             const peerNameEscaped = escapeHtml(peer.name);
-            const currentTransport = peer.preferred_transport || 'auto';
             return `
             <tr>
                 <td><strong>${peerNameEscaped}</strong></td>
@@ -118,17 +117,6 @@ function updateDashboard(data) {
                     </div>
                 </td>
                 <td><code>${escapeHtml(peer.version || '-')}</code></td>
-                <td>
-                    <select class="transport-select" data-peer="${peerNameEscaped}" onchange="setTransport(this)">
-                        <option value="auto" ${currentTransport === 'auto' ? 'selected' : ''}>Auto</option>
-                        <option value="udp" ${currentTransport === 'udp' ? 'selected' : ''}>UDP</option>
-                        <option value="ssh" ${currentTransport === 'ssh' ? 'selected' : ''}>SSH</option>
-                        <option value="relay" ${currentTransport === 'relay' ? 'selected' : ''}>Relay</option>
-                    </select>
-                </td>
-                <td class="actions-cell">
-                    <button class="restart-btn" onclick="restartConnection('${peerNameEscaped}')" title="Restart connection">&#x21bb;</button>
-                </td>
             </tr>
         `}).join('');
     }
@@ -226,60 +214,6 @@ function formatPorts(peer) {
         parts.push(`<span class="port-label">UDP:</span> <code>${udpPort}</code>`);
     }
     return parts.join('<br>');
-}
-
-// Set transport preference for a peer
-async function setTransport(selectElement) {
-    const peerName = selectElement.dataset.peer;
-    const transport = selectElement.value;
-
-    selectElement.disabled = true;
-
-    try {
-        const resp = await fetch(`/admin/api/peers/${encodeURIComponent(peerName)}/transport`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ preferred: transport })
-        });
-
-        if (!resp.ok) {
-            const error = await resp.text();
-            throw new Error(error || `HTTP ${resp.status}`);
-        }
-
-        console.log(`Transport set to ${transport} for ${peerName}`);
-    } catch (err) {
-        console.error('Failed to set transport:', err);
-        alert(`Failed to set transport: ${err.message}`);
-        // Revert to previous selection on error
-        fetchData();
-    } finally {
-        selectElement.disabled = false;
-    }
-}
-
-// Restart connection for a peer
-async function restartConnection(peerName) {
-    if (!confirm(`Restart connection for ${peerName}?`)) {
-        return;
-    }
-
-    try {
-        const resp = await fetch(`/admin/api/peers/${encodeURIComponent(peerName)}/reconnect`, {
-            method: 'POST'
-        });
-
-        if (!resp.ok) {
-            const error = await resp.text();
-            throw new Error(error || `HTTP ${resp.status}`);
-        }
-
-        const result = await resp.json();
-        console.log(`Reconnect initiated for ${peerName}:`, result.message);
-    } catch (err) {
-        console.error('Failed to restart connection:', err);
-        alert(`Failed to restart connection: ${err.message}`);
-    }
 }
 
 // Initialize

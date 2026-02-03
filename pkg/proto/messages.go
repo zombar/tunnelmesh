@@ -11,19 +11,18 @@ import (
 
 // Peer represents a node in the mesh network.
 type Peer struct {
-	Name               string    `json:"name"`
-	PublicKey          string    `json:"public_key"`                    // SSH public key (base64 encoded wire format)
-	PublicIPs          []string  `json:"public_ips"`                    // Externally reachable IPs
-	PrivateIPs         []string  `json:"private_ips"`                   // Internal network IPs
-	SSHPort            int       `json:"ssh_port"`                      // SSH server port
-	UDPPort            int       `json:"udp_port,omitempty"`            // UDP transport port
-	MeshIP             string    `json:"mesh_ip"`                       // Assigned mesh network IP (10.99.x.x)
-	LastSeen           time.Time `json:"last_seen"`                     // Last heartbeat time
-	Connectable        bool      `json:"connectable"`                   // Can accept incoming connections
-	BehindNAT          bool      `json:"behind_nat"`                    // Public IP was fetched externally (behind NAT)
-	ExternalEndpoint   string    `json:"external_endpoint,omitempty"`   // STUN-discovered external address for UDP
-	PreferredTransport string    `json:"preferred_transport,omitempty"` // Admin-set transport preference (auto/udp/ssh/relay)
-	Version            string    `json:"version,omitempty"`             // Application version
+	Name             string    `json:"name"`
+	PublicKey        string    `json:"public_key"`                  // SSH public key (base64 encoded wire format)
+	PublicIPs        []string  `json:"public_ips"`                  // Externally reachable IPs
+	PrivateIPs       []string  `json:"private_ips"`                 // Internal network IPs
+	SSHPort          int       `json:"ssh_port"`                    // SSH server port
+	UDPPort          int       `json:"udp_port,omitempty"`          // UDP transport port
+	MeshIP           string    `json:"mesh_ip"`                     // Assigned mesh network IP (10.99.x.x)
+	LastSeen         time.Time `json:"last_seen"`                   // Last heartbeat time
+	Connectable      bool      `json:"connectable"`                 // Can accept incoming connections
+	BehindNAT        bool      `json:"behind_nat"`                  // Public IP was fetched externally (behind NAT)
+	ExternalEndpoint string    `json:"external_endpoint,omitempty"` // STUN-discovered external address for UDP
+	Version          string    `json:"version,omitempty"`           // Application version
 }
 
 // RegisterRequest is sent by a peer to join the mesh.
@@ -70,7 +69,6 @@ type HeartbeatResponse struct {
 	OK                bool     `json:"ok"`
 	RelayRequests     []string `json:"relay_requests,omitempty"`      // Peers waiting on relay for us
 	HolePunchRequests []string `json:"hole_punch_requests,omitempty"` // Peers wanting to UDP hole-punch with us
-	Reconnect         bool     `json:"reconnect,omitempty"`           // Signal to reconnect all tunnels
 }
 
 // RelayStatusResponse contains pending relay requests for a peer.

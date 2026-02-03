@@ -88,13 +88,6 @@ func (m *MeshNode) PerformHeartbeat(ctx context.Context) {
 		return
 	}
 
-	// Handle reconnect signal from admin
-	if heartbeatResp.Reconnect {
-		log.Info().Msg("reconnect requested by admin, closing all tunnels")
-		m.tunnelMgr.CloseAll()
-		m.TriggerDiscovery()
-	}
-
 	// Handle relay requests
 	m.HandleRelayRequests(ctx, heartbeatResp.RelayRequests)
 
