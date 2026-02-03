@@ -14,10 +14,11 @@ import (
 
 // Persistent relay message types (must match server)
 const (
-	MsgTypeSendPacket byte = 0x01 // Client -> Server: send packet to target peer
-	MsgTypeRecvPacket byte = 0x02 // Server -> Client: received packet from source peer
-	MsgTypePing       byte = 0x03 // Keepalive ping
-	MsgTypePong       byte = 0x04 // Keepalive pong
+	MsgTypeSendPacket      byte = 0x01 // Client -> Server: send packet to target peer
+	MsgTypeRecvPacket      byte = 0x02 // Server -> Client: received packet from source peer
+	MsgTypePing            byte = 0x03 // Keepalive ping
+	MsgTypePong            byte = 0x04 // Keepalive pong
+	MsgTypePeerReconnected byte = 0x05 // Server -> Client: peer reconnected (invalidate tunnel)
 )
 
 // PersistentRelay maintains a persistent connection to the coordination server
@@ -37,7 +38,8 @@ type PersistentRelay struct {
 	incoming   map[string]*peerQueue // peerName -> queue of incoming packets
 
 	// Callbacks (protected by mu)
-	onPacket func(sourcePeer string, data []byte)
+	onPacket          func(sourcePeer string, data []byte)
+	onPeerReconnected func(peerName string) // Called when server notifies a peer reconnected
 
 	// Reconnection control
 	reconnecting bool // Prevents concurrent autoReconnect goroutines
@@ -225,7 +227,7 @@ func (p *PersistentRelay) autoReconnect() {
 
 // handleMessage processes an incoming message from the server.
 func (p *PersistentRelay) handleMessage(data []byte) {
-	if len(data) < 3 {
+	if len(data) < 2 {
 		log.Debug().Int("len", len(data)).Msg("persistent relay: message too short")
 		return
 	}
@@ -235,6 +237,10 @@ func (p *PersistentRelay) handleMessage(data []byte) {
 	switch msgType {
 	case MsgTypeRecvPacket:
 		// Format: [MsgTypeRecvPacket][source name len][source name][packet data]
+		if len(data) < 3 {
+			log.Debug().Int("len", len(data)).Msg("persistent relay: recv packet too short")
+			return
+		}
 		sourceLen := int(data[1])
 		if len(data) < 2+sourceLen {
 			log.Debug().Int("len", len(data)).Int("source_len", sourceLen).Msg("persistent relay: malformed packet")
@@ -252,6 +258,29 @@ func (p *PersistentRelay) handleMessage(data []byte) {
 			handler(sourcePeer, packetData)
 		} else {
 			p.queuePacket(sourcePeer, packetData)
+		}
+
+	case MsgTypePeerReconnected:
+		// Format: [MsgTypePeerReconnected][peer name len][peer name]
+		if len(data) < 2 {
+			return
+		}
+		peerLen := int(data[1])
+		if len(data) < 2+peerLen {
+			log.Debug().Int("len", len(data)).Int("peer_len", peerLen).Msg("persistent relay: malformed peer reconnected")
+			return
+		}
+		peerName := string(data[2 : 2+peerLen])
+
+		log.Info().Str("peer", peerName).Msg("received peer reconnected notification, invalidating tunnel")
+
+		// Dispatch to callback
+		p.mu.RLock()
+		handler := p.onPeerReconnected
+		p.mu.RUnlock()
+
+		if handler != nil {
+			handler(peerName)
 		}
 
 	case MsgTypePong:
@@ -311,6 +340,15 @@ func (p *PersistentRelay) SetPacketHandler(handler func(sourcePeer string, data 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.onPacket = handler
+}
+
+// SetPeerReconnectedHandler sets a callback for peer reconnection notifications.
+// This is called when the server notifies us that another peer has reconnected,
+// indicating that our direct tunnel to them may be stale.
+func (p *PersistentRelay) SetPeerReconnectedHandler(handler func(peerName string)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onPeerReconnected = handler
 }
 
 // IsConnected returns true if the relay is connected.

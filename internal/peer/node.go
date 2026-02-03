@@ -245,7 +245,19 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 	// Set up packet handler to route incoming relay packets to forwarder
 	m.PersistentRelay.SetPacketHandler(func(sourcePeer string, data []byte) {
 		if m.Forwarder != nil {
+			log.Debug().Str("source", sourcePeer).Int("len", len(data)).Msg("routing relay packet to forwarder")
 			m.Forwarder.HandleRelayPacket(sourcePeer, data)
+		} else {
+			log.Warn().Str("source", sourcePeer).Int("len", len(data)).Msg("dropping relay packet: forwarder not set")
+		}
+	})
+
+	// Set up handler for peer reconnection notifications
+	// When a peer reconnects to relay, our direct tunnel to them is likely stale
+	m.PersistentRelay.SetPeerReconnectedHandler(func(peerName string) {
+		if pc := m.Connections.Get(peerName); pc != nil {
+			log.Info().Str("peer", peerName).Msg("peer reconnected to relay, invalidating stale tunnel")
+			_ = pc.Disconnect("peer reconnected to relay", nil)
 		}
 	})
 
