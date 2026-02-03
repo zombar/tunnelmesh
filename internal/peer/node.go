@@ -288,21 +288,27 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 	})
 
 	// Set up handler for peer reconnection notifications
-	// When a peer reconnects to relay, our direct tunnel to them is likely stale
-	// However, we apply the same grace period as for relay packets to avoid
-	// tearing down freshly established tunnels due to stale relay state
+	// When a peer reconnects to relay, our direct tunnel to them is likely stale.
+	// However, we only invalidate if there's an actual tunnel to invalidate.
+	// If we're still connecting (no tunnel yet), let the connection attempt complete.
+	// We also apply a grace period to avoid tearing down freshly established tunnels.
 	m.PersistentRelay.SetPeerReconnectedHandler(func(peerName string) {
 		if pc := m.Connections.Get(peerName); pc != nil {
-			if pc.HasTunnel() {
-				connectedSince := pc.ConnectedSince()
-				tunnelAge := time.Since(connectedSince)
-				if tunnelAge < asymmetricDetectionGracePeriod {
-					log.Debug().
-						Str("peer", peerName).
-						Dur("tunnel_age", tunnelAge).
-						Msg("ignoring peer reconnect notification during grace period after tunnel establishment")
-					return
-				}
+			if !pc.HasTunnel() {
+				// No tunnel yet (e.g., still connecting) - ignore notification
+				log.Debug().
+					Str("peer", peerName).
+					Msg("ignoring peer reconnect notification - no tunnel to invalidate")
+				return
+			}
+			connectedSince := pc.ConnectedSince()
+			tunnelAge := time.Since(connectedSince)
+			if tunnelAge < asymmetricDetectionGracePeriod {
+				log.Debug().
+					Str("peer", peerName).
+					Dur("tunnel_age", tunnelAge).
+					Msg("ignoring peer reconnect notification during grace period after tunnel establishment")
+				return
 			}
 			log.Info().Str("peer", peerName).Msg("peer reconnected to relay, invalidating stale tunnel")
 			_ = pc.Disconnect("peer reconnected to relay", nil)
@@ -398,16 +404,21 @@ func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
 
 		newRelay.SetPeerReconnectedHandler(func(peerName string) {
 			if pc := m.Connections.Get(peerName); pc != nil {
-				if pc.HasTunnel() {
-					connectedSince := pc.ConnectedSince()
-					tunnelAge := time.Since(connectedSince)
-					if tunnelAge < asymmetricDetectionGracePeriod {
-						log.Debug().
-							Str("peer", peerName).
-							Dur("tunnel_age", tunnelAge).
-							Msg("ignoring peer reconnect notification during grace period after tunnel establishment")
-						return
-					}
+				if !pc.HasTunnel() {
+					// No tunnel yet (e.g., still connecting) - ignore notification
+					log.Debug().
+						Str("peer", peerName).
+						Msg("ignoring peer reconnect notification - no tunnel to invalidate")
+					return
+				}
+				connectedSince := pc.ConnectedSince()
+				tunnelAge := time.Since(connectedSince)
+				if tunnelAge < asymmetricDetectionGracePeriod {
+					log.Debug().
+						Str("peer", peerName).
+						Dur("tunnel_age", tunnelAge).
+						Msg("ignoring peer reconnect notification during grace period after tunnel establishment")
+					return
 				}
 				log.Info().Str("peer", peerName).Msg("peer reconnected to relay, invalidating stale tunnel")
 				_ = pc.Disconnect("peer reconnected to relay", nil)
