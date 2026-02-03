@@ -4,6 +4,10 @@ auth_token: "docker-test-token-123"
 mesh_cidr: "10.99.0.0/16"
 domain_suffix: ".tunnelmesh"
 
+admin:
+  enabled: true
+  token: "admin"
+
 # WireGuard client management (enables admin panel WireGuard section)
 wireguard:
   enabled: true
