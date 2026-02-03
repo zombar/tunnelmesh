@@ -46,6 +46,8 @@ var (
 // target heap size. This is particularly effective for reducing latency spikes
 // caused by GC pauses in packet forwarding paths. Package-level to ensure it
 // stays alive for the lifetime of the process.
+//
+//nolint:gochecknoglobals
 var ballast []byte
 
 // setupGCTuning configures the Go garbage collector for lower latency.
@@ -59,6 +61,9 @@ func setupGCTuning() {
 	// GOGC% of the previous heap size. With a ballast, the effective
 	// trigger point is higher, reducing GC frequency for small allocations.
 	ballast = make([]byte, 10<<20) // 10MB
+
+	// Prevent the ballast from being optimized away
+	runtime.KeepAlive(ballast)
 }
 
 var (

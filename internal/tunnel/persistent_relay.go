@@ -143,11 +143,17 @@ func (p *PersistentRelay) Connect(ctx context.Context) error {
 func (p *PersistentRelay) writeLoop() {
 	defer close(p.writeLoopDone)
 
+	// Capture closedChan under lock to avoid race with Close()
+	p.mu.RLock()
+	closedChan := p.closedChan
+	writeChan := p.writeChan
+	p.mu.RUnlock()
+
 	for {
 		select {
-		case <-p.closedChan:
+		case <-closedChan:
 			return
-		case req, ok := <-p.writeChan:
+		case req, ok := <-writeChan:
 			if !ok {
 				return
 			}
