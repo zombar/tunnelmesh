@@ -32,6 +32,7 @@ type WireGuardServerConfig struct {
 type WireGuardPeerConfig struct {
 	Enabled      bool   `yaml:"enabled"`       // Run as WireGuard concentrator
 	ListenPort   int    `yaml:"listen_port"`   // WireGuard UDP port (default: 51820)
+	Endpoint     string `yaml:"endpoint"`      // Public endpoint for clients (host:port)
 	Interface    string `yaml:"interface"`     // Interface name (default: "wg0")
 	MTU          int    `yaml:"mtu"`           // MTU (default: 1420)
 	DataDir      string `yaml:"data_dir"`      // Server key storage directory

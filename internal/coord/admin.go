@@ -3,6 +3,7 @@ package coord
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/web"
-	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
@@ -165,80 +165,79 @@ func (s *Server) handleWGClients(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleWGClientsList returns all WireGuard clients.
+// handleWGClientsList returns all WireGuard clients by proxying to the concentrator.
 func (s *Server) handleWGClientsList(w http.ResponseWriter, _ *http.Request) {
-	clients := s.wgStore.List()
+	// Proxy to concentrator via relay
+	respBody, err := s.relay.SendAPIRequest("GET /clients", nil, 10*time.Second)
+	if err != nil {
+		s.jsonError(w, "concentrator not available: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 
-	// Sort by mesh IP for consistent ordering
-	sort.Slice(clients, func(i, j int) bool {
-		return clients[i].MeshIP < clients[j].MeshIP
-	})
-
-	resp := wireguard.ClientListResponse{
-		Clients:               clients,
-		ConcentratorPublicKey: "", // Will be set when concentrator registers
+	// Parse API response
+	var apiResp struct {
+		StatusCode int             `json:"status_code"`
+		Body       json.RawMessage `json:"body"`
+	}
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		s.jsonError(w, "invalid response from concentrator", http.StatusBadGateway)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	if apiResp.StatusCode != 200 {
+		w.WriteHeader(apiResp.StatusCode)
+	}
+	_, _ = w.Write(apiResp.Body)
 }
 
-// handleWGClientCreate creates a new WireGuard client.
+// handleWGClientCreate creates a new WireGuard client by proxying to the concentrator.
 func (s *Server) handleWGClientCreate(w http.ResponseWriter, r *http.Request) {
-	var req wireguard.CreateClientRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.jsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if err := req.Validate(); err != nil {
-		s.jsonError(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	client, privateKey, err := s.wgStore.CreateWithPrivateKey(req.Name)
+	// Read request body
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		s.jsonError(w, "failed to create client: "+err.Error(), http.StatusInternalServerError)
+		s.jsonError(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
 
-	// Add to DNS cache
-	s.peersMu.Lock()
-	s.dnsCache[client.DNSName] = client.MeshIP
-	s.peersMu.Unlock()
-
-	// Generate config and QR code
-	configParams := wireguard.ClientConfigParams{
-		ClientPrivateKey: privateKey,
-		ClientMeshIP:     client.MeshIP,
-		ServerPublicKey:  "", // Will be set when concentrator registers its public key
-		ServerEndpoint:   s.cfg.WireGuard.Endpoint,
-		DNSServer:        "", // Optional: could be set to a DNS server in the mesh
-		MeshCIDR:         s.cfg.MeshCIDR,
-		MTU:              1420,
-	}
-
-	configStr := wireguard.GenerateClientConfig(configParams)
-
-	qrCode, err := wireguard.GenerateQRCodeDataURL(configStr, 256)
+	// Proxy to concentrator via relay
+	respBody, err := s.relay.SendAPIRequest("POST /clients", body, 10*time.Second)
 	if err != nil {
-		// QR generation failed, but we can still return the config
-		qrCode = ""
+		s.jsonError(w, "concentrator not available: "+err.Error(), http.StatusServiceUnavailable)
+		return
 	}
 
-	resp := wireguard.CreateClientResponse{
-		Client:     *client,
-		PrivateKey: privateKey,
-		Config:     configStr,
-		QRCode:     qrCode,
+	// Parse API response
+	var apiResp struct {
+		StatusCode int             `json:"status_code"`
+		Body       json.RawMessage `json:"body"`
+	}
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		s.jsonError(w, "invalid response from concentrator", http.StatusBadGateway)
+		return
+	}
+
+	// Try to extract client info for DNS cache update
+	if apiResp.StatusCode == 201 {
+		var createResp struct {
+			Client struct {
+				DNSName string `json:"dns_name"`
+				MeshIP  string `json:"mesh_ip"`
+			} `json:"client"`
+		}
+		if err := json.Unmarshal(apiResp.Body, &createResp); err == nil && createResp.Client.DNSName != "" {
+			s.peersMu.Lock()
+			s.dnsCache[createResp.Client.DNSName] = createResp.Client.MeshIP
+			s.peersMu.Unlock()
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(resp)
+	w.WriteHeader(apiResp.StatusCode)
+	_, _ = w.Write(apiResp.Body)
 }
 
-// handleWGClientByID handles GET, PATCH, DELETE for a specific WireGuard client.
+// handleWGClientByID handles GET, PATCH, DELETE for a specific WireGuard client by proxying to the concentrator.
 func (s *Server) handleWGClientByID(w http.ResponseWriter, r *http.Request) {
 	// Extract client ID from path
 	id := strings.TrimPrefix(r.URL.Path, "/admin/api/wireguard/clients/")
@@ -247,59 +246,52 @@ func (s *Server) handleWGClientByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var method string
+	var body []byte
+	var err error
+
 	switch r.Method {
 	case http.MethodGet:
-		client, err := s.wgStore.Get(id)
-		if err != nil {
-			s.jsonError(w, "client not found", http.StatusNotFound)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(client)
+		method = "GET /clients/" + id
 
 	case http.MethodPatch:
-		var req wireguard.UpdateClientRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.jsonError(w, "invalid request body", http.StatusBadRequest)
-			return
-		}
-
-		if err := req.Validate(); err != nil {
-			s.jsonError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		client, err := s.wgStore.Update(id, &req)
+		method = "PATCH /clients/" + id
+		body, err = io.ReadAll(r.Body)
 		if err != nil {
-			s.jsonError(w, "client not found", http.StatusNotFound)
+			s.jsonError(w, "failed to read request body", http.StatusBadRequest)
 			return
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(client)
 
 	case http.MethodDelete:
-		// Get client first to remove from DNS cache
-		client, err := s.wgStore.Get(id)
-		if err != nil {
-			s.jsonError(w, "client not found", http.StatusNotFound)
-			return
-		}
-
-		if err := s.wgStore.Delete(id); err != nil {
-			s.jsonError(w, "failed to delete client", http.StatusInternalServerError)
-			return
-		}
-
-		// Remove from DNS cache
-		s.peersMu.Lock()
-		delete(s.dnsCache, client.DNSName)
-		s.peersMu.Unlock()
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		method = "DELETE /clients/" + id
 
 	default:
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
+
+	// Proxy to concentrator via relay
+	respBody, err := s.relay.SendAPIRequest(method, body, 10*time.Second)
+	if err != nil {
+		s.jsonError(w, "concentrator not available: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	// Parse API response
+	var apiResp struct {
+		StatusCode int             `json:"status_code"`
+		Body       json.RawMessage `json:"body"`
+	}
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		s.jsonError(w, "invalid response from concentrator", http.StatusBadGateway)
+		return
+	}
+
+	// Note: DNS cache cleanup for deleted clients is handled by periodic DNS sync
+
+	w.Header().Set("Content-Type", "application/json")
+	if apiResp.StatusCode != 200 {
+		w.WriteHeader(apiResp.StatusCode)
+	}
+	_, _ = w.Write(apiResp.Body)
 }

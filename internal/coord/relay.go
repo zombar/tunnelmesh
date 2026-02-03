@@ -2,6 +2,7 @@ package coord
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -30,9 +31,15 @@ type persistentConn struct {
 
 // relayManager handles relay connections between peers.
 type relayManager struct {
-	pending    map[string]*relayConn    // key: "peerA->peerB" (legacy pairing)
-	persistent map[string]*persistentConn // key: peerName (DERP-like routing)
-	mu         sync.Mutex
+	pending        map[string]*relayConn      // key: "peerA->peerB" (legacy pairing)
+	persistent     map[string]*persistentConn // key: peerName (DERP-like routing)
+	wgConcentrator string                     // peerName of WireGuard concentrator (if any)
+	mu             sync.Mutex
+
+	// API request tracking
+	apiRequests   map[uint32]chan []byte // reqID -> response channel
+	apiRequestsMu sync.Mutex
+	nextReqID     uint32
 }
 
 // Persistent relay message types
@@ -42,6 +49,9 @@ const (
 	MsgTypePing            byte = 0x03 // Keepalive ping
 	MsgTypePong            byte = 0x04 // Keepalive pong
 	MsgTypePeerReconnected byte = 0x05 // Server -> Client: peer reconnected (tunnel may be stale)
+	MsgTypeWGAnnounce      byte = 0x10 // Client -> Server: announce as WireGuard concentrator
+	MsgTypeAPIRequest      byte = 0x11 // Server -> Client: API request to concentrator
+	MsgTypeAPIResponse     byte = 0x12 // Client -> Server: API response from concentrator
 )
 
 var upgrader = websocket.Upgrader{
@@ -55,8 +65,116 @@ var upgrader = websocket.Upgrader{
 // newRelayManager creates a new relay manager.
 func newRelayManager() *relayManager {
 	return &relayManager{
-		pending:    make(map[string]*relayConn),
-		persistent: make(map[string]*persistentConn),
+		pending:     make(map[string]*relayConn),
+		persistent:  make(map[string]*persistentConn),
+		apiRequests: make(map[uint32]chan []byte),
+	}
+}
+
+// SetWGConcentrator sets the peer that acts as WireGuard concentrator.
+func (r *relayManager) SetWGConcentrator(peerName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	old := r.wgConcentrator
+	r.wgConcentrator = peerName
+	if old != peerName {
+		log.Info().Str("peer", peerName).Str("old", old).Msg("WireGuard concentrator updated")
+	}
+}
+
+// GetWGConcentrator returns the current WireGuard concentrator peer name.
+func (r *relayManager) GetWGConcentrator() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.wgConcentrator
+}
+
+// ClearWGConcentrator clears the concentrator if it matches the given peer.
+func (r *relayManager) ClearWGConcentrator(peerName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.wgConcentrator == peerName {
+		r.wgConcentrator = ""
+		log.Info().Str("peer", peerName).Msg("WireGuard concentrator disconnected")
+	}
+}
+
+// SendAPIRequest sends an API request to the WireGuard concentrator and waits for response.
+// Returns the response body or error if timeout/no concentrator.
+func (r *relayManager) SendAPIRequest(method string, body []byte, timeout time.Duration) ([]byte, error) {
+	r.mu.Lock()
+	concentrator := r.wgConcentrator
+	pc, ok := r.persistent[concentrator]
+	r.mu.Unlock()
+
+	if concentrator == "" || !ok {
+		return nil, fmt.Errorf("no WireGuard concentrator connected")
+	}
+
+	// Allocate request ID and response channel
+	r.apiRequestsMu.Lock()
+	reqID := r.nextReqID
+	r.nextReqID++
+	respChan := make(chan []byte, 1)
+	r.apiRequests[reqID] = respChan
+	r.apiRequestsMu.Unlock()
+
+	defer func() {
+		r.apiRequestsMu.Lock()
+		delete(r.apiRequests, reqID)
+		r.apiRequestsMu.Unlock()
+	}()
+
+	// Build request: [MsgTypeAPIRequest][reqID:4][method_len:1][method][body]
+	msg := make([]byte, 1+4+1+len(method)+len(body))
+	msg[0] = MsgTypeAPIRequest
+	msg[1] = byte(reqID >> 24)
+	msg[2] = byte(reqID >> 16)
+	msg[3] = byte(reqID >> 8)
+	msg[4] = byte(reqID)
+	msg[5] = byte(len(method))
+	copy(msg[6:], method)
+	copy(msg[6+len(method):], body)
+
+	// Send request
+	pc.writeMu.Lock()
+	err := pc.conn.WriteMessage(websocket.BinaryMessage, msg)
+	pc.writeMu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("send API request: %w", err)
+	}
+
+	// Wait for response
+	select {
+	case resp := <-respChan:
+		return resp, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("API request timeout")
+	}
+}
+
+// handleAPIResponse processes an API response from the concentrator.
+func (r *relayManager) handleAPIResponse(data []byte) {
+	if len(data) < 5 {
+		log.Debug().Msg("API response too short")
+		return
+	}
+
+	reqID := uint32(data[1])<<24 | uint32(data[2])<<16 | uint32(data[3])<<8 | uint32(data[4])
+	body := data[5:]
+
+	r.apiRequestsMu.Lock()
+	respChan, ok := r.apiRequests[reqID]
+	r.apiRequestsMu.Unlock()
+
+	if ok {
+		select {
+		case respChan <- body:
+		default:
+			log.Debug().Uint32("req_id", reqID).Msg("API response channel full")
+		}
+	} else {
+		log.Debug().Uint32("req_id", reqID).Msg("API response for unknown request")
 	}
 }
 
@@ -220,6 +338,7 @@ func (s *Server) handlePersistentRelay(w http.ResponseWriter, r *http.Request) {
 	pc := s.relay.RegisterPersistent(peerName, conn)
 	defer func() {
 		s.relay.UnregisterPersistent(peerName)
+		s.relay.ClearWGConcentrator(peerName) // Clear if this was the concentrator
 		conn.Close()
 		log.Info().Str("peer", peerName).Msg("persistent relay connection closed")
 	}()
@@ -323,6 +442,15 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 	case MsgTypePing:
 		// Respond with pong (handled at protocol level via SetPongHandler)
 		log.Debug().Str("peer", sourcePeer).Msg("persistent relay received ping")
+
+	case MsgTypeWGAnnounce:
+		// Peer announces itself as WireGuard concentrator
+		log.Info().Str("peer", sourcePeer).Msg("peer announced as WireGuard concentrator")
+		s.relay.SetWGConcentrator(sourcePeer)
+
+	case MsgTypeAPIResponse:
+		// API response from concentrator
+		s.relay.handleAPIResponse(data)
 
 	default:
 		log.Debug().Str("peer", sourcePeer).Uint8("type", msgType).Msg("unknown persistent relay message type")

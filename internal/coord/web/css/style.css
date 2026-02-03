@@ -150,6 +150,12 @@ main {
     padding: 0;
     background: none;
     border: none;
+    border-bottom: none;
+}
+
+/* Override h2 styles when inside section-header (has button beside it) */
+#wireguard-section .section-header h2 {
+    border-bottom: none;
 }
 
 /* Buttons */

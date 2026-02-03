@@ -765,13 +765,9 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	// Initialize WireGuard concentrator if enabled
 	var wgConcentrator *peerwg.Concentrator
 	var wgRouter *peerwg.Router
+	var wgStore *peerwg.ClientStore
+	var wgAPIHandler *peerwg.APIHandler
 	if cfg.WireGuard.Enabled {
-		// Parse sync interval
-		syncInterval, err := time.ParseDuration(cfg.WireGuard.SyncInterval)
-		if err != nil {
-			syncInterval = 30 * time.Second
-		}
-
 		// Set default data dir if not specified
 		dataDir := cfg.WireGuard.DataDir
 		if dataDir == "" {
@@ -779,59 +775,83 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 			dataDir = filepath.Join(homeDir, ".tunnelmesh", "wireguard")
 		}
 
-		wgCfg := &peerwg.ConcentratorConfig{
-			ServerURL:    cfg.Server,
-			AuthToken:    cfg.AuthToken,
-			ListenPort:   cfg.WireGuard.ListenPort,
-			DataDir:      dataDir,
-			SyncInterval: syncInterval,
-			MeshCIDR:     resp.MeshCIDR,
-		}
-
-		wgConcentrator, err = peerwg.NewConcentrator(wgCfg)
+		// Create persistent client store
+		var err error
+		wgStore, err = peerwg.NewClientStore(resp.MeshCIDR, dataDir)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to create WireGuard concentrator")
+			log.Error().Err(err).Msg("failed to create WireGuard client store")
 		} else {
-			// Create WG router for packet routing decisions
-			wgRouter = peerwg.NewRouter(resp.MeshCIDR)
-
-			// Set callback to update router when clients change
-			wgConcentrator.SetOnClientsUpdated(func(clients []peerwg.Client) {
-				wgRouter.UpdateClients(clients)
-				log.Info().Int("clients", len(clients)).Msg("WireGuard clients updated")
-			})
-
-			// Initial sync
-			if err := wgConcentrator.Sync(ctx); err != nil {
-				log.Warn().Err(err).Msg("initial WireGuard client sync failed")
+			wgCfg := &peerwg.ConcentratorConfig{
+				ServerURL:    cfg.Server,
+				AuthToken:    cfg.AuthToken,
+				ListenPort:   cfg.WireGuard.ListenPort,
+				DataDir:      dataDir,
+				SyncInterval: 30 * time.Second, // Not used for syncing from server anymore
+				MeshCIDR:     resp.MeshCIDR,
 			}
 
-			// Start periodic sync loop
-			go func() {
-				ticker := time.NewTicker(syncInterval)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case <-ticker.C:
-						if err := wgConcentrator.Sync(ctx); err != nil {
-							log.Debug().Err(err).Msg("WireGuard client sync failed")
+			wgConcentrator, err = peerwg.NewConcentrator(wgCfg)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to create WireGuard concentrator")
+			} else {
+				// Create WG router for packet routing decisions
+				wgRouter = peerwg.NewRouter(resp.MeshCIDR)
+
+				// Create API handler for proxied requests
+				wgAPIHandler = peerwg.NewAPIHandler(
+					wgStore,
+					wgConcentrator.PublicKey(),
+					cfg.WireGuard.Endpoint,
+					resp.MeshCIDR,
+					resp.Domain,
+				)
+
+				// Set up relay to handle API requests if relay is connected
+				if node.PersistentRelay != nil {
+					node.PersistentRelay.SetAPIRequestHandler(func(reqID uint32, method string, body []byte) {
+						response := wgAPIHandler.HandleRequest(method, body)
+						if err := node.PersistentRelay.SendAPIResponse(reqID, response); err != nil {
+							log.Error().Err(err).Uint32("req_id", reqID).Msg("failed to send API response")
 						}
+					})
+
+					// Announce as WireGuard concentrator
+					if err := node.PersistentRelay.AnnounceWGConcentrator(); err != nil {
+						log.Error().Err(err).Msg("failed to announce as WireGuard concentrator")
 					}
 				}
-			}()
 
-			log.Info().
-				Int("port", cfg.WireGuard.ListenPort).
-				Str("public_key", wgConcentrator.PublicKey()).
-				Msg("WireGuard concentrator initialized")
+				// Load initial clients from store and update router
+				clients := wgStore.List()
+				wgClients := make([]peerwg.Client, len(clients))
+				for i, c := range clients {
+					wgClients[i] = peerwg.Client{
+						ID:        c.ID,
+						Name:      c.Name,
+						PublicKey: c.PublicKey,
+						MeshIP:    c.MeshIP,
+						DNSName:   c.DNSName,
+						Enabled:   c.Enabled,
+						CreatedAt: c.CreatedAt,
+						LastSeen:  c.LastSeen,
+					}
+				}
+				wgRouter.UpdateClients(wgClients)
+
+				log.Info().
+					Int("port", cfg.WireGuard.ListenPort).
+					Str("public_key", wgConcentrator.PublicKey()).
+					Int("clients", len(clients)).
+					Msg("WireGuard concentrator initialized")
+			}
 		}
 	}
 
 	// Suppress unused variable warnings for future WireGuard integration
 	_ = wgConcentrator
 	_ = wgRouter
+	_ = wgStore
+	_ = wgAPIHandler
 
 	// Start DNS resolver if enabled
 	var dnsConfigured bool

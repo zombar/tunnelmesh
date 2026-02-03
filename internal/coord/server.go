@@ -177,7 +177,8 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/v1/dns", s.withAuth(s.handleDNS))
 
 	// Setup relay routes (JWT auth handled internally)
-	if s.cfg.Relay.Enabled {
+	// Always initialize relay manager if relay or WireGuard is enabled (WG uses relay for API proxying)
+	if s.cfg.Relay.Enabled || s.cfg.WireGuard.Enabled {
 		s.setupRelayRoutes()
 	}
 

@@ -19,6 +19,9 @@ const (
 	MsgTypePing            byte = 0x03 // Keepalive ping
 	MsgTypePong            byte = 0x04 // Keepalive pong
 	MsgTypePeerReconnected byte = 0x05 // Server -> Client: peer reconnected (tunnel may be stale)
+	MsgTypeWGAnnounce      byte = 0x10 // Client -> Server: announce as WireGuard concentrator
+	MsgTypeAPIRequest      byte = 0x11 // Server -> Client: API request to concentrator
+	MsgTypeAPIResponse     byte = 0x12 // Client -> Server: API response from concentrator
 )
 
 // PersistentRelay maintains a persistent connection to the coordination server
@@ -39,10 +42,14 @@ type PersistentRelay struct {
 
 	// Callbacks (protected by mu)
 	onPacket          func(sourcePeer string, data []byte)
-	onPeerReconnected func(peerName string) // Called when server notifies a peer reconnected
+	onPeerReconnected func(peerName string)                         // Called when server notifies a peer reconnected
+	onAPIRequest      func(reqID uint32, method string, body []byte) // Called when server sends API request
 
 	// Reconnection control
 	reconnecting bool // Prevents concurrent autoReconnect goroutines
+
+	// WireGuard concentrator state
+	isWGConcentrator bool
 }
 
 // peerQueue holds incoming packets from a specific peer.
@@ -286,6 +293,34 @@ func (p *PersistentRelay) handleMessage(data []byte) {
 	case MsgTypePong:
 		// Server pong - connection is alive
 		log.Debug().Msg("persistent relay received pong")
+
+	case MsgTypeAPIRequest:
+		// Format: [MsgTypeAPIRequest][reqID:4][method_len:1][method][body]
+		if len(data) < 6 {
+			log.Debug().Int("len", len(data)).Msg("persistent relay: API request too short")
+			return
+		}
+		reqID := uint32(data[1])<<24 | uint32(data[2])<<16 | uint32(data[3])<<8 | uint32(data[4])
+		methodLen := int(data[5])
+		if len(data) < 6+methodLen {
+			log.Debug().Int("len", len(data)).Int("method_len", methodLen).Msg("persistent relay: API request malformed")
+			return
+		}
+		method := string(data[6 : 6+methodLen])
+		body := data[6+methodLen:]
+
+		log.Debug().Uint32("req_id", reqID).Str("method", method).Int("body_len", len(body)).Msg("received API request")
+
+		// Dispatch to callback
+		p.mu.RLock()
+		handler := p.onAPIRequest
+		p.mu.RUnlock()
+
+		if handler != nil {
+			handler(reqID, method, body)
+		} else {
+			log.Warn().Uint32("req_id", reqID).Str("method", method).Msg("no API request handler registered")
+		}
 	}
 }
 
@@ -349,6 +384,71 @@ func (p *PersistentRelay) SetPeerReconnectedHandler(handler func(peerName string
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.onPeerReconnected = handler
+}
+
+// SetAPIRequestHandler sets a callback for API requests from the coordinator.
+// This is called when this peer is acting as a WireGuard concentrator and receives
+// API requests proxied through the relay connection.
+func (p *PersistentRelay) SetAPIRequestHandler(handler func(reqID uint32, method string, body []byte)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onAPIRequest = handler
+}
+
+// AnnounceWGConcentrator announces this peer as the WireGuard concentrator.
+// This tells the coordinator to proxy WireGuard API requests to this peer.
+func (p *PersistentRelay) AnnounceWGConcentrator() error {
+	p.mu.Lock()
+	conn := p.conn
+	connected := p.connected
+	p.mu.Unlock()
+
+	if !connected || conn == nil {
+		return fmt.Errorf("not connected to relay")
+	}
+
+	// Send announce message: [MsgTypeWGAnnounce]
+	msg := []byte{MsgTypeWGAnnounce}
+	if err := conn.WriteMessage(websocket.BinaryMessage, msg); err != nil {
+		return fmt.Errorf("send WG announce: %w", err)
+	}
+
+	p.mu.Lock()
+	p.isWGConcentrator = true
+	p.mu.Unlock()
+
+	log.Info().Msg("announced as WireGuard concentrator")
+	return nil
+}
+
+// SendAPIResponse sends an API response back to the coordinator.
+func (p *PersistentRelay) SendAPIResponse(reqID uint32, body []byte) error {
+	p.mu.RLock()
+	conn := p.conn
+	connected := p.connected
+	p.mu.RUnlock()
+
+	if !connected || conn == nil {
+		return fmt.Errorf("not connected to relay")
+	}
+
+	// Build response: [MsgTypeAPIResponse][reqID:4][body]
+	msg := make([]byte, 5+len(body))
+	msg[0] = MsgTypeAPIResponse
+	msg[1] = byte(reqID >> 24)
+	msg[2] = byte(reqID >> 16)
+	msg[3] = byte(reqID >> 8)
+	msg[4] = byte(reqID)
+	copy(msg[5:], body)
+
+	return conn.WriteMessage(websocket.BinaryMessage, msg)
+}
+
+// IsWGConcentrator returns true if this peer has announced as WireGuard concentrator.
+func (p *PersistentRelay) IsWGConcentrator() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.isWGConcentrator
 }
 
 // IsConnected returns true if the relay is connected.
