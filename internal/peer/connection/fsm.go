@@ -89,6 +89,13 @@ func (pc *PeerConnection) Tunnel() io.ReadWriteCloser {
 	return pc.tunnel
 }
 
+// HasTunnel returns true if the connection has an active tunnel.
+func (pc *PeerConnection) HasTunnel() bool {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+	return pc.tunnel != nil
+}
+
 // ConnectedSince returns when the connection was established.
 // Returns zero time if not currently connected.
 func (pc *PeerConnection) ConnectedSince() time.Time {

@@ -35,6 +35,8 @@ func (m *MeshNode) HandleNetworkChange(event netmon.Event) {
 		m.TransportRegistry.ClearNetworkState()
 	}
 
+	log.Debug().Msg("getting local IPs...")
+
 	// Get new IP addresses, excluding mesh network IPs
 	publicIPs, privateIPs, behindNAT := m.identity.GetLocalIPs()
 	log.Debug().

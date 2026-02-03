@@ -250,6 +250,16 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 		} else {
 			log.Warn().Str("source", sourcePeer).Int("len", len(data)).Msg("dropping relay packet: forwarder not set")
 		}
+
+		// If we're receiving relay packets from a peer, they can't reach us directly.
+		// Our direct tunnel to them is also likely broken (asymmetric path failure).
+		// Invalidate our direct tunnel so we fall back to relay for outbound too.
+		if pc := m.Connections.Get(sourcePeer); pc != nil {
+			if pc.HasTunnel() {
+				log.Info().Str("peer", sourcePeer).Msg("received relay packet from peer with active tunnel, invalidating stale tunnel")
+				_ = pc.Disconnect("peer using relay (asymmetric tunnel failure)", nil)
+			}
+		}
 	})
 
 	// Set up handler for peer reconnection notifications
