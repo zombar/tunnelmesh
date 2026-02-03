@@ -21,6 +21,12 @@ import (
 // we consider the node to be in a "recovery" state. Used for logging and debugging.
 const networkBypassWindow = 10 * time.Second
 
+// asymmetricDetectionGracePeriod is the duration after tunnel establishment during which
+// we ignore relay packets for asymmetric failure detection. This prevents tearing down
+// freshly established tunnels due to stale relay packets that were in-flight before
+// the peer knew the direct tunnel was ready.
+const asymmetricDetectionGracePeriod = 5 * time.Second
+
 // MeshNode coordinates all mesh networking operations for a peer.
 // It owns all the managers and handles lifecycle of connections.
 type MeshNode struct {
@@ -259,11 +265,24 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 
 		// If we're receiving relay packets from a peer, they can't reach us directly.
 		// Our direct tunnel to them is also likely broken (asymmetric path failure).
-		// Invalidate our direct tunnel so we fall back to relay for outbound too.
+		// However, we apply a grace period after tunnel establishment to avoid
+		// tearing down freshly established tunnels due to stale relay packets.
 		if pc := m.Connections.Get(sourcePeer); pc != nil {
 			if pc.HasTunnel() {
-				log.Info().Str("peer", sourcePeer).Msg("received relay packet from peer with active tunnel, invalidating stale tunnel")
-				_ = pc.Disconnect("peer using relay (asymmetric tunnel failure)", nil)
+				connectedSince := pc.ConnectedSince()
+				tunnelAge := time.Since(connectedSince)
+				if tunnelAge < asymmetricDetectionGracePeriod {
+					log.Debug().
+						Str("peer", sourcePeer).
+						Dur("tunnel_age", tunnelAge).
+						Msg("ignoring relay packet during grace period after tunnel establishment")
+				} else {
+					log.Info().
+						Str("peer", sourcePeer).
+						Dur("tunnel_age", tunnelAge).
+						Msg("received relay packet from peer with active tunnel, invalidating stale tunnel")
+					_ = pc.Disconnect("peer using relay (asymmetric tunnel failure)", nil)
+				}
 			}
 		}
 	})
@@ -343,10 +362,23 @@ func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
 			}
 
 			// Invalidate stale direct tunnels when receiving relay packets
+			// Apply grace period to avoid tearing down freshly established tunnels
 			if pc := m.Connections.Get(sourcePeer); pc != nil {
 				if pc.HasTunnel() {
-					log.Info().Str("peer", sourcePeer).Msg("received relay packet from peer with active tunnel, invalidating stale tunnel")
-					_ = pc.Disconnect("peer using relay (asymmetric tunnel failure)", nil)
+					connectedSince := pc.ConnectedSince()
+					tunnelAge := time.Since(connectedSince)
+					if tunnelAge < asymmetricDetectionGracePeriod {
+						log.Debug().
+							Str("peer", sourcePeer).
+							Dur("tunnel_age", tunnelAge).
+							Msg("ignoring relay packet during grace period after tunnel establishment")
+					} else {
+						log.Info().
+							Str("peer", sourcePeer).
+							Dur("tunnel_age", tunnelAge).
+							Msg("received relay packet from peer with active tunnel, invalidating stale tunnel")
+						_ = pc.Disconnect("peer using relay (asymmetric tunnel failure)", nil)
+					}
 				}
 			}
 		})
