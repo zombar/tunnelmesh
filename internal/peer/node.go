@@ -311,6 +311,10 @@ func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
 	if m.PersistentRelay != nil {
 		m.PersistentRelay.Close()
 		m.PersistentRelay = nil
+		// Clear forwarder's relay reference to prevent using stale closed relay
+		if m.Forwarder != nil {
+			m.Forwarder.SetRelay(nil)
+		}
 	}
 
 	// Small delay to let network settle

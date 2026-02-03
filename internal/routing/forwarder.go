@@ -103,7 +103,16 @@ func (f *Forwarder) SetLocalIP(ip net.IP) {
 func (f *Forwarder) SetRelay(relay RelayPacketSender) {
 	f.relayMu.Lock()
 	defer f.relayMu.Unlock()
+	oldRelay := f.relay
 	f.relay = relay
+	if relay != nil {
+		log.Debug().
+			Bool("old_was_nil", oldRelay == nil).
+			Bool("new_connected", relay.IsConnected()).
+			Msg("forwarder relay reference updated")
+	} else {
+		log.Debug().Bool("old_was_nil", oldRelay == nil).Msg("forwarder relay reference cleared")
+	}
 }
 
 // HandleRelayPacket processes a packet received from the persistent relay.
@@ -132,6 +141,8 @@ func (f *Forwarder) HandleRelayPacket(sourcePeer string, data []byte) {
 	// Deliver to TUN
 	if err := f.ReceivePacket(packet); err != nil {
 		log.Debug().Err(err).Str("peer", sourcePeer).Msg("failed to deliver relay packet to TUN")
+	} else {
+		log.Trace().Str("peer", sourcePeer).Int("len", len(packet)).Msg("received packet via relay")
 	}
 }
 
@@ -208,6 +219,7 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 
 		if err := relay.SendTo(peerName, frame); err != nil {
 			atomic.AddUint64(&f.stats.Errors, 1)
+			log.Warn().Err(err).Str("peer", peerName).Msg("relay send failed")
 			return fmt.Errorf("relay to peer %s: %w", peerName, err)
 		}
 
@@ -225,6 +237,17 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 	}
 
 	atomic.AddUint64(&f.stats.DroppedNoTunnel, 1)
+	relayNil := relay == nil
+	relayConnected := false
+	if relay != nil {
+		relayConnected = relay.IsConnected()
+	}
+	log.Debug().
+		Str("peer", peerName).
+		Str("dst", info.DstIP.String()).
+		Bool("relay_nil", relayNil).
+		Bool("relay_connected", relayConnected).
+		Msg("dropped packet: no tunnel or relay")
 	return fmt.Errorf("no tunnel or relay for peer %s", peerName)
 }
 
