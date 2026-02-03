@@ -7,16 +7,20 @@ echo "Peer: ${peer_enabled}"
 echo "WireGuard: ${wireguard_enabled}"
 echo "SSL: ${ssl_enabled}"
 
-# Update system
+# Make apt fully non-interactive
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
+# Update system (keep existing configs on conflicts)
 apt-get update
-apt-get upgrade -y
+apt-get -o Dpkg::Options::="--force-confold" -o Dpkg::Options::="--force-confdef" upgrade -y
 
 # Install base dependencies
-apt-get install -y curl wget jq
+apt-get install -y -q curl wget jq
 
 %{ if coordinator_enabled && ssl_enabled ~}
 # Install nginx and certbot for SSL termination
-apt-get install -y nginx certbot python3-certbot-nginx
+apt-get install -y -q nginx certbot python3-certbot-nginx
 %{ endif ~}
 
 # Create tunnelmesh directories
