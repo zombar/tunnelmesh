@@ -57,9 +57,10 @@ func (m *mockTUN) GetWrittenPackets() []byte {
 
 // mockTunnel simulates a tunnel for testing.
 type mockTunnel struct {
-	buf    *bytes.Buffer
-	mu     sync.Mutex
-	closed bool
+	buf       *bytes.Buffer
+	mu        sync.Mutex
+	closed    bool
+	failWrite bool // If true, Write returns an error
 }
 
 func newMockTunnel() *mockTunnel {
@@ -77,7 +78,16 @@ func (m *mockTunnel) Read(p []byte) (int, error) {
 func (m *mockTunnel) Write(p []byte) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.failWrite {
+		return 0, io.ErrClosedPipe
+	}
 	return m.buf.Write(p)
+}
+
+func (m *mockTunnel) SetFailWrite(fail bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failWrite = fail
 }
 
 func (m *mockTunnel) Close() error {
@@ -439,4 +449,95 @@ func TestForwarder_HandleRelayPacket(t *testing.T) {
 	// Verify packet was written to TUN
 	written := mockTun.GetWrittenPackets()
 	assert.Equal(t, packet, written)
+}
+
+func TestForwarder_DeadTunnelFallbackToRelay(t *testing.T) {
+	router := NewRouter()
+	router.AddRoute("10.99.0.2", "peer1")
+
+	tunnelMgr := NewMockTunnelManager()
+	tunnel := newMockTunnel()
+	tunnel.SetFailWrite(true) // Tunnel write will fail
+	tunnelMgr.Add("peer1", tunnel)
+
+	relay := newMockRelay()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetRelay(relay)
+
+	// Track if onDeadTunnel callback was called
+	var deadTunnelPeer string
+	var callbackCalled bool
+	callbackDone := make(chan struct{})
+	fwd.SetOnDeadTunnel(func(peerName string) {
+		deadTunnelPeer = peerName
+		callbackCalled = true
+		close(callbackDone)
+	})
+
+	// Create a test packet
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.2").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test via relay fallback"))
+
+	// Forward the packet - should fail on tunnel, fall back to relay
+	err := fwd.ForwardPacket(packet)
+	require.NoError(t, err)
+
+	// Wait for callback (it's async)
+	select {
+	case <-callbackDone:
+	case <-time.After(time.Second):
+		t.Fatal("onDeadTunnel callback was not called")
+	}
+
+	// Verify onDeadTunnel was called with correct peer
+	assert.True(t, callbackCalled)
+	assert.Equal(t, "peer1", deadTunnelPeer)
+
+	// Verify packet was sent to relay (fallback)
+	relayPackets := relay.GetPackets()
+	require.Len(t, relayPackets, 1)
+	assert.Equal(t, "peer1", relayPackets[0].target)
+}
+
+func TestForwarder_DeadTunnelNoRelay(t *testing.T) {
+	router := NewRouter()
+	router.AddRoute("10.99.0.2", "peer1")
+
+	tunnelMgr := NewMockTunnelManager()
+	tunnel := newMockTunnel()
+	tunnel.SetFailWrite(true) // Tunnel write will fail
+	tunnelMgr.Add("peer1", tunnel)
+
+	fwd := NewForwarder(router, tunnelMgr)
+	// No relay set
+
+	// Track if onDeadTunnel callback was called
+	var callbackCalled bool
+	callbackDone := make(chan struct{})
+	fwd.SetOnDeadTunnel(func(peerName string) {
+		callbackCalled = true
+		close(callbackDone)
+	})
+
+	// Create a test packet
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.2").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test no relay"))
+
+	// Forward the packet - should fail on tunnel and have no relay fallback
+	err := fwd.ForwardPacket(packet)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no tunnel or relay")
+
+	// Wait for callback (it's async)
+	select {
+	case <-callbackDone:
+	case <-time.After(time.Second):
+		t.Fatal("onDeadTunnel callback was not called")
+	}
+
+	// Verify onDeadTunnel was still called
+	assert.True(t, callbackCalled)
 }

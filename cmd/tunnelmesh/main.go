@@ -553,6 +553,15 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	}
 	node.Forwarder = forwarder
 
+	// When forwarder detects a dead tunnel (write fails), disconnect the peer
+	// This removes the tunnel and triggers discovery for reconnection
+	forwarder.SetOnDeadTunnel(func(peerName string) {
+		if pc := node.Connections.Get(peerName); pc != nil {
+			log.Debug().Str("peer", peerName).Msg("forwarder detected dead tunnel, disconnecting peer")
+			_ = pc.Disconnect("tunnel write failed", nil)
+		}
+	})
+
 	// Create transport registry with default order: UDP -> SSH -> Relay
 	// UDP is first for better performance (lower latency, no head-of-line blocking)
 	// Falls back to SSH when UDP hole-punching fails or times out

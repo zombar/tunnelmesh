@@ -66,6 +66,7 @@ type Forwarder struct {
 	relayMu      sync.RWMutex
 	localIP      net.IP
 	localIPMu    sync.RWMutex
+	onDeadTunnel func(peerName string) // Callback when tunnel write fails
 }
 
 // NewForwarder creates a new packet forwarder.
@@ -116,6 +117,12 @@ func (f *Forwarder) SetRelay(relay RelayPacketSender) {
 	} else {
 		log.Debug().Bool("old_was_nil", oldRelay == nil).Msg("forwarder relay reference cleared")
 	}
+}
+
+// SetOnDeadTunnel sets a callback that is called when a tunnel write fails.
+// This allows the caller to remove the dead tunnel and trigger reconnection.
+func (f *Forwarder) SetOnDeadTunnel(callback func(peerName string)) {
+	f.onDeadTunnel = callback
 }
 
 // HandleRelayPacket processes a packet received from the persistent relay.
@@ -192,23 +199,30 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 		// Direct tunnel exists - use it
 		if err := f.writeFrame(tunnel, packet); err != nil {
 			atomic.AddUint64(&f.stats.Errors, 1)
-			return fmt.Errorf("write to tunnel: %w", err)
+			log.Warn().Err(err).Str("peer", peerName).Msg("tunnel write failed, marking dead and falling back to relay")
+
+			// Signal dead tunnel so it can be removed and reconnection triggered
+			if f.onDeadTunnel != nil {
+				go f.onDeadTunnel(peerName)
+			}
+
+			// Fall through to relay fallback below
+		} else {
+			atomic.AddUint64(&f.stats.PacketsSent, 1)
+			atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
+
+			log.Trace().
+				Str("src", info.SrcIP.String()).
+				Str("dst", info.DstIP.String()).
+				Str("peer", peerName).
+				Int("len", len(packet)).
+				Msg("forwarded packet via tunnel")
+
+			return nil
 		}
-
-		atomic.AddUint64(&f.stats.PacketsSent, 1)
-		atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
-
-		log.Trace().
-			Str("src", info.SrcIP.String()).
-			Str("dst", info.DstIP.String()).
-			Str("peer", peerName).
-			Int("len", len(packet)).
-			Msg("forwarded packet via tunnel")
-
-		return nil
 	}
 
-	// No direct tunnel - try persistent relay
+	// No direct tunnel or tunnel write failed - try persistent relay
 	f.relayMu.RLock()
 	relay := f.relay
 	f.relayMu.RUnlock()
@@ -356,23 +370,30 @@ func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) 
 		// Zero-copy write: frame header is already in place
 		if err := f.writeFrameZeroCopy(tunnel, zcBuf, packetLen); err != nil {
 			atomic.AddUint64(&f.stats.Errors, 1)
-			return fmt.Errorf("write to tunnel: %w", err)
+			log.Warn().Err(err).Str("peer", peerName).Msg("tunnel write failed, marking dead and falling back to relay")
+
+			// Signal dead tunnel so it can be removed and reconnection triggered
+			if f.onDeadTunnel != nil {
+				go f.onDeadTunnel(peerName)
+			}
+
+			// Fall through to relay fallback below
+		} else {
+			atomic.AddUint64(&f.stats.PacketsSent, 1)
+			atomic.AddUint64(&f.stats.BytesSent, uint64(packetLen))
+
+			log.Debug().
+				Str("src", info.SrcIP.String()).
+				Str("dst", info.DstIP.String()).
+				Str("peer", peerName).
+				Int("len", packetLen).
+				Msg("packet forwarded to tunnel")
+
+			return nil
 		}
-
-		atomic.AddUint64(&f.stats.PacketsSent, 1)
-		atomic.AddUint64(&f.stats.BytesSent, uint64(packetLen))
-
-		log.Debug().
-			Str("src", info.SrcIP.String()).
-			Str("dst", info.DstIP.String()).
-			Str("peer", peerName).
-			Int("len", packetLen).
-			Msg("packet forwarded to tunnel")
-
-		return nil
 	}
 
-	// No direct tunnel - try persistent relay
+	// No direct tunnel or tunnel write failed - try persistent relay
 	f.relayMu.RLock()
 	relay := f.relay
 	f.relayMu.RUnlock()
