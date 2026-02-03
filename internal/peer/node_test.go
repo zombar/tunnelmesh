@@ -174,7 +174,7 @@ func TestMeshNode_IPsChanged(t *testing.T) {
 	assert.True(t, node.IPsChanged([]string{"1.2.3.4"}, []string{"192.168.1.1"}, true))
 }
 
-func TestMeshNode_CancelOutboundConnection(t *testing.T) {
+func TestMeshNode_CancelOutbound_ViaLifecycleManager(t *testing.T) {
 	identity := &PeerIdentity{
 		Name: "test-node",
 		Config: &config.PeerConfig{
@@ -195,15 +195,15 @@ func TestMeshNode_CancelOutboundConnection(t *testing.T) {
 		cancelled.Store(true)
 	}()
 
-	// Mark as connecting with cancel function
-	set := node.SetConnectingWithCancel("peer1", cancel)
-	assert.True(t, set, "should be able to mark as connecting")
+	// Start connecting with cancel function via LifecycleManager
+	started := node.Connections.StartConnecting("peer1", "10.0.0.1", cancel)
+	assert.True(t, started, "should be able to start connecting")
 
 	// Verify peer is marked as connecting
-	assert.True(t, node.IsConnecting("peer1"))
+	assert.True(t, node.Connections.IsConnecting("peer1"))
 
 	// Cancel the outbound connection (simulating inbound success)
-	wasCancelled := node.CancelOutboundConnection("peer1")
+	wasCancelled := node.Connections.CancelOutbound("peer1")
 	assert.True(t, wasCancelled, "should cancel the connection")
 
 	// Wait a bit for goroutine to process
@@ -213,11 +213,11 @@ func TestMeshNode_CancelOutboundConnection(t *testing.T) {
 	assert.True(t, cancelled.Load(), "context should be cancelled")
 
 	// Second cancel should return false (already consumed)
-	wasCancelled = node.CancelOutboundConnection("peer1")
+	wasCancelled = node.Connections.CancelOutbound("peer1")
 	assert.False(t, wasCancelled, "second cancel should return false")
 }
 
-func TestMeshNode_CancelOutboundConnection_NoCancel(t *testing.T) {
+func TestMeshNode_CancelOutbound_NonExistent(t *testing.T) {
 	identity := &PeerIdentity{
 		Name: "test-node",
 		Config: &config.PeerConfig{
@@ -228,11 +228,11 @@ func TestMeshNode_CancelOutboundConnection_NoCancel(t *testing.T) {
 	node := NewMeshNode(identity, client)
 
 	// Cancel for non-existent peer should return false
-	wasCancelled := node.CancelOutboundConnection("nonexistent")
+	wasCancelled := node.Connections.CancelOutbound("nonexistent")
 	assert.False(t, wasCancelled)
 }
 
-func TestMeshNode_SetConnectingWithCancel_AlreadyConnecting(t *testing.T) {
+func TestMeshNode_StartConnecting_AlreadyConnecting(t *testing.T) {
 	identity := &PeerIdentity{
 		Name: "test-node",
 		Config: &config.PeerConfig{
@@ -242,26 +242,26 @@ func TestMeshNode_SetConnectingWithCancel_AlreadyConnecting(t *testing.T) {
 	client := coord.NewClient("http://localhost:8080", "test-token")
 	node := NewMeshNode(identity, client)
 
-	// First set should succeed
+	// First start should succeed
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()
-	set1 := node.SetConnectingWithCancel("peer1", cancel1)
-	assert.True(t, set1)
+	started1 := node.Connections.StartConnecting("peer1", "10.0.0.1", cancel1)
+	assert.True(t, started1)
 
-	// Second set should fail (already connecting)
+	// Second start should fail (already connecting)
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
-	set2 := node.SetConnectingWithCancel("peer1", cancel2)
-	assert.False(t, set2, "should not be able to set connecting twice")
+	started2 := node.Connections.StartConnecting("peer1", "10.0.0.1", cancel2)
+	assert.False(t, started2, "should not be able to start connecting twice")
 
 	// Verify only the first context is tracked
 	_ = ctx1
 	_ = ctx2
 
-	// Clear connecting and verify we can set again
-	node.ClearConnecting("peer1")
-	set3 := node.SetConnectingWithCancel("peer1", cancel1)
-	assert.True(t, set3, "should be able to set connecting after clear")
+	// Clear connecting and verify we can start again
+	node.Connections.ClearConnecting("peer1")
+	started3 := node.Connections.StartConnecting("peer1", "10.0.0.1", cancel1)
+	assert.True(t, started3, "should be able to start connecting after clear")
 }
 
 func TestMeshNode_InboundCancelsOutbound_Integration(t *testing.T) {
@@ -286,9 +286,9 @@ func TestMeshNode_InboundCancelsOutbound_Integration(t *testing.T) {
 	var outboundCancelled atomic.Bool
 	outboundDone := make(chan struct{})
 
-	// Start simulated outbound connection
-	if !node.SetConnectingWithCancel("peer1", cancel) {
-		t.Fatal("should be able to set connecting")
+	// Start simulated outbound connection via LifecycleManager
+	if !node.Connections.StartConnecting("peer1", "10.0.0.1", cancel) {
+		t.Fatal("should be able to start connecting")
 	}
 
 	go func() {
@@ -312,7 +312,7 @@ func TestMeshNode_InboundCancelsOutbound_Integration(t *testing.T) {
 	}
 
 	// Simulate inbound connection arriving
-	wasCancelled := node.CancelOutboundConnection("peer1")
+	wasCancelled := node.Connections.CancelOutbound("peer1")
 	assert.True(t, wasCancelled, "should cancel outbound")
 
 	// Wait for outbound to complete

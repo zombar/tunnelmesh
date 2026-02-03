@@ -41,7 +41,7 @@ func (m *MeshNode) handleSSHConnection(ctx context.Context, conn transport.Conne
 		Msg("incoming SSH connection")
 
 	// Cancel any outbound connection attempt to this peer
-	m.CancelOutboundConnection(peerName)
+	m.Connections.CancelOutbound(peerName)
 
 	// If we already have a healthy tunnel to this peer, reject the incoming connection
 	// to avoid race conditions where both peers connect simultaneously
@@ -57,28 +57,35 @@ func (m *MeshNode) handleSSHConnection(ctx context.Context, conn transport.Conne
 
 	// Fetch peer info from coordination server to get mesh IP and add route
 	// This ensures routing works immediately, without waiting for next discovery cycle
-	m.ensurePeerRoute(peerName)
+	meshIP := m.ensurePeerRoute(peerName)
 
 	// Wrap connection as a tunnel
 	tun := tunnel.NewTunnelFromTransport(conn)
 
-	// Add to tunnel manager
-	m.tunnelMgr.Add(peerName, tun)
+	// Transition to Connected state (this adds tunnel via LifecycleManager observer)
+	pc := m.Connections.GetOrCreate(peerName, meshIP)
+	if err := pc.Connected(tun, "incoming SSH connection"); err != nil {
+		log.Warn().Err(err).Str("peer", peerName).Msg("failed to transition to connected state")
+		tun.Close()
+		return
+	}
 
 	log.Info().Str("peer", peerName).Msg("tunnel established from incoming SSH connection")
 
 	// Handle incoming packets from this tunnel
 	if m.Forwarder != nil {
-		go func(name string, t *tunnel.Tunnel) {
-			m.Forwarder.HandleTunnel(ctx, name, t)
-			m.tunnelMgr.RemoveIfMatch(name, t)
-		}(peerName, tun)
+		go func(name string, p *tunnel.Tunnel, peerConn interface{ Disconnect(string, error) error }) {
+			m.Forwarder.HandleTunnel(ctx, name, p)
+			// Disconnect when tunnel handler exits (removes tunnel via LifecycleManager observer)
+			peerConn.Disconnect("tunnel handler exited", nil)
+		}(peerName, tun, pc)
 	}
 }
 
 // ensurePeerRoute fetches peer info from coordination server and ensures the route exists.
 // Retries on failure with exponential backoff, then falls back to cached peer info.
-func (m *MeshNode) ensurePeerRoute(peerName string) {
+// Returns the mesh IP for the peer (empty string if not found).
+func (m *MeshNode) ensurePeerRoute(peerName string) string {
 	if m.client == nil {
 		// Try cache if no client available
 		if meshIP, ok := m.GetCachedPeerMeshIP(peerName); ok {
@@ -87,8 +94,9 @@ func (m *MeshNode) ensurePeerRoute(peerName string) {
 				Str("peer", peerName).
 				Str("mesh_ip", meshIP).
 				Msg("route added from cache (no client)")
+			return meshIP
 		}
-		return
+		return ""
 	}
 
 	// Retry with exponential backoff
@@ -132,7 +140,7 @@ func (m *MeshNode) ensurePeerRoute(peerName string) {
 						m.SSHTransport.AddAuthorizedKey(pubKey)
 					}
 				}
-				return
+				return peer.MeshIP
 			}
 		}
 		// Peer not in list - don't retry, it's not a transient error
@@ -146,7 +154,7 @@ func (m *MeshNode) ensurePeerRoute(peerName string) {
 			Str("peer", peerName).
 			Str("mesh_ip", meshIP).
 			Msg("route added from cache (retries exhausted)")
-		return
+		return meshIP
 	}
 
 	if lastErr != nil {
@@ -154,4 +162,5 @@ func (m *MeshNode) ensurePeerRoute(peerName string) {
 	} else {
 		log.Warn().Str("peer", peerName).Msg("peer not found on coordination server or in cache")
 	}
+	return ""
 }

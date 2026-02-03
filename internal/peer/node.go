@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	"github.com/tunnelmesh/tunnelmesh/internal/dns"
+	"github.com/tunnelmesh/tunnelmesh/internal/peer/connection"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	sshtransport "github.com/tunnelmesh/tunnelmesh/internal/transport/ssh"
@@ -42,10 +43,8 @@ type MeshNode struct {
 	router    *routing.Router
 	Forwarder *routing.Forwarder
 
-	// Connection state - tracks peers with connection attempts in progress
-	connectingMu     sync.Mutex
-	connecting       map[string]bool
-	outboundCancels  map[string]context.CancelFunc // Cancel functions for outbound connections
+	// Connection lifecycle management (FSM-based)
+	Connections *connection.LifecycleManager
 
 	// Signals
 	triggerDiscovery chan struct{}
@@ -70,73 +69,26 @@ type MeshNode struct {
 
 // NewMeshNode creates a new MeshNode with the given identity and client.
 func NewMeshNode(identity *PeerIdentity, client *coord.Client) *MeshNode {
+	router := routing.NewRouter()
+	tunnelMgr := NewTunnelAdapter()
+
 	node := &MeshNode{
 		identity:         identity,
 		client:           client,
-		tunnelMgr:        NewTunnelAdapter(),
-		router:           routing.NewRouter(),
-		connecting:       make(map[string]bool),
-		outboundCancels:  make(map[string]context.CancelFunc),
+		tunnelMgr:        tunnelMgr,
+		router:           router,
 		triggerDiscovery: make(chan struct{}, 1),
 		peerCache:        make(map[string]string),
 	}
+
+	// Initialize connection lifecycle manager with route and tunnel integration
+	node.Connections = connection.NewLifecycleManager(connection.LifecycleConfig{
+		Router:  router,
+		Tunnels: tunnelMgr,
+	})
+
 	node.lastNetworkChange.Store(time.Time{})
 	return node
-}
-
-// IsConnecting returns true if a connection attempt is already in progress for the peer.
-func (m *MeshNode) IsConnecting(peerName string) bool {
-	m.connectingMu.Lock()
-	defer m.connectingMu.Unlock()
-	return m.connecting[peerName]
-}
-
-// SetConnectingWithCancel marks a peer as having a connection attempt in progress
-// and stores the cancel function to allow cancellation if an inbound connection arrives.
-// Returns true if the state was set, false if already connecting.
-func (m *MeshNode) SetConnectingWithCancel(peerName string, cancel context.CancelFunc) bool {
-	m.connectingMu.Lock()
-	defer m.connectingMu.Unlock()
-	if m.connecting[peerName] {
-		return false // Already connecting
-	}
-	m.connecting[peerName] = true
-	m.outboundCancels[peerName] = cancel
-	return true
-}
-
-// SetConnecting marks a peer as having a connection attempt in progress.
-// Returns true if the state was set, false if already connecting.
-// Deprecated: Use SetConnectingWithCancel instead.
-func (m *MeshNode) SetConnecting(peerName string) bool {
-	return m.SetConnectingWithCancel(peerName, nil)
-}
-
-// ClearConnecting removes the connecting state for a peer.
-func (m *MeshNode) ClearConnecting(peerName string) {
-	m.connectingMu.Lock()
-	defer m.connectingMu.Unlock()
-	delete(m.connecting, peerName)
-	delete(m.outboundCancels, peerName)
-}
-
-// CancelOutboundConnection cancels any pending outbound connection attempt to the peer.
-// This is called when an inbound connection from the peer is established.
-// Returns true if a connection was cancelled.
-func (m *MeshNode) CancelOutboundConnection(peerName string) bool {
-	m.connectingMu.Lock()
-	cancel, exists := m.outboundCancels[peerName]
-	if exists && cancel != nil {
-		delete(m.outboundCancels, peerName)
-	}
-	m.connectingMu.Unlock()
-
-	if exists && cancel != nil {
-		log.Debug().Str("peer", peerName).Msg("cancelling outbound connection due to inbound success")
-		cancel()
-		return true
-	}
-	return false
 }
 
 // Identity returns the peer's identity.

@@ -107,22 +107,22 @@ func TestMeshNode_ConnectingState(t *testing.T) {
 	node := NewMeshNode(identity, client)
 
 	// Initially not connecting
-	assert.False(t, node.IsConnecting("peer1"))
+	assert.False(t, node.Connections.IsConnecting("peer1"))
 
-	// Set connecting - should succeed
-	assert.True(t, node.SetConnecting("peer1"))
-	assert.True(t, node.IsConnecting("peer1"))
+	// Start connecting - should succeed
+	assert.True(t, node.Connections.StartConnecting("peer1", "10.0.0.1", nil))
+	assert.True(t, node.Connections.IsConnecting("peer1"))
 
-	// Try to set connecting again - should fail (already connecting)
-	assert.False(t, node.SetConnecting("peer1"))
+	// Try to start connecting again - should fail (already connecting)
+	assert.False(t, node.Connections.StartConnecting("peer1", "10.0.0.1", nil))
 
 	// Clear connecting
-	node.ClearConnecting("peer1")
-	assert.False(t, node.IsConnecting("peer1"))
+	node.Connections.ClearConnecting("peer1")
+	assert.False(t, node.Connections.IsConnecting("peer1"))
 
-	// Can set connecting again after clearing
-	assert.True(t, node.SetConnecting("peer1"))
-	assert.True(t, node.IsConnecting("peer1"))
+	// Can start connecting again after clearing
+	assert.True(t, node.Connections.StartConnecting("peer1", "10.0.0.1", nil))
+	assert.True(t, node.Connections.IsConnecting("peer1"))
 }
 
 func TestMeshNode_ConnectingState_MultiplePeers(t *testing.T) {
@@ -137,20 +137,20 @@ func TestMeshNode_ConnectingState_MultiplePeers(t *testing.T) {
 	node := NewMeshNode(identity, client)
 
 	// Can connect to multiple peers simultaneously
-	assert.True(t, node.SetConnecting("peer1"))
-	assert.True(t, node.SetConnecting("peer2"))
-	assert.True(t, node.SetConnecting("peer3"))
+	assert.True(t, node.Connections.StartConnecting("peer1", "10.0.0.1", nil))
+	assert.True(t, node.Connections.StartConnecting("peer2", "10.0.0.2", nil))
+	assert.True(t, node.Connections.StartConnecting("peer3", "10.0.0.3", nil))
 
 	// All are connecting
-	assert.True(t, node.IsConnecting("peer1"))
-	assert.True(t, node.IsConnecting("peer2"))
-	assert.True(t, node.IsConnecting("peer3"))
+	assert.True(t, node.Connections.IsConnecting("peer1"))
+	assert.True(t, node.Connections.IsConnecting("peer2"))
+	assert.True(t, node.Connections.IsConnecting("peer3"))
 
 	// Clear one doesn't affect others
-	node.ClearConnecting("peer2")
-	assert.True(t, node.IsConnecting("peer1"))
-	assert.False(t, node.IsConnecting("peer2"))
-	assert.True(t, node.IsConnecting("peer3"))
+	node.Connections.ClearConnecting("peer2")
+	assert.True(t, node.Connections.IsConnecting("peer1"))
+	assert.False(t, node.Connections.IsConnecting("peer2"))
+	assert.True(t, node.Connections.IsConnecting("peer3"))
 }
 
 func TestMeshNode_RunPeerDiscovery_ContextCancel(t *testing.T) {

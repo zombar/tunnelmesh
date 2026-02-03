@@ -106,7 +106,7 @@ func (m *MeshNode) DiscoverAndConnectPeers(ctx context.Context) {
 		}
 
 		// Skip if connection attempt already in progress
-		if m.IsConnecting(peer.Name) {
+		if m.Connections.IsConnecting(peer.Name) {
 			log.Debug().Str("peer", peer.Name).Msg("connection attempt already in progress, skipping")
 			continue
 		}
@@ -125,11 +125,11 @@ func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer) {
 	defer cancel()
 
 	// Mark as connecting with cancel function - if already connecting, bail out
-	if !m.SetConnectingWithCancel(peer.Name, cancel) {
+	if !m.Connections.StartConnecting(peer.Name, peer.MeshIP, cancel) {
 		log.Debug().Str("peer", peer.Name).Msg("connection attempt already in progress")
 		return
 	}
-	defer m.ClearConnecting(peer.Name)
+	defer m.Connections.ClearConnecting(peer.Name)
 
 	// Check if transport negotiator is available
 	if m.TransportNegotiator == nil {
@@ -179,7 +179,19 @@ func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer) {
 
 	// Wrap the transport.Connection in a tunnel adapter
 	tun := tunnel.NewConnectionAdapter(result.Connection, peer.Name)
-	m.tunnelMgr.Add(peer.Name, tun)
+
+	// Transition to Connected state (this adds tunnel via LifecycleManager observer)
+	pc := m.Connections.Get(peer.Name)
+	if pc == nil {
+		log.Warn().Str("peer", peer.Name).Msg("peer connection not found after negotiation")
+		tun.Close()
+		return
+	}
+	if err := pc.Connected(tun, "transport negotiated: "+string(result.Transport)); err != nil {
+		log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to transition to connected state")
+		tun.Close()
+		return
+	}
 
 	log.Info().
 		Str("peer", peer.Name).
@@ -190,7 +202,9 @@ func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer) {
 	if m.Forwarder != nil {
 		m.Forwarder.HandleTunnel(connCtx, peer.Name, tun)
 	}
-	m.tunnelMgr.RemoveIfMatch(peer.Name, tun)
+
+	// Disconnect when tunnel handler exits (this removes tunnel via LifecycleManager observer)
+	pc.Disconnect("tunnel handler exited", nil)
 }
 
 // buildTransportPeerInfo builds a transport.PeerInfo from a proto.Peer.

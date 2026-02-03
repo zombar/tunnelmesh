@@ -181,7 +181,7 @@ func (m *MeshNode) HandleRelayRequests(ctx context.Context, relayRequests []stri
 // connectRelay connects to a relay for the given peer.
 func (m *MeshNode) connectRelay(ctx context.Context, peerName, jwtToken string) {
 	// Cancel any outbound connection attempt to this peer (relay is server-mediated inbound)
-	m.CancelOutboundConnection(peerName)
+	m.Connections.CancelOutbound(peerName)
 
 	relayTunnel, err := tunnel.NewRelayTunnel(ctx, m.client.BaseURL(), peerName, jwtToken)
 	if err != nil {
@@ -189,14 +189,26 @@ func (m *MeshNode) connectRelay(ctx context.Context, peerName, jwtToken string) 
 		return
 	}
 
-	m.tunnelMgr.Add(peerName, relayTunnel)
+	// Get mesh IP for this peer from cache (relay connections may not have coord server access)
+	meshIP, _ := m.GetCachedPeerMeshIP(peerName)
+
+	// Transition to Connected state (this adds tunnel via LifecycleManager observer)
+	pc := m.Connections.GetOrCreate(peerName, meshIP)
+	if err := pc.Connected(relayTunnel, "relay notification"); err != nil {
+		log.Warn().Err(err).Str("peer", peerName).Msg("failed to transition to connected state")
+		relayTunnel.Close()
+		return
+	}
+
 	log.Info().Str("peer", peerName).Msg("relay tunnel established via notification")
 
 	// Handle incoming packets from this tunnel
 	if m.Forwarder != nil {
 		m.Forwarder.HandleTunnel(ctx, peerName, relayTunnel)
 	}
-	m.tunnelMgr.RemoveIfMatch(peerName, relayTunnel)
+
+	// Disconnect when tunnel handler exits (removes tunnel via LifecycleManager observer)
+	pc.Disconnect("relay tunnel handler exited", nil)
 }
 
 // syncDNS syncs DNS records from the coordination server.
@@ -251,7 +263,7 @@ func (m *MeshNode) HandleHolePunchRequests(ctx context.Context, holePunchRequest
 		}
 
 		// Skip if we're already connecting to this peer
-		if m.IsConnecting(peerName) {
+		if m.Connections.IsConnecting(peerName) {
 			log.Debug().Str("peer", peerName).Msg("skipping hole-punch request, already connecting")
 			continue
 		}

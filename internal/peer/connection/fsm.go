@@ -1,0 +1,318 @@
+package connection
+
+import (
+	"context"
+	"io"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog/log"
+)
+
+// PeerConnection manages the connection state for a single peer.
+// It provides thread-safe state transitions and notifies observers of changes.
+type PeerConnection struct {
+	mu sync.RWMutex
+
+	// Identity
+	peerName string
+	meshIP   string
+
+	// State
+	state     State
+	lastError error
+
+	// Tunnel (active connection)
+	tunnel io.ReadWriteCloser
+
+	// Cancel function for outbound connection attempts
+	cancelFunc context.CancelFunc
+
+	// Observers for state changes
+	observers []Observer
+
+	// Timestamps
+	createdAt      time.Time
+	lastTransition time.Time
+	connectedSince time.Time
+	reconnectCount int
+}
+
+// PeerConnectionConfig holds configuration for creating a PeerConnection.
+type PeerConnectionConfig struct {
+	PeerName  string
+	MeshIP    string
+	Observers []Observer
+}
+
+// NewPeerConnection creates a new PeerConnection in the Disconnected state.
+func NewPeerConnection(cfg PeerConnectionConfig) *PeerConnection {
+	now := time.Now()
+	return &PeerConnection{
+		peerName:       cfg.PeerName,
+		meshIP:         cfg.MeshIP,
+		state:          StateDisconnected,
+		observers:      cfg.Observers,
+		createdAt:      now,
+		lastTransition: now,
+	}
+}
+
+// PeerName returns the peer's name.
+func (pc *PeerConnection) PeerName() string {
+	return pc.peerName
+}
+
+// MeshIP returns the peer's mesh IP address.
+func (pc *PeerConnection) MeshIP() string {
+	return pc.meshIP
+}
+
+// State returns the current connection state.
+func (pc *PeerConnection) State() State {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+	return pc.state
+}
+
+// LastError returns the last error that caused a state transition.
+func (pc *PeerConnection) LastError() error {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+	return pc.lastError
+}
+
+// Tunnel returns the current tunnel, or nil if not connected.
+func (pc *PeerConnection) Tunnel() io.ReadWriteCloser {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+	return pc.tunnel
+}
+
+// ConnectedSince returns when the connection was established.
+// Returns zero time if not currently connected.
+func (pc *PeerConnection) ConnectedSince() time.Time {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+	if pc.state != StateConnected {
+		return time.Time{}
+	}
+	return pc.connectedSince
+}
+
+// ReconnectCount returns the number of times this connection has reconnected.
+func (pc *PeerConnection) ReconnectCount() int {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+	return pc.reconnectCount
+}
+
+// AddObserver adds an observer to receive state change notifications.
+func (pc *PeerConnection) AddObserver(o Observer) {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	pc.observers = append(pc.observers, o)
+}
+
+// SetCancelFunc sets a cancel function for an outbound connection attempt.
+// This is called to cancel the attempt when an inbound connection arrives first.
+func (pc *PeerConnection) SetCancelFunc(cancel context.CancelFunc) {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	pc.cancelFunc = cancel
+}
+
+// CancelOutbound calls the cancel function if one was set, clearing it afterwards.
+// Returns true if a cancel function was called.
+func (pc *PeerConnection) CancelOutbound() bool {
+	pc.mu.Lock()
+	cancel := pc.cancelFunc
+	pc.cancelFunc = nil
+	pc.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+		return true
+	}
+	return false
+}
+
+// TransitionTo attempts to transition to the target state.
+// Returns an error if the transition is invalid.
+// On success, notifies all observers of the transition.
+func (pc *PeerConnection) TransitionTo(target State, reason string, err error) error {
+	pc.mu.Lock()
+
+	from := pc.state
+
+	// Check if transition is valid
+	if !from.CanTransitionTo(target) {
+		pc.mu.Unlock()
+		return NewTransitionError(from, target, pc.peerName, "invalid transition")
+	}
+
+	// Perform transition
+	now := time.Now()
+	pc.state = target
+	pc.lastError = err
+	pc.lastTransition = now
+
+	// Track connected time and reconnect count
+	if target == StateConnected {
+		if from == StateReconnecting {
+			pc.reconnectCount++
+		}
+		pc.connectedSince = now
+	}
+
+	// Build transition event
+	transition := Transition{
+		PeerName:  pc.peerName,
+		From:      from,
+		To:        target,
+		Timestamp: now,
+		Reason:    reason,
+		Error:     err,
+	}
+
+	// Copy observers slice to avoid holding lock during callbacks
+	observers := make([]Observer, len(pc.observers))
+	copy(observers, pc.observers)
+
+	pc.mu.Unlock()
+
+	// Log the transition
+	logEvent := log.Debug().
+		Str("peer", pc.peerName).
+		Str("from", from.String()).
+		Str("to", target.String()).
+		Str("reason", reason)
+	if err != nil {
+		logEvent = logEvent.Err(err)
+	}
+	logEvent.Msg("connection state transition")
+
+	// Notify observers (outside lock)
+	for _, o := range observers {
+		o.OnTransition(transition)
+	}
+
+	return nil
+}
+
+// SetTunnel sets the active tunnel for this connection.
+// This should be called when transitioning to Connected state.
+func (pc *PeerConnection) SetTunnel(tunnel io.ReadWriteCloser) {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	pc.tunnel = tunnel
+}
+
+// ClearTunnel clears the tunnel reference without closing it.
+// Use this when the tunnel is managed externally.
+func (pc *PeerConnection) ClearTunnel() {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	pc.tunnel = nil
+}
+
+// Close closes the tunnel and transitions to Closed state.
+// This is a terminal operation - the PeerConnection cannot be reused.
+func (pc *PeerConnection) Close() error {
+	pc.mu.Lock()
+	tunnel := pc.tunnel
+	pc.tunnel = nil
+	state := pc.state
+	pc.mu.Unlock()
+
+	// Close the tunnel if present
+	var tunnelErr error
+	if tunnel != nil {
+		tunnelErr = tunnel.Close()
+	}
+
+	// Transition to closed (if not already)
+	if !state.IsTerminal() {
+		if err := pc.TransitionTo(StateClosed, "explicit close", tunnelErr); err != nil {
+			// Log but don't fail - we still want to clean up
+			log.Debug().
+				Str("peer", pc.peerName).
+				Err(err).
+				Msg("error transitioning to closed state")
+		}
+	}
+
+	return tunnelErr
+}
+
+// Disconnect transitions to Disconnected state and closes the tunnel.
+// Unlike Close(), the connection can be reused after Disconnect().
+func (pc *PeerConnection) Disconnect(reason string, err error) error {
+	pc.mu.Lock()
+	tunnel := pc.tunnel
+	pc.tunnel = nil
+	state := pc.state
+	pc.mu.Unlock()
+
+	// Close the tunnel if present
+	if tunnel != nil {
+		tunnel.Close()
+	}
+
+	// Transition to disconnected (if valid)
+	if state.CanTransitionTo(StateDisconnected) {
+		return pc.TransitionTo(StateDisconnected, reason, err)
+	}
+
+	return nil
+}
+
+// StartConnecting transitions to Connecting state.
+func (pc *PeerConnection) StartConnecting(reason string) error {
+	return pc.TransitionTo(StateConnecting, reason, nil)
+}
+
+// Connected transitions to Connected state and sets the tunnel.
+func (pc *PeerConnection) Connected(tunnel io.ReadWriteCloser, reason string) error {
+	pc.SetTunnel(tunnel)
+	if err := pc.TransitionTo(StateConnected, reason, nil); err != nil {
+		// Roll back tunnel assignment on failure
+		pc.ClearTunnel()
+		return err
+	}
+	return nil
+}
+
+// StartReconnecting transitions to Reconnecting state.
+// The tunnel is cleared but not closed (caller should close it).
+func (pc *PeerConnection) StartReconnecting(reason string, err error) error {
+	pc.ClearTunnel()
+	return pc.TransitionTo(StateReconnecting, reason, err)
+}
+
+// ConnectionInfo contains snapshot information about a connection.
+type ConnectionInfo struct {
+	PeerName       string
+	MeshIP         string
+	State          State
+	LastError      error
+	ConnectedSince time.Time
+	ReconnectCount int
+	HasTunnel      bool
+}
+
+// Info returns a snapshot of the connection's current state.
+func (pc *PeerConnection) Info() ConnectionInfo {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+
+	return ConnectionInfo{
+		PeerName:       pc.peerName,
+		MeshIP:         pc.meshIP,
+		State:          pc.state,
+		LastError:      pc.lastError,
+		ConnectedSince: pc.connectedSince,
+		ReconnectCount: pc.reconnectCount,
+		HasTunnel:      pc.tunnel != nil,
+	}
+}
