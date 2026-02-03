@@ -452,7 +452,16 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 
 	// Remove the stale session
 	delete(t.sessions, localIndex)
-	delete(t.peerSessions, peerName)
+	// Only delete from peerSessions if it still points to this session
+	// (a new session may have already replaced it during reconnection)
+	var hasNewSession bool
+	if existing, ok := t.peerSessions[peerName]; ok {
+		if existing.LocalIndex() == localIndex {
+			delete(t.peerSessions, peerName)
+		} else {
+			hasNewSession = true
+		}
+	}
 
 	// Get callback while holding lock, then release before calling
 	cb := t.onSessionInvalid
@@ -463,13 +472,15 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 		Uint32("local_index", localIndex).
 		Uint32("remote_index", pkt.UnknownIndex).
 		Str("from", remoteAddr.String()).
+		Bool("has_new_session", hasNewSession).
 		Msg("session invalidated by peer, re-handshake needed")
 
 	// Close the old session
 	session.Close()
 
-	// Notify upper layer to re-establish connection
-	if cb != nil {
+	// Only notify upper layer if there's no new session already established
+	// If a new session exists, don't trigger reconnection - we're already connected
+	if cb != nil && !hasNewSession {
 		cb(peerName)
 	}
 }
