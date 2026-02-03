@@ -275,7 +275,7 @@ function updateWGClientsTable() {
                 <td><code>${escapeHtml(client.dns_name)}.tunnelmesh</code></td>
                 <td><span class="status-badge ${statusClass}">${statusText}</span></td>
                 <td>${lastSeen}</td>
-                <td>
+                <td class="actions-cell">
                     <button class="btn-icon" onclick="toggleWGClient('${client.id}', ${!client.enabled})" title="${client.enabled ? 'Disable' : 'Enable'}">
                         ${client.enabled ? '⏸' : '▶'}
                     </button>

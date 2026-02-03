@@ -372,6 +372,15 @@ main {
     }
 }
 
+/* Inline code styling (for tables and elsewhere) */
+code {
+    background: #21262d;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
 table {
     width: 100%;
     border-collapse: collapse;
