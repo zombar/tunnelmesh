@@ -12,6 +12,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// relayPacketPool pools relay packet buffers to reduce GC pressure.
+var relayPacketPool = sync.Pool{
+	New: func() interface{} {
+		// Allocate buffer for max relay message: type(1) + name_len(1) + name(255) + data(65535)
+		buf := make([]byte, 65792)
+		return &buf
+	},
+}
+
 // Persistent relay message types (must match server)
 const (
 	MsgTypeSendPacket      byte = 0x01 // Client -> Server: send packet to target peer
@@ -33,6 +42,10 @@ type PersistentRelay struct {
 	closed     bool
 	closedChan chan struct{}
 
+	// Async write channel to prevent blocking on slow writes
+	writeChan     chan writeRequest
+	writeLoopDone chan struct{}
+
 	// Packet routing
 	incomingMu sync.Mutex
 	incoming   map[string]*peerQueue // peerName -> queue of incoming packets
@@ -45,6 +58,12 @@ type PersistentRelay struct {
 	reconnecting bool // Prevents concurrent autoReconnect goroutines
 }
 
+// writeRequest represents a pending write to the relay connection.
+type writeRequest struct {
+	data   []byte
+	pooled bool // if true, return to pool after write
+}
+
 // peerQueue holds incoming packets from a specific peer.
 type peerQueue struct {
 	packets chan []byte
@@ -53,10 +72,12 @@ type peerQueue struct {
 // NewPersistentRelay creates a new persistent relay connection.
 func NewPersistentRelay(serverURL, jwtToken string) *PersistentRelay {
 	return &PersistentRelay{
-		serverURL:  serverURL,
-		jwtToken:   jwtToken,
-		closedChan: make(chan struct{}),
-		incoming:   make(map[string]*peerQueue),
+		serverURL:     serverURL,
+		jwtToken:      jwtToken,
+		closedChan:    make(chan struct{}),
+		writeChan:     make(chan writeRequest, 256), // Buffered to prevent blocking
+		writeLoopDone: make(chan struct{}),
+		incoming:      make(map[string]*peerQueue),
 	}
 }
 
@@ -102,14 +123,60 @@ func (p *PersistentRelay) Connect(ctx context.Context) error {
 	p.mu.Lock()
 	p.conn = conn
 	p.connected = true
+	// Reset write channel and done signal for new connection
+	p.writeChan = make(chan writeRequest, 256)
+	p.writeLoopDone = make(chan struct{})
 	p.mu.Unlock()
 
 	log.Info().Msg("persistent relay connected")
+
+	// Start write loop (handles outgoing packets without blocking callers)
+	go p.writeLoop()
 
 	// Start message reader
 	go p.readLoop()
 
 	return nil
+}
+
+// writeLoop processes queued writes to prevent blocking on slow network writes.
+func (p *PersistentRelay) writeLoop() {
+	defer close(p.writeLoopDone)
+
+	// Capture closedChan under lock to avoid race with Close()
+	p.mu.RLock()
+	closedChan := p.closedChan
+	writeChan := p.writeChan
+	p.mu.RUnlock()
+
+	for {
+		select {
+		case <-closedChan:
+			return
+		case req, ok := <-writeChan:
+			if !ok {
+				return
+			}
+			p.mu.RLock()
+			conn := p.conn
+			p.mu.RUnlock()
+
+			if conn == nil {
+				if req.pooled {
+					relayPacketPool.Put(&req.data)
+				}
+				continue
+			}
+
+			if err := conn.WriteMessage(websocket.BinaryMessage, req.data); err != nil {
+				log.Debug().Err(err).Msg("persistent relay write failed")
+			}
+
+			if req.pooled {
+				relayPacketPool.Put(&req.data)
+			}
+		}
+	}
 }
 
 // readLoop reads messages from the server and dispatches them.
@@ -122,6 +189,11 @@ func (p *PersistentRelay) readLoop() {
 		if p.conn != nil {
 			p.conn.Close()
 			p.conn = nil
+		}
+		// Close write channel to stop write loop
+		if p.writeChan != nil {
+			close(p.writeChan)
+			p.writeChan = nil
 		}
 		closed := p.closed
 		p.mu.Unlock()
@@ -316,22 +388,53 @@ func (p *PersistentRelay) queuePacket(sourcePeer string, data []byte) {
 // SendTo sends a packet to the target peer via the relay.
 func (p *PersistentRelay) SendTo(targetPeer string, data []byte) error {
 	p.mu.RLock()
-	conn := p.conn
 	connected := p.connected
+	writeChan := p.writeChan
 	p.mu.RUnlock()
 
-	if !connected || conn == nil {
+	if !connected || writeChan == nil {
 		return fmt.Errorf("not connected to relay")
 	}
 
+	// Get buffer from pool
+	bufPtr := relayPacketPool.Get().(*[]byte)
+	buf := *bufPtr
+
 	// Build message: [MsgTypeSendPacket][target name len][target name][data]
-	msg := make([]byte, 2+len(targetPeer)+len(data))
+	msgLen := 2 + len(targetPeer) + len(data)
+	if msgLen > len(buf) {
+		// Message too large for pooled buffer, allocate new one
+		relayPacketPool.Put(bufPtr)
+		buf = make([]byte, msgLen)
+		// Send non-pooled (won't be returned to pool)
+		msg := buf[:msgLen]
+		msg[0] = MsgTypeSendPacket
+		msg[1] = byte(len(targetPeer))
+		copy(msg[2:], targetPeer)
+		copy(msg[2+len(targetPeer):], data)
+
+		select {
+		case writeChan <- writeRequest{data: msg, pooled: false}:
+			return nil
+		default:
+			return fmt.Errorf("relay write channel full")
+		}
+	}
+
+	msg := buf[:msgLen]
 	msg[0] = MsgTypeSendPacket
 	msg[1] = byte(len(targetPeer))
 	copy(msg[2:], targetPeer)
 	copy(msg[2+len(targetPeer):], data)
 
-	return conn.WriteMessage(websocket.BinaryMessage, msg)
+	// Non-blocking send to write channel
+	select {
+	case writeChan <- writeRequest{data: msg, pooled: true}:
+		return nil
+	default:
+		relayPacketPool.Put(bufPtr)
+		return fmt.Errorf("relay write channel full")
+	}
 }
 
 // SetPacketHandler sets a callback for incoming packets.
@@ -370,7 +473,18 @@ func (p *PersistentRelay) Close() error {
 	close(p.closedChan)
 	conn := p.conn
 	p.conn = nil
+	writeChan := p.writeChan
+	p.writeChan = nil
+	writeLoopDone := p.writeLoopDone
 	p.mu.Unlock()
+
+	// Close write channel and wait for write loop to finish
+	if writeChan != nil {
+		close(writeChan)
+	}
+	if writeLoopDone != nil {
+		<-writeLoopDone
+	}
 
 	// Close all peer queues to unblock readers
 	p.incomingMu.Lock()
