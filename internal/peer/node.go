@@ -252,6 +252,15 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 		}
 	})
 
+	// Set up handler for peer reconnection notifications
+	// When a peer reconnects to relay, our direct tunnel to them is likely stale
+	m.PersistentRelay.SetPeerReconnectedHandler(func(peerName string) {
+		if pc := m.Connections.Get(peerName); pc != nil {
+			log.Info().Str("peer", peerName).Msg("peer reconnected to relay, invalidating stale tunnel")
+			_ = pc.Disconnect("peer reconnected to relay", nil)
+		}
+	})
+
 	if err := m.PersistentRelay.Connect(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to connect persistent relay")
 		return err

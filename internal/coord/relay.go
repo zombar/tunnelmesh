@@ -37,10 +37,11 @@ type relayManager struct {
 
 // Persistent relay message types
 const (
-	MsgTypeSendPacket byte = 0x01 // Client -> Server: send packet to target peer
-	MsgTypeRecvPacket byte = 0x02 // Server -> Client: received packet from source peer
-	MsgTypePing       byte = 0x03 // Keepalive ping
-	MsgTypePong       byte = 0x04 // Keepalive pong
+	MsgTypeSendPacket      byte = 0x01 // Client -> Server: send packet to target peer
+	MsgTypeRecvPacket      byte = 0x02 // Server -> Client: received packet from source peer
+	MsgTypePing            byte = 0x03 // Keepalive ping
+	MsgTypePong            byte = 0x04 // Keepalive pong
+	MsgTypePeerReconnected byte = 0x05 // Server -> Client: peer reconnected (invalidate tunnel)
 )
 
 var upgrader = websocket.Upgrader{
@@ -90,6 +91,42 @@ func (r *relayManager) GetPersistent(peerName string) (*persistentConn, bool) {
 	defer r.mu.Unlock()
 	pc, ok := r.persistent[peerName]
 	return pc, ok
+}
+
+// BroadcastPeerReconnected notifies all other connected peers that a peer has reconnected.
+// This allows them to invalidate stale tunnels to that peer.
+func (r *relayManager) BroadcastPeerReconnected(reconnectedPeer string) {
+	r.mu.Lock()
+	peers := make([]*persistentConn, 0, len(r.persistent))
+	for name, pc := range r.persistent {
+		if name != reconnectedPeer {
+			peers = append(peers, pc)
+		}
+	}
+	r.mu.Unlock()
+
+	// Build message: [MsgTypePeerReconnected][name len][name]
+	msg := make([]byte, 2+len(reconnectedPeer))
+	msg[0] = MsgTypePeerReconnected
+	msg[1] = byte(len(reconnectedPeer))
+	copy(msg[2:], reconnectedPeer)
+
+	for _, pc := range peers {
+		pc.writeMu.Lock()
+		err := pc.conn.WriteMessage(websocket.BinaryMessage, msg)
+		pc.writeMu.Unlock()
+		if err != nil {
+			log.Debug().Err(err).
+				Str("target", pc.peerName).
+				Str("reconnected", reconnectedPeer).
+				Msg("failed to send peer reconnected notification")
+		} else {
+			log.Debug().
+				Str("target", pc.peerName).
+				Str("reconnected", reconnectedPeer).
+				Msg("sent peer reconnected notification")
+		}
+	}
 }
 
 // SendToPeer sends a packet to a peer via their persistent connection.
@@ -186,6 +223,10 @@ func (s *Server) handlePersistentRelay(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		log.Info().Str("peer", peerName).Msg("persistent relay connection closed")
 	}()
+
+	// Notify other peers that this peer has (re)connected
+	// This allows them to invalidate stale direct tunnels
+	go s.relay.BroadcastPeerReconnected(peerName)
 
 	// Set up ping/pong handlers for keepalive
 	conn.SetPongHandler(func(string) error {
