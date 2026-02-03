@@ -1,3 +1,9 @@
+# TunnelMesh Terraform Variables
+
+# ============================================================================
+# REQUIRED
+# ============================================================================
+
 variable "do_token" {
   description = "DigitalOcean API token"
   type        = string
@@ -5,21 +11,88 @@ variable "do_token" {
 }
 
 variable "domain" {
-  description = "Base domain name (e.g., example.com)"
+  description = "Base domain name (must be managed in DigitalOcean DNS)"
   type        = string
-}
-
-variable "subdomain" {
-  description = "Subdomain for the coord server"
-  type        = string
-  default     = "tunnelmesh"
 }
 
 variable "auth_token" {
-  description = "Authentication token for mesh peers"
+  description = "Authentication token for mesh peers (generate with: openssl rand -hex 32)"
   type        = string
   sensitive   = true
 }
+
+# ============================================================================
+# NODE DEFINITIONS
+# ============================================================================
+
+variable "nodes" {
+  description = <<-EOF
+    Map of nodes to deploy. Each node can have:
+    - coordinator: bool - Run coordination server (only one node should have this)
+    - peer: bool - Run as mesh peer
+    - wireguard: bool - Enable WireGuard concentrator
+    - region: string - Override default region
+    - size: string - Override default droplet size
+    - wg_port: number - Override WireGuard port
+    - ssh_port: number - Override SSH tunnel port
+    - tags: list(string) - Additional tags
+  EOF
+  type        = map(any)
+  default = {
+    # Default: all-in-one coordinator + peer + wireguard
+    "tunnelmesh" = {
+      coordinator = true
+      peer        = true
+      wireguard   = true
+    }
+  }
+
+  validation {
+    condition = length([
+      for name, cfg in var.nodes : name
+      if lookup(cfg, "coordinator", false)
+    ]) <= 1
+    error_message = "Only one node can have coordinator = true."
+  }
+}
+
+variable "external_coordinator_url" {
+  description = "URL of external coordinator (if not deploying one)"
+  type        = string
+  default     = ""
+}
+
+# ============================================================================
+# DEFAULT SETTINGS (can be overridden per-node)
+# ============================================================================
+
+variable "default_region" {
+  description = "Default DigitalOcean region"
+  type        = string
+  default     = "ams3"
+}
+
+variable "default_droplet_size" {
+  description = "Default droplet size"
+  type        = string
+  default     = "s-1vcpu-512mb-10gb" # $4/month
+}
+
+variable "default_wg_port" {
+  description = "Default WireGuard UDP port"
+  type        = number
+  default     = 51820
+}
+
+variable "default_ssh_port" {
+  description = "Default SSH tunnel port"
+  type        = number
+  default     = 2222
+}
+
+# ============================================================================
+# GLOBAL SETTINGS
+# ============================================================================
 
 variable "mesh_cidr" {
   description = "CIDR block for mesh network IP allocation"
@@ -33,20 +106,26 @@ variable "domain_suffix" {
   default     = ".tunnelmesh"
 }
 
+variable "ssh_key_name" {
+  description = "Name of SSH key in DigitalOcean (for droplet access)"
+  type        = string
+  default     = ""
+}
+
 variable "github_owner" {
-  description = "GitHub username or organization for container image"
+  description = "GitHub owner for downloading tunnelmesh binary"
   type        = string
   default     = "zombar"
 }
 
-variable "image_tag" {
-  description = "Docker image tag to deploy"
+variable "binary_version" {
+  description = "TunnelMesh version to install"
   type        = string
   default     = "latest"
 }
 
-variable "region" {
-  description = "DigitalOcean region for deployment"
+variable "ssl_email" {
+  description = "Email for Let's Encrypt notifications"
   type        = string
-  default     = "ams"
+  default     = ""
 }
