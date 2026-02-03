@@ -38,9 +38,14 @@ func (m *MeshNode) handleIncomingConnection(ctx context.Context, conn transport.
 		}
 	}
 
-	// Get cached mesh IP for FSM tracking
-	// Routes are managed atomically by discovery via UpdateRoutes()
+	// Get cached mesh IP for FSM tracking and routing
 	meshIP, _ := m.GetCachedPeerMeshIP(peerName)
+
+	// Add route immediately for bidirectional traffic
+	// Discovery will refresh/validate routes on next cycle
+	if meshIP != "" {
+		m.router.AddRoute(meshIP, peerName)
+	}
 
 	// Wrap connection as a tunnel
 	tun := tunnel.NewTunnelFromTransport(conn)
