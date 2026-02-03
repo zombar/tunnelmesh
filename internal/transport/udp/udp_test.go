@@ -1261,3 +1261,172 @@ func TestTransportClose_DualStack(t *testing.T) {
 		}
 	}
 }
+
+// =============================================================================
+// Worker Pool Tests
+// =============================================================================
+
+func TestWorkerPoolCreation(t *testing.T) {
+	priv, pub, _ := X25519KeyPair()
+	cfg := Config{
+		Port:          0,
+		StaticPrivate: priv,
+		StaticPublic:  pub,
+	}
+
+	transport, err := New(cfg)
+	if err != nil {
+		t.Fatalf("create transport: %v", err)
+	}
+
+	err = transport.Start()
+	if err != nil {
+		t.Fatalf("start transport: %v", err)
+	}
+	defer transport.Close()
+
+	// Packet queue should be initialized
+	if transport.packetQueue == nil {
+		t.Error("packet queue should be initialized after Start()")
+	}
+}
+
+func TestWorkerPoolProcessesPackets(t *testing.T) {
+	priv, pub, _ := X25519KeyPair()
+	cfg := Config{
+		Port:          0,
+		StaticPrivate: priv,
+		StaticPublic:  pub,
+	}
+
+	transport, err := New(cfg)
+	if err != nil {
+		t.Fatalf("create transport: %v", err)
+	}
+
+	err = transport.Start()
+	if err != nil {
+		t.Fatalf("start transport: %v", err)
+	}
+	defer transport.Close()
+
+	// Create a test packet and queue it
+	// The packet will be processed but since there's no session, it will be logged and dropped
+	// We're testing that the queue mechanism works, not packet handling
+
+	remoteAddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
+	testPacket := make([]byte, 20)
+	testPacket[0] = PacketTypeData // Data packet type
+
+	// Queue the packet
+	work := packetWork{
+		data:       testPacket,
+		remoteAddr: remoteAddr,
+		conn:       transport.conn,
+	}
+
+	// Should be able to queue without blocking
+	select {
+	case transport.packetQueue <- work:
+		// Success - packet queued
+	case <-time.After(100 * time.Millisecond):
+		t.Error("failed to queue packet - worker pool may not be running")
+	}
+
+	// Give workers time to process
+	time.Sleep(50 * time.Millisecond)
+}
+
+func TestWorkerPoolQueueFullDropsPackets(t *testing.T) {
+	priv, pub, _ := X25519KeyPair()
+	cfg := Config{
+		Port:          0,
+		StaticPrivate: priv,
+		StaticPublic:  pub,
+	}
+
+	transport, err := New(cfg)
+	if err != nil {
+		t.Fatalf("create transport: %v", err)
+	}
+
+	err = transport.Start()
+	if err != nil {
+		t.Fatalf("start transport: %v", err)
+	}
+	defer transport.Close()
+
+	remoteAddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
+
+	// Fill up the queue by sending more packets than buffer size
+	// This tests that we gracefully drop packets when queue is full
+	// rather than creating unbounded goroutines
+	dropped := 0
+	for i := 0; i < PacketQueueSize+100; i++ {
+		testPacket := make([]byte, 20)
+		testPacket[0] = PacketTypeData
+
+		work := packetWork{
+			data:       testPacket,
+			remoteAddr: remoteAddr,
+			conn:       transport.conn,
+		}
+
+		select {
+		case transport.packetQueue <- work:
+			// Queued successfully
+		default:
+			// Queue full - packet dropped (this is expected behavior)
+			dropped++
+		}
+	}
+
+	// We should have dropped some packets when queue was full
+	if dropped == 0 {
+		t.Error("expected some packets to be dropped when queue is full")
+	}
+	t.Logf("dropped %d packets (expected, queue size: %d)", dropped, PacketQueueSize)
+}
+
+func TestWorkerPoolShutdown(t *testing.T) {
+	priv, pub, _ := X25519KeyPair()
+	cfg := Config{
+		Port:          0,
+		StaticPrivate: priv,
+		StaticPublic:  pub,
+	}
+
+	transport, err := New(cfg)
+	if err != nil {
+		t.Fatalf("create transport: %v", err)
+	}
+
+	err = transport.Start()
+	if err != nil {
+		t.Fatalf("start transport: %v", err)
+	}
+
+	// Close should shut down workers gracefully
+	err = transport.Close()
+	if err != nil {
+		t.Errorf("close transport: %v", err)
+	}
+
+	// After close, the packet queue channel should be closed.
+	// Verify by checking we can't send to it (either blocks indefinitely or panics).
+	// Since channel is closed, ranging over it should complete immediately.
+	done := make(chan struct{})
+	go func() {
+		// This will complete immediately if channel is closed
+		for range transport.packetQueue {
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Channel was closed - workers can exit
+	case <-time.After(100 * time.Millisecond):
+		t.Error("packet queue should be closed after transport.Close()")
+	}
+}

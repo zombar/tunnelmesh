@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,17 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
+
+// PacketQueueSize is the buffer size for the packet processing queue.
+// When the queue is full, packets are dropped rather than spawning unbounded goroutines.
+const PacketQueueSize = 1024
+
+// packetWork represents a packet to be processed by a worker.
+type packetWork struct {
+	data       []byte
+	remoteAddr *net.UDPAddr
+	conn       *net.UDPConn
+}
 
 // handshakeResponse is used to pass handshake responses from receiveLoop to initiators.
 type handshakeResponse struct {
@@ -60,6 +72,9 @@ type Transport struct {
 
 	// Callback for session invalidation (called when we receive rekey-required)
 	onSessionInvalid func(peerName string)
+
+	// Worker pool for packet processing (avoids per-packet goroutine spawning)
+	packetQueue chan packetWork
 
 	// State
 	running atomic.Bool
@@ -225,6 +240,14 @@ func (t *Transport) Start() error {
 
 	t.running.Store(true)
 
+	// Initialize worker pool for packet processing
+	t.packetQueue = make(chan packetWork, PacketQueueSize)
+	numWorkers := runtime.NumCPU()
+	for i := 0; i < numWorkers; i++ {
+		go t.packetWorker()
+	}
+	log.Debug().Int("workers", numWorkers).Int("queue_size", PacketQueueSize).Msg("UDP packet worker pool started")
+
 	// Start packet receivers for each socket
 	if t.conn != nil {
 		go t.receiveLoop(t.conn)
@@ -270,7 +293,22 @@ func (t *Transport) receiveLoop(conn *net.UDPConn) {
 		packet := make([]byte, n)
 		copy(packet, buf[:n])
 
-		go t.handlePacket(packet, remoteAddr, conn)
+		// Dispatch to worker pool instead of spawning goroutine per packet
+		select {
+		case t.packetQueue <- packetWork{data: packet, remoteAddr: remoteAddr, conn: conn}:
+			// Packet queued for processing
+		default:
+			// Queue full - drop packet (better than unbounded goroutines)
+			log.Debug().Msg("packet queue full, dropping packet")
+		}
+	}
+}
+
+// packetWorker processes packets from the queue.
+// Multiple workers run concurrently to handle packets.
+func (t *Transport) packetWorker() {
+	for work := range t.packetQueue {
+		t.handlePacket(work.data, work.remoteAddr, work.conn)
 	}
 }
 
@@ -1140,6 +1178,11 @@ func (t *Transport) Close() error {
 
 	t.running.Store(false)
 	close(t.closeCh)
+
+	// Close packet queue to signal workers to exit
+	if t.packetQueue != nil {
+		close(t.packetQueue)
+	}
 
 	t.mu.Lock()
 	for _, s := range t.sessions {
