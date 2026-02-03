@@ -143,7 +143,7 @@ func TestLifecycleManager_OnConnectCallback(t *testing.T) {
 
 	// Connect - callback should be called
 	tunnel := &mockTunnel{}
-	_ = pc.Connected(tunnel, "test")
+	_ = pc.Connected(tunnel, "test", "test")
 
 	mu.Lock()
 	if len(connectedPeers) != 1 || connectedPeers[0] != "peer1" {
@@ -153,7 +153,7 @@ func TestLifecycleManager_OnConnectCallback(t *testing.T) {
 
 	// Disconnect and reconnect - callback should be called again
 	_ = pc.Disconnect("test", nil)
-	_ = pc.Connected(&mockTunnel{}, "reconnect")
+	_ = pc.Connected(&mockTunnel{}, "test", "reconnect")
 
 	mu.Lock()
 	if len(connectedPeers) != 2 {
@@ -181,7 +181,7 @@ func TestLifecycleManager_OnDisconnectCallback(t *testing.T) {
 
 	// Connect
 	tunnel := &mockTunnel{}
-	_ = pc.Connected(tunnel, "test")
+	_ = pc.Connected(tunnel, "test", "test")
 
 	// No callback yet
 	mu.Lock()
@@ -215,7 +215,7 @@ func TestLifecycleManager_TunnelLifecycle(t *testing.T) {
 
 	// Connect - tunnel should be added
 	tunnel := &mockTunnel{}
-	_ = pc.Connected(tunnel, "test")
+	_ = pc.Connected(tunnel, "test", "test")
 
 	if !tunnels.Has("peer1") {
 		t.Error("Tunnel should be added after Connected()")
@@ -243,7 +243,7 @@ func TestLifecycleManager_ReconnectingRemovesTunnel(t *testing.T) {
 
 	// Connect
 	tunnel := &mockTunnel{}
-	_ = pc.Connected(tunnel, "test")
+	_ = pc.Connected(tunnel, "test", "test")
 
 	if !tunnels.Has("peer1") {
 		t.Error("Tunnel should exist after Connected()")
@@ -258,7 +258,7 @@ func TestLifecycleManager_ReconnectingRemovesTunnel(t *testing.T) {
 
 	// Reconnect - tunnel should be added back
 	tunnel2 := &mockTunnel{}
-	_ = pc.Connected(tunnel2, "reconnected")
+	_ = pc.Connected(tunnel2, "test", "reconnected")
 
 	if !tunnels.Has("peer1") {
 		t.Error("Tunnel should exist after reconnect")
@@ -275,7 +275,7 @@ func TestLifecycleManager_CloseRemovesTunnel(t *testing.T) {
 
 	// Connect
 	tunnel := &mockTunnel{}
-	_ = pc.Connected(tunnel, "test")
+	_ = pc.Connected(tunnel, "test", "test")
 
 	// Close - tunnel should be removed
 	pc.Close()
@@ -293,7 +293,7 @@ func TestLifecycleManager_Remove(t *testing.T) {
 
 	pc := lm.GetOrCreate("peer1", "10.0.0.1")
 	tunnel := &mockTunnel{}
-	_ = pc.Connected(tunnel, "test")
+	_ = pc.Connected(tunnel, "test", "test")
 
 	// Remove from manager
 	lm.Remove("peer1")
@@ -321,8 +321,8 @@ func TestLifecycleManager_CloseAll(t *testing.T) {
 
 	tunnel1 := &mockTunnel{}
 	tunnel2 := &mockTunnel{}
-	_ = pc1.Connected(tunnel1, "test")
-	_ = pc2.Connected(tunnel2, "test")
+	_ = pc1.Connected(tunnel1, "test", "test")
+	_ = pc2.Connected(tunnel2, "test", "test")
 
 	// Close all
 	lm.CloseAll()
@@ -350,8 +350,8 @@ func TestLifecycleManager_DisconnectAll(t *testing.T) {
 
 	tunnel1 := &mockTunnel{}
 	tunnel2 := &mockTunnel{}
-	_ = pc1.Connected(tunnel1, "test")
-	_ = pc2.Connected(tunnel2, "test")
+	_ = pc1.Connected(tunnel1, "test", "test")
+	_ = pc2.Connected(tunnel2, "test", "test")
 
 	// Verify connections are in Connected state
 	if pc1.State() != StateConnected || pc2.State() != StateConnected {
@@ -386,7 +386,7 @@ func TestLifecycleManager_DisconnectAll(t *testing.T) {
 
 	// Connections can be reused - try reconnecting
 	newTunnel := &mockTunnel{}
-	err := pc1.Connected(newTunnel, "reconnection")
+	err := pc1.Connected(newTunnel, "test", "reconnection")
 	if err != nil {
 		t.Errorf("Should be able to reconnect after DisconnectAll: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestLifecycleManager_ListByState(t *testing.T) {
 	_ = lm.GetOrCreate("peer3", "10.0.0.3") // stays disconnected
 
 	_ = pc1.StartConnecting("test")
-	_ = pc2.Connected(&mockTunnel{}, "test")
+	_ = pc2.Connected(&mockTunnel{}, "test", "test")
 
 	connecting := lm.ListByState(StateConnecting)
 	if len(connecting) != 1 || connecting[0] != "peer1" {
@@ -436,8 +436,8 @@ func TestLifecycleManager_CountByState(t *testing.T) {
 	pc2 := lm.GetOrCreate("peer2", "10.0.0.2")
 	_ = lm.GetOrCreate("peer3", "10.0.0.3") // stays disconnected
 
-	_ = pc1.Connected(&mockTunnel{}, "test")
-	_ = pc2.Connected(&mockTunnel{}, "test")
+	_ = pc1.Connected(&mockTunnel{}, "test", "test")
+	_ = pc2.Connected(&mockTunnel{}, "test", "test")
 
 	if lm.CountByState(StateConnected) != 2 {
 		t.Errorf("CountByState(Connected) = %d, want 2", lm.CountByState(StateConnected))
@@ -472,7 +472,7 @@ func TestLifecycleManager_IsConnecting(t *testing.T) {
 	}
 
 	// Connected
-	_ = pc.Connected(&mockTunnel{}, "test")
+	_ = pc.Connected(&mockTunnel{}, "test", "test")
 	if lm.IsConnecting("peer1") {
 		t.Error("IsConnecting() should return false for connected peer")
 	}
@@ -494,7 +494,7 @@ func TestLifecycleManager_IsConnected(t *testing.T) {
 	}
 
 	// Connected
-	_ = pc.Connected(&mockTunnel{}, "test")
+	_ = pc.Connected(&mockTunnel{}, "test", "test")
 	if !lm.IsConnected("peer1") {
 		t.Error("IsConnected() should return true for connected peer")
 	}
@@ -509,7 +509,7 @@ func TestLifecycleManager_State(t *testing.T) {
 	}
 
 	pc := lm.GetOrCreate("peer1", "10.0.0.1")
-	_ = pc.Connected(&mockTunnel{}, "test")
+	_ = pc.Connected(&mockTunnel{}, "test", "test")
 
 	if lm.State("peer1") != StateConnected {
 		t.Errorf("State() = %v, want Connected", lm.State("peer1"))
@@ -522,7 +522,7 @@ func TestLifecycleManager_AllInfo(t *testing.T) {
 	pc1 := lm.GetOrCreate("peer1", "10.0.0.1")
 	_ = lm.GetOrCreate("peer2", "10.0.0.2") // stays disconnected
 
-	_ = pc1.Connected(&mockTunnel{}, "test")
+	_ = pc1.Connected(&mockTunnel{}, "test", "test")
 
 	infos := lm.AllInfo()
 	if len(infos) != 2 {
@@ -553,7 +553,7 @@ func TestLifecycleManager_AddObserver(t *testing.T) {
 
 	// New connections should have the observer
 	pc := lm.GetOrCreate("peer1", "10.0.0.1")
-	_ = pc.Connected(&mockTunnel{}, "test")
+	_ = pc.Connected(&mockTunnel{}, "test", "test")
 
 	transitions := recorder.Transitions()
 	if len(transitions) != 1 {
@@ -580,7 +580,7 @@ func TestLifecycleManager_ConcurrentAccess(t *testing.T) {
 
 			pc := lm.GetOrCreate(peerName, meshIP)
 			_ = pc.StartConnecting("test")
-			_ = pc.Connected(&mockTunnel{}, "test")
+			_ = pc.Connected(&mockTunnel{}, "test", "test")
 			lm.List()
 			lm.Get(peerName)
 			lm.IsConnected(peerName)

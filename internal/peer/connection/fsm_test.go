@@ -170,7 +170,7 @@ func TestPeerConnection_SetTunnel(t *testing.T) {
 	})
 
 	tunnel := &mockTunnel{}
-	pc.SetTunnel(tunnel)
+	pc.SetTunnel(tunnel, "test")
 
 	if pc.Tunnel() != tunnel {
 		t.Error("Tunnel() should return the set tunnel")
@@ -189,7 +189,7 @@ func TestPeerConnection_Connected(t *testing.T) {
 	})
 
 	tunnel := &mockTunnel{}
-	if err := pc.Connected(tunnel, "incoming connection"); err != nil {
+	if err := pc.Connected(tunnel, "test", "incoming connection"); err != nil {
 		t.Fatalf("Connected() failed: %v", err)
 	}
 
@@ -211,7 +211,7 @@ func TestPeerConnection_StartReconnecting(t *testing.T) {
 	})
 
 	tunnel := &mockTunnel{}
-	_ = pc.Connected(tunnel, "connected")
+	_ = pc.Connected(tunnel, "test", "connected")
 
 	err := errors.New("connection lost")
 	if err := pc.StartReconnecting("network error", err); err != nil {
@@ -234,7 +234,7 @@ func TestPeerConnection_ReconnectCount(t *testing.T) {
 
 	// Initial connect
 	tunnel1 := &mockTunnel{}
-	_ = pc.Connected(tunnel1, "connected")
+	_ = pc.Connected(tunnel1, "test", "connected")
 	if pc.ReconnectCount() != 0 {
 		t.Errorf("ReconnectCount() = %d, want 0 after initial connect", pc.ReconnectCount())
 	}
@@ -242,7 +242,7 @@ func TestPeerConnection_ReconnectCount(t *testing.T) {
 	// Reconnect
 	_ = pc.StartReconnecting("network error", nil)
 	tunnel2 := &mockTunnel{}
-	_ = pc.Connected(tunnel2, "reconnected")
+	_ = pc.Connected(tunnel2, "test", "reconnected")
 	if pc.ReconnectCount() != 1 {
 		t.Errorf("ReconnectCount() = %d, want 1 after first reconnect", pc.ReconnectCount())
 	}
@@ -250,7 +250,7 @@ func TestPeerConnection_ReconnectCount(t *testing.T) {
 	// Another reconnect
 	_ = pc.StartReconnecting("another error", nil)
 	tunnel3 := &mockTunnel{}
-	_ = pc.Connected(tunnel3, "reconnected again")
+	_ = pc.Connected(tunnel3, "test", "reconnected again")
 	if pc.ReconnectCount() != 2 {
 		t.Errorf("ReconnectCount() = %d, want 2 after second reconnect", pc.ReconnectCount())
 	}
@@ -263,7 +263,7 @@ func TestPeerConnection_Close(t *testing.T) {
 	})
 
 	tunnel := &mockTunnel{}
-	_ = pc.Connected(tunnel, "connected")
+	_ = pc.Connected(tunnel, "test", "connected")
 
 	if err := pc.Close(); err != nil {
 		t.Fatalf("Close() failed: %v", err)
@@ -292,7 +292,7 @@ func TestPeerConnection_CloseIdempotent(t *testing.T) {
 	})
 
 	tunnel := &mockTunnel{}
-	_ = pc.Connected(tunnel, "connected")
+	_ = pc.Connected(tunnel, "test", "connected")
 
 	// Close multiple times should not panic
 	pc.Close()
@@ -311,7 +311,7 @@ func TestPeerConnection_Disconnect(t *testing.T) {
 	})
 
 	tunnel := &mockTunnel{}
-	_ = pc.Connected(tunnel, "connected")
+	_ = pc.Connected(tunnel, "test", "connected")
 
 	if err := pc.Disconnect("user requested", nil); err != nil {
 		t.Fatalf("Disconnect() failed: %v", err)
@@ -326,7 +326,7 @@ func TestPeerConnection_Disconnect(t *testing.T) {
 
 	// Can reconnect after Disconnect (unlike Close)
 	tunnel2 := &mockTunnel{}
-	if err := pc.Connected(tunnel2, "reconnected"); err != nil {
+	if err := pc.Connected(tunnel2, "test", "reconnected"); err != nil {
 		t.Fatalf("Connected() after Disconnect() failed: %v", err)
 	}
 	if pc.State() != StateConnected {
@@ -355,7 +355,7 @@ func TestPeerConnection_Info(t *testing.T) {
 	}
 
 	tunnel := &mockTunnel{}
-	_ = pc.Connected(tunnel, "connected")
+	_ = pc.Connected(tunnel, "test", "connected")
 
 	info = pc.Info()
 	if info.State != StateConnected {
@@ -508,7 +508,7 @@ func TestPeerConnection_CancelFuncClearedOnConnected(t *testing.T) {
 
 	// Connect with a tunnel
 	tunnel := &mockTunnel{}
-	_ = pc.Connected(tunnel, "test")
+	_ = pc.Connected(tunnel, "test", "test")
 
 	// The cancel function should have been cleared during transition to Connected
 	// Calling CancelOutbound should NOT cancel anything
@@ -560,7 +560,7 @@ func TestPeerConnection_TunnelDataFlow(t *testing.T) {
 	pipe := newPipeRWC()
 	defer pipe.Close()
 
-	pc.SetTunnel(pipe)
+	pc.SetTunnel(pipe, "test")
 
 	// Verify tunnel is accessible
 	gotTunnel := pc.Tunnel()

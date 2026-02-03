@@ -203,7 +203,7 @@ func (m *MeshNode) connectRelay(ctx context.Context, peerName, jwtToken string) 
 
 	// Transition to Connected state (this adds tunnel via LifecycleManager observer)
 	pc := m.Connections.GetOrCreate(peerName, meshIP)
-	if err := pc.Connected(relayTunnel, "relay notification"); err != nil {
+	if err := pc.Connected(relayTunnel, "relay", "relay notification"); err != nil {
 		log.Warn().Err(err).Str("peer", peerName).Msg("failed to transition to connected state")
 		relayTunnel.Close()
 		return

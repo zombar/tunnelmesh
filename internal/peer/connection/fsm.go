@@ -23,7 +23,8 @@ type PeerConnection struct {
 	lastError error
 
 	// Tunnel (active connection)
-	tunnel io.ReadWriteCloser
+	tunnel        io.ReadWriteCloser
+	transportType string // "udp", "ssh", "relay", etc.
 
 	// Cancel function for outbound connection attempts
 	cancelFunc context.CancelFunc
@@ -94,6 +95,24 @@ func (pc *PeerConnection) HasTunnel() bool {
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
 	return pc.tunnel != nil
+}
+
+// TransportType returns the transport type of the current tunnel (e.g., "udp", "ssh", "relay").
+// Returns empty string if not connected.
+func (pc *PeerConnection) TransportType() string {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+	if pc.state != StateConnected {
+		return ""
+	}
+	return pc.transportType
+}
+
+// IsRelayTunnel returns true if the current tunnel is using relay transport.
+func (pc *PeerConnection) IsRelayTunnel() bool {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+	return pc.tunnel != nil && pc.transportType == "relay"
 }
 
 // ConnectedSince returns when the connection was established.
@@ -212,10 +231,12 @@ func (pc *PeerConnection) TransitionTo(target State, reason string, err error) e
 
 // SetTunnel sets the active tunnel for this connection.
 // This should be called when transitioning to Connected state.
-func (pc *PeerConnection) SetTunnel(tunnel io.ReadWriteCloser) {
+// transportType should be "udp", "ssh", "relay", etc.
+func (pc *PeerConnection) SetTunnel(tunnel io.ReadWriteCloser, transportType string) {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 	pc.tunnel = tunnel
+	pc.transportType = transportType
 }
 
 // ClearTunnel clears the tunnel reference without closing it.
@@ -224,6 +245,7 @@ func (pc *PeerConnection) ClearTunnel() {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 	pc.tunnel = nil
+	pc.transportType = ""
 }
 
 // Close closes the tunnel and transitions to Closed state.
@@ -283,8 +305,9 @@ func (pc *PeerConnection) StartConnecting(reason string) error {
 }
 
 // Connected transitions to Connected state and sets the tunnel.
-func (pc *PeerConnection) Connected(tunnel io.ReadWriteCloser, reason string) error {
-	pc.SetTunnel(tunnel)
+// transportType should be "udp", "ssh", "relay", etc.
+func (pc *PeerConnection) Connected(tunnel io.ReadWriteCloser, transportType string, reason string) error {
+	pc.SetTunnel(tunnel, transportType)
 	if err := pc.TransitionTo(StateConnected, reason, nil); err != nil {
 		// Roll back tunnel assignment on failure
 		pc.ClearTunnel()

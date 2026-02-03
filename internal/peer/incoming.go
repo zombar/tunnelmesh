@@ -52,7 +52,7 @@ func (m *MeshNode) handleIncomingConnection(ctx context.Context, conn transport.
 
 	// Transition to Connected state (this adds tunnel via LifecycleManager observer)
 	pc := m.Connections.GetOrCreate(peerName, meshIP)
-	if err := pc.Connected(tun, "incoming "+transportName+" connection"); err != nil {
+	if err := pc.Connected(tun, transportName, "incoming "+transportName+" connection"); err != nil {
 		log.Warn().Err(err).Str("peer", peerName).Msg("failed to transition to connected state")
 		tun.Close()
 		return

@@ -267,8 +267,18 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 		// Our direct tunnel to them is also likely broken (asymmetric path failure).
 		// However, we apply a grace period after tunnel establishment to avoid
 		// tearing down freshly established tunnels due to stale relay packets.
+		// Also, if our tunnel to this peer is itself a relay tunnel, receiving
+		// relay packets is expected behavior - don't invalidate.
 		if pc := m.Connections.Get(sourcePeer); pc != nil {
 			if pc.HasTunnel() {
+				// If our tunnel to this peer is also a relay tunnel, receiving relay packets
+				// is expected behavior - don't invalidate our relay tunnel
+				if pc.IsRelayTunnel() {
+					log.Debug().
+						Str("peer", sourcePeer).
+						Msg("receiving relay packet on relay tunnel - expected behavior")
+					return
+				}
 				connectedSince := pc.ConnectedSince()
 				tunnelAge := time.Since(connectedSince)
 				if tunnelAge < asymmetricDetectionGracePeriod {
@@ -292,6 +302,7 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 	// However, we only invalidate if there's an actual tunnel to invalidate.
 	// If we're still connecting (no tunnel yet), let the connection attempt complete.
 	// We also apply a grace period to avoid tearing down freshly established tunnels.
+	// If our tunnel is itself a relay tunnel, peer reconnecting is expected.
 	m.PersistentRelay.SetPeerReconnectedHandler(func(peerName string) {
 		if pc := m.Connections.Get(peerName); pc != nil {
 			if !pc.HasTunnel() {
@@ -299,6 +310,14 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 				log.Debug().
 					Str("peer", peerName).
 					Msg("ignoring peer reconnect notification - no tunnel to invalidate")
+				return
+			}
+			// If our tunnel to this peer is a relay tunnel, peer reconnecting to relay
+			// is expected behavior - don't invalidate our relay tunnel
+			if pc.IsRelayTunnel() {
+				log.Debug().
+					Str("peer", peerName).
+					Msg("ignoring peer reconnect notification - our tunnel is also relay")
 				return
 			}
 			connectedSince := pc.ConnectedSince()

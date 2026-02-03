@@ -193,7 +193,7 @@ func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer) {
 		tun.Close()
 		return
 	}
-	if err := pc.Connected(tun, "transport negotiated: "+string(result.Transport)); err != nil {
+	if err := pc.Connected(tun, string(result.Transport), "transport negotiated: "+string(result.Transport)); err != nil {
 		log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to transition to connected state")
 		tun.Close()
 		return
