@@ -18,7 +18,7 @@ const (
 	MsgTypeRecvPacket      byte = 0x02 // Server -> Client: received packet from source peer
 	MsgTypePing            byte = 0x03 // Keepalive ping
 	MsgTypePong            byte = 0x04 // Keepalive pong
-	MsgTypePeerReconnected byte = 0x05 // Server -> Client: peer reconnected (invalidate tunnel)
+	MsgTypePeerReconnected byte = 0x05 // Server -> Client: peer reconnected (tunnel may be stale)
 )
 
 // PersistentRelay maintains a persistent connection to the coordination server
@@ -272,7 +272,7 @@ func (p *PersistentRelay) handleMessage(data []byte) {
 		}
 		peerName := string(data[2 : 2+peerLen])
 
-		log.Info().Str("peer", peerName).Msg("received peer reconnected notification, invalidating tunnel")
+		log.Debug().Str("peer", peerName).Msg("received peer reconnected notification")
 
 		// Dispatch to callback
 		p.mu.RLock()
@@ -343,8 +343,8 @@ func (p *PersistentRelay) SetPacketHandler(handler func(sourcePeer string, data 
 }
 
 // SetPeerReconnectedHandler sets a callback for peer reconnection notifications.
-// This is called when the server notifies us that another peer has reconnected,
-// indicating that our direct tunnel to them may be stale.
+// This is called when the server notifies us that another peer has reconnected.
+// The handler decides what action to take (if any) based on current connection state.
 func (p *PersistentRelay) SetPeerReconnectedHandler(handler func(peerName string)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

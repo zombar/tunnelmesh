@@ -41,7 +41,7 @@ const (
 	MsgTypeRecvPacket      byte = 0x02 // Server -> Client: received packet from source peer
 	MsgTypePing            byte = 0x03 // Keepalive ping
 	MsgTypePong            byte = 0x04 // Keepalive pong
-	MsgTypePeerReconnected byte = 0x05 // Server -> Client: peer reconnected (invalidate tunnel)
+	MsgTypePeerReconnected byte = 0x05 // Server -> Client: peer reconnected (tunnel may be stale)
 )
 
 var upgrader = websocket.Upgrader{
@@ -94,7 +94,7 @@ func (r *relayManager) GetPersistent(peerName string) (*persistentConn, bool) {
 }
 
 // BroadcastPeerReconnected notifies all other connected peers that a peer has reconnected.
-// This allows them to invalidate stale tunnels to that peer.
+// Clients may use this to re-evaluate their connection state to that peer.
 func (r *relayManager) BroadcastPeerReconnected(reconnectedPeer string) {
 	r.mu.Lock()
 	peers := make([]*persistentConn, 0, len(r.persistent))

@@ -243,19 +243,11 @@ func slicesEqual(a, b []string) bool {
 	return true
 }
 
-// ConnectPersistentRelay establishes the persistent relay connection.
-// This should be called after registration when we have a JWT token.
-func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
-	jwtToken := m.client.JWTToken()
-	if jwtToken == "" {
-		log.Warn().Msg("no JWT token available for persistent relay")
-		return nil
-	}
-
-	m.PersistentRelay = tunnel.NewPersistentRelay(m.client.BaseURL(), jwtToken)
-
+// setupRelayHandlers configures the packet and peer reconnection handlers for a relay.
+// This is extracted to ensure consistent behavior between initial connect and reconnect.
+func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 	// Set up packet handler to route incoming relay packets to forwarder
-	m.PersistentRelay.SetPacketHandler(func(sourcePeer string, data []byte) {
+	relay.SetPacketHandler(func(sourcePeer string, data []byte) {
 		if m.Forwarder != nil {
 			log.Debug().Str("source", sourcePeer).Int("len", len(data)).Msg("routing relay packet to forwarder")
 			m.Forwarder.HandleRelayPacket(sourcePeer, data)
@@ -298,12 +290,11 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 	})
 
 	// Set up handler for peer reconnection notifications
-	// When a peer reconnects to relay, our direct tunnel to them is likely stale.
-	// However, we only invalidate if there's an actual tunnel to invalidate.
-	// If we're still connecting (no tunnel yet), let the connection attempt complete.
-	// We also apply a grace period to avoid tearing down freshly established tunnels.
-	// If our tunnel is itself a relay tunnel, peer reconnecting is expected.
-	m.PersistentRelay.SetPeerReconnectedHandler(func(peerName string) {
+	// NOTE: We no longer invalidate direct tunnels when a peer reconnects to relay.
+	// The peer maintains a persistent relay connection for fallback - reconnecting to it
+	// doesn't mean our direct tunnel is broken. We only rely on actual relay packet
+	// reception to detect asymmetric situations (handled in SetPacketHandler above).
+	relay.SetPeerReconnectedHandler(func(peerName string) {
 		if pc := m.Connections.Get(peerName); pc != nil {
 			if !pc.HasTunnel() {
 				// No tunnel yet (e.g., still connecting) - ignore notification
@@ -312,27 +303,31 @@ func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
 					Msg("ignoring peer reconnect notification - no tunnel to invalidate")
 				return
 			}
-			// If our tunnel to this peer is a relay tunnel, peer reconnecting to relay
-			// is expected behavior - don't invalidate our relay tunnel
-			if pc.IsRelayTunnel() {
-				log.Debug().
-					Str("peer", peerName).
-					Msg("ignoring peer reconnect notification - our tunnel is also relay")
-				return
-			}
-			connectedSince := pc.ConnectedSince()
-			tunnelAge := time.Since(connectedSince)
-			if tunnelAge < asymmetricDetectionGracePeriod {
-				log.Debug().
-					Str("peer", peerName).
-					Dur("tunnel_age", tunnelAge).
-					Msg("ignoring peer reconnect notification during grace period after tunnel establishment")
-				return
-			}
-			log.Info().Str("peer", peerName).Msg("peer reconnected to relay, invalidating stale tunnel")
-			_ = pc.Disconnect("peer reconnected to relay", nil)
+			// Don't invalidate direct tunnels (UDP/SSH) when peer reconnects to relay.
+			// Peer reconnecting to relay doesn't mean our direct path is broken -
+			// they may just be refreshing their persistent relay connection.
+			// We rely on actual relay packet reception to detect asymmetric situations.
+			log.Debug().
+				Str("peer", peerName).
+				Str("transport", pc.TransportType()).
+				Msg("ignoring peer reconnect notification - relying on packet-based detection")
 		}
 	})
+}
+
+// ConnectPersistentRelay establishes the persistent relay connection.
+// This should be called after registration when we have a JWT token.
+func (m *MeshNode) ConnectPersistentRelay(ctx context.Context) error {
+	jwtToken := m.client.JWTToken()
+	if jwtToken == "" {
+		log.Warn().Msg("no JWT token available for persistent relay")
+		return nil
+	}
+
+	m.PersistentRelay = tunnel.NewPersistentRelay(m.client.BaseURL(), jwtToken)
+
+	// Set up handlers BEFORE connecting
+	m.setupRelayHandlers(m.PersistentRelay)
 
 	if err := m.PersistentRelay.Connect(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to connect persistent relay")
@@ -390,59 +385,8 @@ func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
 		// Create new relay (don't touch old yet)
 		newRelay := tunnel.NewPersistentRelay(m.client.BaseURL(), jwtToken)
 
-		// Set up packet handler BEFORE connecting
-		newRelay.SetPacketHandler(func(sourcePeer string, data []byte) {
-			if m.Forwarder != nil {
-				log.Debug().Str("source", sourcePeer).Int("len", len(data)).Msg("routing relay packet to forwarder")
-				m.Forwarder.HandleRelayPacket(sourcePeer, data)
-			} else {
-				log.Warn().Str("source", sourcePeer).Int("len", len(data)).Msg("dropping relay packet: forwarder not set")
-			}
-
-			// Invalidate stale direct tunnels when receiving relay packets
-			// Apply grace period to avoid tearing down freshly established tunnels
-			if pc := m.Connections.Get(sourcePeer); pc != nil {
-				if pc.HasTunnel() {
-					connectedSince := pc.ConnectedSince()
-					tunnelAge := time.Since(connectedSince)
-					if tunnelAge < asymmetricDetectionGracePeriod {
-						log.Debug().
-							Str("peer", sourcePeer).
-							Dur("tunnel_age", tunnelAge).
-							Msg("ignoring relay packet during grace period after tunnel establishment")
-					} else {
-						log.Info().
-							Str("peer", sourcePeer).
-							Dur("tunnel_age", tunnelAge).
-							Msg("received relay packet from peer with active tunnel, invalidating stale tunnel")
-						_ = pc.Disconnect("peer using relay (asymmetric tunnel failure)", nil)
-					}
-				}
-			}
-		})
-
-		newRelay.SetPeerReconnectedHandler(func(peerName string) {
-			if pc := m.Connections.Get(peerName); pc != nil {
-				if !pc.HasTunnel() {
-					// No tunnel yet (e.g., still connecting) - ignore notification
-					log.Debug().
-						Str("peer", peerName).
-						Msg("ignoring peer reconnect notification - no tunnel to invalidate")
-					return
-				}
-				connectedSince := pc.ConnectedSince()
-				tunnelAge := time.Since(connectedSince)
-				if tunnelAge < asymmetricDetectionGracePeriod {
-					log.Debug().
-						Str("peer", peerName).
-						Dur("tunnel_age", tunnelAge).
-						Msg("ignoring peer reconnect notification during grace period after tunnel establishment")
-					return
-				}
-				log.Info().Str("peer", peerName).Msg("peer reconnected to relay, invalidating stale tunnel")
-				_ = pc.Disconnect("peer reconnected to relay", nil)
-			}
-		})
+		// Set up handlers BEFORE connecting (uses shared handler setup)
+		m.setupRelayHandlers(newRelay)
 
 		if err := newRelay.Connect(ctx); err != nil {
 			log.Warn().Err(err).Int("attempt", attempt).Msg("relay reconnection failed")
