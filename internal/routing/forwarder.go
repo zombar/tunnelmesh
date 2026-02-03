@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -54,19 +55,20 @@ type ForwarderStats struct {
 
 // Forwarder routes packets between the TUN device and tunnels.
 type Forwarder struct {
-	router       *Router
-	tunnels      TunnelProvider
-	tun          TUNDevice
-	relay        RelayPacketSender // Optional persistent relay for fallback
-	bufPool      *PacketBufferPool
-	zeroCopyPool *ZeroCopyBufferPool // Pool for zero-copy buffers
-	framePool    *sync.Pool          // Pool for frame buffers (header + MTU)
-	stats        ForwarderStats
-	tunMu        sync.RWMutex
-	relayMu      sync.RWMutex
-	localIP      net.IP
-	localIPMu    sync.RWMutex
-	onDeadTunnel func(peerName string) // Callback when tunnel write fails
+	router             *Router
+	tunnels            TunnelProvider
+	tun                TUNDevice
+	relay              RelayPacketSender // Optional persistent relay for fallback
+	bufPool            *PacketBufferPool
+	zeroCopyPool       *ZeroCopyBufferPool // Pool for zero-copy buffers
+	framePool          *sync.Pool          // Pool for frame buffers (header + MTU)
+	stats              ForwarderStats
+	tunMu              sync.RWMutex
+	relayMu            sync.RWMutex
+	localIP            net.IP
+	localIPMu          sync.RWMutex
+	onDeadTunnel       func(peerName string) // Callback when tunnel write fails
+	deadTunnelDebounce sync.Map             // peerName → time.Time for debouncing
 }
 
 // NewForwarder creates a new packet forwarder.
@@ -123,6 +125,25 @@ func (f *Forwarder) SetRelay(relay RelayPacketSender) {
 // This allows the caller to remove the dead tunnel and trigger reconnection.
 func (f *Forwarder) SetOnDeadTunnel(callback func(peerName string)) {
 	f.onDeadTunnel = callback
+}
+
+// triggerDeadTunnel invokes the dead tunnel callback with debouncing.
+// Multiple rapid failures for the same peer will only trigger one callback
+// within a 5-second window to prevent callback storms.
+func (f *Forwarder) triggerDeadTunnel(peerName string) {
+	if f.onDeadTunnel == nil {
+		return
+	}
+
+	now := time.Now()
+	if last, ok := f.deadTunnelDebounce.Load(peerName); ok {
+		if now.Sub(last.(time.Time)) < 5*time.Second {
+			return // Debounced - already triggered recently
+		}
+	}
+
+	f.deadTunnelDebounce.Store(peerName, now)
+	go f.onDeadTunnel(peerName)
 }
 
 // HandleRelayPacket processes a packet received from the persistent relay.
@@ -202,9 +223,7 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 			log.Warn().Err(err).Str("peer", peerName).Msg("tunnel write failed, marking dead and falling back to relay")
 
 			// Signal dead tunnel so it can be removed and reconnection triggered
-			if f.onDeadTunnel != nil {
-				go f.onDeadTunnel(peerName)
-			}
+			f.triggerDeadTunnel(peerName)
 
 			// Fall through to relay fallback below
 		} else {
@@ -373,9 +392,7 @@ func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) 
 			log.Warn().Err(err).Str("peer", peerName).Msg("tunnel write failed, marking dead and falling back to relay")
 
 			// Signal dead tunnel so it can be removed and reconnection triggered
-			if f.onDeadTunnel != nil {
-				go f.onDeadTunnel(peerName)
-			}
+			f.triggerDeadTunnel(peerName)
 
 			// Fall through to relay fallback below
 		} else {

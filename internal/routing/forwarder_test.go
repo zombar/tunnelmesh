@@ -541,3 +541,50 @@ func TestForwarder_DeadTunnelNoRelay(t *testing.T) {
 	// Verify onDeadTunnel was still called
 	assert.True(t, callbackCalled)
 }
+
+func TestForwarder_DeadTunnelCallbackDebounced(t *testing.T) {
+	router := NewRouter()
+	router.AddRoute("10.99.0.2", "peer1")
+
+	tunnelMgr := NewMockTunnelManager()
+	tunnel := newMockTunnel()
+	tunnel.SetFailWrite(true) // Tunnel write will fail
+	tunnelMgr.Add("peer1", tunnel)
+
+	relay := newMockRelay()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetRelay(relay)
+
+	// Track callback invocations
+	var callbackCount int
+	var mu sync.Mutex
+	fwd.SetOnDeadTunnel(func(peerName string) {
+		mu.Lock()
+		callbackCount++
+		mu.Unlock()
+	})
+
+	// Create a test packet
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.2").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test debounce"))
+
+	// Send 10 packets rapidly - all will fail and trigger dead tunnel callback
+	for i := 0; i < 10; i++ {
+		err := fwd.ForwardPacket(packet)
+		require.NoError(t, err) // Succeeds due to relay fallback
+	}
+
+	// Wait a bit for any async callbacks to complete
+	time.Sleep(100 * time.Millisecond)
+
+	// Due to debouncing, callback should be called at most once within 5s window
+	mu.Lock()
+	count := callbackCount
+	mu.Unlock()
+
+	// Should be exactly 1 (or at most 2 if there was a race at the boundary)
+	assert.LessOrEqual(t, count, 2, "Callback should be debounced, got %d calls", count)
+	assert.GreaterOrEqual(t, count, 1, "Callback should be called at least once")
+}

@@ -86,6 +86,12 @@ func NewMeshNode(identity *PeerIdentity, client *coord.Client) *MeshNode {
 	// with the coordination server's peer list
 	node.Connections = connection.NewLifecycleManager(connection.LifecycleConfig{
 		Tunnels: tunnelMgr,
+		OnConnect: func(peerName string) {
+			// Trigger discovery to refresh routes immediately on connect
+			// This ensures routes are current even if discovery hasn't run recently
+			log.Debug().Str("peer", peerName).Msg("peer connected, triggering discovery for route refresh")
+			node.TriggerDiscovery()
+		},
 		OnDisconnect: func(peerName string) {
 			// Trigger discovery to refresh routes and attempt reconnection
 			log.Debug().Str("peer", peerName).Msg("peer disconnected, triggering discovery")

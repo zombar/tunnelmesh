@@ -117,6 +117,51 @@ func TestLifecycleManager_Get(t *testing.T) {
 	}
 }
 
+func TestLifecycleManager_OnConnectCallback(t *testing.T) {
+	tunnels := newMockTunnelProvider()
+
+	var connectedPeers []string
+	var mu sync.Mutex
+
+	lm := NewLifecycleManager(LifecycleConfig{
+		Tunnels: tunnels,
+		OnConnect: func(peerName string) {
+			mu.Lock()
+			connectedPeers = append(connectedPeers, peerName)
+			mu.Unlock()
+		},
+	})
+
+	pc := lm.GetOrCreate("peer1", "10.0.0.1")
+
+	// No callback yet
+	mu.Lock()
+	if len(connectedPeers) != 0 {
+		t.Error("OnConnect should not be called before connect")
+	}
+	mu.Unlock()
+
+	// Connect - callback should be called
+	tunnel := &mockTunnel{}
+	_ = pc.Connected(tunnel, "test")
+
+	mu.Lock()
+	if len(connectedPeers) != 1 || connectedPeers[0] != "peer1" {
+		t.Errorf("OnConnect should be called with peer1, got %v", connectedPeers)
+	}
+	mu.Unlock()
+
+	// Disconnect and reconnect - callback should be called again
+	_ = pc.Disconnect("test", nil)
+	_ = pc.Connected(&mockTunnel{}, "reconnect")
+
+	mu.Lock()
+	if len(connectedPeers) != 2 {
+		t.Errorf("OnConnect should be called twice, got %d calls", len(connectedPeers))
+	}
+	mu.Unlock()
+}
+
 func TestLifecycleManager_OnDisconnectCallback(t *testing.T) {
 	tunnels := newMockTunnelProvider()
 

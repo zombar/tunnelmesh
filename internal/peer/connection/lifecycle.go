@@ -25,6 +25,9 @@ type LifecycleManager struct {
 
 	tunnels TunnelProvider
 
+	// Callback triggered on connect to refresh routes immediately
+	onConnect func(peerName string)
+
 	// Callback triggered on disconnect to refresh routes/attempt reconnection
 	onDisconnect func(peerName string)
 
@@ -35,6 +38,7 @@ type LifecycleManager struct {
 // LifecycleConfig holds configuration for creating a LifecycleManager.
 type LifecycleConfig struct {
 	Tunnels      TunnelProvider
+	OnConnect    func(peerName string) // Called when a peer connects (for route refresh)
 	OnDisconnect func(peerName string) // Called when a peer disconnects
 }
 
@@ -43,6 +47,7 @@ func NewLifecycleManager(cfg LifecycleConfig) *LifecycleManager {
 	lm := &LifecycleManager{
 		connections:  make(map[string]*PeerConnection),
 		tunnels:      cfg.Tunnels,
+		onConnect:    cfg.OnConnect,
 		onDisconnect: cfg.OnDisconnect,
 	}
 
@@ -238,6 +243,10 @@ func (lm *LifecycleManager) onTransition(t Transition) {
 					Str("peer", t.PeerName).
 					Msg("added tunnel on connection")
 			}
+		}
+		// Trigger discovery to refresh routes immediately for this peer
+		if lm.onConnect != nil {
+			lm.onConnect(t.PeerName)
 		}
 
 	case StateDisconnected, StateClosed:
