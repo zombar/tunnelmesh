@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
 var testUpgrader = websocket.Upgrader{
@@ -27,6 +28,12 @@ type mockRelayServer struct {
 	connections map[string]*websocket.Conn
 	mu          sync.Mutex
 	received    chan relayMessage
+	heartbeats  chan heartbeatMessage
+}
+
+type heartbeatMessage struct {
+	peerName string
+	data     []byte
 }
 
 type relayMessage struct {
@@ -40,6 +47,7 @@ func newMockRelayServer(t *testing.T) *mockRelayServer {
 		t:           t,
 		connections: make(map[string]*websocket.Conn),
 		received:    make(chan relayMessage, 10),
+		heartbeats:  make(chan heartbeatMessage, 10),
 	}
 
 	mux := http.NewServeMux()
@@ -82,12 +90,16 @@ func (m *mockRelayServer) handlePersistentRelay(w http.ResponseWriter, r *http.R
 			return
 		}
 
-		if len(data) < 3 {
+		if len(data) < 1 {
 			continue
 		}
 
 		msgType := data[0]
-		if msgType == MsgTypeSendPacket {
+		switch msgType {
+		case MsgTypeSendPacket:
+			if len(data) < 3 {
+				continue
+			}
 			targetLen := int(data[1])
 			if len(data) < 2+targetLen {
 				continue
@@ -115,8 +127,75 @@ func (m *mockRelayServer) handlePersistentRelay(w http.ResponseWriter, r *http.R
 				copy(msg[2+len(peerName):], packetData)
 				_ = targetConn.WriteMessage(websocket.BinaryMessage, msg)
 			}
+
+		case MsgTypeHeartbeat:
+			// Record the heartbeat
+			m.heartbeats <- heartbeatMessage{
+				peerName: peerName,
+				data:     data[1:], // Skip message type byte
+			}
+			// Send ack
+			_ = conn.WriteMessage(websocket.BinaryMessage, []byte{MsgTypeHeartbeatAck})
 		}
 	}
+}
+
+// sendRelayNotify sends a relay notification to a connected peer.
+func (m *mockRelayServer) sendRelayNotify(peerName string, waitingPeers []string) error {
+	m.mu.Lock()
+	conn, ok := m.connections[peerName]
+	m.mu.Unlock()
+
+	if !ok {
+		return nil // Peer not connected
+	}
+
+	// Build message: [MsgTypeRelayNotify][count:1][name_len:1][name]...
+	msgLen := 2 // type + count
+	for _, p := range waitingPeers {
+		msgLen += 1 + len(p) // name_len + name
+	}
+
+	msg := make([]byte, msgLen)
+	msg[0] = MsgTypeRelayNotify
+	msg[1] = byte(len(waitingPeers))
+	offset := 2
+	for _, p := range waitingPeers {
+		msg[offset] = byte(len(p))
+		copy(msg[offset+1:], p)
+		offset += 1 + len(p)
+	}
+
+	return conn.WriteMessage(websocket.BinaryMessage, msg)
+}
+
+// sendHolePunchNotify sends a hole-punch notification to a connected peer.
+func (m *mockRelayServer) sendHolePunchNotify(peerName string, requestingPeers []string) error {
+	m.mu.Lock()
+	conn, ok := m.connections[peerName]
+	m.mu.Unlock()
+
+	if !ok {
+		return nil // Peer not connected
+	}
+
+	// Build message: [MsgTypeHolePunchNotify][count:1][name_len:1][name]...
+	msgLen := 2 // type + count
+	for _, p := range requestingPeers {
+		msgLen += 1 + len(p) // name_len + name
+	}
+
+	msg := make([]byte, msgLen)
+	msg[0] = MsgTypeHolePunchNotify
+	msg[1] = byte(len(requestingPeers))
+	offset := 2
+	for _, p := range requestingPeers {
+		msg[offset] = byte(len(p))
+		copy(msg[offset+1:], p)
+		offset += 1 + len(p)
+	}
+
+	return conn.WriteMessage(websocket.BinaryMessage, msg)
 }
 
 func (m *mockRelayServer) URL() string {
@@ -277,4 +356,144 @@ func TestPeerTunnel_Close(t *testing.T) {
 	// Write should fail after close
 	_, err = tunnel.Write([]byte("test"))
 	assert.Error(t, err)
+}
+
+// --- Tests for heartbeat and push notification message types ---
+
+func TestPersistentRelay_SendHeartbeat(t *testing.T) {
+	server := newMockRelayServer(t)
+	defer server.Close()
+
+	relay := NewPersistentRelay(server.URL(), "peer1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := relay.Connect(ctx)
+	require.NoError(t, err)
+	defer relay.Close()
+
+	// Send a heartbeat with stats
+	stats := &proto.PeerStats{
+		PacketsSent:     100,
+		PacketsReceived: 50,
+		BytesSent:       5000,
+		BytesReceived:   2500,
+		ActiveTunnels:   2,
+	}
+	err = relay.SendHeartbeat(stats)
+	require.NoError(t, err)
+
+	// Verify server received the heartbeat
+	select {
+	case msg := <-server.heartbeats:
+		assert.Equal(t, "peer1", msg.peerName)
+		// Data should be JSON-encoded stats
+		assert.True(t, len(msg.data) > 0)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for heartbeat")
+	}
+}
+
+func TestPersistentRelay_SendHeartbeat_NotConnected(t *testing.T) {
+	relay := NewPersistentRelay("http://localhost:9999", "peer1")
+
+	stats := &proto.PeerStats{PacketsSent: 100}
+	err := relay.SendHeartbeat(stats)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not connected")
+}
+
+func TestPersistentRelay_ReceiveRelayNotify(t *testing.T) {
+	server := newMockRelayServer(t)
+	defer server.Close()
+
+	relay := NewPersistentRelay(server.URL(), "peer1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := relay.Connect(ctx)
+	require.NoError(t, err)
+	defer relay.Close()
+
+	// Set up callback
+	received := make(chan []string, 1)
+	relay.SetRelayNotifyHandler(func(peers []string) {
+		received <- peers
+	})
+
+	// Give time for connection to be ready
+	time.Sleep(100 * time.Millisecond)
+
+	// Server pushes relay notification
+	err = server.sendRelayNotify("peer1", []string{"peer2", "peer3"})
+	require.NoError(t, err)
+
+	// Verify callback received it
+	select {
+	case peers := <-received:
+		assert.Equal(t, []string{"peer2", "peer3"}, peers)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for relay notify")
+	}
+}
+
+func TestPersistentRelay_ReceiveHolePunchNotify(t *testing.T) {
+	server := newMockRelayServer(t)
+	defer server.Close()
+
+	relay := NewPersistentRelay(server.URL(), "peer1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := relay.Connect(ctx)
+	require.NoError(t, err)
+	defer relay.Close()
+
+	// Set up callback
+	received := make(chan []string, 1)
+	relay.SetHolePunchNotifyHandler(func(peers []string) {
+		received <- peers
+	})
+
+	// Give time for connection to be ready
+	time.Sleep(100 * time.Millisecond)
+
+	// Server pushes hole-punch notification
+	err = server.sendHolePunchNotify("peer1", []string{"peer4"})
+	require.NoError(t, err)
+
+	// Verify callback received it
+	select {
+	case peers := <-received:
+		assert.Equal(t, []string{"peer4"}, peers)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for hole-punch notify")
+	}
+}
+
+func TestPersistentRelay_ReceiveRelayNotify_NoHandler(t *testing.T) {
+	server := newMockRelayServer(t)
+	defer server.Close()
+
+	relay := NewPersistentRelay(server.URL(), "peer1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := relay.Connect(ctx)
+	require.NoError(t, err)
+	defer relay.Close()
+
+	// No handler set - should not panic
+	time.Sleep(100 * time.Millisecond)
+
+	err = server.sendRelayNotify("peer1", []string{"peer2"})
+	require.NoError(t, err)
+
+	// Give time for message to be processed
+	time.Sleep(100 * time.Millisecond)
+	// Test passes if no panic
 }

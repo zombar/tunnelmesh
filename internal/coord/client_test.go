@@ -62,49 +62,9 @@ func TestClient_ListPeers(t *testing.T) {
 	assert.Equal(t, "node1", peers[0].Name)
 }
 
-func TestClient_Heartbeat(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-	}
-	srv, err := NewServer(cfg)
-	require.NoError(t, err)
-
-	ts := httptest.NewServer(srv)
-	defer ts.Close()
-
-	client := NewClient(ts.URL, "test-token")
-
-	// Register first
-	_, err = client.Register("mynode", "SHA256:key", nil, nil, 2222, 0, false, "v1.0.0")
-	require.NoError(t, err)
-
-	// Heartbeat
-	_, err = client.Heartbeat("mynode", "SHA256:key")
-	assert.NoError(t, err)
-}
-
-func TestClient_HeartbeatNotFound(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-	}
-	srv, err := NewServer(cfg)
-	require.NoError(t, err)
-
-	ts := httptest.NewServer(srv)
-	defer ts.Close()
-
-	client := NewClient(ts.URL, "test-token")
-
-	// Heartbeat without registering should return ErrPeerNotFound
-	_, err = client.Heartbeat("unknown-node", "SHA256:key")
-	assert.ErrorIs(t, err, ErrPeerNotFound)
-}
+// Note: TestClient_Heartbeat and TestClient_HeartbeatNotFound removed.
+// Heartbeats are now sent via WebSocket using PersistentRelay.SendHeartbeat().
+// See internal/tunnel/persistent_relay_test.go for WebSocket heartbeat tests.
 
 func TestClient_Deregister(t *testing.T) {
 	cfg := &config.ServerConfig{

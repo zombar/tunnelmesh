@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
+	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
 // relayPacketPool pools relay packet buffers to reduce GC pressure.
@@ -31,6 +33,12 @@ const (
 	MsgTypeWGAnnounce      byte = 0x10 // Client -> Server: announce as WireGuard concentrator
 	MsgTypeAPIRequest      byte = 0x11 // Server -> Client: API request to concentrator
 	MsgTypeAPIResponse     byte = 0x12 // Client -> Server: API response from concentrator
+
+	// Heartbeat and push notification message types
+	MsgTypeHeartbeat       byte = 0x20 // Client -> Server: stats update
+	MsgTypeHeartbeatAck    byte = 0x21 // Server -> Client: heartbeat acknowledged
+	MsgTypeRelayNotify     byte = 0x22 // Server -> Client: relay request notification
+	MsgTypeHolePunchNotify byte = 0x23 // Server -> Client: hole-punch request notification
 )
 
 // PersistentRelay maintains a persistent connection to the coordination server
@@ -57,6 +65,8 @@ type PersistentRelay struct {
 	onPacket          func(sourcePeer string, data []byte)
 	onPeerReconnected func(peerName string)                         // Called when server notifies a peer reconnected
 	onAPIRequest      func(reqID uint32, method string, body []byte) // Called when server sends API request
+	onRelayNotify     func(waitingPeers []string)                   // Called when server notifies of relay requests
+	onHolePunchNotify func(requestingPeers []string)                // Called when server notifies of hole-punch requests
 
 	// Reconnection control
 	reconnecting bool // Prevents concurrent autoReconnect goroutines
@@ -393,6 +403,74 @@ func (p *PersistentRelay) handleMessage(data []byte) {
 		} else {
 			log.Warn().Uint32("req_id", reqID).Str("method", method).Msg("no API request handler registered")
 		}
+
+	case MsgTypeHeartbeatAck:
+		// Server acknowledged our heartbeat - connection is alive
+		log.Debug().Msg("persistent relay received heartbeat ack")
+
+	case MsgTypeRelayNotify:
+		// Format: [MsgTypeRelayNotify][count:1][name_len:1][name]...
+		if len(data) < 2 {
+			log.Debug().Int("len", len(data)).Msg("persistent relay: relay notify too short")
+			return
+		}
+		count := int(data[1])
+		peers := make([]string, 0, count)
+		offset := 2
+		for i := 0; i < count; i++ {
+			if offset >= len(data) {
+				break
+			}
+			nameLen := int(data[offset])
+			if offset+1+nameLen > len(data) {
+				break
+			}
+			peers = append(peers, string(data[offset+1:offset+1+nameLen]))
+			offset += 1 + nameLen
+		}
+
+		log.Debug().Strs("peers", peers).Msg("received relay notification")
+
+		// Dispatch to callback
+		p.mu.RLock()
+		handler := p.onRelayNotify
+		p.mu.RUnlock()
+
+		if handler != nil {
+			handler(peers)
+		}
+
+	case MsgTypeHolePunchNotify:
+		// Format: [MsgTypeHolePunchNotify][count:1][name_len:1][name]...
+		if len(data) < 2 {
+			log.Debug().Int("len", len(data)).Msg("persistent relay: hole-punch notify too short")
+			return
+		}
+		count := int(data[1])
+		peers := make([]string, 0, count)
+		offset := 2
+		for i := 0; i < count; i++ {
+			if offset >= len(data) {
+				break
+			}
+			nameLen := int(data[offset])
+			if offset+1+nameLen > len(data) {
+				break
+			}
+			peers = append(peers, string(data[offset+1:offset+1+nameLen]))
+			offset += 1 + nameLen
+		}
+
+		log.Debug().Strs("peers", peers).Msg("received hole-punch notification")
+
+		// Dispatch to callback
+		p.mu.RLock()
+		handler := p.onHolePunchNotify
+		p.mu.RUnlock()
+
+		if handler != nil {
+			handler(peers)
+		}
 	}
 }
 
@@ -496,6 +574,58 @@ func (p *PersistentRelay) SetAPIRequestHandler(handler func(reqID uint32, method
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.onAPIRequest = handler
+}
+
+// SetRelayNotifyHandler sets a callback for relay request notifications.
+// This is called when the server notifies us that other peers are waiting
+// to relay through us.
+func (p *PersistentRelay) SetRelayNotifyHandler(handler func(waitingPeers []string)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onRelayNotify = handler
+}
+
+// SetHolePunchNotifyHandler sets a callback for hole-punch request notifications.
+// This is called when the server notifies us that other peers want to
+// hole-punch with us.
+func (p *PersistentRelay) SetHolePunchNotifyHandler(handler func(requestingPeers []string)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onHolePunchNotify = handler
+}
+
+// SendHeartbeat sends a heartbeat with stats to the coordination server.
+func (p *PersistentRelay) SendHeartbeat(stats *proto.PeerStats) error {
+	p.mu.RLock()
+	connected := p.connected
+	writeChan := p.writeChan
+	p.mu.RUnlock()
+
+	if !connected || writeChan == nil {
+		return fmt.Errorf("not connected to relay")
+	}
+
+	// Encode stats as JSON
+	statsJSON, err := json.Marshal(stats)
+	if err != nil {
+		return fmt.Errorf("marshal stats: %w", err)
+	}
+
+	// Build message: [MsgTypeHeartbeat][stats_len:2][stats JSON]
+	msgLen := 1 + 2 + len(statsJSON)
+	msg := make([]byte, msgLen)
+	msg[0] = MsgTypeHeartbeat
+	msg[1] = byte(len(statsJSON) >> 8)
+	msg[2] = byte(len(statsJSON))
+	copy(msg[3:], statsJSON)
+
+	// Non-blocking send to write channel
+	select {
+	case writeChan <- writeRequest{data: msg, pooled: false}:
+		return nil
+	default:
+		return fmt.Errorf("relay write channel full")
+	}
 }
 
 // AnnounceWGConcentrator announces this peer as the WireGuard concentrator.

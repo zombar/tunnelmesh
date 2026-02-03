@@ -93,45 +93,7 @@ func (c *Client) ListPeers() ([]proto.Peer, error) {
 	return result.Peers, nil
 }
 
-// Heartbeat sends a heartbeat to maintain presence.
-func (c *Client) Heartbeat(name, publicKey string) (*proto.HeartbeatResponse, error) {
-	return c.HeartbeatWithStats(name, publicKey, nil)
-}
-
-// HeartbeatWithStats sends a heartbeat with optional stats to maintain presence.
-// Returns the HeartbeatResponse which may include relay requests from other peers.
-func (c *Client) HeartbeatWithStats(name, publicKey string, stats *proto.PeerStats) (*proto.HeartbeatResponse, error) {
-	req := proto.HeartbeatRequest{
-		Name:      name,
-		PublicKey: publicKey,
-		Stats:     stats,
-	}
-
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	resp, err := c.doRequest(http.MethodPost, "/api/v1/heartbeat", body)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, ErrPeerNotFound
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.parseError(resp)
-	}
-
-	var result proto.HeartbeatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-
-	return &result, nil
-}
+// Note: Heartbeat() and HeartbeatWithStats() removed - heartbeats now sent via WebSocket
 
 // Deregister removes this peer from the mesh.
 func (c *Client) Deregister(name string) error {

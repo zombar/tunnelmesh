@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -65,6 +66,12 @@ const (
 	MsgTypeWGAnnounce      byte = 0x10 // Client -> Server: announce as WireGuard concentrator
 	MsgTypeAPIRequest      byte = 0x11 // Server -> Client: API request to concentrator
 	MsgTypeAPIResponse     byte = 0x12 // Client -> Server: API response from concentrator
+
+	// Heartbeat and push notification message types
+	MsgTypeHeartbeat       byte = 0x20 // Client -> Server: stats update
+	MsgTypeHeartbeatAck    byte = 0x21 // Server -> Client: heartbeat acknowledged
+	MsgTypeRelayNotify     byte = 0x22 // Server -> Client: relay request notification
+	MsgTypeHolePunchNotify byte = 0x23 // Server -> Client: hole-punch request notification
 )
 
 var upgrader = websocket.Upgrader{
@@ -368,6 +375,98 @@ func (r *relayManager) GetPendingRequestsFor(peerName string) []string {
 	return requests
 }
 
+// NotifyRelayRequest pushes a relay notification to a peer via their persistent connection.
+// This tells the peer that other peers are waiting for relay connections.
+func (r *relayManager) NotifyRelayRequest(peerName string, waitingPeers []string) {
+	if len(waitingPeers) == 0 {
+		return
+	}
+
+	r.mu.Lock()
+	pc, ok := r.persistent[peerName]
+	r.mu.Unlock()
+
+	if !ok {
+		log.Debug().Str("peer", peerName).Msg("cannot notify relay request: peer not connected")
+		return
+	}
+
+	// Build message: [MsgTypeRelayNotify][count:1][name_len:1][name]...
+	msgLen := 2 // type + count
+	for _, p := range waitingPeers {
+		msgLen += 1 + len(p) // name_len + name
+	}
+
+	msg := make([]byte, msgLen)
+	msg[0] = MsgTypeRelayNotify
+	msg[1] = byte(len(waitingPeers))
+	offset := 2
+	for _, p := range waitingPeers {
+		msg[offset] = byte(len(p))
+		copy(msg[offset+1:], p)
+		offset += 1 + len(p)
+	}
+
+	// Non-blocking send to write channel
+	select {
+	case pc.writeChan <- msg:
+		log.Debug().
+			Str("target", peerName).
+			Strs("waiting", waitingPeers).
+			Msg("sent relay notification")
+	default:
+		log.Debug().
+			Str("target", peerName).
+			Msg("failed to send relay notification: channel full")
+	}
+}
+
+// NotifyHolePunch pushes a hole-punch notification to a peer via their persistent connection.
+// This tells the peer that other peers want to hole-punch with them.
+func (r *relayManager) NotifyHolePunch(peerName string, requestingPeers []string) {
+	if len(requestingPeers) == 0 {
+		return
+	}
+
+	r.mu.Lock()
+	pc, ok := r.persistent[peerName]
+	r.mu.Unlock()
+
+	if !ok {
+		log.Debug().Str("peer", peerName).Msg("cannot notify hole-punch: peer not connected")
+		return
+	}
+
+	// Build message: [MsgTypeHolePunchNotify][count:1][name_len:1][name]...
+	msgLen := 2 // type + count
+	for _, p := range requestingPeers {
+		msgLen += 1 + len(p) // name_len + name
+	}
+
+	msg := make([]byte, msgLen)
+	msg[0] = MsgTypeHolePunchNotify
+	msg[1] = byte(len(requestingPeers))
+	offset := 2
+	for _, p := range requestingPeers {
+		msg[offset] = byte(len(p))
+		copy(msg[offset+1:], p)
+		offset += 1 + len(p)
+	}
+
+	// Non-blocking send to write channel
+	select {
+	case pc.writeChan <- msg:
+		log.Debug().
+			Str("target", peerName).
+			Strs("requesting", requestingPeers).
+			Msg("sent hole-punch notification")
+	default:
+		log.Debug().
+			Str("target", peerName).
+			Msg("failed to send hole-punch notification: channel full")
+	}
+}
+
 // setupRelayRoutes registers the relay WebSocket endpoint.
 func (s *Server) setupRelayRoutes() {
 	if s.relay == nil {
@@ -457,7 +556,7 @@ func (s *Server) handlePersistentRelay(w http.ResponseWriter, r *http.Request) {
 
 // handlePersistentRelayMessage processes a message from a persistent relay connection.
 func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
-	if len(data) < 3 {
+	if len(data) < 1 {
 		log.Debug().Str("peer", sourcePeer).Msg("persistent relay message too short")
 		return
 	}
@@ -465,8 +564,53 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 	msgType := data[0]
 
 	switch msgType {
+	case MsgTypeHeartbeat:
+		// Format: [MsgTypeHeartbeat][stats_len:2][stats JSON]
+		if len(data) < 3 {
+			log.Debug().Str("peer", sourcePeer).Msg("heartbeat message too short")
+			return
+		}
+		statsLen := int(data[1])<<8 | int(data[2])
+		if len(data) < 3+statsLen {
+			log.Debug().Str("peer", sourcePeer).Int("expected", statsLen).Int("got", len(data)-3).Msg("heartbeat stats truncated")
+			return
+		}
+		statsJSON := data[3 : 3+statsLen]
+
+		// Parse stats
+		var stats proto.PeerStats
+		if err := json.Unmarshal(statsJSON, &stats); err != nil {
+			log.Debug().Err(err).Str("peer", sourcePeer).Msg("failed to parse heartbeat stats")
+		}
+
+		// Update peer info
+		s.peersMu.Lock()
+		if peer, exists := s.peers[sourcePeer]; exists {
+			peer.peer.LastSeen = time.Now()
+			peer.stats = &stats
+			peer.prevStats = peer.stats
+			peer.lastStatsTime = time.Now()
+			peer.heartbeatCount++
+		}
+		atomic.AddUint64(&s.serverStats.totalHeartbeats, 1)
+		s.peersMu.Unlock()
+
+		// Send ack via the persistent connection
+		if pc, ok := s.relay.GetPersistent(sourcePeer); ok {
+			select {
+			case pc.writeChan <- []byte{MsgTypeHeartbeatAck}:
+				log.Debug().Str("peer", sourcePeer).Msg("sent heartbeat ack")
+			default:
+				log.Debug().Str("peer", sourcePeer).Msg("failed to send heartbeat ack: channel full")
+			}
+		}
+
 	case MsgTypeSendPacket:
 		// Format: [MsgTypeSendPacket][target name len][target name][packet data]
+		if len(data) < 3 {
+			log.Debug().Str("peer", sourcePeer).Msg("persistent relay send packet too short")
+			return
+		}
 		targetLen := int(data[1])
 		if len(data) < 2+targetLen {
 			log.Debug().Str("peer", sourcePeer).Msg("persistent relay send packet too short")
@@ -638,6 +782,9 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	s.relay.pending[forwardKey] = rc
 	s.relay.mu.Unlock()
+
+	// Push notification to target peer that someone is waiting for relay
+	s.relay.NotifyRelayRequest(targetPeer, []string{fromPeer})
 
 	// Wait for peer with timeout
 	pairTimeout := 30 * time.Second

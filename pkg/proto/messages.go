@@ -46,6 +46,7 @@ type RegisterResponse struct {
 }
 
 // PeerStats contains traffic statistics reported by peers.
+// Stats are now sent via WebSocket heartbeat (see internal/tunnel/persistent_relay.go).
 type PeerStats struct {
 	PacketsSent     uint64 `json:"packets_sent"`
 	PacketsReceived uint64 `json:"packets_received"`
@@ -57,19 +58,12 @@ type PeerStats struct {
 	ActiveTunnels   int    `json:"active_tunnels"`
 }
 
-// HeartbeatRequest is sent periodically to maintain presence.
-type HeartbeatRequest struct {
-	Name      string     `json:"name"`
-	PublicKey string     `json:"public_key"`
-	Stats     *PeerStats `json:"stats,omitempty"`
-}
-
-// HeartbeatResponse is returned after successful heartbeat.
-type HeartbeatResponse struct {
-	OK                bool     `json:"ok"`
-	RelayRequests     []string `json:"relay_requests,omitempty"`      // Peers waiting on relay for us
-	HolePunchRequests []string `json:"hole_punch_requests,omitempty"` // Peers wanting to UDP hole-punch with us
-}
+// Note: HeartbeatRequest and HeartbeatResponse removed.
+// Heartbeats are now sent via WebSocket using binary message format.
+// See internal/tunnel/persistent_relay.go (MsgTypeHeartbeat) and
+// internal/coord/relay.go for implementation.
+// Relay and hole-punch notifications are pushed instantly via WebSocket
+// (MsgTypeRelayNotify, MsgTypeHolePunchNotify).
 
 // RelayStatusResponse contains pending relay requests for a peer.
 type RelayStatusResponse struct {

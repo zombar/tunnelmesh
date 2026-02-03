@@ -173,7 +173,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/v1/register", s.withAuth(s.handleRegister))
 	s.mux.HandleFunc("/api/v1/peers", s.withAuth(s.handlePeers))
 	s.mux.HandleFunc("/api/v1/peers/", s.withAuth(s.handlePeerByName))
-	s.mux.HandleFunc("/api/v1/heartbeat", s.withAuth(s.handleHeartbeat))
+	// Note: HTTP heartbeat endpoint removed - heartbeats now sent via WebSocket in relay.go
 	s.mux.HandleFunc("/api/v1/dns", s.withAuth(s.handleDNS))
 
 	// Setup relay routes (JWT auth handled internally)
@@ -363,53 +363,6 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
-}
-
-func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req proto.HeartbeatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.jsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	s.peersMu.Lock()
-	info, exists := s.peers[req.Name]
-	if exists {
-		info.peer.LastSeen = time.Now()
-		info.heartbeatCount++
-		if req.Stats != nil {
-			info.prevStats = info.stats
-			info.stats = req.Stats
-			info.lastStatsTime = time.Now()
-		}
-	}
-	s.serverStats.totalHeartbeats++
-	s.peersMu.Unlock()
-
-	if !exists {
-		s.jsonError(w, "peer not found", http.StatusNotFound)
-		return
-	}
-
-	resp := proto.HeartbeatResponse{OK: true}
-
-	// Check if any peers are waiting on relay for this peer
-	if s.relay != nil {
-		resp.RelayRequests = s.relay.GetPendingRequestsFor(req.Name)
-	}
-
-	// Check if any peers are waiting to hole-punch with this peer
-	if s.holePunch != nil {
-		resp.HolePunchRequests = s.holePunch.GetPendingHolePunches(req.Name)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {

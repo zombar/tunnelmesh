@@ -338,6 +338,11 @@ func (s *Server) handleHolePunch(w http.ResponseWriter, r *http.Request) {
 	// Record this request so the target peer can be notified to hole-punch back
 	if req.FromPeer != "" && req.ToPeer != "" {
 		s.holePunch.RecordHolePunchRequest(req.FromPeer, req.ToPeer)
+
+		// Push notification to target peer via WebSocket if connected
+		if s.relay != nil {
+			s.relay.NotifyHolePunch(req.ToPeer, []string{req.FromPeer})
+		}
 	}
 
 	// Get target peer's endpoint

@@ -2,44 +2,39 @@ package peer
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 )
 
 // RunHeartbeat starts the heartbeat loop that maintains presence with the coordination server.
-// It runs in fast mode (5s interval) for the first 60 seconds, then normal mode (30s interval).
+// Uses WebSocket-based heartbeat via PersistentRelay with push notifications for relay/hole-punch.
 func (m *MeshNode) RunHeartbeat(ctx context.Context) {
-	// Fast phase: 5-second interval for first 60 seconds
-	fastTicker := time.NewTicker(5 * time.Second)
-	fastPhaseEnd := time.After(60 * time.Second)
-
-fastLoop:
-	for {
-		select {
-		case <-ctx.Done():
-			fastTicker.Stop()
-			return
-		case <-fastPhaseEnd:
-			fastTicker.Stop()
-			break fastLoop
-		case <-fastTicker.C:
-			m.PerformHeartbeat(ctx)
-		}
+	// Set up push notification callbacks on PersistentRelay
+	if m.PersistentRelay != nil {
+		m.PersistentRelay.SetRelayNotifyHandler(func(peers []string) {
+			log.Debug().Strs("peers", peers).Msg("received relay notification via WebSocket")
+			m.HandleRelayRequests(ctx, peers)
+		})
+		m.PersistentRelay.SetHolePunchNotifyHandler(func(peers []string) {
+			log.Debug().Strs("peers", peers).Msg("received hole-punch notification via WebSocket")
+			m.HandleHolePunchRequests(ctx, peers)
+		})
 	}
 
-	// Normal phase: 30-second interval
-	normalTicker := time.NewTicker(30 * time.Second)
-	defer normalTicker.Stop()
+	// Send heartbeats every 30 seconds (no fast phase needed - notifications are pushed instantly)
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	// Perform initial heartbeat immediately
+	m.PerformHeartbeat(ctx)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-normalTicker.C:
+		case <-ticker.C:
 			m.PerformHeartbeat(ctx)
 		}
 	}
@@ -78,23 +73,17 @@ func (m *MeshNode) PerformHeartbeat(ctx context.Context) {
 		}
 	}
 
-	// Collect and send stats
+	// Collect stats
 	stats := m.CollectStats()
-	heartbeatResp, err := m.client.HeartbeatWithStats(
-		m.identity.Name, m.identity.PubKeyEncoded, stats,
-	)
-	if err != nil {
-		m.handleHeartbeatError(err, publicIPs, privateIPs, behindNAT)
-		return
+
+	// Send heartbeat via WebSocket if PersistentRelay is connected
+	if m.PersistentRelay != nil && m.PersistentRelay.IsConnected() {
+		if err := m.PersistentRelay.SendHeartbeat(stats); err != nil {
+			log.Debug().Err(err).Msg("WebSocket heartbeat failed, relay notifications may be delayed")
+		}
 	}
 
-	// Handle relay requests
-	m.HandleRelayRequests(ctx, heartbeatResp.RelayRequests)
-
-	// Handle hole-punch requests
-	m.HandleHolePunchRequests(ctx, heartbeatResp.HolePunchRequests)
-
-	// Sync DNS
+	// Sync DNS (still uses HTTP, but infrequent)
 	m.syncDNS()
 }
 
@@ -126,28 +115,6 @@ func (m *MeshNode) HandleIPChange(publicIPs, privateIPs []string, behindNAT bool
 
 	// Trigger discovery
 	m.TriggerDiscovery()
-}
-
-// handleHeartbeatError handles errors from heartbeat.
-func (m *MeshNode) handleHeartbeatError(err error, publicIPs, privateIPs []string, behindNAT bool) {
-	if errors.Is(err, coord.ErrPeerNotFound) {
-		// Server restarted or peer was removed - re-register
-		log.Info().Msg("peer not found on server, re-registering...")
-		ips := publicIPs
-		privIPs := privateIPs
-		nat := behindNAT
-		if _, regErr := m.client.Register(
-			m.identity.Name, m.identity.PubKeyEncoded,
-			ips, privIPs, m.identity.SSHPort, m.identity.UDPPort, nat, m.identity.Version,
-		); regErr != nil {
-			log.Error().Err(regErr).Msg("failed to re-register")
-		} else {
-			log.Info().Msg("re-registered with coordination server")
-			m.SetHeartbeatIPs(ips, privIPs, nat)
-		}
-	} else {
-		log.Warn().Err(err).Msg("heartbeat failed")
-	}
 }
 
 // HandleRelayRequests connects to relay for peers that are waiting for us.

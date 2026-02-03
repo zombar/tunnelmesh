@@ -178,42 +178,8 @@ func TestServer_Peers(t *testing.T) {
 	assert.Equal(t, "node1", resp.Peers[0].Name)
 }
 
-func TestServer_Heartbeat(t *testing.T) {
-	srv := newTestServer(t)
-
-	// Register first
-	regReq := proto.RegisterRequest{
-		Name:      "testnode",
-		PublicKey: "SHA256:abc123",
-		SSHPort:   2222,
-	}
-	body, _ := json.Marshal(regReq)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer test-token")
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-
-	// Send heartbeat
-	hbReq := proto.HeartbeatRequest{
-		Name:      "testnode",
-		PublicKey: "SHA256:abc123",
-	}
-	body, _ = json.Marshal(hbReq)
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/heartbeat", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer test-token")
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var resp proto.HeartbeatResponse
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	assert.True(t, resp.OK)
-}
+// Note: TestServer_Heartbeat removed - HTTP heartbeat endpoint replaced by WebSocket
+// See relay_test.go for WebSocket heartbeat tests
 
 func TestServer_Deregister(t *testing.T) {
 	srv := newTestServer(t)
@@ -349,61 +315,8 @@ func TestServer_AdminOverview_WithPeers(t *testing.T) {
 	assert.True(t, resp.Peers[0].Online)
 }
 
-func TestServer_HeartbeatWithStats(t *testing.T) {
-	srv := newTestServer(t)
-
-	// Register first
-	regReq := proto.RegisterRequest{
-		Name:      "testnode",
-		PublicKey: "SHA256:abc123",
-		SSHPort:   2222,
-	}
-	body, _ := json.Marshal(regReq)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer test-token")
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-
-	// Send heartbeat with stats
-	hbReq := proto.HeartbeatRequest{
-		Name:      "testnode",
-		PublicKey: "SHA256:abc123",
-		Stats: &proto.PeerStats{
-			PacketsSent:     100,
-			PacketsReceived: 200,
-			BytesSent:       10000,
-			BytesReceived:   20000,
-			ActiveTunnels:   2,
-		},
-	}
-	body, _ = json.Marshal(hbReq)
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/heartbeat", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer test-token")
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	// Verify stats are reflected in admin overview
-	req = httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
-	w = httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
-
-	var resp AdminOverview
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err)
-
-	assert.Len(t, resp.Peers, 1)
-	assert.NotNil(t, resp.Peers[0].Stats)
-	assert.Equal(t, uint64(100), resp.Peers[0].Stats.PacketsSent)
-	assert.Equal(t, uint64(200), resp.Peers[0].Stats.PacketsReceived)
-	assert.Equal(t, uint64(10000), resp.Peers[0].Stats.BytesSent)
-	assert.Equal(t, uint64(20000), resp.Peers[0].Stats.BytesReceived)
-	assert.Equal(t, 2, resp.Peers[0].Stats.ActiveTunnels)
-}
+// Note: TestServer_HeartbeatWithStats removed - HTTP heartbeat endpoint replaced by WebSocket
+// See relay_test.go for WebSocket heartbeat tests
 
 func TestServer_AdminStaticFiles(t *testing.T) {
 	srv := newTestServer(t)
@@ -458,7 +371,7 @@ func TestServer_HolePunchBidirectionalCoordination(t *testing.T) {
 
 	// Register UDP endpoints for both peers
 	for _, peerData := range []struct {
-		name        string
+		name         string
 		externalAddr string
 	}{
 		{"peerA", "1.1.1.1:5000"},
@@ -500,38 +413,8 @@ func TestServer_HolePunchBidirectionalCoordination(t *testing.T) {
 	assert.True(t, holePunchResp.OK)
 	assert.True(t, holePunchResp.Ready)
 
-	// PeerB sends heartbeat and should receive hole-punch request notification
-	hbReq := proto.HeartbeatRequest{
-		Name:      "peerB",
-		PublicKey: "SHA256:peerB",
-	}
-	body, _ = json.Marshal(hbReq)
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/heartbeat", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer test-token")
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var hbResp proto.HeartbeatResponse
-	err = json.Unmarshal(w.Body.Bytes(), &hbResp)
-	require.NoError(t, err)
-	assert.True(t, hbResp.OK)
-	assert.Contains(t, hbResp.HolePunchRequests, "peerA", "peerB should be notified that peerA wants to hole-punch")
-
-	// Second heartbeat should not have the same request (it was consumed)
-	body, _ = json.Marshal(hbReq)
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/heartbeat", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer test-token")
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var hbResp2 proto.HeartbeatResponse
-	err = json.Unmarshal(w.Body.Bytes(), &hbResp2)
-	require.NoError(t, err)
-	assert.Empty(t, hbResp2.HolePunchRequests, "hole-punch request should be consumed after first heartbeat")
+	// Note: Hole-punch notifications are now delivered via WebSocket push instead of HTTP heartbeat.
+	// See relay_test.go TestRelayManager_NotifyHolePunch for WebSocket notification tests.
 }
 
 func TestServer_DualStackUDPEndpointRegistration(t *testing.T) {
