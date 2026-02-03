@@ -6,44 +6,6 @@ import (
 	"testing"
 )
 
-// mockRouter implements RouteManager for testing.
-type mockRouter struct {
-	mu     sync.Mutex
-	routes map[string]string // ip -> peerID
-}
-
-func newMockRouter() *mockRouter {
-	return &mockRouter{
-		routes: make(map[string]string),
-	}
-}
-
-func (r *mockRouter) AddRoute(ip string, peerID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.routes[ip] = peerID
-}
-
-func (r *mockRouter) RemoveRoute(ip string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.routes, ip)
-}
-
-func (r *mockRouter) HasRoute(ip string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	_, ok := r.routes[ip]
-	return ok
-}
-
-func (r *mockRouter) GetRoute(ip string) (string, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	peerID, ok := r.routes[ip]
-	return peerID, ok
-}
-
 // mockTunnelProvider implements TunnelProvider for testing.
 type mockTunnelProvider struct {
 	mu      sync.Mutex
@@ -83,11 +45,9 @@ func (t *mockTunnelProvider) Has(name string) bool {
 }
 
 func TestNewLifecycleManager(t *testing.T) {
-	router := newMockRouter()
 	tunnels := newMockTunnelProvider()
 
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
 	})
 
@@ -101,10 +61,8 @@ func TestNewLifecycleManager(t *testing.T) {
 }
 
 func TestLifecycleManager_GetOrCreate(t *testing.T) {
-	router := newMockRouter()
 	tunnels := newMockTunnelProvider()
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
 	})
 
@@ -140,10 +98,8 @@ func TestLifecycleManager_GetOrCreate(t *testing.T) {
 }
 
 func TestLifecycleManager_Get(t *testing.T) {
-	router := newMockRouter()
 	tunnels := newMockTunnelProvider()
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
 	})
 
@@ -161,46 +117,47 @@ func TestLifecycleManager_Get(t *testing.T) {
 	}
 }
 
-func TestLifecycleManager_RouteLifecycle(t *testing.T) {
-	router := newMockRouter()
+func TestLifecycleManager_OnDisconnectCallback(t *testing.T) {
 	tunnels := newMockTunnelProvider()
+
+	var disconnectedPeers []string
+	var mu sync.Mutex
+
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
+		OnDisconnect: func(peerName string) {
+			mu.Lock()
+			disconnectedPeers = append(disconnectedPeers, peerName)
+			mu.Unlock()
+		},
 	})
 
 	pc := lm.GetOrCreate("peer1", "10.0.0.1")
 
-	// Initially no route
-	if router.HasRoute("10.0.0.1") {
-		t.Error("Should have no route before Connected()")
-	}
-
-	// Connect - route should be added
+	// Connect
 	tunnel := &mockTunnel{}
 	_ = pc.Connected(tunnel, "test")
 
-	if !router.HasRoute("10.0.0.1") {
-		t.Error("Route should be added after Connected()")
+	// No callback yet
+	mu.Lock()
+	if len(disconnectedPeers) != 0 {
+		t.Error("OnDisconnect should not be called before disconnect")
 	}
-	peerID, _ := router.GetRoute("10.0.0.1")
-	if peerID != "peer1" {
-		t.Errorf("Route should map to peer1, got %q", peerID)
-	}
+	mu.Unlock()
 
-	// Disconnect - route should be removed
+	// Disconnect - callback should be called
 	_ = pc.Disconnect("test", nil)
 
-	if router.HasRoute("10.0.0.1") {
-		t.Error("Route should be removed after Disconnect()")
+	mu.Lock()
+	if len(disconnectedPeers) != 1 || disconnectedPeers[0] != "peer1" {
+		t.Errorf("OnDisconnect should be called with peer1, got %v", disconnectedPeers)
 	}
+	mu.Unlock()
 }
 
 func TestLifecycleManager_TunnelLifecycle(t *testing.T) {
-	router := newMockRouter()
 	tunnels := newMockTunnelProvider()
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
 	})
 
@@ -231,11 +188,9 @@ func TestLifecycleManager_TunnelLifecycle(t *testing.T) {
 	}
 }
 
-func TestLifecycleManager_ReconnectingKeepsRoute(t *testing.T) {
-	router := newMockRouter()
+func TestLifecycleManager_ReconnectingRemovesTunnel(t *testing.T) {
 	tunnels := newMockTunnelProvider()
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
 	})
 
@@ -245,19 +200,13 @@ func TestLifecycleManager_ReconnectingKeepsRoute(t *testing.T) {
 	tunnel := &mockTunnel{}
 	_ = pc.Connected(tunnel, "test")
 
-	if !router.HasRoute("10.0.0.1") {
-		t.Error("Route should exist after Connected()")
-	}
 	if !tunnels.Has("peer1") {
 		t.Error("Tunnel should exist after Connected()")
 	}
 
-	// Start reconnecting - route should remain, tunnel should be removed
+	// Start reconnecting - tunnel should be removed
 	_ = pc.StartReconnecting("network error", nil)
 
-	if !router.HasRoute("10.0.0.1") {
-		t.Error("Route should remain during Reconnecting")
-	}
 	if tunnels.Has("peer1") {
 		t.Error("Tunnel should be removed during Reconnecting")
 	}
@@ -266,19 +215,14 @@ func TestLifecycleManager_ReconnectingKeepsRoute(t *testing.T) {
 	tunnel2 := &mockTunnel{}
 	_ = pc.Connected(tunnel2, "reconnected")
 
-	if !router.HasRoute("10.0.0.1") {
-		t.Error("Route should still exist after reconnect")
-	}
 	if !tunnels.Has("peer1") {
 		t.Error("Tunnel should exist after reconnect")
 	}
 }
 
-func TestLifecycleManager_CloseRemovesRoute(t *testing.T) {
-	router := newMockRouter()
+func TestLifecycleManager_CloseRemovesTunnel(t *testing.T) {
 	tunnels := newMockTunnelProvider()
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
 	})
 
@@ -288,22 +232,17 @@ func TestLifecycleManager_CloseRemovesRoute(t *testing.T) {
 	tunnel := &mockTunnel{}
 	_ = pc.Connected(tunnel, "test")
 
-	// Close - route and tunnel should be removed
+	// Close - tunnel should be removed
 	pc.Close()
 
-	if router.HasRoute("10.0.0.1") {
-		t.Error("Route should be removed after Close()")
-	}
 	if tunnels.Has("peer1") {
 		t.Error("Tunnel should be removed after Close()")
 	}
 }
 
 func TestLifecycleManager_Remove(t *testing.T) {
-	router := newMockRouter()
 	tunnels := newMockTunnelProvider()
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
 	})
 
@@ -319,20 +258,15 @@ func TestLifecycleManager_Remove(t *testing.T) {
 		t.Error("Connection should be removed from manager")
 	}
 
-	// Route and tunnel should be cleaned up
-	if router.HasRoute("10.0.0.1") {
-		t.Error("Route should be removed after Remove()")
-	}
+	// Tunnel should be cleaned up
 	if tunnels.Has("peer1") {
 		t.Error("Tunnel should be removed after Remove()")
 	}
 }
 
 func TestLifecycleManager_CloseAll(t *testing.T) {
-	router := newMockRouter()
 	tunnels := newMockTunnelProvider()
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
 	})
 
@@ -353,20 +287,15 @@ func TestLifecycleManager_CloseAll(t *testing.T) {
 		t.Errorf("All connections should be removed, got %d", len(lm.List()))
 	}
 
-	// All routes and tunnels should be cleaned up
-	if router.HasRoute("10.0.0.1") || router.HasRoute("10.0.0.2") {
-		t.Error("All routes should be removed after CloseAll()")
-	}
+	// All tunnels should be cleaned up
 	if tunnels.Has("peer1") || tunnels.Has("peer2") {
 		t.Error("All tunnels should be removed after CloseAll()")
 	}
 }
 
 func TestLifecycleManager_DisconnectAll(t *testing.T) {
-	router := newMockRouter()
 	tunnels := newMockTunnelProvider()
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
 	})
 
@@ -400,10 +329,7 @@ func TestLifecycleManager_DisconnectAll(t *testing.T) {
 		t.Errorf("peer2 should be Disconnected after DisconnectAll, got %v", pc2.State())
 	}
 
-	// All routes and tunnels should be cleaned up
-	if router.HasRoute("10.0.0.1") || router.HasRoute("10.0.0.2") {
-		t.Error("All routes should be removed after DisconnectAll()")
-	}
+	// All tunnels should be cleaned up
 	if tunnels.Has("peer1") || tunnels.Has("peer2") {
 		t.Error("All tunnels should be removed after DisconnectAll()")
 	}
@@ -425,10 +351,8 @@ func TestLifecycleManager_DisconnectAll(t *testing.T) {
 }
 
 func TestLifecycleManager_ListByState(t *testing.T) {
-	router := newMockRouter()
 	tunnels := newMockTunnelProvider()
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
 	})
 
@@ -457,10 +381,8 @@ func TestLifecycleManager_ListByState(t *testing.T) {
 }
 
 func TestLifecycleManager_CountByState(t *testing.T) {
-	router := newMockRouter()
 	tunnels := newMockTunnelProvider()
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
 	})
 
@@ -598,10 +520,8 @@ func TestLifecycleManager_AddObserver(t *testing.T) {
 }
 
 func TestLifecycleManager_ConcurrentAccess(t *testing.T) {
-	router := newMockRouter()
 	tunnels := newMockTunnelProvider()
 	lm := NewLifecycleManager(LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnels,
 	})
 

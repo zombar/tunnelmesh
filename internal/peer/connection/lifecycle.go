@@ -8,12 +8,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// RouteManager is the interface for adding/removing routes.
-type RouteManager interface {
-	AddRoute(ip string, peerID string)
-	RemoveRoute(ip string)
-}
-
 // TunnelProvider is the interface for managing tunnels.
 type TunnelProvider interface {
 	Add(name string, tunnel io.ReadWriteCloser)
@@ -22,13 +16,17 @@ type TunnelProvider interface {
 }
 
 // LifecycleManager manages PeerConnection instances and coordinates
-// route and tunnel lifecycle based on state transitions.
+// tunnel lifecycle based on state transitions.
+// Routes are managed separately by discovery to stay in sync with
+// the coordination server's peer list.
 type LifecycleManager struct {
 	mu          sync.RWMutex
 	connections map[string]*PeerConnection
 
-	router  RouteManager
 	tunnels TunnelProvider
+
+	// Callback triggered on disconnect to refresh routes/attempt reconnection
+	onDisconnect func(peerName string)
 
 	// Global observers applied to all connections
 	globalObservers []Observer
@@ -36,19 +34,19 @@ type LifecycleManager struct {
 
 // LifecycleConfig holds configuration for creating a LifecycleManager.
 type LifecycleConfig struct {
-	Router  RouteManager
-	Tunnels TunnelProvider
+	Tunnels      TunnelProvider
+	OnDisconnect func(peerName string) // Called when a peer disconnects
 }
 
 // NewLifecycleManager creates a new LifecycleManager.
 func NewLifecycleManager(cfg LifecycleConfig) *LifecycleManager {
 	lm := &LifecycleManager{
-		connections: make(map[string]*PeerConnection),
-		router:      cfg.Router,
-		tunnels:     cfg.Tunnels,
+		connections:  make(map[string]*PeerConnection),
+		tunnels:      cfg.Tunnels,
+		onDisconnect: cfg.OnDisconnect,
 	}
 
-	// Add ourselves as a global observer to handle route/tunnel lifecycle
+	// Add ourselves as a global observer to handle tunnel lifecycle
 	lm.globalObservers = append(lm.globalObservers, ObserverFunc(lm.onTransition))
 
 	return lm
@@ -219,7 +217,9 @@ func (lm *LifecycleManager) AllInfo() []ConnectionInfo {
 	return infos
 }
 
-// onTransition handles state transitions for route and tunnel lifecycle.
+// onTransition handles state transitions for tunnel lifecycle.
+// Routes are managed separately by discovery to ensure they stay in sync
+// with the coordination server's peer list.
 // This is called as an observer for all managed connections.
 func (lm *LifecycleManager) onTransition(t Transition) {
 	pc := lm.Get(t.PeerName)
@@ -227,18 +227,9 @@ func (lm *LifecycleManager) onTransition(t Transition) {
 		return
 	}
 
-	meshIP := pc.MeshIP()
-
 	switch t.To {
 	case StateConnected:
-		// Add route and tunnel
-		if lm.router != nil && meshIP != "" {
-			lm.router.AddRoute(meshIP, t.PeerName)
-			log.Debug().
-				Str("peer", t.PeerName).
-				Str("mesh_ip", meshIP).
-				Msg("added route on connection")
-		}
+		// Add tunnel (routes are managed by discovery)
 		if lm.tunnels != nil {
 			tunnel := pc.Tunnel()
 			if tunnel != nil {
@@ -250,15 +241,7 @@ func (lm *LifecycleManager) onTransition(t Transition) {
 		}
 
 	case StateDisconnected, StateClosed:
-		// Remove route and tunnel
-		if lm.router != nil && meshIP != "" {
-			lm.router.RemoveRoute(meshIP)
-			log.Debug().
-				Str("peer", t.PeerName).
-				Str("mesh_ip", meshIP).
-				Str("reason", t.Reason).
-				Msg("removed route on disconnect")
-		}
+		// Remove tunnel (routes are managed by discovery)
 		if lm.tunnels != nil {
 			lm.tunnels.Remove(t.PeerName)
 			log.Debug().
@@ -266,15 +249,19 @@ func (lm *LifecycleManager) onTransition(t Transition) {
 				Str("reason", t.Reason).
 				Msg("removed tunnel on disconnect")
 		}
+		// Trigger discovery to refresh routes and attempt reconnection
+		if lm.onDisconnect != nil {
+			lm.onDisconnect(t.PeerName)
+		}
 
 	case StateReconnecting:
-		// Keep route but remove tunnel (will be re-added on reconnect)
+		// Remove tunnel (will be re-added on reconnect)
 		if lm.tunnels != nil {
 			lm.tunnels.Remove(t.PeerName)
 			log.Debug().
 				Str("peer", t.PeerName).
 				Str("reason", t.Reason).
-				Msg("removed tunnel for reconnection (keeping route)")
+				Msg("removed tunnel for reconnection")
 		}
 	}
 }

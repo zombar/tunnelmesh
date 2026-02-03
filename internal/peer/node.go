@@ -81,10 +81,16 @@ func NewMeshNode(identity *PeerIdentity, client *coord.Client) *MeshNode {
 		peerCache:        make(map[string]string),
 	}
 
-	// Initialize connection lifecycle manager with route and tunnel integration
+	// Initialize connection lifecycle manager with tunnel integration
+	// Routes are managed separately by discovery (via UpdateRoutes) to stay in sync
+	// with the coordination server's peer list
 	node.Connections = connection.NewLifecycleManager(connection.LifecycleConfig{
-		Router:  router,
 		Tunnels: tunnelMgr,
+		OnDisconnect: func(peerName string) {
+			// Trigger discovery to refresh routes and attempt reconnection
+			log.Debug().Str("peer", peerName).Msg("peer disconnected, triggering discovery")
+			node.TriggerDiscovery()
+		},
 	})
 
 	node.lastNetworkChange.Store(time.Time{})

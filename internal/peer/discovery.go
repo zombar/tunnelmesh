@@ -80,6 +80,9 @@ func (m *MeshNode) DiscoverAndConnectPeers(ctx context.Context) {
 		existingSet[name] = true
 	}
 
+	// Build routes map for atomic update - only routes for peers known to coord server
+	routes := make(map[string]string, len(peers))
+
 	for _, peer := range peers {
 		if peer.Name == m.identity.Name {
 			continue // Skip self
@@ -95,8 +98,8 @@ func (m *MeshNode) DiscoverAndConnectPeers(ctx context.Context) {
 			}
 		}
 
-		// Update routing table with peer's mesh IP
-		m.router.AddRoute(peer.MeshIP, peer.Name)
+		// Collect route for atomic update
+		routes[peer.MeshIP] = peer.Name
 		// Cache peer mesh IP for use when coord server is unreachable
 		m.CachePeerMeshIP(peer.Name, peer.MeshIP)
 
@@ -114,6 +117,9 @@ func (m *MeshNode) DiscoverAndConnectPeers(ctx context.Context) {
 		// Try to establish tunnel
 		go m.EstablishTunnel(ctx, peer)
 	}
+
+	// Atomically update all routes - this adds new peers and removes stale ones
+	m.router.UpdateRoutes(routes)
 }
 
 // EstablishTunnel negotiates and establishes a tunnel to a peer.
@@ -270,7 +276,13 @@ func (m *MeshNode) RefreshAuthorizedKeys() {
 		return
 	}
 
+	// Build routes map for atomic update
+	routes := make(map[string]string, len(peers))
+
 	for _, peer := range peers {
+		if peer.Name == m.identity.Name {
+			continue // Skip self
+		}
 		if peer.PublicKey != "" {
 			pubKey, err := config.DecodePublicKey(peer.PublicKey)
 			if err != nil {
@@ -279,8 +291,11 @@ func (m *MeshNode) RefreshAuthorizedKeys() {
 				m.SSHTransport.AddAuthorizedKey(pubKey)
 			}
 		}
-		m.router.AddRoute(peer.MeshIP, peer.Name)
+		routes[peer.MeshIP] = peer.Name
 		m.CachePeerMeshIP(peer.Name, peer.MeshIP)
 	}
-	log.Debug().Int("peers", len(peers)).Msg("refreshed authorized keys")
+
+	// Atomically update all routes
+	m.router.UpdateRoutes(routes)
+	log.Debug().Int("peers", len(peers)).Msg("refreshed authorized keys and routes")
 }

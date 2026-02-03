@@ -38,9 +38,9 @@ func (m *MeshNode) handleIncomingConnection(ctx context.Context, conn transport.
 		}
 	}
 
-	// Fetch peer info from coordination server to get mesh IP and add route
-	// This ensures routing works immediately, without waiting for next discovery cycle
-	meshIP := m.ensurePeerRoute(peerName)
+	// Get cached mesh IP for FSM tracking
+	// Routes are managed atomically by discovery via UpdateRoutes()
+	meshIP, _ := m.GetCachedPeerMeshIP(peerName)
 
 	// Wrap connection as a tunnel
 	tun := tunnel.NewTunnelFromTransport(conn)
