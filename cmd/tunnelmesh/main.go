@@ -871,15 +871,51 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 					Str("public_key", wgConcentrator.PublicKey()).
 					Int("clients", len(clients)).
 					Msg("WireGuard concentrator initialized")
+
+				// Start the WireGuard device if TUN is available
+				if tunDev != nil {
+					// Calculate concentrator's WG interface address
+					// Use .1 in the first WG client subnet (e.g., 10.99.100.1/16)
+					_, meshNet, _ := net.ParseCIDR(resp.MeshCIDR)
+					baseIP := meshNet.IP.To4()
+					wgAddr := fmt.Sprintf("%d.%d.100.1/16", baseIP[0], baseIP[1])
+
+					if err := wgConcentrator.StartDevice("wg-mesh", wgAddr); err != nil {
+						log.Error().Err(err).Msg("failed to start WireGuard device")
+					} else {
+						// Create packet handler for bidirectional forwarding
+						wgPacketHandler := peerwg.NewPacketHandler(wgRouter, wgConcentrator)
+						forwarder.SetWGHandler(wgPacketHandler)
+
+						// Set up callback for packets from WG clients to mesh
+						wgConcentrator.SetOnPacketFromWG(func(packet []byte) {
+							if err := forwarder.ForwardPacket(packet); err != nil {
+								log.Debug().Err(err).Msg("failed to forward WG packet to mesh")
+							}
+						})
+
+						// Set up callback for API handler to update WG device when clients change
+						wgAPIHandler.SetOnClientsChanged(func(clients []peerwg.Client) {
+							// Update router
+							wgRouter.UpdateClients(clients)
+
+							// Update concentrator (which updates the WG device)
+							if err := wgConcentrator.UpdateClients(clients); err != nil {
+								log.Error().Err(err).Msg("failed to update WireGuard clients")
+							} else {
+								log.Info().Int("clients", len(clients)).Msg("WireGuard clients updated")
+							}
+						})
+
+						log.Info().Str("address", wgAddr).Msg("WireGuard device started and integrated with forwarder")
+					}
+				}
 			}
 		}
 	}
 
-	// Suppress unused variable warnings for future WireGuard integration
-	_ = wgConcentrator
-	_ = wgRouter
+	// Suppress unused - wgStore is used via wgAPIHandler
 	_ = wgStore
-	_ = wgAPIHandler
 
 	// Start DNS resolver if enabled
 	var dnsConfigured bool
@@ -951,6 +987,13 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	if dnsConfigured {
 		if err := removeSystemResolver(resp.Domain); err != nil {
 			log.Warn().Err(err).Msg("failed to remove system resolver")
+		}
+	}
+
+	// Stop WireGuard device
+	if wgConcentrator != nil && wgConcentrator.IsDeviceRunning() {
+		if err := wgConcentrator.StopDevice(); err != nil {
+			log.Warn().Err(err).Msg("failed to stop WireGuard device")
 		}
 	}
 

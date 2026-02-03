@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ConcentratorConfig holds the configuration for the WireGuard concentrator.
@@ -130,9 +133,14 @@ type Concentrator struct {
 	cfg     *ConcentratorConfig
 	keys    *ServerKeys
 	clients []Client
+	mu      sync.RWMutex
+
+	// WireGuard device (nil if device not started)
+	device *WGDevice
 
 	// Callbacks for integration with the mesh
 	onClientsUpdated func(clients []Client)
+	onPacketFromWG   func(packet []byte) // Called when packet arrives from WG peers
 }
 
 // NewConcentrator creates a new WireGuard concentrator.
@@ -203,4 +211,124 @@ func (c *Concentrator) GetDeviceConfig() *DeviceConfig {
 		ListenPort: c.cfg.ListenPort,
 		Peers:      peers,
 	}
+}
+
+// SetOnPacketFromWG sets the callback for packets received from WireGuard peers.
+// These packets should be forwarded to the mesh.
+func (c *Concentrator) SetOnPacketFromWG(fn func(packet []byte)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onPacketFromWG = fn
+}
+
+// StartDevice creates and starts the userspace WireGuard device.
+// This must be called after loading clients to configure peer allowed IPs.
+func (c *Concentrator) StartDevice(interfaceName, address string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.device != nil {
+		return errors.New("device already started")
+	}
+
+	cfg := &WGDeviceConfig{
+		InterfaceName: interfaceName,
+		PrivateKey:    c.keys.PrivateKey,
+		ListenPort:    c.cfg.ListenPort,
+		MTU:           1420,
+		Address:       address,
+	}
+
+	device, err := NewWGDevice(cfg)
+	if err != nil {
+		return fmt.Errorf("create WG device: %w", err)
+	}
+
+	// Set up packet handler to forward WG packets to mesh
+	device.SetPacketHandler(func(packet []byte) {
+		c.mu.RLock()
+		handler := c.onPacketFromWG
+		c.mu.RUnlock()
+
+		if handler != nil {
+			handler(packet)
+		}
+	})
+
+	// Add all current clients as peers
+	if err := device.UpdatePeers(c.clients); err != nil {
+		device.Close()
+		return fmt.Errorf("update peers: %w", err)
+	}
+
+	c.device = device
+
+	// Start reading packets from the WG device
+	go device.ReadPackets()
+
+	log.Info().
+		Str("interface", interfaceName).
+		Int("port", c.cfg.ListenPort).
+		Int("peers", len(c.clients)).
+		Msg("WireGuard device started")
+
+	return nil
+}
+
+// StopDevice stops and closes the WireGuard device.
+func (c *Concentrator) StopDevice() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.device == nil {
+		return nil
+	}
+
+	err := c.device.Close()
+	c.device = nil
+
+	log.Info().Msg("WireGuard device stopped")
+
+	return err
+}
+
+// SendPacket sends a packet to a WireGuard peer.
+// This is called when the mesh receives a packet destined for a WG client.
+func (c *Concentrator) SendPacket(packet []byte) error {
+	c.mu.RLock()
+	device := c.device
+	c.mu.RUnlock()
+
+	if device == nil {
+		return errors.New("WG device not started")
+	}
+
+	return device.WritePacket(packet)
+}
+
+// UpdateClients updates the concentrator's client list and refreshes the WG device peers.
+func (c *Concentrator) UpdateClients(clients []Client) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.clients = clients
+
+	if c.device != nil {
+		if err := c.device.UpdatePeers(clients); err != nil {
+			return fmt.Errorf("update WG peers: %w", err)
+		}
+	}
+
+	if c.onClientsUpdated != nil {
+		c.onClientsUpdated(clients)
+	}
+
+	return nil
+}
+
+// IsDeviceRunning returns true if the WireGuard device is started.
+func (c *Concentrator) IsDeviceRunning() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.device != nil
 }

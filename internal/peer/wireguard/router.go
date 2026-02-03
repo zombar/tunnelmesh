@@ -168,3 +168,28 @@ func (r *Router) GetWGClientRange() string {
 	// Simplified: return two /8 blocks that cover the range
 	return fmt.Sprintf("%d.%d.100.0/24", base[0], base[1])
 }
+
+// PacketHandler wraps a Router and Concentrator to implement packet handling.
+// This is used by the forwarder to route packets to WireGuard clients.
+type PacketHandler struct {
+	router       *Router
+	concentrator *Concentrator
+}
+
+// NewPacketHandler creates a new packet handler for WireGuard traffic.
+func NewPacketHandler(router *Router, concentrator *Concentrator) *PacketHandler {
+	return &PacketHandler{
+		router:       router,
+		concentrator: concentrator,
+	}
+}
+
+// IsWGClientIP returns true if the IP is a WireGuard client IP.
+func (h *PacketHandler) IsWGClientIP(ip string) bool {
+	return h.router.IsWGClientIP(ip)
+}
+
+// SendPacket sends a packet to a WireGuard client.
+func (h *PacketHandler) SendPacket(packet []byte) error {
+	return h.concentrator.SendPacket(packet)
+}
