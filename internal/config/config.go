@@ -46,6 +46,7 @@ type ServerConfig struct {
 	AuthToken    string                `yaml:"auth_token"`
 	MeshCIDR     string                `yaml:"mesh_cidr"`
 	DomainSuffix string                `yaml:"domain_suffix"`
+	DataDir      string                `yaml:"data_dir"` // Data directory for persistence (default: /var/lib/tunnelmesh)
 	Admin        AdminConfig           `yaml:"admin"`
 	Relay        RelayConfig           `yaml:"relay"`
 	WireGuard    WireGuardServerConfig `yaml:"wireguard"`
@@ -95,6 +96,16 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 	}
 	if cfg.DomainSuffix == "" {
 		cfg.DomainSuffix = ".tunnelmesh"
+	}
+	if cfg.DataDir == "" {
+		cfg.DataDir = "/var/lib/tunnelmesh"
+	}
+	// Expand home directory in data dir
+	if strings.HasPrefix(cfg.DataDir, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			cfg.DataDir = filepath.Join(homeDir, cfg.DataDir[2:])
+		}
 	}
 	// Admin enabled by default
 	cfg.Admin.Enabled = true

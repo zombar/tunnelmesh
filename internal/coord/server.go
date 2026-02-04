@@ -2,11 +2,14 @@
 package coord
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -161,8 +164,72 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		log.Info().Msg("WireGuard client management enabled")
 	}
 
+	// Load persisted stats history
+	if err := srv.LoadStatsHistory(); err != nil {
+		log.Warn().Err(err).Msg("failed to load stats history, starting fresh")
+	}
+
 	srv.setupRoutes()
 	return srv, nil
+}
+
+// statsHistoryPath returns the file path for stats history persistence.
+func (s *Server) statsHistoryPath() string {
+	return filepath.Join(s.cfg.DataDir, "stats_history.json")
+}
+
+// LoadStatsHistory loads stats history from disk.
+func (s *Server) LoadStatsHistory() error {
+	// Ensure data directory exists
+	if err := os.MkdirAll(s.cfg.DataDir, 0755); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+
+	path := s.statsHistoryPath()
+	if err := s.statsHistory.Load(path); err != nil {
+		return err
+	}
+
+	peerCount := s.statsHistory.PeerCount()
+	if peerCount > 0 {
+		log.Info().Int("peers", peerCount).Str("path", path).Msg("loaded stats history")
+	}
+	return nil
+}
+
+// SaveStatsHistory persists stats history to disk.
+func (s *Server) SaveStatsHistory() error {
+	path := s.statsHistoryPath()
+	if err := s.statsHistory.Save(path); err != nil {
+		return fmt.Errorf("save stats history: %w", err)
+	}
+	log.Debug().Str("path", path).Msg("saved stats history")
+	return nil
+}
+
+// Shutdown gracefully shuts down the server, persisting state.
+func (s *Server) Shutdown() error {
+	log.Info().Msg("saving stats history before shutdown")
+	return s.SaveStatsHistory()
+}
+
+// StartPeriodicSave starts a goroutine that periodically saves stats history.
+// The goroutine stops when the context is cancelled.
+func (s *Server) StartPeriodicSave(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := s.SaveStatsHistory(); err != nil {
+					log.Warn().Err(err).Msg("failed to save stats history")
+				}
+			}
+		}
+	}()
 }
 
 // SetVersion sets the server version for admin display.

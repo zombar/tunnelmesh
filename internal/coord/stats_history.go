@@ -1,13 +1,15 @@
 package coord
 
 import (
+	"encoding/json"
+	"os"
 	"sync"
 	"time"
 )
 
 // MaxHistoryPoints is the maximum number of stats data points to store per peer.
-// At 30-second heartbeat intervals, this provides ~1 week of history.
-const MaxHistoryPoints = 20160
+// At 30-second heartbeat intervals, this provides ~3 days of history.
+const MaxHistoryPoints = 8640
 
 // StatsDataPoint represents a single stats measurement at a point in time.
 type StatsDataPoint struct {
@@ -145,4 +147,79 @@ func (sh *StatsHistory) PeerCount() int {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	return len(sh.peers)
+}
+
+// persistedHistory is the JSON structure for persisting stats history.
+type persistedHistory struct {
+	Peers map[string][]StatsDataPoint `json:"peers"`
+}
+
+// Save persists the stats history to a JSON file.
+func (sh *StatsHistory) Save(path string) error {
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+
+	data := persistedHistory{
+		Peers: make(map[string][]StatsDataPoint),
+	}
+
+	for peerID, rb := range sh.peers {
+		// Get all data points, oldest first (for proper chronological order)
+		points := rb.GetLast(rb.Count())
+		if len(points) > 0 {
+			// Reverse to get oldest first
+			reversed := make([]StatsDataPoint, len(points))
+			for i, dp := range points {
+				reversed[len(points)-1-i] = dp
+			}
+			data.Peers[peerID] = reversed
+		}
+	}
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, jsonData, 0600)
+}
+
+// Load restores stats history from a JSON file.
+func (sh *StatsHistory) Load(path string) error {
+	jsonData, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // No history file yet, start fresh
+		}
+		return err
+	}
+
+	var data persistedHistory
+	if err := json.Unmarshal(jsonData, &data); err != nil {
+		return err
+	}
+
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+
+	// Clear existing data
+	sh.peers = make(map[string]*RingBuffer)
+
+	// Restore data for each peer
+	cutoff := time.Now().Add(-3 * 24 * time.Hour) // Only load last 3 days
+	for peerID, points := range data.Peers {
+		rb := NewRingBuffer(MaxHistoryPoints)
+		for _, dp := range points {
+			// Skip data older than 3 days
+			if dp.Timestamp.Before(cutoff) {
+				continue
+			}
+			rb.Push(dp)
+		}
+		if rb.Count() > 0 {
+			sh.peers[peerID] = rb
+		}
+	}
+
+	return nil
 }

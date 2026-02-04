@@ -1,6 +1,8 @@
 package coord
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -154,5 +156,112 @@ func TestStatsHistory_ConcurrentAccess(t *testing.T) {
 	// Should not panic or deadlock
 	if sh.PeerCount() != 1 {
 		t.Errorf("expected 1 peer, got %d", sh.PeerCount())
+	}
+}
+
+func TestStatsHistory_SaveLoad(t *testing.T) {
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "stats.json")
+
+	// Create history and add data
+	sh1 := NewStatsHistory()
+	now := time.Now()
+
+	sh1.RecordStats("peer1", StatsDataPoint{
+		Timestamp:     now.Add(-1 * time.Hour),
+		BytesSentRate: 100,
+	})
+	sh1.RecordStats("peer1", StatsDataPoint{
+		Timestamp:     now.Add(-30 * time.Minute),
+		BytesSentRate: 200,
+	})
+	sh1.RecordStats("peer2", StatsDataPoint{
+		Timestamp:     now.Add(-15 * time.Minute),
+		BytesSentRate: 50,
+	})
+
+	// Save
+	if err := sh1.Save(path); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	// Verify file exists
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Fatal("expected file to exist after save")
+	}
+
+	// Load into new instance
+	sh2 := NewStatsHistory()
+	if err := sh2.Load(path); err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	// Verify data
+	if sh2.PeerCount() != 2 {
+		t.Errorf("expected 2 peers after load, got %d", sh2.PeerCount())
+	}
+
+	history1 := sh2.GetHistory("peer1", 10)
+	if len(history1) != 2 {
+		t.Errorf("expected 2 items for peer1 after load, got %d", len(history1))
+	}
+
+	history2 := sh2.GetHistory("peer2", 10)
+	if len(history2) != 1 {
+		t.Errorf("expected 1 item for peer2 after load, got %d", len(history2))
+	}
+}
+
+func TestStatsHistory_LoadNonExistent(t *testing.T) {
+	sh := NewStatsHistory()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "nonexistent.json")
+
+	// Loading non-existent file should not error (just start fresh)
+	if err := sh.Load(path); err != nil {
+		t.Errorf("load of non-existent file should not error, got: %v", err)
+	}
+
+	if sh.PeerCount() != 0 {
+		t.Errorf("expected 0 peers after loading non-existent file, got %d", sh.PeerCount())
+	}
+}
+
+func TestStatsHistory_LoadExpiredData(t *testing.T) {
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "stats.json")
+
+	// Create history with old data (more than 3 days ago)
+	sh1 := NewStatsHistory()
+	now := time.Now()
+
+	// Add data from 4 days ago (should be filtered out on load)
+	sh1.RecordStats("peer1", StatsDataPoint{
+		Timestamp:     now.Add(-4 * 24 * time.Hour),
+		BytesSentRate: 100,
+	})
+	// Add recent data (should be kept)
+	sh1.RecordStats("peer1", StatsDataPoint{
+		Timestamp:     now.Add(-1 * time.Hour),
+		BytesSentRate: 200,
+	})
+
+	if err := sh1.Save(path); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	// Load into new instance
+	sh2 := NewStatsHistory()
+	if err := sh2.Load(path); err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	// Should only have the recent data point
+	history := sh2.GetHistory("peer1", 10)
+	if len(history) != 1 {
+		t.Errorf("expected 1 item after filtering old data, got %d", len(history))
+	}
+	if history[0].BytesSentRate != 200 {
+		t.Errorf("expected recent data point (200), got %f", history[0].BytesSentRate)
 	}
 }

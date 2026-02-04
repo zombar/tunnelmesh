@@ -280,7 +280,11 @@ func runServeFromService(ctx context.Context, configPath string) error {
 		Str("listen", cfg.Listen).
 		Str("mesh_cidr", cfg.MeshCIDR).
 		Str("domain", cfg.DomainSuffix).
+		Str("data_dir", cfg.DataDir).
 		Msg("starting coordination server")
+
+	// Start periodic stats history saving
+	srv.StartPeriodicSave(ctx)
 
 	// Start HTTP server in goroutine
 	go func() {
@@ -308,6 +312,12 @@ func runServeFromService(ctx context.Context, configPath string) error {
 
 	// Wait for context cancellation (service stop)
 	<-ctx.Done()
+
+	// Save stats history before exit
+	if err := srv.Shutdown(); err != nil {
+		log.Error().Err(err).Msg("error during shutdown")
+	}
+
 	return nil
 }
 
@@ -411,7 +421,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Str("listen", cfg.Listen).
 		Str("mesh_cidr", cfg.MeshCIDR).
 		Str("domain", cfg.DomainSuffix).
+		Str("data_dir", cfg.DataDir).
 		Msg("starting coordination server")
+
+	// Start periodic stats history saving
+	srv.StartPeriodicSave(ctx)
 
 	// Start HTTP server in goroutine
 	go func() {
@@ -442,6 +456,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Wait for shutdown
 	<-ctx.Done()
+
+	// Save stats history before exit
+	if err := srv.Shutdown(); err != nil {
+		log.Error().Err(err).Msg("error during shutdown")
+	}
+
 	return nil
 }
 
