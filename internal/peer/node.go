@@ -301,29 +301,82 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 		}
 	})
 
-	// Set up handler for peer reconnection notifications
-	// NOTE: We no longer invalidate direct tunnels when a peer reconnects to relay.
-	// The peer maintains a persistent relay connection for fallback - reconnecting to it
-	// doesn't mean our direct tunnel is broken. We only rely on actual relay packet
-	// reception to detect asymmetric situations (handled in SetPacketHandler above).
+	// Set up handler for peer reconnection notifications.
+	// When a peer reconnects to the relay, they may have changed networks (new IPs).
+	// We fetch their fresh info from the server and compare IPs - if changed,
+	// our direct tunnel is likely broken and needs to be reconnected.
 	relay.SetPeerReconnectedHandler(func(peerName string) {
-		if pc := m.Connections.Get(peerName); pc != nil {
-			if !pc.HasTunnel() {
-				// No tunnel yet (e.g., still connecting) - ignore notification
+		// Get our cached info for this peer (if any)
+		oldPeer, hadCached := m.GetCachedPeer(peerName)
+
+		// Fetch fresh peer info from coordination server
+		peers, err := m.client.ListPeers()
+		if err != nil {
+			log.Debug().Err(err).Str("peer", peerName).Msg("failed to fetch peers after reconnect notification")
+			return
+		}
+
+		// Find the peer that reconnected and update our cache
+		var newPeer *proto.Peer
+		for _, p := range peers {
+			m.CachePeer(p) // Update cache for all peers
+			if p.Name == peerName {
+				newPeer = &p
+			}
+		}
+
+		if newPeer == nil {
+			log.Debug().Str("peer", peerName).Msg("peer not found on server after reconnect notification")
+			return
+		}
+
+		// Check if IPs changed (only if we had cached info to compare)
+		if hadCached {
+			oldPublicIPs := make(map[string]bool)
+			for _, ip := range oldPeer.PublicIPs {
+				oldPublicIPs[ip] = true
+			}
+			ipsChanged := false
+			for _, ip := range newPeer.PublicIPs {
+				if !oldPublicIPs[ip] {
+					ipsChanged = true
+					break
+				}
+			}
+			if len(oldPeer.PublicIPs) != len(newPeer.PublicIPs) {
+				ipsChanged = true
+			}
+
+			if !ipsChanged {
 				log.Debug().
 					Str("peer", peerName).
-					Msg("ignoring peer reconnect notification - no tunnel to invalidate")
+					Msg("peer reconnected but IPs unchanged - no action needed")
 				return
 			}
-			// Don't invalidate direct tunnels (UDP/SSH) when peer reconnects to relay.
-			// Peer reconnecting to relay doesn't mean our direct path is broken -
-			// they may just be refreshing their persistent relay connection.
-			// We rely on actual relay packet reception to detect asymmetric situations.
+
+			log.Info().
+				Str("peer", peerName).
+				Strs("old_ips", oldPeer.PublicIPs).
+				Strs("new_ips", newPeer.PublicIPs).
+				Msg("peer IPs changed after reconnect notification")
+		} else {
 			log.Debug().
 				Str("peer", peerName).
-				Str("transport", pc.TransportType()).
-				Msg("ignoring peer reconnect notification - relying on packet-based detection")
+				Msg("peer reconnected (no cached info to compare)")
 		}
+
+		// If we have a direct tunnel to this peer, disconnect it
+		// (the peer's IPs changed, so our direct tunnel is broken)
+		if pc := m.Connections.Get(peerName); pc != nil && pc.HasTunnel() {
+			log.Info().
+				Str("peer", peerName).
+				Str("transport", pc.TransportType()).
+				Msg("disconnecting tunnel due to peer IP change")
+			_ = pc.Disconnect("peer IP changed", nil)
+		}
+
+		// Trigger discovery to reconnect with new IPs
+		m.TriggerDiscovery()
 	})
 
 	// Set up handler for reconnection errors to detect when we need to re-register
