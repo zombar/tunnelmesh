@@ -10,19 +10,9 @@ import (
 
 // RunHeartbeat starts the heartbeat loop that maintains presence with the coordination server.
 // Uses WebSocket-based heartbeat via PersistentRelay with push notifications for relay/hole-punch.
+// Note: Push notification handlers (relay/hole-punch) are set in setupRelayHandlers to ensure
+// they're re-registered after relay reconnection.
 func (m *MeshNode) RunHeartbeat(ctx context.Context) {
-	// Set up push notification callbacks on PersistentRelay
-	if m.PersistentRelay != nil {
-		m.PersistentRelay.SetRelayNotifyHandler(func(peers []string) {
-			log.Debug().Strs("peers", peers).Msg("received relay notification via WebSocket")
-			m.HandleRelayRequests(ctx, peers)
-		})
-		m.PersistentRelay.SetHolePunchNotifyHandler(func(peers []string) {
-			log.Debug().Strs("peers", peers).Msg("received hole-punch notification via WebSocket")
-			m.HandleHolePunchRequests(ctx, peers)
-		})
-	}
-
 	// Send heartbeats every 30 seconds (no fast phase needed - notifications are pushed instantly)
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()

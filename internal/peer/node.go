@@ -331,6 +331,20 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 			}
 		}
 	})
+
+	// Set up push notification handlers for relay and hole-punch requests.
+	// These must be set here (not just in RunHeartbeat) to ensure they're
+	// re-registered after relay reconnection.
+	// Note: Uses background context since handlers spawn their own goroutines
+	// and should continue processing even during shutdown.
+	relay.SetRelayNotifyHandler(func(peers []string) {
+		log.Debug().Strs("peers", peers).Msg("received relay notification via WebSocket")
+		m.HandleRelayRequests(context.Background(), peers)
+	})
+	relay.SetHolePunchNotifyHandler(func(peers []string) {
+		log.Debug().Strs("peers", peers).Msg("received hole-punch notification via WebSocket")
+		m.HandleHolePunchRequests(context.Background(), peers)
+	})
 }
 
 // ConnectPersistentRelay establishes the persistent relay connection.
