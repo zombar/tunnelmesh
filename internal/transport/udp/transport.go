@@ -1628,6 +1628,7 @@ func (t *Transport) registerEndpointVia(ctx context.Context, peerName, localAddr
 		"peer_name":  peerName,
 		"local_addr": localAddr,
 		"udp_port":   port,
+		"pcp_mapped": t.HasPCPMapping(),
 	}
 
 	bodyBytes, _ := json.Marshal(reqBody)

@@ -23,6 +23,7 @@ type Peer struct {
 	BehindNAT        bool      `json:"behind_nat"`                  // Public IP was fetched externally (behind NAT)
 	ExternalEndpoint string    `json:"external_endpoint,omitempty"` // STUN-discovered external address for UDP
 	Version          string    `json:"version,omitempty"`           // Application version
+	PCPMapped        bool      `json:"pcp_mapped,omitempty"`        // Whether peer has PCP/NAT-PMP port mapping
 }
 
 // RegisterRequest is sent by a peer to join the mesh.
