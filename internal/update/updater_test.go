@@ -259,7 +259,7 @@ func TestUpdaterDownload(t *testing.T) {
 		if strings.HasSuffix(r.URL.Path, "tunnelmesh-"+runtime.GOOS+"-"+runtime.GOARCH) ||
 			strings.HasSuffix(r.URL.Path, "tunnelmesh-"+runtime.GOOS+"-"+runtime.GOARCH+".exe") {
 			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(binaryContent)))
-			w.Write(binaryContent)
+			_, _ = w.Write(binaryContent)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -300,7 +300,7 @@ func TestUpdaterDownloadWithProgress(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(binaryContent)))
-		w.Write(binaryContent)
+		_, _ = w.Write(binaryContent)
 	}))
 	defer server.Close()
 
@@ -422,9 +422,9 @@ func TestUpdaterVerifyDownload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
-			w.Write([]byte(checksumFileContent))
+			_, _ = w.Write([]byte(checksumFileContent))
 		case strings.HasSuffix(r.URL.Path, "tunnelmesh-linux-amd64"):
-			w.Write(binaryContent)
+			_, _ = w.Write(binaryContent)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -449,7 +449,7 @@ func TestUpdaterVerifyDownload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp() error: %v", err)
 	}
-	tmpFile.Write(binaryContent)
+	_, _ = tmpFile.Write(binaryContent)
 	tmpFile.Close()
 	defer os.Remove(tmpFile.Name())
 
@@ -461,7 +461,7 @@ func TestUpdaterVerifyDownload(t *testing.T) {
 
 	// Write wrong content and verify should fail
 	wrongFile, _ := os.CreateTemp("", "update-test-wrong-*")
-	wrongFile.Write([]byte("wrong content"))
+	_, _ = wrongFile.Write([]byte("wrong content"))
 	wrongFile.Close()
 	defer os.Remove(wrongFile.Name())
 
