@@ -140,7 +140,7 @@ func NewServiceConfig(cfg *ServiceConfig, execPath string) *service.Config {
 	// Platform-specific options
 	switch runtime.GOOS {
 	case "linux":
-		svcCfg.Dependencies = []string{"network-online.target"}
+		svcCfg.Dependencies = []string{"After=network-online.target", "Wants=network-online.target"}
 		svcCfg.Option = service.KeyValue{
 			"Restart":    "on-failure",
 			"RestartSec": "5",
