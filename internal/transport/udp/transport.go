@@ -920,39 +920,36 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 		}
 	}
 
+	// Get peer's current external endpoint from coordination server
+	// This is the authoritative source for where the peer currently is
+	peerEndpoint, err := t.getPeerEndpoint(ctx, opts.PeerName)
+	if err != nil {
+		return nil, fmt.Errorf("get peer endpoint: %w", err)
+	}
+
 	// Check if peer is on the same network (same public IP = same NAT)
 	// If so, use private IPs to avoid NAT hairpinning issues
-	// Use fresh IP detection to avoid stale cached addresses after network changes
-	var peerEndpoint string
+	// IMPORTANT: Use the fresh external address from coordination, not cached PeerInfo
 	if opts.PeerInfo != nil && len(opts.PeerInfo.PrivateIPs) > 0 && opts.PeerInfo.UDPPort > 0 {
-		// Get our current public IPs freshly to handle network changes
-		ourPublicIPs, _, _ := proto.GetLocalIPs()
-		for _, ourPublicIP := range ourPublicIPs {
-			for _, peerPublicIP := range opts.PeerInfo.PublicIPs {
-				if ourPublicIP == peerPublicIP {
+		// Extract peer's current public IP from external endpoint (host:port format)
+		peerExternalHost, _, _ := net.SplitHostPort(peerEndpoint)
+		if peerExternalHost != "" {
+			// Get our current public IPs freshly to handle network changes
+			ourPublicIPs, _, _ := proto.GetLocalIPs()
+			for _, ourPublicIP := range ourPublicIPs {
+				if ourPublicIP == peerExternalHost {
 					// Same public IP means same LAN - use private IP to avoid hairpinning
-					peerEndpoint = net.JoinHostPort(opts.PeerInfo.PrivateIPs[0], fmt.Sprint(opts.PeerInfo.UDPPort))
+					privateEndpoint := net.JoinHostPort(opts.PeerInfo.PrivateIPs[0], fmt.Sprint(opts.PeerInfo.UDPPort))
 					log.Debug().
 						Str("peer", opts.PeerName).
 						Str("our_public_ip", ourPublicIP).
-						Str("peer_public_ip", peerPublicIP).
-						Str("using_private_addr", peerEndpoint).
+						Str("peer_external_ip", peerExternalHost).
+						Str("using_private_addr", privateEndpoint).
 						Msg("detected same-network peer, using private IP to avoid NAT hairpinning")
+					peerEndpoint = privateEndpoint
 					break
 				}
 			}
-			if peerEndpoint != "" {
-				break
-			}
-		}
-	}
-
-	// If not same network, get peer's UDP endpoint via coordination server
-	if peerEndpoint == "" {
-		var err error
-		peerEndpoint, err = t.getPeerEndpoint(ctx, opts.PeerName)
-		if err != nil {
-			return nil, fmt.Errorf("get peer endpoint: %w", err)
 		}
 	}
 
