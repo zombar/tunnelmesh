@@ -20,9 +20,9 @@ const state = {
     }
 };
 
-// Single color for all chart lines (GitHub blue)
-const CHART_LINE_COLOR = '#58a6ff';
-const CHART_FILL_COLOR = 'rgba(88, 166, 255, 0.15)';
+// Single color for all chart lines (GitHub green)
+const CHART_LINE_COLOR = '#3fb950';
+const CHART_FILL_COLOR = 'rgba(63, 185, 80, 0.15)';
 
 // Range presets in days
 const RANGE_DAYS = {
@@ -532,7 +532,7 @@ function rebuildChartDatasets() {
             backgroundColor: CHART_FILL_COLOR,
             borderWidth: 1.5,
             pointRadius: 0,
-            tension: 0.3,
+            tension: 0,
             fill: stacked ? 'origin' : false,
             spanGaps: true,
             stack: stacked ? 'stack0' : undefined
@@ -556,7 +556,7 @@ function rebuildChartDatasets() {
             backgroundColor: CHART_FILL_COLOR,
             borderWidth: 1.5,
             pointRadius: 0,
-            tension: 0.3,
+            tension: 0,
             fill: stacked ? 'origin' : false,
             spanGaps: true,
             stack: stacked ? 'stack0' : undefined
