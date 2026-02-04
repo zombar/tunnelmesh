@@ -31,6 +31,11 @@ output "ssh_commands" {
 # COORDINATOR
 # ============================================================================
 
+output "coordinator_name" {
+  description = "Name of the coordinator node"
+  value       = local.coordinator_name
+}
+
 output "coordinator_url" {
   description = "Coordination server URL"
   value       = local.coordinator_name != null ? module.node[local.coordinator_name].coordinator_url : var.external_coordinator_url

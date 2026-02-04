@@ -6,7 +6,17 @@ output "droplet_id" {
 }
 
 output "ipv4_address" {
-  description = "The public IPv4 address of the droplet"
+  description = "The static reserved IPv4 address"
+  value       = digitalocean_reserved_ip.node.ip_address
+}
+
+output "reserved_ip" {
+  description = "The reserved IP address (static)"
+  value       = digitalocean_reserved_ip.node.ip_address
+}
+
+output "droplet_ipv4_address" {
+  description = "The dynamic IPv4 address of the droplet (use reserved_ip for stable addressing)"
   value       = digitalocean_droplet.node.ipv4_address
 }
 
@@ -22,7 +32,7 @@ output "hostname" {
 
 output "ssh_command" {
   description = "SSH command to connect to the droplet"
-  value       = "ssh root@${digitalocean_droplet.node.ipv4_address}"
+  value       = "ssh root@${digitalocean_reserved_ip.node.ip_address}"
 }
 
 # Coordinator-specific outputs
@@ -33,7 +43,7 @@ output "coordinator_url" {
 
 output "coordinator_api_url" {
   description = "API URL for peers to connect to"
-  value       = var.coordinator_enabled ? (var.ssl_enabled ? "https://${var.name}.${var.domain}" : "http://${digitalocean_droplet.node.ipv4_address}:${var.coordinator_port}") : null
+  value       = var.coordinator_enabled ? (var.ssl_enabled ? "https://${var.name}.${var.domain}" : "http://${digitalocean_reserved_ip.node.ip_address}:${var.coordinator_port}") : null
 }
 
 # WireGuard-specific outputs

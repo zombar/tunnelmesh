@@ -1,7 +1,7 @@
 .PHONY: all build build-force test test-verbose test-coverage clean install lint fmt \
         dev-server dev-peer gen-keys release release-all push-release \
         docker-build docker-up docker-down docker-logs docker-clean docker-test \
-        ghcr-login ghcr-build ghcr-push deploy deploy-plan deploy-destroy \
+        ghcr-login ghcr-build ghcr-push deploy deploy-plan deploy-destroy deploy-taint-coordinator \
         service-install service-uninstall service-start service-stop service-status
 
 # Build variables
@@ -168,6 +168,15 @@ deploy:
 deploy-destroy:
 	cd $(TF_DIR) && terraform destroy
 
+deploy-taint-coordinator:
+	@COORD=$$(cd $(TF_DIR) && terraform output -raw coordinator_name 2>/dev/null); \
+	if [ -z "$$COORD" ]; then \
+		echo "Error: No coordinator found in terraform state"; \
+		exit 1; \
+	fi; \
+	echo "Tainting coordinator droplet: $$COORD"; \
+	cd $(TF_DIR) && terraform taint "module.node[\"$$COORD\"].digitalocean_droplet.node"
+
 ghcr-login:
 	@echo "Logging in to GitHub Container Registry..."
 	@echo "Use: echo \$$GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin"
@@ -267,7 +276,8 @@ help:
 	@echo "  ghcr-push      - Build and push to ghcr.io"
 	@echo ""
 	@echo "Deployment targets:"
-	@echo "  deploy-init    - Initialize terraform"
-	@echo "  deploy-plan    - Show terraform plan for deployment"
-	@echo "  deploy         - Deploy infrastructure to DigitalOcean"
-	@echo "  deploy-destroy - Destroy deployed infrastructure"
+	@echo "  deploy-init            - Initialize terraform"
+	@echo "  deploy-plan            - Show terraform plan for deployment"
+	@echo "  deploy                 - Deploy infrastructure to DigitalOcean"
+	@echo "  deploy-destroy         - Destroy deployed infrastructure"
+	@echo "  deploy-taint-coordinator - Taint coordinator droplet for recreation"
