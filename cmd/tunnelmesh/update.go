@@ -90,8 +90,12 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	needsUpdate := currentVersion.NeedsUpdate(remoteVersion)
 	isDowngrade := remoteVersion.NeedsUpdate(currentVersion)
 
+	// For non-semver versions (commit hashes), we can't determine order
+	// so don't treat different hashes as a downgrade
+	bothNonSemver := !currentVersion.IsSemver() && !remoteVersion.IsSemver()
+
 	if !needsUpdate && !updateForce {
-		if isDowngrade && !updateForce {
+		if isDowngrade && !bothNonSemver && !updateForce {
 			fmt.Println("\nCurrent version is newer than target. Use --force to downgrade.")
 			return nil
 		}
@@ -99,7 +103,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if isDowngrade {
+	if isDowngrade && !bothNonSemver {
 		fmt.Println("\nWarning: This is a downgrade.")
 	}
 

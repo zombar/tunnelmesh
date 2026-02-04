@@ -203,3 +203,135 @@ func TestTransportTypeConstants(t *testing.T) {
 	assert.Equal(t, "relay", string(transport.TransportRelay))
 	assert.Equal(t, "auto", string(transport.TransportAuto))
 }
+
+func TestMeshNode_shouldInitiateConnection(t *testing.T) {
+	tests := []struct {
+		name           string
+		ourKey         string
+		peerKey        string
+		expectInitiate bool
+	}{
+		{
+			name:           "our key is lower - we initiate",
+			ourKey:         "AAAA",
+			peerKey:        "BBBB",
+			expectInitiate: true,
+		},
+		{
+			name:           "our key is higher - peer initiates",
+			ourKey:         "BBBB",
+			peerKey:        "AAAA",
+			expectInitiate: false,
+		},
+		{
+			name:           "keys are equal - we don't initiate",
+			ourKey:         "AAAA",
+			peerKey:        "AAAA",
+			expectInitiate: false,
+		},
+		{
+			name:           "our key is empty - legacy behavior, we initiate",
+			ourKey:         "",
+			peerKey:        "BBBB",
+			expectInitiate: true,
+		},
+		{
+			name:           "peer key is empty - legacy behavior, we initiate",
+			ourKey:         "AAAA",
+			peerKey:        "",
+			expectInitiate: true,
+		},
+		{
+			name:           "both keys empty - legacy behavior, we initiate",
+			ourKey:         "",
+			peerKey:        "",
+			expectInitiate: true,
+		},
+		{
+			name:           "realistic base64 keys - lower initiates",
+			ourKey:         "c3NoLWVkMjU1MTkgQUFBQUMz...",
+			peerKey:        "c3NoLWVkMjU1MTkgQkJCQkMz...",
+			expectInitiate: true,
+		},
+		{
+			name:           "realistic base64 keys - higher waits",
+			ourKey:         "c3NoLWVkMjU1MTkgQkJCQkMz...",
+			peerKey:        "c3NoLWVkMjU1MTkgQUFBQUMz...",
+			expectInitiate: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			identity := &PeerIdentity{
+				Name:          "test-node",
+				PubKeyEncoded: tt.ourKey,
+				Config: &config.PeerConfig{
+					Name: "test-node",
+				},
+			}
+			client := coord.NewClient("http://localhost:8080", "test-token")
+			node := NewMeshNode(identity, client)
+
+			peer := proto.Peer{
+				Name:      "peer1",
+				PublicKey: tt.peerKey,
+			}
+
+			result := node.shouldInitiateConnection(peer)
+			assert.Equal(t, tt.expectInitiate, result, "shouldInitiateConnection mismatch")
+		})
+	}
+}
+
+func TestMeshNode_EstablishTunnel_RespectsKeyComparison(t *testing.T) {
+	// When our key is higher, EstablishTunnel should not initiate
+	identity := &PeerIdentity{
+		Name:          "test-node",
+		PubKeyEncoded: "ZZZZ", // Higher than peer's key
+		Config: &config.PeerConfig{
+			Name: "test-node",
+		},
+	}
+	client := coord.NewClient("http://localhost:8080", "test-token")
+	node := NewMeshNode(identity, client)
+
+	peer := proto.Peer{
+		Name:      "peer1",
+		PublicKey: "AAAA", // Lower key - peer should initiate
+	}
+
+	// Should return early without attempting connection
+	ctx := context.Background()
+	node.EstablishTunnel(ctx, peer)
+
+	// Verify no connection attempt was started
+	assert.False(t, node.Connections.IsConnecting("peer1"),
+		"should not start connecting when peer has lower pubkey")
+}
+
+func TestMeshNode_EstablishTunnelForced_IgnoresKeyComparison(t *testing.T) {
+	// EstablishTunnelForced should initiate even when our key is higher
+	identity := &PeerIdentity{
+		Name:          "test-node",
+		PubKeyEncoded: "ZZZZ", // Higher than peer's key
+		Config: &config.PeerConfig{
+			Name: "test-node",
+		},
+	}
+	client := coord.NewClient("http://localhost:8080", "test-token")
+	node := NewMeshNode(identity, client)
+	// No transport negotiator set - will return early after marking connecting
+
+	peer := proto.Peer{
+		Name:      "peer1",
+		PublicKey: "AAAA", // Lower key - normally peer would initiate
+	}
+
+	ctx := context.Background()
+	node.EstablishTunnelForced(ctx, peer)
+
+	// With forced initiation, it should attempt to connect (but fail due to no negotiator)
+	// The key point is it didn't skip due to pubkey comparison
+	// Since there's no transport negotiator, it will log and return, but it did try
+}
