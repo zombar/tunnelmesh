@@ -2,6 +2,7 @@
         dev-server dev-peer gen-keys release release-all push-release \
         docker-build docker-up docker-down docker-logs docker-clean docker-test \
         ghcr-login ghcr-build ghcr-push deploy deploy-plan deploy-destroy deploy-taint-coordinator \
+        deploy-update deploy-update-node \
         service-install service-uninstall service-start service-stop service-status
 
 # Build variables
@@ -177,6 +178,79 @@ deploy-taint-coordinator:
 	echo "Tainting coordinator droplet: $$COORD"; \
 	cd $(TF_DIR) && terraform taint "module.node[\"$$COORD\"].digitalocean_droplet.node"
 
+# Update tunnelmesh binary on all deployed nodes
+# Usage: make deploy-update [BINARY_VERSION=latest]
+BINARY_VERSION ?= latest
+GITHUB_OWNER ?= zombar
+
+deploy-update:
+	@echo "Updating tunnelmesh on all deployed nodes..."
+	@NODES=$$(cd $(TF_DIR) && terraform output -json ssh_commands 2>/dev/null | jq -r 'to_entries[] | "\(.key)|\(.value)"'); \
+	if [ -z "$$NODES" ]; then \
+		echo "Error: No nodes found in terraform state. Run 'make deploy' first."; \
+		exit 1; \
+	fi; \
+	for node in $$NODES; do \
+		NAME=$${node%%|*}; \
+		SSH=$${node##*|}; \
+		echo ""; \
+		echo "=== Updating $$NAME ==="; \
+		$$SSH -o StrictHostKeyChecking=no -o ConnectTimeout=10 ' \
+			set -e; \
+			ARCH=$$(dpkg --print-architecture); \
+			if [ "$(BINARY_VERSION)" = "latest" ]; then \
+				URL="https://github.com/$(GITHUB_OWNER)/tunnelmesh/releases/latest/download/tunnelmesh-linux-$$ARCH"; \
+			else \
+				URL="https://github.com/$(GITHUB_OWNER)/tunnelmesh/releases/download/$(BINARY_VERSION)/tunnelmesh-linux-$$ARCH"; \
+			fi; \
+			echo "Downloading from $$URL..."; \
+			curl -sL "$$URL" -o /tmp/tunnelmesh-new; \
+			chmod +x /tmp/tunnelmesh-new; \
+			NEW_VER=$$(/tmp/tunnelmesh-new version 2>/dev/null | head -1 || echo "unknown"); \
+			OLD_VER=$$(/usr/local/bin/tunnelmesh version 2>/dev/null | head -1 || echo "unknown"); \
+			echo "Current: $$OLD_VER"; \
+			echo "New:     $$NEW_VER"; \
+			mv /tmp/tunnelmesh-new /usr/local/bin/tunnelmesh; \
+			systemctl restart tunnelmesh; \
+			echo "Service restarted"; \
+		' || echo "Failed to update $$NAME"; \
+	done; \
+	echo ""; \
+	echo "=== Update complete ==="
+
+# Update a single node by name
+# Usage: make deploy-update-node NODE=tunnelmesh
+deploy-update-node:
+	@if [ -z "$(NODE)" ]; then \
+		echo "Error: NODE not specified. Usage: make deploy-update-node NODE=tunnelmesh"; \
+		exit 1; \
+	fi
+	@SSH=$$(cd $(TF_DIR) && terraform output -json ssh_commands 2>/dev/null | jq -r '.["$(NODE)"]'); \
+	if [ -z "$$SSH" ] || [ "$$SSH" = "null" ]; then \
+		echo "Error: Node '$(NODE)' not found in terraform state"; \
+		exit 1; \
+	fi; \
+	echo "=== Updating $(NODE) ==="; \
+	$$SSH -o StrictHostKeyChecking=no -o ConnectTimeout=10 ' \
+		set -e; \
+		ARCH=$$(dpkg --print-architecture); \
+		if [ "$(BINARY_VERSION)" = "latest" ]; then \
+			URL="https://github.com/$(GITHUB_OWNER)/tunnelmesh/releases/latest/download/tunnelmesh-linux-$$ARCH"; \
+		else \
+			URL="https://github.com/$(GITHUB_OWNER)/tunnelmesh/releases/download/$(BINARY_VERSION)/tunnelmesh-linux-$$ARCH"; \
+		fi; \
+		echo "Downloading from $$URL..."; \
+		curl -sL "$$URL" -o /tmp/tunnelmesh-new; \
+		chmod +x /tmp/tunnelmesh-new; \
+		NEW_VER=$$(/tmp/tunnelmesh-new version 2>/dev/null | head -1 || echo "unknown"); \
+		OLD_VER=$$(/usr/local/bin/tunnelmesh version 2>/dev/null | head -1 || echo "unknown"); \
+		echo "Current: $$OLD_VER"; \
+		echo "New:     $$NEW_VER"; \
+		mv /tmp/tunnelmesh-new /usr/local/bin/tunnelmesh; \
+		systemctl restart tunnelmesh; \
+		echo "Service restarted"; \
+	'
+
 ghcr-login:
 	@echo "Logging in to GitHub Container Registry..."
 	@echo "Use: echo \$$GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin"
@@ -281,3 +355,5 @@ help:
 	@echo "  deploy                 - Deploy infrastructure to DigitalOcean"
 	@echo "  deploy-destroy         - Destroy deployed infrastructure"
 	@echo "  deploy-taint-coordinator - Taint coordinator droplet for recreation"
+	@echo "  deploy-update          - Update tunnelmesh on all nodes (BINARY_VERSION=latest)"
+	@echo "  deploy-update-node     - Update single node (NODE=name BINARY_VERSION=latest)"
