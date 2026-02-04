@@ -88,6 +88,9 @@ func (m *MeshNode) HandleIPChange(publicIPs, privateIPs []string, behindNAT bool
 	// Close stale HTTP connections
 	m.client.CloseIdleConnections()
 
+	// Clear peer cache to prevent using stale IPs/endpoints for reconnection
+	m.ClearPeerCache()
+
 	// Disconnect all peers (tunnels may be using stale IPs)
 	// Use DisconnectAll to properly transition FSM states and trigger observers
 	m.Connections.DisconnectAll("IP change")
@@ -97,6 +100,12 @@ func (m *MeshNode) HandleIPChange(publicIPs, privateIPs []string, behindNAT bool
 
 	// Update stored IPs
 	m.SetHeartbeatIPs(publicIPs, privateIPs, behindNAT)
+
+	// Re-register UDP endpoint with new external address (non-blocking)
+	// This ensures peers can reach us at our new address before discovery completes
+	if m.TransportRegistry != nil {
+		go m.TransportRegistry.RefreshEndpoints(context.Background(), m.identity.Name)
+	}
 
 	// Reconnect persistent relay (non-blocking)
 	if m.PersistentRelay != nil {

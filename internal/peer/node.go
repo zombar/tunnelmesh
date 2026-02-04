@@ -196,6 +196,15 @@ func (m *MeshNode) GetCachedPeer(peerName string) (proto.Peer, bool) {
 	return peer, ok
 }
 
+// ClearPeerCache clears all cached peer info.
+// Called on network change to prevent using stale IPs/endpoints.
+func (m *MeshNode) ClearPeerCache() {
+	m.peerCacheMu.Lock()
+	defer m.peerCacheMu.Unlock()
+	m.peerCache = make(map[string]proto.Peer)
+	log.Debug().Msg("cleared peer cache due to network change")
+}
+
 // IPsChanged returns true if the provided IPs differ from the last known IPs.
 // If no IPs have been set yet (first heartbeat), returns true only if we have
 // recorded IPs before (to avoid re-registering on first heartbeat).

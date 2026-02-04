@@ -60,6 +60,9 @@ type Transport struct {
 	externalAddr  string // IPv4 external address
 	externalAddr6 string // IPv6 external address
 
+	// Timestamp of last network change (for invalidating stale sessions)
+	lastNetworkChange time.Time
+
 	// Port mapper for PCP/NAT-PMP/UPnP
 	portMapper *portmap.PortMapper
 
@@ -87,6 +90,9 @@ type Transport struct {
 	// State
 	running atomic.Bool
 	closeCh chan struct{}
+
+	// HTTP client for coordination server requests
+	httpClient *http.Client
 }
 
 // Config holds UDP transport configuration.
@@ -135,6 +141,11 @@ type Config struct {
 	// When enabled, the transport will attempt to create a port mapping
 	// on the gateway for better NAT traversal. Default: true (opportunistic)
 	EnablePortMapping *bool
+
+	// HTTPClient is the HTTP client to use for coordination server requests.
+	// If nil, a new client with sensible defaults will be created.
+	// Providing a managed client allows proper cleanup during network changes.
+	HTTPClient *http.Client
 }
 
 // DefaultConfig returns sensible defaults.
@@ -163,6 +174,14 @@ func New(cfg Config) (*Transport, error) {
 		cfg.HolePunchRetries = 5
 	}
 
+	// Use provided HTTP client or create a new one with sensible defaults
+	httpClient := cfg.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{
+			Timeout: 30 * time.Second,
+		}
+	}
+
 	t := &Transport{
 		config:               cfg,
 		staticPrivate:        cfg.StaticPrivate,
@@ -173,6 +192,7 @@ func New(cfg Config) (*Transport, error) {
 		pendingOutboundPeers: make(map[string]uint32),
 		rekeyRateLimit:       make(map[string]time.Time),
 		closeCh:              make(chan struct{}),
+		httpClient:           httpClient,
 	}
 
 	return t, nil
@@ -720,14 +740,18 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 	// 2. Timeout and try again (at which point our session may be stale)
 	t.mu.RLock()
 	existingSession, hasExisting := t.peerSessions[peerName]
+	lastNetChange := t.lastNetworkChange
 	if hasExisting && existingSession.IsEstablished() {
 		// Check if the existing session is still active (received data recently)
 		lastRecv := existingSession.LastReceive()
 		sessionAge := time.Since(lastRecv)
 		t.mu.RUnlock()
 
-		// If we received data in the last 30 seconds, keep the existing session
-		if sessionAge < 30*time.Second {
+		// Session is active if:
+		// 1. We received data in the last 30 seconds, AND
+		// 2. The last receive was AFTER any network change (session uses current network)
+		sessionActive := sessionAge < 30*time.Second && lastRecv.After(lastNetChange)
+		if sessionActive {
 			log.Debug().
 				Str("peer", peerName).
 				Str("remote", remoteAddr.String()).
@@ -738,6 +762,7 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 		log.Debug().
 			Str("peer", peerName).
 			Dur("session_age", sessionAge).
+			Bool("pre_network_change", lastRecv.Before(lastNetChange)).
 			Msg("replacing stale session with new handshake")
 	} else {
 		t.mu.RUnlock()
@@ -1189,7 +1214,7 @@ func (t *Transport) holePunch(ctx context.Context, peerName string, peerAddr *ne
 		req.Header.Set("Authorization", "Bearer "+t.config.AuthToken)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -1253,7 +1278,7 @@ func (t *Transport) getPeerEndpoint(ctx context.Context, peerName string) (strin
 		req.Header.Set("Authorization", "Bearer "+t.config.AuthToken)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -1419,13 +1444,16 @@ func (t *Transport) registerSession(session *Session) bool {
 	// Check for existing session to this peer
 	var oldSession *Session
 	var discardNew bool
+	lastNetChange := t.lastNetworkChange
 	if existing, ok := t.peerSessions[peerName]; ok {
 		if existing.LocalIndex() != session.LocalIndex() {
 			// Check if existing session is active (received data recently)
 			if existing.IsEstablished() {
 				lastRecv := existing.LastReceive()
 				sessionAge := time.Since(lastRecv)
-				if sessionAge < 30*time.Second {
+				// Session is active if we received data recently AND after any network change
+				sessionActive := sessionAge < 30*time.Second && lastRecv.After(lastNetChange)
+				if sessionActive {
 					// Existing session is active - discard the new one
 					log.Debug().
 						Str("peer", peerName).
@@ -1470,6 +1498,7 @@ func (t *Transport) registerSession(session *Session) bool {
 
 // ClearNetworkState clears cached network state such as STUN-discovered external addresses.
 // This should be called after network changes to ensure fresh address discovery.
+// Also records the time of network change to invalidate stale sessions.
 func (t *Transport) ClearNetworkState() {
 	t.mu.Lock()
 	log.Debug().
@@ -1479,7 +1508,11 @@ func (t *Transport) ClearNetworkState() {
 
 	t.externalAddr = ""
 	t.externalAddr6 = ""
+	t.lastNetworkChange = time.Now()
 	t.mu.Unlock()
+
+	// Close idle HTTP connections to force fresh connections on new network
+	t.httpClient.CloseIdleConnections()
 
 	// Signal network change to port mapper (will re-discover and re-map)
 	if t.portMapper != nil {
