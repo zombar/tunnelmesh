@@ -377,6 +377,31 @@ function initializeChartData(data) {
     });
 
     rebuildChartDatasets();
+
+    // Zoom out to show all available data
+    fitChartsToData();
+}
+
+function fitChartsToData() {
+    const labels = state.charts.chartData.labels;
+    if (labels.length === 0) return;
+
+    // Get the time range of the data
+    const minTime = labels[0];
+    const maxTime = labels[labels.length - 1];
+
+    // Update both charts to show full data range
+    if (state.charts.throughput) {
+        state.charts.throughput.options.scales.x.min = minTime;
+        state.charts.throughput.options.scales.x.max = maxTime;
+        state.charts.throughput.update();
+    }
+
+    if (state.charts.packets) {
+        state.charts.packets.options.scales.x.min = minTime;
+        state.charts.packets.options.scales.x.max = maxTime;
+        state.charts.packets.update();
+    }
 }
 
 function updateChartsWithNewData(peers) {
