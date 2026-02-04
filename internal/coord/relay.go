@@ -588,9 +588,21 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 			log.Debug().Err(err).Str("peer", sourcePeer).Msg("failed to parse heartbeat stats")
 		}
 
-		// Update peer info
+		// Update peer info and record stats history
 		s.peersMu.Lock()
 		if peer, exists := s.peers[sourcePeer]; exists {
+			// Calculate rates if we have previous stats
+			if peer.stats != nil {
+				dp := StatsDataPoint{
+					Timestamp:           time.Now(),
+					BytesSentRate:       float64(stats.BytesSent-peer.stats.BytesSent) / 30.0,
+					BytesReceivedRate:   float64(stats.BytesReceived-peer.stats.BytesReceived) / 30.0,
+					PacketsSentRate:     float64(stats.PacketsSent-peer.stats.PacketsSent) / 30.0,
+					PacketsReceivedRate: float64(stats.PacketsReceived-peer.stats.PacketsReceived) / 30.0,
+				}
+				s.statsHistory.RecordStats(sourcePeer, dp)
+			}
+
 			peer.peer.LastSeen = time.Now()
 			peer.prevStats = peer.stats // Save current as previous BEFORE updating
 			peer.stats = &stats

@@ -35,17 +35,18 @@ type serverStats struct {
 
 // Server is the coordination server that manages peer registration and discovery.
 type Server struct {
-	cfg         *config.ServerConfig
-	mux         *http.ServeMux
-	peers       map[string]*peerInfo
-	peersMu     sync.RWMutex
-	ipAlloc     *ipAllocator
-	dnsCache    map[string]string // hostname -> mesh IP
-	serverStats serverStats
-	relay       *relayManager
-	holePunch   *holePunchManager
-	wgStore     *wireguard.Store // WireGuard client storage
-	version     string           // Server version for admin display
+	cfg          *config.ServerConfig
+	mux          *http.ServeMux
+	peers        map[string]*peerInfo
+	peersMu      sync.RWMutex
+	ipAlloc      *ipAllocator
+	dnsCache     map[string]string // hostname -> mesh IP
+	serverStats  serverStats
+	statsHistory *StatsHistory // Per-peer stats time series
+	relay        *relayManager
+	holePunch    *holePunchManager
+	wgStore      *wireguard.Store // WireGuard client storage
+	version      string           // Server version for admin display
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -143,11 +144,12 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	srv := &Server{
-		cfg:      cfg,
-		mux:      http.NewServeMux(),
-		peers:    make(map[string]*peerInfo),
-		ipAlloc:  ipAlloc,
-		dnsCache: make(map[string]string),
+		cfg:          cfg,
+		mux:          http.NewServeMux(),
+		peers:        make(map[string]*peerInfo),
+		ipAlloc:      ipAlloc,
+		dnsCache:     make(map[string]string),
+		statsHistory: NewStatsHistory(),
 		serverStats: serverStats{
 			startTime: time.Now(),
 		},

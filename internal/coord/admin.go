@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,13 +51,24 @@ type AdminPeerInfo struct {
 	PacketsSentRate     float64          `json:"packets_sent_rate"`
 	PacketsReceivedRate float64          `json:"packets_received_rate"`
 	Version             string           `json:"version,omitempty"`
+	History             []StatsDataPoint `json:"history,omitempty"`
 }
 
 // handleAdminOverview returns the admin overview data.
+// Query params:
+//   - history=N: include last N stats data points per peer (default: 0)
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+
+	// Parse history query param
+	historyLimit := 0
+	if h := r.URL.Query().Get("history"); h != "" {
+		if n, err := strconv.Atoi(h); err == nil && n > 0 {
+			historyLimit = n
+		}
 	}
 
 	s.peersMu.RLock()
@@ -113,6 +125,11 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			peerInfo.BytesReceivedRate = float64(info.stats.BytesReceived-info.prevStats.BytesReceived) / 30.0
 			peerInfo.PacketsSentRate = float64(info.stats.PacketsSent-info.prevStats.PacketsSent) / 30.0
 			peerInfo.PacketsReceivedRate = float64(info.stats.PacketsReceived-info.prevStats.PacketsReceived) / 30.0
+		}
+
+		// Include history if requested
+		if historyLimit > 0 {
+			peerInfo.History = s.statsHistory.GetHistory(info.peer.Name, historyLimit)
 		}
 
 		overview.Peers = append(overview.Peers, peerInfo)

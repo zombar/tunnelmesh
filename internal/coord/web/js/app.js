@@ -8,9 +8,10 @@ const state = {
 };
 
 // Fetch and update dashboard
-async function fetchData() {
+async function fetchData(includeHistory = false) {
     try {
-        const resp = await fetch('/admin/api/overview');
+        const url = includeHistory ? '/admin/api/overview?history=20' : '/admin/api/overview';
+        const resp = await fetch(url);
         if (resp.status === 401) {
             // Browser will show Basic Auth prompt on page load
             // If we get 401 during polling, credentials were rejected
@@ -22,7 +23,7 @@ async function fetchData() {
         }
         hideAuthError();
         const data = await resp.json();
-        updateDashboard(data);
+        updateDashboard(data, includeHistory);
     } catch (err) {
         console.error('Failed to fetch data:', err);
     }
@@ -46,7 +47,7 @@ function hideAuthError() {
     }
 }
 
-function updateDashboard(data) {
+function updateDashboard(data, loadHistory = false) {
     // Update header stats
     document.getElementById('uptime').textContent = data.server_uptime;
     document.getElementById('peer-count').textContent = `${data.online_peers}/${data.total_peers}`;
@@ -69,18 +70,28 @@ function updateDashboard(data) {
         }
         const history = state.peerHistory[peer.name];
 
-        // Add new data points
-        history.throughputTx.push(peer.bytes_sent_rate || 0);
-        history.throughputRx.push(peer.bytes_received_rate || 0);
-        history.packetsTx.push(peer.packets_sent_rate || 0);
-        history.packetsRx.push(peer.packets_received_rate || 0);
+        // If loading history from server, populate from server data
+        if (loadHistory && peer.history && peer.history.length > 0) {
+            // Server returns newest first, reverse to get oldest first
+            const serverHistory = [...peer.history].reverse();
+            history.throughputTx = serverHistory.map(h => h.txB || 0);
+            history.throughputRx = serverHistory.map(h => h.rxB || 0);
+            history.packetsTx = serverHistory.map(h => h.txP || 0);
+            history.packetsRx = serverHistory.map(h => h.rxP || 0);
+        } else {
+            // Add new data points from current rates
+            history.throughputTx.push(peer.bytes_sent_rate || 0);
+            history.throughputRx.push(peer.bytes_received_rate || 0);
+            history.packetsTx.push(peer.packets_sent_rate || 0);
+            history.packetsRx.push(peer.packets_received_rate || 0);
 
-        // Trim to max history
-        if (history.throughputTx.length > state.maxHistoryPoints) {
-            history.throughputTx.shift();
-            history.throughputRx.shift();
-            history.packetsTx.shift();
-            history.packetsRx.shift();
+            // Trim to max history
+            if (history.throughputTx.length > state.maxHistoryPoints) {
+                history.throughputTx.shift();
+                history.throughputRx.shift();
+                history.packetsTx.shift();
+                history.packetsRx.shift();
+            }
         }
     });
 
@@ -473,8 +484,8 @@ async function deleteWGClient(id, name) {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    fetchData();
-    setInterval(fetchData, 5000); // Refresh every 5 seconds
+    fetchData(true); // Load with history on initial fetch
+    setInterval(() => fetchData(false), 5000); // Refresh every 5 seconds without history
 
     // Check if WireGuard is enabled and setup handlers
     checkWireGuardStatus();
