@@ -3,6 +3,7 @@ package routing
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -156,7 +157,7 @@ func TestForwarder_ForwardPacket_NoRoute(t *testing.T) {
 	// Should fail - no route
 	err := fwd.ForwardPacket(packet)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no route")
+	assert.True(t, errors.Is(err, ErrNoRoute))
 }
 
 func TestForwarder_ForwardPacket_NoTunnel(t *testing.T) {
@@ -174,7 +175,7 @@ func TestForwarder_ForwardPacket_NoTunnel(t *testing.T) {
 
 	err := fwd.ForwardPacket(packet)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no tunnel")
+	assert.True(t, errors.Is(err, ErrNoTunnel))
 }
 
 func TestForwarder_ReceivePacket(t *testing.T) {
@@ -418,7 +419,7 @@ func TestForwarder_RelayDisconnected(t *testing.T) {
 	// Should fail - no tunnel and relay disconnected
 	err := fwd.ForwardPacket(packet)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no tunnel or relay")
+	assert.True(t, errors.Is(err, ErrNoTunnel))
 }
 
 func TestForwarder_HandleRelayPacket(t *testing.T) {
@@ -529,7 +530,7 @@ func TestForwarder_DeadTunnelNoRelay(t *testing.T) {
 	// Forward the packet - should fail on tunnel and have no relay fallback
 	err := fwd.ForwardPacket(packet)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no tunnel or relay")
+	assert.True(t, errors.Is(err, ErrNoTunnel))
 
 	// Wait for callback (it's async)
 	select {

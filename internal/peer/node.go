@@ -317,7 +317,7 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 
 	// Set up handler for reconnection errors to detect when we need to re-register
 	relay.SetReconnectErrorHandler(func(err error) {
-		if errors.Is(err, tunnel.ErrPeerNotRegistered) {
+		if errors.Is(err, coord.ErrPeerNotFound) {
 			log.Info().Msg("peer not registered on server, re-registering...")
 			publicIPs, privateIPs, behindNAT := m.identity.GetLocalIPs()
 			if _, regErr := m.client.Register(
