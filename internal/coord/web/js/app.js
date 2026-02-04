@@ -23,6 +23,9 @@ async function fetchData(includeHistory = false) {
         }
         hideAuthError();
         const data = await resp.json();
+        if (includeHistory) {
+            console.log('Fetched with history:', data.peers.map(p => ({ name: p.name, historyLen: p.history?.length || 0 })));
+        }
         updateDashboard(data, includeHistory);
     } catch (err) {
         console.error('Failed to fetch data:', err);
@@ -78,6 +81,14 @@ function updateDashboard(data, loadHistory = false) {
             history.throughputRx = serverHistory.map(h => h.rxB || 0);
             history.packetsTx = serverHistory.map(h => h.txP || 0);
             history.packetsRx = serverHistory.map(h => h.rxP || 0);
+            console.log(`Loaded ${peer.history.length} history points for ${peer.name}:`, history.throughputTx);
+        } else if (loadHistory && (!peer.history || peer.history.length === 0)) {
+            console.log(`No history available for ${peer.name}, starting fresh`);
+            // Still add current rate when no history
+            history.throughputTx.push(peer.bytes_sent_rate || 0);
+            history.throughputRx.push(peer.bytes_received_rate || 0);
+            history.packetsTx.push(peer.packets_sent_rate || 0);
+            history.packetsRx.push(peer.packets_received_rate || 0);
         } else {
             // Add new data points from current rates
             history.throughputTx.push(peer.bytes_sent_rate || 0);
