@@ -3,6 +3,7 @@ package tunnel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,10 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
+
+// ErrPeerNotRegistered is returned when the coordinator doesn't recognize this peer.
+// This typically happens when the coordinator was restarted and the peer needs to re-register.
+var ErrPeerNotRegistered = errors.New("peer not registered")
 
 // relayPacketPool pools relay packet buffers to reduce GC pressure.
 var relayPacketPool = sync.Pool{
@@ -133,6 +138,10 @@ func (p *PersistentRelay) Connect(ctx context.Context) error {
 		if resp != nil {
 			body := make([]byte, 256)
 			n, _ := resp.Body.Read(body)
+			// Return sentinel error for 404 so callers can trigger re-registration
+			if resp.StatusCode == http.StatusNotFound {
+				return fmt.Errorf("%w: %s", ErrPeerNotRegistered, string(body[:n]))
+			}
 			return fmt.Errorf("persistent relay connection failed: %s - %s", resp.Status, string(body[:n]))
 		}
 		return fmt.Errorf("persistent relay connection failed: %w", err)
