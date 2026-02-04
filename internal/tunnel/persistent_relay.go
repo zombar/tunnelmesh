@@ -316,8 +316,8 @@ func (p *PersistentRelay) autoReconnect() {
 
 // handleMessage processes an incoming message from the server.
 func (p *PersistentRelay) handleMessage(data []byte) {
-	if len(data) < 2 {
-		log.Debug().Int("len", len(data)).Msg("persistent relay: message too short")
+	if len(data) < 1 {
+		log.Debug().Msg("persistent relay: empty message")
 		return
 	}
 

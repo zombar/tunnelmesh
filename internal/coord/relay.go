@@ -239,12 +239,17 @@ func (pc *persistentConn) writeLoop() {
 		case data := <-pc.writeChan:
 			if err := pc.conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
 				log.Debug().Err(err).Str("peer", pc.peerName).Msg("persistent relay write failed")
-				// Return buffer to pool
-				relayPacketPool.Put(&data)
+				// Only return buffer to pool if it's a pool-sized buffer
+				// (small buffers like heartbeat ack are allocated inline)
+				if cap(data) >= 65792 {
+					relayPacketPool.Put(&data)
+				}
 				return
 			}
-			// Return buffer to pool after successful write
-			relayPacketPool.Put(&data)
+			// Only return buffer to pool if it's a pool-sized buffer
+			if cap(data) >= 65792 {
+				relayPacketPool.Put(&data)
+			}
 		}
 	}
 }
@@ -587,8 +592,8 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 		s.peersMu.Lock()
 		if peer, exists := s.peers[sourcePeer]; exists {
 			peer.peer.LastSeen = time.Now()
+			peer.prevStats = peer.stats // Save current as previous BEFORE updating
 			peer.stats = &stats
-			peer.prevStats = peer.stats
 			peer.lastStatsTime = time.Now()
 			peer.heartbeatCount++
 		}
