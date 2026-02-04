@@ -17,6 +17,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/internal/portmap"
+	"github.com/tunnelmesh/tunnelmesh/internal/portmap/client"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -57,6 +59,9 @@ type Transport struct {
 	// Our discovered external addresses (set after registration)
 	externalAddr  string // IPv4 external address
 	externalAddr6 string // IPv6 external address
+
+	// Port mapper for PCP/NAT-PMP/UPnP
+	portMapper *portmap.PortMapper
 
 	// Sessions (indexed by local index)
 	sessions map[uint32]*Session
@@ -125,6 +130,11 @@ type Config struct {
 
 	// HolePunchRetries is the number of hole-punch attempts
 	HolePunchRetries int
+
+	// EnablePortMapping enables PCP/NAT-PMP/UPnP port mapping.
+	// When enabled, the transport will attempt to create a port mapping
+	// on the gateway for better NAT traversal. Default: true (opportunistic)
+	EnablePortMapping *bool
 }
 
 // DefaultConfig returns sensible defaults.
@@ -171,6 +181,56 @@ func New(cfg Config) (*Transport, error) {
 // Type returns the transport type.
 func (t *Transport) Type() transport.TransportType {
 	return transport.TransportUDP
+}
+
+// Implement portmap.Observer interface
+
+// OnPortMapStateChanged is called when the port mapper transitions between states.
+func (t *Transport) OnPortMapStateChanged(pm *portmap.PortMapper, oldState, newState portmap.State) {
+	log.Debug().
+		Str("old", oldState.String()).
+		Str("new", newState.String()).
+		Msg("UDP portmap state changed")
+}
+
+// OnMappingAcquired is called when a port mapping is successfully acquired or refreshed.
+func (t *Transport) OnMappingAcquired(pm *portmap.PortMapper, mapping *portmap.Mapping) {
+	t.mu.Lock()
+	// Store the PCP-mapped external address
+	// This will be used during registration with the coord server
+	t.externalAddr = mapping.ExternalAddr()
+	t.mu.Unlock()
+
+	log.Info().
+		Str("external", mapping.ExternalAddr()).
+		Str("client", mapping.ClientType).
+		Dur("lifetime", mapping.Lifetime).
+		Msg("UDP PCP/NAT-PMP mapping acquired")
+}
+
+// OnMappingLost is called when a previously active mapping is lost.
+func (t *Transport) OnMappingLost(pm *portmap.PortMapper, reason error) {
+	t.mu.Lock()
+	// Clear the PCP-mapped address, will fall back to STUN discovery
+	t.externalAddr = ""
+	t.mu.Unlock()
+
+	log.Warn().
+		Err(reason).
+		Msg("UDP PCP/NAT-PMP mapping lost, falling back to STUN discovery")
+}
+
+// HasPCPMapping returns true if we have an active PCP/NAT-PMP port mapping.
+func (t *Transport) HasPCPMapping() bool {
+	return t.portMapper != nil && t.portMapper.IsActive()
+}
+
+// PCPMapping returns the current PCP/NAT-PMP mapping, or nil if not active.
+func (t *Transport) PCPMapping() *portmap.Mapping {
+	if t.portMapper == nil {
+		return nil
+	}
+	return t.portMapper.Mapping()
 }
 
 // rekeyRateLimitInterval is the minimum time between rekey-required messages to the same source.
@@ -273,6 +333,47 @@ func (t *Transport) Start() error {
 	log.Info().
 		Strs("addrs", addrs).
 		Msg("UDP transport started")
+
+	// Start port mapper if enabled (default: enabled)
+	portMappingEnabled := t.config.EnablePortMapping == nil || *t.config.EnablePortMapping
+	if portMappingEnabled {
+		if err := t.startPortMapper(); err != nil {
+			// Port mapping is opportunistic - log but don't fail
+			log.Debug().Err(err).Msg("port mapping not available, using STUN fallback")
+		}
+	}
+
+	return nil
+}
+
+// startPortMapper initializes and starts the PCP/NAT-PMP/UPnP port mapper.
+func (t *Transport) startPortMapper() error {
+	// Detect gateway and local IP
+	gateway, localIP, err := portmap.DetectGateway()
+	if err != nil {
+		return fmt.Errorf("detect gateway: %w", err)
+	}
+
+	log.Debug().
+		Str("gateway", gateway.String()).
+		Str("local_ip", localIP.String()).
+		Msg("detected gateway for port mapping")
+
+	// Create discovery client that tries PCP, then NAT-PMP
+	pmClient := client.NewDiscoveryClient(gateway, localIP, 0)
+
+	// Create port mapper FSM
+	t.portMapper = portmap.New(portmap.Config{
+		Protocol:  portmap.ProtocolUDP,
+		LocalPort: t.config.Port,
+		Client:    pmClient,
+		Observers: []portmap.Observer{t},
+	})
+
+	// Start the FSM (runs in background)
+	if err := t.portMapper.Start(); err != nil {
+		return fmt.Errorf("start port mapper: %w", err)
+	}
 
 	return nil
 }
@@ -1211,6 +1312,11 @@ func (t *Transport) Close() error {
 	t.running.Store(false)
 	close(t.closeCh)
 
+	// Stop port mapper if running
+	if t.portMapper != nil {
+		t.portMapper.Stop()
+	}
+
 	// Close packet queue to signal workers to exit
 	if t.packetQueue != nil {
 		close(t.packetQueue)
@@ -1316,8 +1422,6 @@ func (t *Transport) registerSession(session *Session) bool {
 // This should be called after network changes to ensure fresh address discovery.
 func (t *Transport) ClearNetworkState() {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-
 	log.Debug().
 		Str("old_ipv4", t.externalAddr).
 		Str("old_ipv6", t.externalAddr6).
@@ -1325,6 +1429,12 @@ func (t *Transport) ClearNetworkState() {
 
 	t.externalAddr = ""
 	t.externalAddr6 = ""
+	t.mu.Unlock()
+
+	// Signal network change to port mapper (will re-discover and re-map)
+	if t.portMapper != nil {
+		t.portMapper.NetworkChanged()
+	}
 }
 
 // RefreshEndpoint re-registers the UDP endpoint with the coordination server.
