@@ -67,6 +67,7 @@ type PersistentRelay struct {
 	onAPIRequest      func(reqID uint32, method string, body []byte) // Called when server sends API request
 	onRelayNotify     func(waitingPeers []string)                   // Called when server notifies of relay requests
 	onHolePunchNotify func(requestingPeers []string)                // Called when server notifies of hole-punch requests
+	onReconnectError  func(err error)                               // Called when reconnection fails (for re-registration)
 
 	// Reconnection control
 	reconnecting bool // Prevents concurrent autoReconnect goroutines
@@ -291,6 +292,14 @@ func (p *PersistentRelay) autoReconnect() {
 		}
 
 		log.Warn().Err(err).Int("attempt", attempt).Msg("relay reconnection failed")
+
+		// Notify caller of error (e.g., to trigger re-registration)
+		p.mu.RLock()
+		errorHandler := p.onReconnectError
+		p.mu.RUnlock()
+		if errorHandler != nil {
+			errorHandler(err)
+		}
 
 		// Wait before next attempt
 		p.mu.RLock()
@@ -592,6 +601,15 @@ func (p *PersistentRelay) SetHolePunchNotifyHandler(handler func(requestingPeers
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.onHolePunchNotify = handler
+}
+
+// SetReconnectErrorHandler sets a callback for reconnection errors.
+// This is called when autoReconnect fails to connect, allowing the caller
+// to handle specific errors like "peer not registered" by re-registering.
+func (p *PersistentRelay) SetReconnectErrorHandler(handler func(err error)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onReconnectError = handler
 }
 
 // SendHeartbeat sends a heartbeat with stats to the coordination server.

@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -311,6 +312,24 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 				Str("peer", peerName).
 				Str("transport", pc.TransportType()).
 				Msg("ignoring peer reconnect notification - relying on packet-based detection")
+		}
+	})
+
+	// Set up handler for reconnection errors to detect when we need to re-register
+	relay.SetReconnectErrorHandler(func(err error) {
+		errStr := err.Error()
+		if strings.Contains(errStr, "peer not registered") || strings.Contains(errStr, "404") {
+			log.Info().Msg("peer not registered on server, re-registering...")
+			publicIPs, privateIPs, behindNAT := m.identity.GetLocalIPs()
+			if _, regErr := m.client.Register(
+				m.identity.Name, m.identity.PubKeyEncoded,
+				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version,
+			); regErr != nil {
+				log.Error().Err(regErr).Msg("failed to re-register after peer not found")
+			} else {
+				log.Info().Msg("re-registered with coordination server")
+				m.SetHeartbeatIPs(publicIPs, privateIPs, behindNAT)
+			}
 		}
 	})
 }
