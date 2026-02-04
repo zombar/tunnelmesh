@@ -177,7 +177,7 @@ deploy-update:
 	while read -r NAME IP; do \
 		echo ""; \
 		echo "=== Updating $$NAME ($$IP) ==="; \
-		ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP ' \
+		ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP ' \
 			set -e; \
 			ARCH=$$(dpkg --print-architecture); \
 			if [ "$(BINARY_VERSION)" = "latest" ]; then \
@@ -192,9 +192,14 @@ deploy-update:
 			OLD_VER=$$(/usr/local/bin/tunnelmesh version 2>/dev/null | head -1 || echo "unknown"); \
 			echo "Current: $$OLD_VER"; \
 			echo "New:     $$NEW_VER"; \
-			mv /tmp/tunnelmesh-new /usr/local/bin/tunnelmesh; \
-			systemctl restart tunnelmesh; \
-			echo "Service restarted"; \
+			if [ "$$OLD_VER" = "$$NEW_VER" ]; then \
+				echo "Already up to date, skipping"; \
+				rm /tmp/tunnelmesh-new; \
+			else \
+				mv /tmp/tunnelmesh-new /usr/local/bin/tunnelmesh; \
+				systemctl restart tunnelmesh; \
+				echo "Service restarted"; \
+			fi; \
 		' || echo "Failed to update $$NAME"; \
 	done; \
 	echo ""; \
@@ -228,9 +233,14 @@ deploy-update-node:
 		OLD_VER=$$(/usr/local/bin/tunnelmesh version 2>/dev/null | head -1 || echo "unknown"); \
 		echo "Current: $$OLD_VER"; \
 		echo "New:     $$NEW_VER"; \
-		mv /tmp/tunnelmesh-new /usr/local/bin/tunnelmesh; \
-		systemctl restart tunnelmesh; \
-		echo "Service restarted"; \
+		if [ "$$OLD_VER" = "$$NEW_VER" ]; then \
+			echo "Already up to date, skipping"; \
+			rm /tmp/tunnelmesh-new; \
+		else \
+			mv /tmp/tunnelmesh-new /usr/local/bin/tunnelmesh; \
+			systemctl restart tunnelmesh; \
+			echo "Service restarted"; \
+		fi; \
 	'
 
 ghcr-login:
