@@ -263,8 +263,10 @@ function initCharts() {
                 border: { display: false }
             },
             y: {
-                display: false,
-                beginAtZero: true
+                beginAtZero: true,
+                grid: { color: '#21262d' },
+                ticks: { color: '#8b949e', maxTicksLimit: 4 },
+                border: { display: false }
             }
         },
         plugins: {
