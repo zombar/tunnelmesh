@@ -3,6 +3,7 @@ package peer
 import (
 	"context"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -122,10 +123,50 @@ func (m *MeshNode) DiscoverAndConnectPeers(ctx context.Context) {
 	m.router.UpdateRoutes(routes)
 }
 
+// shouldInitiateConnection determines if we should be the initiator for a connection
+// to the given peer. Uses public key comparison as a deterministic tie-breaker:
+// the peer with the lexicographically "lower" public key initiates.
+// This prevents both peers from simultaneously connecting with different transports.
+func (m *MeshNode) shouldInitiateConnection(peer proto.Peer) bool {
+	ourKey := m.identity.PubKeyEncoded
+	peerKey := peer.PublicKey
+
+	// If either key is empty, fall back to initiating (legacy behavior)
+	if ourKey == "" || peerKey == "" {
+		return true
+	}
+
+	// Compare keys: lower key initiates
+	return strings.Compare(ourKey, peerKey) < 0
+}
+
 // EstablishTunnel negotiates and establishes a tunnel to a peer.
-// Both peers race to connect - first successful connection wins.
-// The connection attempt can be cancelled if an inbound connection arrives.
+// Uses public key comparison to determine which peer should initiate:
+// the peer with the "lower" public key initiates, the other waits for incoming.
+// This prevents asymmetric transport selection where peers use different transports.
 func (m *MeshNode) EstablishTunnel(ctx context.Context, peer proto.Peer) {
+	m.establishTunnelWithOptions(ctx, peer, false)
+}
+
+// EstablishTunnelForced initiates a tunnel regardless of public key comparison.
+// Used for hole-punch requests where we must respond to enable NAT traversal.
+func (m *MeshNode) EstablishTunnelForced(ctx context.Context, peer proto.Peer) {
+	m.establishTunnelWithOptions(ctx, peer, true)
+}
+
+// establishTunnelWithOptions is the internal implementation of tunnel establishment.
+// If forceInitiate is true, bypasses the public key comparison (for hole-punch).
+func (m *MeshNode) establishTunnelWithOptions(ctx context.Context, peer proto.Peer, forceInitiate bool) {
+	// Determine if we should be the initiator based on public key comparison
+	// This prevents both peers from connecting simultaneously with different transports
+	// Exception: hole-punch requests bypass this check to enable NAT traversal
+	if !forceInitiate && !m.shouldInitiateConnection(peer) {
+		log.Debug().
+			Str("peer", peer.Name).
+			Msg("not initiating connection (peer has lower pubkey, they will initiate)")
+		return
+	}
+
 	// Create a cancellable context for this outbound connection
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -232,6 +273,7 @@ func (m *MeshNode) buildTransportPeerInfo(peer proto.Peer) *transport.PeerInfo {
 
 // ConnectToPeerByName fetches the peer info from the coordination server and establishes a tunnel.
 // This is used when we're notified that a peer wants to connect to us (e.g., hole-punch notification).
+// Uses forced initiation to bypass pubkey comparison, as hole-punch requires both sides to send.
 func (m *MeshNode) ConnectToPeerByName(ctx context.Context, peerName string) {
 	// Skip if tunnel already exists
 	if _, exists := m.tunnelMgr.Get(peerName); exists {
@@ -260,8 +302,8 @@ func (m *MeshNode) ConnectToPeerByName(ctx context.Context, peerName string) {
 		return
 	}
 
-	// Establish tunnel
-	m.EstablishTunnel(ctx, *targetPeer)
+	// Establish tunnel with forced initiation (needed for hole-punch to work)
+	m.EstablishTunnelForced(ctx, *targetPeer)
 }
 
 // RefreshAuthorizedKeys fetches peer keys from coordination server and adds them to SSH transport.
