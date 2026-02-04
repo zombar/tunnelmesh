@@ -205,7 +205,7 @@ func TestFSM_RefreshSuccess(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Should have called refresh
-	assert.GreaterOrEqual(t, mock.RefreshMappingCalls, 1)
+	assert.GreaterOrEqual(t, mock.GetRefreshMappingCalls(), 1)
 }
 
 func TestFSM_RefreshFailure(t *testing.T) {
@@ -327,7 +327,7 @@ func TestFSM_NetworkChange_FromDiscovering(t *testing.T) {
 	time.Sleep(700 * time.Millisecond)
 
 	// Should have called probe at least twice (initial + after network change)
-	assert.GreaterOrEqual(t, mock.ProbeCalls, 2, "probe should be called again after network change")
+	assert.GreaterOrEqual(t, mock.GetProbeCalls(), 2, "probe should be called again after network change")
 }
 
 func TestFSM_Stop_FromIdle(t *testing.T) {
@@ -370,7 +370,7 @@ func TestFSM_Stop_FromActive(t *testing.T) {
 	assert.Nil(t, pm.Mapping())
 
 	// Should have called DeleteMapping
-	assert.Equal(t, 1, mock.DeleteMappingCalls)
+	assert.Equal(t, 1, mock.GetDeleteMappingCalls())
 
 	// Observer should have received mapping lost
 	lost := obs.getMappingsLost()

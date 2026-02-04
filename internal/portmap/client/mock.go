@@ -180,3 +180,31 @@ func (m *MockClient) SetRefreshMappingError(err error) {
 	m.RefreshMappingErr = err
 	m.mu.Unlock()
 }
+
+// GetProbeCalls returns the number of probe calls.
+func (m *MockClient) GetProbeCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ProbeCalls
+}
+
+// GetRequestMappingCalls returns the number of request mapping calls.
+func (m *MockClient) GetRequestMappingCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.RequestMappingCalls
+}
+
+// GetRefreshMappingCalls returns the number of refresh mapping calls.
+func (m *MockClient) GetRefreshMappingCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.RefreshMappingCalls
+}
+
+// GetDeleteMappingCalls returns the number of delete mapping calls.
+func (m *MockClient) GetDeleteMappingCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.DeleteMappingCalls
+}
