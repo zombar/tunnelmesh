@@ -592,8 +592,8 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 		s.peersMu.Lock()
 		if peer, exists := s.peers[sourcePeer]; exists {
 			peer.peer.LastSeen = time.Now()
+			peer.prevStats = peer.stats // Save current as previous BEFORE updating
 			peer.stats = &stats
-			peer.prevStats = peer.stats
 			peer.lastStatsTime = time.Now()
 			peer.heartbeatCount++
 		}
