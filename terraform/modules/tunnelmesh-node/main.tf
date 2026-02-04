@@ -22,7 +22,8 @@ locals {
   # Determine which services to run
   run_coordinator = var.coordinator_enabled
   run_peer        = var.peer_enabled || (var.coordinator_enabled && var.peer_enabled)
-  run_wireguard   = var.wireguard_enabled && (var.peer_enabled || var.coordinator_enabled)
+  # WireGuard concentrator only runs on peer nodes (coordinator just needs admin panel)
+  run_wireguard_concentrator = var.wireguard_enabled && var.peer_enabled
 
   # Tags based on enabled features
   feature_tags = concat(
@@ -136,9 +137,9 @@ resource "digitalocean_firewall" "node" {
     }
   }
 
-  # WireGuard UDP
+  # WireGuard UDP (only for peer nodes running concentrator)
   dynamic "inbound_rule" {
-    for_each = var.wireguard_enabled ? [1] : []
+    for_each = local.run_wireguard_concentrator ? [1] : []
     content {
       protocol         = "udp"
       port_range       = tostring(var.wg_listen_port)

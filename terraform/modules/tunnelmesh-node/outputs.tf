@@ -48,8 +48,8 @@ output "coordinator_api_url" {
 
 # WireGuard-specific outputs
 output "wireguard_endpoint" {
-  description = "WireGuard endpoint for clients (if enabled)"
-  value       = var.wireguard_enabled ? "${var.name}.${var.domain}:${var.wg_listen_port}" : null
+  description = "WireGuard endpoint for clients (only for peer nodes running concentrator)"
+  value       = var.wireguard_enabled && var.peer_enabled ? "${var.name}.${var.domain}:${var.wg_listen_port}" : null
 }
 
 # Peer-specific outputs
