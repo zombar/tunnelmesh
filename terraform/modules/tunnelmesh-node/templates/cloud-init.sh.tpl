@@ -90,28 +90,8 @@ join_mesh:
 %{ endif ~}
 SERVERCONF
 
-# Create systemd service for coordinator
-cat > /etc/systemd/system/tunnelmesh.service <<'SERVICE'
-[Unit]
-Description=TunnelMesh Coordinator
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/tunnelmesh serve --config /etc/tunnelmesh/server.yaml
-Restart=always
-RestartSec=5
-LimitNOFILE=65535
-
-# Logging
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=tunnelmesh
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
+# Install service using built-in command
+/usr/local/bin/tunnelmesh service install --mode serve --config /etc/tunnelmesh/server.yaml
 
 %{ if ssl_enabled ~}
 # Configure nginx as SSL reverse proxy
@@ -211,28 +191,8 @@ wireguard:
 %{ endif ~}
 PEERCONF
 
-# Create systemd service for peer
-cat > /etc/systemd/system/tunnelmesh.service <<'SERVICE'
-[Unit]
-Description=TunnelMesh Peer
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/tunnelmesh join --config /etc/tunnelmesh/peer.yaml
-Restart=always
-RestartSec=5
-LimitNOFILE=65535
-
-# Logging
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=tunnelmesh
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
+# Install service using built-in command
+/usr/local/bin/tunnelmesh service install --mode join --config /etc/tunnelmesh/peer.yaml
 %{ endif ~}
 
 # Configure firewall
@@ -263,10 +223,8 @@ SYSCTL
 sysctl -p
 %{ endif ~}
 
-# Enable and start tunnelmesh service
-systemctl daemon-reload
-systemctl enable tunnelmesh
-systemctl start tunnelmesh
+# Start the tunnelmesh service
+/usr/local/bin/tunnelmesh service start
 
 %{ if coordinator_enabled && ssl_enabled ~}
 # Wait for DNS propagation and obtain SSL certificate
@@ -287,6 +245,39 @@ ln -sf /etc/nginx/sites-available/tunnelmesh /etc/nginx/sites-enabled/tunnelmesh
 systemctl reload nginx
 
 echo "SSL certificate installed successfully"
+%{ endif ~}
+
+%{ if auto_update_enabled ~}
+# Set up auto-update timer
+cat > /etc/systemd/system/tunnelmesh-update.service <<'SERVICE'
+[Unit]
+Description=TunnelMesh Auto-Update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tunnelmesh update
+StandardOutput=journal
+StandardError=journal
+SERVICE
+
+cat > /etc/systemd/system/tunnelmesh-update.timer <<TIMER
+[Unit]
+Description=Run TunnelMesh update ${auto_update_schedule}
+
+[Timer]
+OnCalendar=${auto_update_schedule}
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMER
+
+systemctl daemon-reload
+systemctl enable --now tunnelmesh-update.timer
+echo "Auto-update timer enabled (${auto_update_schedule})"
 %{ endif ~}
 
 echo "=== TunnelMesh Node Setup Complete ==="

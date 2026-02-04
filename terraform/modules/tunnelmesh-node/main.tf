@@ -81,6 +81,10 @@ resource "digitalocean_droplet" "node" {
 
     # SSL settings
     ssl_email = local.ssl_email
+
+    # Auto-update settings
+    auto_update_enabled  = var.auto_update_enabled
+    auto_update_schedule = var.auto_update_schedule
   })
 }
 

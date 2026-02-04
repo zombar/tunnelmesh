@@ -158,3 +158,17 @@ variable "ssl_email" {
   type        = string
   default     = ""
 }
+
+# --- Auto-Update Settings ---
+
+variable "auto_update_enabled" {
+  description = "Enable automatic updates via systemd timer"
+  type        = bool
+  default     = true
+}
+
+variable "auto_update_schedule" {
+  description = "Schedule for auto-updates (systemd OnCalendar format: hourly, daily, weekly)"
+  type        = string
+  default     = "hourly"
+}

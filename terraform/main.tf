@@ -98,6 +98,10 @@ module "node" {
   ssl_enabled = lookup(each.value, "coordinator", false)
   ssl_email   = var.ssl_email
 
+  # Auto-update settings
+  auto_update_enabled  = var.auto_update_enabled
+  auto_update_schedule = var.auto_update_schedule
+
   tags = concat(
     ["tunnelmesh"],
     lookup(each.value, "coordinator", false) ? ["coordinator"] : [],

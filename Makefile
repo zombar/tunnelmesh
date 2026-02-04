@@ -173,10 +173,9 @@ deploy:
 	@echo "=== Deployment Complete ==="
 	@cd $(TF_DIR) && terraform output -json nodes | jq -r 'to_entries[] | "\(.key): \(.value.ip) - \(.value.hostname)"'
 
-# Update tunnelmesh binary on all deployed nodes
+# Update tunnelmesh binary on all deployed nodes using built-in update command
 # Usage: make deploy-update [BINARY_VERSION=latest]
 BINARY_VERSION ?= latest
-GITHUB_OWNER ?= zombar
 
 deploy-update:
 	@echo "Updating tunnelmesh on all deployed nodes..."
@@ -184,36 +183,19 @@ deploy-update:
 	while read -r NAME IP; do \
 		echo ""; \
 		echo "=== Updating $$NAME ($$IP) ==="; \
-		ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP ' \
-			set -e; \
-			ARCH=$$(dpkg --print-architecture); \
-			if [ "$(BINARY_VERSION)" = "latest" ]; then \
-				URL="https://github.com/$(GITHUB_OWNER)/tunnelmesh/releases/latest/download/tunnelmesh-linux-$$ARCH"; \
-			else \
-				URL="https://github.com/$(GITHUB_OWNER)/tunnelmesh/releases/download/$(BINARY_VERSION)/tunnelmesh-linux-$$ARCH"; \
-			fi; \
-			echo "Downloading from $$URL..."; \
-			curl -sL "$$URL" -o /tmp/tunnelmesh-new; \
-			chmod +x /tmp/tunnelmesh-new; \
-			NEW_VER=$$(/tmp/tunnelmesh-new version 2>/dev/null | head -1 || echo "unknown"); \
-			OLD_VER=$$(/usr/local/bin/tunnelmesh version 2>/dev/null | head -1 || echo "unknown"); \
-			echo "Current: $$OLD_VER"; \
-			echo "New:     $$NEW_VER"; \
-			if [ "$$OLD_VER" = "$$NEW_VER" ]; then \
-				echo "Already up to date, skipping"; \
-				rm /tmp/tunnelmesh-new; \
-			else \
-				mv /tmp/tunnelmesh-new /usr/local/bin/tunnelmesh; \
-				systemctl restart tunnelmesh; \
-				echo "Service restarted"; \
-			fi; \
-		' || echo "Failed to update $$NAME"; \
+		if [ "$(BINARY_VERSION)" = "latest" ]; then \
+			ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP \
+				'/usr/local/bin/tunnelmesh update' || echo "Failed to update $$NAME"; \
+		else \
+			ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP \
+				'/usr/local/bin/tunnelmesh update $(BINARY_VERSION)' || echo "Failed to update $$NAME"; \
+		fi; \
 	done; \
 	echo ""; \
 	echo "=== Update complete ==="
 
-# Update a single node by name
-# Usage: make deploy-update-node NODE=tunnelmesh
+# Update a single node by name using built-in update command
+# Usage: make deploy-update-node NODE=tunnelmesh [BINARY_VERSION=latest]
 deploy-update-node:
 	@if [ -z "$(NODE)" ]; then \
 		echo "Error: NODE not specified. Usage: make deploy-update-node NODE=tunnelmesh"; \
@@ -225,30 +207,13 @@ deploy-update-node:
 		exit 1; \
 	fi; \
 	echo "=== Updating $(NODE) ($$IP) ==="; \
-	ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP ' \
-		set -e; \
-		ARCH=$$(dpkg --print-architecture); \
-		if [ "$(BINARY_VERSION)" = "latest" ]; then \
-			URL="https://github.com/$(GITHUB_OWNER)/tunnelmesh/releases/latest/download/tunnelmesh-linux-$$ARCH"; \
-		else \
-			URL="https://github.com/$(GITHUB_OWNER)/tunnelmesh/releases/download/$(BINARY_VERSION)/tunnelmesh-linux-$$ARCH"; \
-		fi; \
-		echo "Downloading from $$URL..."; \
-		curl -sL "$$URL" -o /tmp/tunnelmesh-new; \
-		chmod +x /tmp/tunnelmesh-new; \
-		NEW_VER=$$(/tmp/tunnelmesh-new version 2>/dev/null | head -1 || echo "unknown"); \
-		OLD_VER=$$(/usr/local/bin/tunnelmesh version 2>/dev/null | head -1 || echo "unknown"); \
-		echo "Current: $$OLD_VER"; \
-		echo "New:     $$NEW_VER"; \
-		if [ "$$OLD_VER" = "$$NEW_VER" ]; then \
-			echo "Already up to date, skipping"; \
-			rm /tmp/tunnelmesh-new; \
-		else \
-			mv /tmp/tunnelmesh-new /usr/local/bin/tunnelmesh; \
-			systemctl restart tunnelmesh; \
-			echo "Service restarted"; \
-		fi; \
-	'
+	if [ "$(BINARY_VERSION)" = "latest" ]; then \
+		ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP \
+			'/usr/local/bin/tunnelmesh update'; \
+	else \
+		ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP \
+			'/usr/local/bin/tunnelmesh update $(BINARY_VERSION)'; \
+	fi
 
 ghcr-login:
 	@echo "Logging in to GitHub Container Registry..."
