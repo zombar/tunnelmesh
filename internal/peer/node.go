@@ -66,9 +66,9 @@ type MeshNode struct {
 	lastBehindNAT     bool
 	heartbeatIPsIsSet bool
 
-	// Peer cache for routing (mesh IP lookup when coord server unreachable)
+	// Peer cache for use when coord server unreachable (e.g., during network transitions)
 	peerCacheMu sync.RWMutex
-	peerCache   map[string]string // peer name -> mesh IP
+	peerCache   map[string]proto.Peer // peer name -> full peer info
 
 	// Optional components
 	Resolver *dns.Resolver
@@ -85,7 +85,7 @@ func NewMeshNode(identity *PeerIdentity, client *coord.Client) *MeshNode {
 		tunnelMgr:        tunnelMgr,
 		router:           router,
 		triggerDiscovery: make(chan struct{}, 1),
-		peerCache:        make(map[string]string),
+		peerCache:        make(map[string]proto.Peer),
 	}
 
 	// Initialize connection lifecycle manager with tunnel integration
@@ -179,19 +179,19 @@ func (m *MeshNode) SetHeartbeatIPs(publicIPs, privateIPs []string, behindNAT boo
 	m.heartbeatIPsIsSet = true
 }
 
-// CachePeerMeshIP caches the mesh IP for a peer.
-func (m *MeshNode) CachePeerMeshIP(peerName, meshIP string) {
+// CachePeer caches the full peer info for use when coord server is unreachable.
+func (m *MeshNode) CachePeer(peer proto.Peer) {
 	m.peerCacheMu.Lock()
 	defer m.peerCacheMu.Unlock()
-	m.peerCache[peerName] = meshIP
+	m.peerCache[peer.Name] = peer
 }
 
-// GetCachedPeerMeshIP returns the cached mesh IP for a peer.
-func (m *MeshNode) GetCachedPeerMeshIP(peerName string) (string, bool) {
+// GetCachedPeer returns the cached peer info.
+func (m *MeshNode) GetCachedPeer(peerName string) (proto.Peer, bool) {
 	m.peerCacheMu.RLock()
 	defer m.peerCacheMu.RUnlock()
-	meshIP, ok := m.peerCache[peerName]
-	return meshIP, ok
+	peer, ok := m.peerCache[peerName]
+	return peer, ok
 }
 
 // IPsChanged returns true if the provided IPs differ from the last known IPs.

@@ -39,7 +39,10 @@ func (m *MeshNode) handleIncomingConnection(ctx context.Context, conn transport.
 	}
 
 	// Get cached mesh IP for FSM tracking and routing
-	meshIP, _ := m.GetCachedPeerMeshIP(peerName)
+	var meshIP string
+	if peer, ok := m.GetCachedPeer(peerName); ok {
+		meshIP = peer.MeshIP
+	}
 
 	// Add route immediately for bidirectional traffic
 	// Discovery will refresh/validate routes on next cycle

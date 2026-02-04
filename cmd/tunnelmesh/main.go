@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -661,13 +662,13 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 				Bool("match", string(x25519Pub) == string(x25519FromEd)).
 				Msg("X25519 key derivation check")
 
-			// Create peer resolver for incoming UDP connections
-			peerResolver := func(x25519PubKey [32]byte) string {
-				peers, err := client.ListPeers()
-				if err != nil {
-					log.Debug().Err(err).Msg("failed to list peers for resolver")
-					return ""
-				}
+			// Cache for peer X25519 keys -> peer names
+			// This allows handshakes to succeed even during network transitions
+			// when API calls might fail temporarily
+			var peerKeyCache sync.Map // [32]byte -> string
+
+			// Helper to update cache from peers list
+			updatePeerKeyCache := func(peers []proto.Peer) {
 				for _, p := range peers {
 					if p.PublicKey == "" {
 						continue
@@ -677,7 +678,6 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 					if err != nil {
 						continue
 					}
-					// Extract the crypto.PublicKey from the SSH public key
 					cryptoPubKey, ok := sshPubKey.(ssh.CryptoPublicKey)
 					if !ok {
 						continue
@@ -693,10 +693,32 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 					if len(peerX25519) == 32 {
 						var peerKey [32]byte
 						copy(peerKey[:], peerX25519)
-						if peerKey == x25519PubKey {
-							return p.Name
-						}
+						peerKeyCache.Store(peerKey, p.Name)
 					}
+				}
+			}
+
+			// Create peer resolver for incoming UDP connections
+			peerResolver := func(x25519PubKey [32]byte) string {
+				// Try to fetch fresh peer list
+				peers, err := client.ListPeers()
+				if err != nil {
+					// API call failed (likely during network transition)
+					// Fall back to cached data
+					log.Debug().Err(err).Msg("failed to list peers for resolver, using cache")
+					if name, ok := peerKeyCache.Load(x25519PubKey); ok {
+						log.Debug().Str("peer", name.(string)).Msg("resolved peer from cache")
+						return name.(string)
+					}
+					return ""
+				}
+
+				// Update cache with fresh data
+				updatePeerKeyCache(peers)
+
+				// Look up the peer
+				if name, ok := peerKeyCache.Load(x25519PubKey); ok {
+					return name.(string)
 				}
 				return ""
 			}

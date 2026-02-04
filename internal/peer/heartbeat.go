@@ -150,7 +150,10 @@ func (m *MeshNode) connectRelay(ctx context.Context, peerName, jwtToken string) 
 	}
 
 	// Get mesh IP for this peer from cache (relay connections may not have coord server access)
-	meshIP, _ := m.GetCachedPeerMeshIP(peerName)
+	var meshIP string
+	if peer, ok := m.GetCachedPeer(peerName); ok {
+		meshIP = peer.MeshIP
+	}
 
 	// Add route immediately for bidirectional traffic
 	// Discovery will refresh/validate routes on next cycle
