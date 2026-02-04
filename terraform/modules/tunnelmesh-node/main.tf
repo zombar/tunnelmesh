@@ -83,6 +83,17 @@ resource "digitalocean_droplet" "node" {
   })
 }
 
+# Reserved IP for static addressing
+resource "digitalocean_reserved_ip" "node" {
+  region = var.region
+}
+
+# Assign the reserved IP to the droplet
+resource "digitalocean_reserved_ip_assignment" "node" {
+  ip_address = digitalocean_reserved_ip.node.ip_address
+  droplet_id = digitalocean_droplet.node.id
+}
+
 # Firewall
 resource "digitalocean_firewall" "node" {
   name        = "${var.name}-firewall"
@@ -164,11 +175,11 @@ resource "digitalocean_firewall" "node" {
   }
 }
 
-# DNS record
+# DNS record (points to reserved IP for stability)
 resource "digitalocean_record" "node" {
   domain = var.domain
   type   = "A"
   name   = var.name
-  value  = digitalocean_droplet.node.ipv4_address
+  value  = digitalocean_reserved_ip.node.ip_address
   ttl    = 300
 }
