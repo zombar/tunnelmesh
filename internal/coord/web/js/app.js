@@ -515,33 +515,53 @@ function rebuildChartDatasets() {
     const labels = state.charts.chartData.labels;
     const stacked = state.charts.stacked;
 
-    // Build throughput datasets - all same color with fill
-    const throughputDatasets = Object.entries(state.charts.chartData.throughput).map(([peerName, values]) => ({
-        label: peerName,
-        data: values.map((v, i) => ({ x: labels[i], y: v })),
-        borderColor: CHART_LINE_COLOR,
-        backgroundColor: CHART_FILL_COLOR,
-        borderWidth: 1.5,
-        pointRadius: 0,
-        tension: 0.3,
-        fill: stacked ? 'origin' : true,
-        spanGaps: true,
-        stack: stacked ? 'stack0' : undefined
-    }));
+    // Build throughput datasets
+    const throughputDatasets = Object.entries(state.charts.chartData.throughput).map(([peerName, values]) => {
+        // Ensure line connects from Y axis by filling leading nulls with first real value
+        const firstRealIdx = values.findIndex(v => v !== null);
+        const filledValues = values.map((v, i) => {
+            if (v === null && i < firstRealIdx && firstRealIdx >= 0) {
+                return values[firstRealIdx]; // Use first real value for leading nulls
+            }
+            return v;
+        });
+        return {
+            label: peerName,
+            data: filledValues.map((v, i) => ({ x: labels[i], y: v })),
+            borderColor: CHART_LINE_COLOR,
+            backgroundColor: CHART_FILL_COLOR,
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.3,
+            fill: stacked ? 'origin' : false,
+            spanGaps: true,
+            stack: stacked ? 'stack0' : undefined
+        };
+    });
 
-    // Build packets datasets - all same color with fill
-    const packetsDatasets = Object.entries(state.charts.chartData.packets).map(([peerName, values]) => ({
-        label: peerName,
-        data: values.map((v, i) => ({ x: labels[i], y: v })),
-        borderColor: CHART_LINE_COLOR,
-        backgroundColor: CHART_FILL_COLOR,
-        borderWidth: 1.5,
-        pointRadius: 0,
-        tension: 0.3,
-        fill: stacked ? 'origin' : true,
-        spanGaps: true,
-        stack: stacked ? 'stack0' : undefined
-    }));
+    // Build packets datasets
+    const packetsDatasets = Object.entries(state.charts.chartData.packets).map(([peerName, values]) => {
+        // Ensure line connects from Y axis by filling leading nulls with first real value
+        const firstRealIdx = values.findIndex(v => v !== null);
+        const filledValues = values.map((v, i) => {
+            if (v === null && i < firstRealIdx && firstRealIdx >= 0) {
+                return values[firstRealIdx]; // Use first real value for leading nulls
+            }
+            return v;
+        });
+        return {
+            label: peerName,
+            data: filledValues.map((v, i) => ({ x: labels[i], y: v })),
+            borderColor: CHART_LINE_COLOR,
+            backgroundColor: CHART_FILL_COLOR,
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.3,
+            fill: stacked ? 'origin' : false,
+            spanGaps: true,
+            stack: stacked ? 'stack0' : undefined
+        };
+    });
 
     if (state.charts.throughput) {
         state.charts.throughput.data.datasets = throughputDatasets;
