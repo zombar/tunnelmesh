@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,14 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+)
+
+// Sentinel errors for routing failures.
+var (
+	// ErrNoRoute is returned when no route exists for the destination IP.
+	ErrNoRoute = errors.New("no route")
+	// ErrNoTunnel is returned when no tunnel or relay is available for the peer.
+	ErrNoTunnel = errors.New("no tunnel or relay")
 )
 
 const (
@@ -248,7 +257,7 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 	peerName, ok := f.router.Lookup(info.DstIP)
 	if !ok {
 		atomic.AddUint64(&f.stats.DroppedNoRoute, 1)
-		return fmt.Errorf("no route for %s", info.DstIP)
+		return fmt.Errorf("%w for %s", ErrNoRoute, info.DstIP)
 	}
 
 	// Get the tunnel
@@ -321,7 +330,7 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 		Bool("relay_nil", relayNil).
 		Bool("relay_connected", relayConnected).
 		Msg("dropped packet: no tunnel or relay")
-	return fmt.Errorf("no tunnel or relay for peer %s", peerName)
+	return fmt.Errorf("%w for peer %s", ErrNoTunnel, peerName)
 }
 
 // ReceivePacket writes a received packet to the TUN device.
@@ -429,7 +438,7 @@ func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) 
 		log.Debug().
 			Str("dst", info.DstIP.String()).
 			Msg("no route for destination")
-		return fmt.Errorf("no route for %s", info.DstIP)
+		return fmt.Errorf("%w for %s", ErrNoRoute, info.DstIP)
 	}
 
 	// Get the tunnel
@@ -498,7 +507,7 @@ func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) 
 		Str("peer", peerName).
 		Str("dst", info.DstIP.String()).
 		Msg("no tunnel or relay for peer")
-	return fmt.Errorf("no tunnel or relay for peer %s", peerName)
+	return fmt.Errorf("%w for peer %s", ErrNoTunnel, peerName)
 }
 
 // readFrame reads a length-prefixed frame from the tunnel into the provided buffer.

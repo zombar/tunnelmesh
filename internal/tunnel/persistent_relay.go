@@ -3,6 +3,7 @@ package tunnel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,8 +12,12 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
+
+// ErrNotConnected is returned when an operation requires a relay connection but none exists.
+var ErrNotConnected = errors.New("not connected to relay")
 
 // relayPacketPool pools relay packet buffers to reduce GC pressure.
 var relayPacketPool = sync.Pool{
@@ -67,6 +72,7 @@ type PersistentRelay struct {
 	onAPIRequest      func(reqID uint32, method string, body []byte) // Called when server sends API request
 	onRelayNotify     func(waitingPeers []string)                   // Called when server notifies of relay requests
 	onHolePunchNotify func(requestingPeers []string)                // Called when server notifies of hole-punch requests
+	onReconnectError  func(err error)                               // Called when reconnection fails (for re-registration)
 
 	// Reconnection control
 	reconnecting bool // Prevents concurrent autoReconnect goroutines
@@ -132,6 +138,10 @@ func (p *PersistentRelay) Connect(ctx context.Context) error {
 		if resp != nil {
 			body := make([]byte, 256)
 			n, _ := resp.Body.Read(body)
+			// Return sentinel error for 404 so callers can trigger re-registration
+			if resp.StatusCode == http.StatusNotFound {
+				return fmt.Errorf("%w: %s", coord.ErrPeerNotFound, string(body[:n]))
+			}
 			return fmt.Errorf("persistent relay connection failed: %s - %s", resp.Status, string(body[:n]))
 		}
 		return fmt.Errorf("persistent relay connection failed: %w", err)
@@ -291,6 +301,14 @@ func (p *PersistentRelay) autoReconnect() {
 		}
 
 		log.Warn().Err(err).Int("attempt", attempt).Msg("relay reconnection failed")
+
+		// Notify caller of error (e.g., to trigger re-registration)
+		p.mu.RLock()
+		errorHandler := p.onReconnectError
+		p.mu.RUnlock()
+		if errorHandler != nil {
+			errorHandler(err)
+		}
 
 		// Wait before next attempt
 		p.mu.RLock()
@@ -506,7 +524,7 @@ func (p *PersistentRelay) SendTo(targetPeer string, data []byte) error {
 	p.mu.RUnlock()
 
 	if !connected || writeChan == nil {
-		return fmt.Errorf("not connected to relay")
+		return ErrNotConnected
 	}
 
 	// Get buffer from pool
@@ -594,6 +612,15 @@ func (p *PersistentRelay) SetHolePunchNotifyHandler(handler func(requestingPeers
 	p.onHolePunchNotify = handler
 }
 
+// SetReconnectErrorHandler sets a callback for reconnection errors.
+// This is called when autoReconnect fails to connect, allowing the caller
+// to handle specific errors like "peer not registered" by re-registering.
+func (p *PersistentRelay) SetReconnectErrorHandler(handler func(err error)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onReconnectError = handler
+}
+
 // SendHeartbeat sends a heartbeat with stats to the coordination server.
 func (p *PersistentRelay) SendHeartbeat(stats *proto.PeerStats) error {
 	p.mu.RLock()
@@ -602,7 +629,7 @@ func (p *PersistentRelay) SendHeartbeat(stats *proto.PeerStats) error {
 	p.mu.RUnlock()
 
 	if !connected || writeChan == nil {
-		return fmt.Errorf("not connected to relay")
+		return ErrNotConnected
 	}
 
 	// Encode stats as JSON
@@ -637,7 +664,7 @@ func (p *PersistentRelay) AnnounceWGConcentrator() error {
 	p.mu.Unlock()
 
 	if !connected || conn == nil {
-		return fmt.Errorf("not connected to relay")
+		return ErrNotConnected
 	}
 
 	// Send announce message: [MsgTypeWGAnnounce]
@@ -662,7 +689,7 @@ func (p *PersistentRelay) SendAPIResponse(reqID uint32, body []byte) error {
 	p.mu.RUnlock()
 
 	if !connected || conn == nil {
-		return fmt.Errorf("not connected to relay")
+		return ErrNotConnected
 	}
 
 	// Build response: [MsgTypeAPIResponse][reqID:4][body]

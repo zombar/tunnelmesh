@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -312,6 +313,37 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 				Str("transport", pc.TransportType()).
 				Msg("ignoring peer reconnect notification - relying on packet-based detection")
 		}
+	})
+
+	// Set up handler for reconnection errors to detect when we need to re-register
+	relay.SetReconnectErrorHandler(func(err error) {
+		if errors.Is(err, coord.ErrPeerNotFound) {
+			log.Info().Msg("peer not registered on server, re-registering...")
+			publicIPs, privateIPs, behindNAT := m.identity.GetLocalIPs()
+			if _, regErr := m.client.Register(
+				m.identity.Name, m.identity.PubKeyEncoded,
+				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version,
+			); regErr != nil {
+				log.Error().Err(regErr).Msg("failed to re-register after peer not found")
+			} else {
+				log.Info().Msg("re-registered with coordination server")
+				m.SetHeartbeatIPs(publicIPs, privateIPs, behindNAT)
+			}
+		}
+	})
+
+	// Set up push notification handlers for relay and hole-punch requests.
+	// These must be set here (not just in RunHeartbeat) to ensure they're
+	// re-registered after relay reconnection.
+	// Note: Uses background context since handlers spawn their own goroutines
+	// and should continue processing even during shutdown.
+	relay.SetRelayNotifyHandler(func(peers []string) {
+		log.Debug().Strs("peers", peers).Msg("received relay notification via WebSocket")
+		m.HandleRelayRequests(context.Background(), peers)
+	})
+	relay.SetHolePunchNotifyHandler(func(peers []string) {
+		log.Debug().Strs("peers", peers).Msg("received hole-punch notification via WebSocket")
+		m.HandleHolePunchRequests(context.Background(), peers)
 	})
 }
 

@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -300,7 +301,7 @@ func TestPersistentRelay_SendNotConnected(t *testing.T) {
 
 	err := relay.SendTo("peer2", []byte("test"))
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not connected")
+	assert.True(t, errors.Is(err, ErrNotConnected))
 }
 
 func TestPeerTunnel_ReadWrite(t *testing.T) {
@@ -401,7 +402,7 @@ func TestPersistentRelay_SendHeartbeat_NotConnected(t *testing.T) {
 	stats := &proto.PeerStats{PacketsSent: 100}
 	err := relay.SendHeartbeat(stats)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not connected")
+	assert.True(t, errors.Is(err, ErrNotConnected))
 }
 
 func TestPersistentRelay_ReceiveRelayNotify(t *testing.T) {
