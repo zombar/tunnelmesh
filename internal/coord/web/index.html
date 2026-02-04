@@ -6,6 +6,8 @@
     <title>TunnelMesh Admin</title>
     <link rel="icon" type="image/png" href="favicon.png">
     <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 </head>
 <body>
     <header>
@@ -24,6 +26,37 @@
             </span>
         </div>
     </header>
+
+    <section id="charts-section">
+        <div class="charts-header">
+            <h2>Network Activity</h2>
+            <div class="timeline-controls">
+                <div class="preset-buttons">
+                    <button class="preset-btn active" data-range="1d">1D</button>
+                    <button class="preset-btn" data-range="3d">3D</button>
+                    <button class="preset-btn" data-range="7d">7D</button>
+                    <button class="preset-btn" data-range="14d">14D</button>
+                    <button class="preset-btn" data-range="30d">30D</button>
+                    <button class="preset-btn" data-range="90d">90D</button>
+                </div>
+                <div class="range-slider">
+                    <input type="range" id="timeline-slider" min="0" max="100" value="100">
+                    <span id="timeline-label">Last 24 hours</span>
+                </div>
+            </div>
+        </div>
+        <div class="charts-container">
+            <div class="chart-wrapper">
+                <h3>Throughput</h3>
+                <canvas id="throughput-chart"></canvas>
+            </div>
+            <div class="chart-wrapper">
+                <h3>Packets/s</h3>
+                <canvas id="packets-chart"></canvas>
+            </div>
+        </div>
+        <div class="chart-legend" id="chart-legend"></div>
+    </section>
 
     <main>
         <section id="peers-section">

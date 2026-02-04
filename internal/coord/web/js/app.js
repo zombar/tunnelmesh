@@ -4,7 +4,48 @@ const state = {
     maxHistoryPoints: 20,
     wgClients: [],
     wgEnabled: false,
-    currentWGConfig: null
+    currentWGConfig: null,
+    // Chart state
+    charts: {
+        throughput: null,
+        packets: null,
+        selectedRange: '1d',
+        sliderPosition: 100,
+        peerColors: {},
+        colorIndex: 0,
+        chartData: {
+            labels: [],      // timestamps (shared across both charts)
+            throughput: {},  // { peerName: [values] }
+            packets: {}      // { peerName: [values] }
+        },
+        maxChartPoints: 300  // max points to display on chart
+    }
+};
+
+// Color palette for chart lines (GitHub-themed)
+const PEER_COLORS = [
+    '#58a6ff', '#3fb950', '#f0883e', '#a371f7', '#f85149',
+    '#79c0ff', '#56d364', '#ffab70', '#bc8cff', '#ff7b72'
+];
+
+// Range presets in days
+const RANGE_DAYS = {
+    '1d': 1,
+    '3d': 3,
+    '7d': 7,
+    '14d': 14,
+    '30d': 30,
+    '90d': 90
+};
+
+// Max points to request for each range (for downsampling)
+const RANGE_MAX_POINTS = {
+    '1d': 288,
+    '3d': 288,
+    '7d': 336,
+    '14d': 336,
+    '30d': 360,
+    '90d': 360
 };
 
 // Fetch and update dashboard
@@ -56,6 +97,11 @@ function updateDashboard(data, loadHistory = false) {
     const versionEl = document.getElementById('server-version');
     if (versionEl && data.server_version) {
         versionEl.textContent = data.server_version;
+    }
+
+    // Update charts with new data during polling (not on initial history load)
+    if (!loadHistory && state.charts.throughput) {
+        updateChartsWithNewData(data.peers);
     }
 
     // Update history for each peer
@@ -211,6 +257,383 @@ function formatBytes(bytes) {
 function formatRate(rate) {
     if (rate === 0 || rate === undefined || rate === null) return '0';
     return rate.toFixed(1);
+}
+
+// Chart functions
+
+function initCharts() {
+    const chartOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: {
+            mode: 'index',
+            intersect: false
+        },
+        scales: {
+            x: {
+                type: 'time',
+                time: {
+                    unit: 'hour',
+                    displayFormats: {
+                        hour: 'HH:mm',
+                        day: 'MMM d'
+                    }
+                },
+                grid: { color: '#21262d' },
+                ticks: { color: '#8b949e', maxTicksLimit: 8 },
+                border: { color: '#30363d' }
+            },
+            y: {
+                beginAtZero: true,
+                grid: { color: '#21262d' },
+                ticks: { color: '#8b949e' },
+                border: { color: '#30363d' }
+            }
+        },
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                backgroundColor: '#161b22',
+                borderColor: '#30363d',
+                borderWidth: 1,
+                titleColor: '#e6edf3',
+                bodyColor: '#8b949e',
+                padding: 10
+            }
+        }
+    };
+
+    // Throughput chart with bytes formatting
+    const throughputCtx = document.getElementById('throughput-chart');
+    if (throughputCtx) {
+        state.charts.throughput = new Chart(throughputCtx, {
+            type: 'line',
+            data: { datasets: [] },
+            options: {
+                ...chartOptions,
+                scales: {
+                    ...chartOptions.scales,
+                    y: {
+                        ...chartOptions.scales.y,
+                        ticks: {
+                            ...chartOptions.scales.y.ticks,
+                            callback: function(value) {
+                                return formatBytes(value) + '/s';
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    ...chartOptions.plugins,
+                    tooltip: {
+                        ...chartOptions.plugins.tooltip,
+                        callbacks: {
+                            label: function(context) {
+                                return context.dataset.label + ': ' + formatBytes(context.raw.y) + '/s';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Packets chart
+    const packetsCtx = document.getElementById('packets-chart');
+    if (packetsCtx) {
+        state.charts.packets = new Chart(packetsCtx, {
+            type: 'line',
+            data: { datasets: [] },
+            options: {
+                ...chartOptions,
+                scales: {
+                    ...chartOptions.scales,
+                    y: {
+                        ...chartOptions.scales.y,
+                        ticks: {
+                            ...chartOptions.scales.y.ticks,
+                            callback: function(value) {
+                                return value.toFixed(1) + ' pkt/s';
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    ...chartOptions.plugins,
+                    tooltip: {
+                        ...chartOptions.plugins.tooltip,
+                        callbacks: {
+                            label: function(context) {
+                                return context.dataset.label + ': ' + context.raw.y.toFixed(1) + ' pkt/s';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+function setupTimelineControls() {
+    // Setup preset buttons
+    const presetButtons = document.querySelectorAll('.preset-btn');
+    presetButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const range = btn.dataset.range;
+            if (range === state.charts.selectedRange) return;
+
+            // Update active button
+            presetButtons.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            state.charts.selectedRange = range;
+            state.charts.sliderPosition = 100;
+            document.getElementById('timeline-slider').value = 100;
+            updateTimelineLabel();
+            fetchChartHistory(range);
+        });
+    });
+
+    // Setup slider
+    const slider = document.getElementById('timeline-slider');
+    if (slider) {
+        slider.addEventListener('input', () => {
+            state.charts.sliderPosition = parseInt(slider.value);
+            updateTimelineLabel();
+            updateChartVisibleWindow();
+        });
+    }
+
+    updateTimelineLabel();
+}
+
+function updateTimelineLabel() {
+    const label = document.getElementById('timeline-label');
+    if (!label) return;
+
+    const range = state.charts.selectedRange;
+    const days = RANGE_DAYS[range];
+    const position = state.charts.sliderPosition;
+
+    if (position === 100) {
+        label.textContent = `Last ${days === 1 ? '24 hours' : days + ' days'}`;
+    } else {
+        // Calculate the visible window based on slider position
+        const windowEnd = (position / 100);
+        const daysAgo = Math.round(days * (1 - windowEnd));
+        if (daysAgo === 0) {
+            label.textContent = `Last ${days === 1 ? '24 hours' : days + ' days'}`;
+        } else {
+            label.textContent = `${daysAgo}d - ${daysAgo + days}d ago`;
+        }
+    }
+}
+
+async function fetchChartHistory(range) {
+    try {
+        const days = RANGE_DAYS[range];
+        const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        const maxPoints = RANGE_MAX_POINTS[range];
+
+        const url = `/admin/api/overview?since=${since.toISOString()}&maxPoints=${maxPoints}`;
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}`);
+        }
+
+        const data = await resp.json();
+        initializeChartData(data);
+    } catch (err) {
+        console.error('Failed to fetch chart history:', err);
+    }
+}
+
+function initializeChartData(data) {
+    // Clear existing chart data
+    state.charts.chartData.labels = [];
+    state.charts.chartData.throughput = {};
+    state.charts.chartData.packets = {};
+
+    // Build chart data from peer histories
+    // Each peer may have different history lengths, so we need to align timestamps
+    const allTimestamps = new Set();
+    const peerHistories = {};
+
+    data.peers.forEach(peer => {
+        if (!peer.history || peer.history.length === 0) return;
+
+        // Assign color if new peer
+        if (!state.charts.peerColors[peer.name]) {
+            state.charts.peerColors[peer.name] = PEER_COLORS[state.charts.colorIndex % PEER_COLORS.length];
+            state.charts.colorIndex++;
+        }
+
+        // History comes newest first, reverse to get oldest first
+        const history = [...peer.history].reverse();
+        peerHistories[peer.name] = history;
+
+        history.forEach(point => {
+            allTimestamps.add(new Date(point.ts).getTime());
+        });
+    });
+
+    // Sort timestamps
+    const sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b);
+    state.charts.chartData.labels = sortedTimestamps.map(ts => new Date(ts));
+
+    // Build data arrays for each peer
+    Object.entries(peerHistories).forEach(([peerName, history]) => {
+        const historyMap = new Map();
+        history.forEach(point => {
+            historyMap.set(new Date(point.ts).getTime(), point);
+        });
+
+        const throughputData = [];
+        const packetsData = [];
+
+        sortedTimestamps.forEach(ts => {
+            const point = historyMap.get(ts);
+            if (point) {
+                // Combine TX and RX for total throughput/packets
+                throughputData.push((point.txB || 0) + (point.rxB || 0));
+                packetsData.push((point.txP || 0) + (point.rxP || 0));
+            } else {
+                // No data for this timestamp - use null for gap
+                throughputData.push(null);
+                packetsData.push(null);
+            }
+        });
+
+        state.charts.chartData.throughput[peerName] = throughputData;
+        state.charts.chartData.packets[peerName] = packetsData;
+    });
+
+    rebuildChartDatasets();
+    renderChartLegend();
+}
+
+function updateChartsWithNewData(peers) {
+    if (!state.charts.throughput || !state.charts.packets) return;
+
+    const now = new Date();
+
+    peers.forEach(peer => {
+        // Assign color if new peer
+        if (!state.charts.peerColors[peer.name]) {
+            state.charts.peerColors[peer.name] = PEER_COLORS[state.charts.colorIndex % PEER_COLORS.length];
+            state.charts.colorIndex++;
+        }
+
+        // Initialize arrays if needed
+        if (!state.charts.chartData.throughput[peer.name]) {
+            state.charts.chartData.throughput[peer.name] = [];
+            state.charts.chartData.packets[peer.name] = [];
+        }
+
+        // Calculate total throughput and packets (TX + RX)
+        const throughput = (peer.bytes_sent_rate || 0) + (peer.bytes_received_rate || 0);
+        const packets = (peer.packets_sent_rate || 0) + (peer.packets_received_rate || 0);
+
+        state.charts.chartData.throughput[peer.name].push(throughput);
+        state.charts.chartData.packets[peer.name].push(packets);
+    });
+
+    // Add timestamp
+    state.charts.chartData.labels.push(now);
+
+    // Trim to max points (rolling window)
+    const maxPoints = state.charts.maxChartPoints;
+    if (state.charts.chartData.labels.length > maxPoints) {
+        state.charts.chartData.labels.shift();
+        Object.keys(state.charts.chartData.throughput).forEach(peerName => {
+            if (state.charts.chartData.throughput[peerName].length > maxPoints) {
+                state.charts.chartData.throughput[peerName].shift();
+            }
+            if (state.charts.chartData.packets[peerName].length > maxPoints) {
+                state.charts.chartData.packets[peerName].shift();
+            }
+        });
+    }
+
+    // Clean up peers that are no longer present
+    const currentPeers = new Set(peers.map(p => p.name));
+    Object.keys(state.charts.chartData.throughput).forEach(peerName => {
+        if (!currentPeers.has(peerName)) {
+            delete state.charts.chartData.throughput[peerName];
+            delete state.charts.chartData.packets[peerName];
+        }
+    });
+
+    rebuildChartDatasets();
+    renderChartLegend();
+}
+
+function rebuildChartDatasets() {
+    const labels = state.charts.chartData.labels;
+
+    // Build throughput datasets
+    const throughputDatasets = Object.entries(state.charts.chartData.throughput).map(([peerName, values]) => ({
+        label: peerName,
+        data: values.map((v, i) => ({ x: labels[i], y: v })),
+        borderColor: state.charts.peerColors[peerName],
+        backgroundColor: state.charts.peerColors[peerName] + '20',
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: false,
+        spanGaps: true
+    }));
+
+    // Build packets datasets
+    const packetsDatasets = Object.entries(state.charts.chartData.packets).map(([peerName, values]) => ({
+        label: peerName,
+        data: values.map((v, i) => ({ x: labels[i], y: v })),
+        borderColor: state.charts.peerColors[peerName],
+        backgroundColor: state.charts.peerColors[peerName] + '20',
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: false,
+        spanGaps: true
+    }));
+
+    if (state.charts.throughput) {
+        state.charts.throughput.data.datasets = throughputDatasets;
+        state.charts.throughput.update('none');
+    }
+
+    if (state.charts.packets) {
+        state.charts.packets.data.datasets = packetsDatasets;
+        state.charts.packets.update('none');
+    }
+}
+
+function updateChartVisibleWindow() {
+    // This is called when the slider changes
+    // For now, we'll just refresh the data
+    // A more sophisticated implementation would adjust the chart's x-axis range
+    const range = state.charts.selectedRange;
+    fetchChartHistory(range);
+}
+
+function renderChartLegend() {
+    const legendEl = document.getElementById('chart-legend');
+    if (!legendEl) return;
+
+    const peerNames = Object.keys(state.charts.chartData.throughput);
+    if (peerNames.length === 0) {
+        legendEl.innerHTML = '<span class="legend-item" style="color: #8b949e;">No peers connected</span>';
+        return;
+    }
+
+    legendEl.innerHTML = peerNames.map(peerName => {
+        const color = state.charts.peerColors[peerName] || PEER_COLORS[0];
+        return `<span class="legend-item">
+            <span class="legend-color" style="background: ${color}"></span>
+            ${escapeHtml(peerName)}
+        </span>`;
+    }).join('');
 }
 
 function formatNumber(num) {
@@ -484,6 +907,13 @@ async function deleteWGClient(id, name) {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+    // Initialize charts first
+    initCharts();
+    setupTimelineControls();
+
+    // Fetch initial chart history
+    fetchChartHistory(state.charts.selectedRange);
+
     fetchData(true); // Load with history on initial fetch
     setInterval(() => fetchData(false), 5000); // Refresh every 5 seconds without history
 
