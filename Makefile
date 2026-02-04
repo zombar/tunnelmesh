@@ -10,8 +10,8 @@ BINARY_NAME=tunnelmesh
 BUILD_DIR=bin
 GO=go
 
-# Version info (use short commit ID if no tag)
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+# Version info (use short commit ID)
+VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_TIME ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.BuildTime=$(BUILD_TIME)"
