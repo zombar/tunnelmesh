@@ -994,14 +994,29 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 
 // initiateHandshake performs the Noise IK handshake as initiator.
 func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peerPublic [32]byte, peerAddr *net.UDPAddr, conn *net.UDPConn) (*Session, error) {
+	// Register intent to connect BEFORE creating handshake state.
+	// This closes a race window where an incoming init could be processed
+	// before pendingOutboundPeers is set, bypassing the crossing handshake
+	// tie-breaker logic in handleHandshakeInit.
+	// We use 0 as a placeholder index until the real index is known.
+	t.mu.Lock()
+	t.pendingOutboundPeers[peerName] = 0
+	t.mu.Unlock()
+
 	hs, err := NewInitiatorHandshake(t.staticPrivate, t.staticPublic, peerPublic)
 	if err != nil {
+		t.mu.Lock()
+		delete(t.pendingOutboundPeers, peerName)
+		t.mu.Unlock()
 		return nil, err
 	}
 
 	// Create initiation message
 	initMsg, err := hs.CreateInitiation()
 	if err != nil {
+		t.mu.Lock()
+		delete(t.pendingOutboundPeers, peerName)
+		t.mu.Unlock()
 		return nil, err
 	}
 
@@ -1011,7 +1026,7 @@ func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peer
 
 	t.mu.Lock()
 	t.pendingHandshakes[localIndex] = respChan
-	t.pendingOutboundPeers[peerName] = localIndex
+	t.pendingOutboundPeers[peerName] = localIndex // Update with real index
 	t.mu.Unlock()
 
 	// Clean up pending handshake when done
