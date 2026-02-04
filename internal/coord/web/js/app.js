@@ -289,14 +289,7 @@ function initCharts() {
         },
         plugins: {
             legend: { display: false },
-            tooltip: {
-                backgroundColor: '#161b22',
-                borderColor: '#30363d',
-                borderWidth: 1,
-                titleColor: '#e6edf3',
-                bodyColor: '#8b949e',
-                padding: 10
-            }
+            tooltip: { enabled: false }
         }
     };
 
@@ -320,17 +313,7 @@ function initCharts() {
                         }
                     }
                 },
-                plugins: {
-                    ...chartOptions.plugins,
-                    tooltip: {
-                        ...chartOptions.plugins.tooltip,
-                        callbacks: {
-                            label: function(context) {
-                                return context.dataset.label + ': ' + formatBytes(context.raw.y) + '/s';
-                            }
-                        }
-                    }
-                }
+                plugins: chartOptions.plugins
             }
         });
     }
@@ -355,17 +338,7 @@ function initCharts() {
                         }
                     }
                 },
-                plugins: {
-                    ...chartOptions.plugins,
-                    tooltip: {
-                        ...chartOptions.plugins.tooltip,
-                        callbacks: {
-                            label: function(context) {
-                                return context.dataset.label + ': ' + context.raw.y.toFixed(1) + ' pkt/s';
-                            }
-                        }
-                    }
-                }
+                plugins: chartOptions.plugins
             }
         });
     }
