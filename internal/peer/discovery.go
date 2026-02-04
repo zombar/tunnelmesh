@@ -101,8 +101,8 @@ func (m *MeshNode) DiscoverAndConnectPeers(ctx context.Context) {
 
 		// Collect route for atomic update
 		routes[peer.MeshIP] = peer.Name
-		// Cache peer mesh IP for use when coord server is unreachable
-		m.CachePeerMeshIP(peer.Name, peer.MeshIP)
+		// Cache full peer info for use when coord server is unreachable
+		m.CachePeer(peer)
 
 		// Skip if tunnel already exists
 		if existingSet[peer.Name] {
@@ -271,9 +271,10 @@ func (m *MeshNode) buildTransportPeerInfo(peer proto.Peer) *transport.PeerInfo {
 	return info
 }
 
-// ConnectToPeerByName fetches the peer info from the coordination server and establishes a tunnel.
+// ConnectToPeerByName establishes a tunnel to a peer by name.
 // This is used when we're notified that a peer wants to connect to us (e.g., hole-punch notification).
 // Uses forced initiation to bypass pubkey comparison, as hole-punch requires both sides to send.
+// Uses cached peer info if available, falls back to API if not in cache.
 func (m *MeshNode) ConnectToPeerByName(ctx context.Context, peerName string) {
 	// Skip if tunnel already exists
 	if _, exists := m.tunnelMgr.Get(peerName); exists {
@@ -281,19 +282,26 @@ func (m *MeshNode) ConnectToPeerByName(ctx context.Context, peerName string) {
 		return
 	}
 
-	// Fetch peer info from coordination server
-	peers, err := m.client.ListPeers()
-	if err != nil {
-		log.Warn().Err(err).Str("peer", peerName).Msg("failed to fetch peer info for connection")
+	// Try cache first (works during network transitions when API is unreachable)
+	if cachedPeer, ok := m.GetCachedPeer(peerName); ok {
+		log.Debug().Str("peer", peerName).Msg("using cached peer info for connection")
+		m.EstablishTunnelForced(ctx, cachedPeer)
 		return
 	}
 
-	// Find the target peer
+	// Fall back to API if not in cache
+	peers, err := m.client.ListPeers()
+	if err != nil {
+		log.Warn().Err(err).Str("peer", peerName).Msg("failed to fetch peer info for connection (not in cache)")
+		return
+	}
+
+	// Find the target peer and cache it
 	var targetPeer *proto.Peer
 	for _, p := range peers {
+		m.CachePeer(p) // Cache all peers while we're at it
 		if p.Name == peerName {
 			targetPeer = &p
-			break
 		}
 	}
 
@@ -334,7 +342,7 @@ func (m *MeshNode) RefreshAuthorizedKeys() {
 			}
 		}
 		routes[peer.MeshIP] = peer.Name
-		m.CachePeerMeshIP(peer.Name, peer.MeshIP)
+		m.CachePeer(peer)
 	}
 
 	// Atomically update all routes
