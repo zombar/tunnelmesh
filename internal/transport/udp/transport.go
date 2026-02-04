@@ -67,6 +67,9 @@ type Transport struct {
 	// Pending handshakes (local index -> response channel)
 	pendingHandshakes map[uint32]chan handshakeResponse
 
+	// Pending outbound handshakes by peer name (for crossing handshake detection)
+	pendingOutboundPeers map[string]uint32 // peer name -> local index
+
 	// Rate limiting for rekey-required messages (source addr -> last sent time)
 	rekeyRateLimit map[string]time.Time
 
@@ -151,14 +154,15 @@ func New(cfg Config) (*Transport, error) {
 	}
 
 	t := &Transport{
-		config:            cfg,
-		staticPrivate:     cfg.StaticPrivate,
-		staticPublic:      cfg.StaticPublic,
-		sessions:          make(map[uint32]*Session),
-		peerSessions:      make(map[string]*Session),
-		pendingHandshakes: make(map[uint32]chan handshakeResponse),
-		rekeyRateLimit:    make(map[string]time.Time),
-		closeCh:           make(chan struct{}),
+		config:               cfg,
+		staticPrivate:        cfg.StaticPrivate,
+		staticPublic:         cfg.StaticPublic,
+		sessions:             make(map[uint32]*Session),
+		peerSessions:         make(map[string]*Session),
+		pendingHandshakes:    make(map[uint32]chan handshakeResponse),
+		pendingOutboundPeers: make(map[string]uint32),
+		rekeyRateLimit:       make(map[string]time.Time),
+		closeCh:              make(chan struct{}),
 	}
 
 	return t, nil
@@ -559,6 +563,32 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 		return
 	}
 
+	// Check for crossing handshakes: if we have a pending outbound handshake to this peer,
+	// use public key comparison as tie-breaker. The node with the "lower" public key wins
+	// (its outgoing handshake is kept). This ensures both sides agree on which handshake to use.
+	t.mu.RLock()
+	_, hasPendingOutbound := t.pendingOutboundPeers[peerName]
+	t.mu.RUnlock()
+
+	if hasPendingOutbound {
+		// Compare public keys: lower wins (their outgoing handshake is kept)
+		cmp := bytes.Compare(t.staticPublic[:], peerPubKey[:])
+		if cmp < 0 {
+			// Our public key is lower, we win - ignore their init, our outgoing handshake will complete
+			log.Debug().
+				Str("peer", peerName).
+				Str("remote", remoteAddr.String()).
+				Msg("crossing handshake detected, our pubkey is lower - ignoring incoming init")
+			return
+		}
+		// Their public key is lower (or equal, unlikely), they win - we'll respond to their init
+		// Our outgoing handshake will fail (no response) or be superseded
+		log.Debug().
+			Str("peer", peerName).
+			Str("remote", remoteAddr.String()).
+			Msg("crossing handshake detected, their pubkey is lower - responding to their init")
+	}
+
 	// Check if we already have an active established session for this peer BEFORE responding.
 	// If so, don't respond - the peer is probably retrying due to packet loss.
 	// By not responding, the peer will either:
@@ -868,12 +898,14 @@ func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peer
 
 	t.mu.Lock()
 	t.pendingHandshakes[localIndex] = respChan
+	t.pendingOutboundPeers[peerName] = localIndex
 	t.mu.Unlock()
 
 	// Clean up pending handshake when done
 	defer func() {
 		t.mu.Lock()
 		delete(t.pendingHandshakes, localIndex)
+		delete(t.pendingOutboundPeers, peerName)
 		t.mu.Unlock()
 	}()
 

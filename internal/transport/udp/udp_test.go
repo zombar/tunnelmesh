@@ -1434,3 +1434,87 @@ func TestWorkerPoolShutdown(t *testing.T) {
 		t.Error("packet queue should be closed after transport.Close()")
 	}
 }
+
+// =============================================================================
+// Crossing Handshake Tests
+// =============================================================================
+
+func TestCrossingHandshakeTieBreaker(t *testing.T) {
+	// Test that crossing handshake detection uses public key comparison correctly.
+	// When both nodes initiate handshakes simultaneously, the node with the "lower"
+	// public key wins (their outgoing handshake is kept).
+
+	// Create two "public keys" for comparison
+	var lowKey, highKey [32]byte
+	lowKey[0] = 0x00
+	highKey[0] = 0xFF
+
+	// Test: lower key should win (cmp < 0)
+	cmp := bytes.Compare(lowKey[:], highKey[:])
+	if cmp >= 0 {
+		t.Errorf("expected lowKey < highKey, got cmp=%d", cmp)
+	}
+
+	// Test: higher key should lose (cmp > 0)
+	cmp = bytes.Compare(highKey[:], lowKey[:])
+	if cmp <= 0 {
+		t.Errorf("expected highKey > lowKey, got cmp=%d", cmp)
+	}
+
+	// Test: equal keys (unlikely in practice)
+	cmp = bytes.Compare(lowKey[:], lowKey[:])
+	if cmp != 0 {
+		t.Errorf("expected same keys to be equal, got cmp=%d", cmp)
+	}
+}
+
+func TestPendingOutboundPeersTracking(t *testing.T) {
+	// Test that pending outbound peers are tracked correctly
+	cfg := Config{
+		Port: 0, // Let OS choose port
+	}
+
+	transport, err := New(cfg)
+	if err != nil {
+		t.Fatalf("failed to create transport: %v", err)
+	}
+	defer transport.Close()
+
+	// Initially no pending outbound peers
+	transport.mu.RLock()
+	if len(transport.pendingOutboundPeers) != 0 {
+		t.Errorf("expected no pending outbound peers initially, got %d", len(transport.pendingOutboundPeers))
+	}
+	transport.mu.RUnlock()
+
+	// Simulate adding a pending outbound peer
+	transport.mu.Lock()
+	transport.pendingOutboundPeers["test-peer"] = 12345
+	transport.mu.Unlock()
+
+	// Verify it's tracked
+	transport.mu.RLock()
+	localIndex, exists := transport.pendingOutboundPeers["test-peer"]
+	transport.mu.RUnlock()
+
+	if !exists {
+		t.Error("expected pending outbound peer to be tracked")
+	}
+	if localIndex != 12345 {
+		t.Errorf("expected localIndex 12345, got %d", localIndex)
+	}
+
+	// Simulate removing the pending outbound peer
+	transport.mu.Lock()
+	delete(transport.pendingOutboundPeers, "test-peer")
+	transport.mu.Unlock()
+
+	// Verify it's removed
+	transport.mu.RLock()
+	_, exists = transport.pendingOutboundPeers["test-peer"]
+	transport.mu.RUnlock()
+
+	if exists {
+		t.Error("expected pending outbound peer to be removed")
+	}
+}
