@@ -27,7 +27,7 @@ apt-get install -y -q nginx certbot python3-certbot-nginx
 mkdir -p /etc/tunnelmesh
 mkdir -p /var/lib/tunnelmesh
 
-%{ if wireguard_enabled ~}
+%{ if wireguard_enabled && peer_enabled ~}
 mkdir -p /var/lib/tunnelmesh/wireguard
 %{ endif ~}
 
@@ -61,6 +61,12 @@ admin:
 relay:
   enabled: ${relay_enabled}
   pair_timeout: "90s"
+
+%{ if wireguard_enabled ~}
+wireguard:
+  enabled: true
+  endpoint: "${wg_endpoint}"
+%{ endif ~}
 
 %{ if peer_enabled ~}
 # Embedded peer (join_mesh mode)
@@ -242,7 +248,7 @@ ufw allow 80/tcp comment 'HTTP'
 ufw allow 443/tcp comment 'HTTPS'
 %{ endif ~}
 
-%{ if wireguard_enabled ~}
+%{ if wireguard_enabled && peer_enabled ~}
 ufw allow ${wg_listen_port}/udp comment 'WireGuard'
 %{ endif ~}
 
