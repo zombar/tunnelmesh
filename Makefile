@@ -173,17 +173,11 @@ GITHUB_OWNER ?= zombar
 
 deploy-update:
 	@echo "Updating tunnelmesh on all deployed nodes..."
-	@NODES=$$(cd $(TF_DIR) && terraform output -json ssh_commands 2>/dev/null | jq -r 'to_entries[] | "\(.key)|\(.value)"'); \
-	if [ -z "$$NODES" ]; then \
-		echo "Error: No nodes found in terraform state. Run 'make deploy' first."; \
-		exit 1; \
-	fi; \
-	for node in $$NODES; do \
-		NAME=$${node%%|*}; \
-		SSH=$${node##*|}; \
+	@cd $(TF_DIR) && terraform output -json ssh_commands 2>/dev/null | jq -r 'keys[]' | while read -r NAME; do \
+		IP=$$(cd $(TF_DIR) && terraform output -json node_ips 2>/dev/null | jq -r ".\"$$NAME\""); \
 		echo ""; \
-		echo "=== Updating $$NAME ==="; \
-		$$SSH -o StrictHostKeyChecking=no -o ConnectTimeout=10 ' \
+		echo "=== Updating $$NAME ($$IP) ==="; \
+		ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP ' \
 			set -e; \
 			ARCH=$$(dpkg --print-architecture); \
 			if [ "$(BINARY_VERSION)" = "latest" ]; then \
@@ -213,13 +207,13 @@ deploy-update-node:
 		echo "Error: NODE not specified. Usage: make deploy-update-node NODE=tunnelmesh"; \
 		exit 1; \
 	fi
-	@SSH=$$(cd $(TF_DIR) && terraform output -json ssh_commands 2>/dev/null | jq -r '.["$(NODE)"]'); \
-	if [ -z "$$SSH" ] || [ "$$SSH" = "null" ]; then \
+	@IP=$$(cd $(TF_DIR) && terraform output -json node_ips 2>/dev/null | jq -r '.["$(NODE)"]'); \
+	if [ -z "$$IP" ] || [ "$$IP" = "null" ]; then \
 		echo "Error: Node '$(NODE)' not found in terraform state"; \
 		exit 1; \
 	fi; \
-	echo "=== Updating $(NODE) ==="; \
-	$$SSH -o StrictHostKeyChecking=no -o ConnectTimeout=10 ' \
+	echo "=== Updating $(NODE) ($$IP) ==="; \
+	ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$$IP ' \
 		set -e; \
 		ARCH=$$(dpkg --print-architecture); \
 		if [ "$(BINARY_VERSION)" = "latest" ]; then \
