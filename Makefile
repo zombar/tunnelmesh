@@ -81,6 +81,13 @@ release-all:
 		echo "Built: $(BINARY_NAME)-$${platform%/*}-$${platform#*/}"; \
 	done
 	@echo "Release binaries in $(BUILD_DIR)/release/"
+	@$(MAKE) release-checksums
+
+# Generate SHA256 checksums for release binaries
+release-checksums:
+	@echo "Generating checksums..."
+	@cd $(BUILD_DIR)/release && shasum -a 256 $(BINARY_NAME)-* > checksums.txt
+	@echo "Checksums written to $(BUILD_DIR)/release/checksums.txt"
 
 # Build release for current platform
 release: build

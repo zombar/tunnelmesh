@@ -189,6 +189,9 @@ It does not route traffic - peers connect directly to each other.`,
 	// Service command - manage system service
 	rootCmd.AddCommand(newServiceCmd())
 
+	// Update command - self-update
+	rootCmd.AddCommand(newUpdateCmd())
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
