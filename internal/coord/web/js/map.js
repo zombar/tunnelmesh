@@ -32,7 +32,7 @@ class NodeMap {
             center: [20, 0],
             zoom: 2,
             scrollWheelZoom: true,
-            attributionControl: true
+            attributionControl: false
         });
 
         // Use CartoDB Dark Matter tiles for dark theme
