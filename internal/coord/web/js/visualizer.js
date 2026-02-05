@@ -11,10 +11,10 @@ const NodeType = {
     EXIT_NODE: 'exit_node'
 };
 
-const CARD_WIDTH = 220;
-const CARD_HEIGHT = 105;
+const CARD_WIDTH = 210;
+const CARD_HEIGHT = 80;
 const TAB_HEIGHT = 22;
-const ROW_SPACING = 135;  // Vertical spacing between spread nodes
+const ROW_SPACING = 110;  // Vertical spacing between spread nodes
 const CONNECTION_DOT_RADIUS = 5;
 const MAX_VISIBLE_NODES = 3;  // Show max 3 nodes per column, then "+ N more"
 
@@ -46,11 +46,9 @@ class VisualizerNode {
         this.version = peer.version || '';
         this.nodeType = nodeType;
 
-        // Traffic stats
-        this.bytesTxRate = peer.bytes_sent_rate || 0;
-        this.bytesRxRate = peer.bytes_received_rate || 0;
-        this.packetsTxRate = peer.packets_sent_rate || 0;
-        this.packetsRxRate = peer.packets_received_rate || 0;
+        // Throughput stats
+        this.bytesSentRate = peer.bytes_sent_rate || 0;
+        this.bytesReceivedRate = peer.bytes_received_rate || 0;
 
         // Build DNS name with truncation
         const fullDns = peer.name + (domainSuffix || '');
@@ -67,12 +65,7 @@ class VisualizerNode {
         this.hovered = false;
         this.stackIndex = 0;
         this.stackSize = 1;
-        this.visible = true;
-    }
-
-    // Total traffic for sorting (busiest first)
-    get totalTraffic() {
-        return this.bytesTxRate + this.bytesRxRate;
+        this.visible = true;  // Whether to render this node
     }
 
     get category() {
@@ -81,33 +74,23 @@ class VisualizerNode {
 }
 
 // =============================================================================
-// Formatting Helpers
-// =============================================================================
-
-function formatBytes(bytes) {
-    if (bytes === 0 || bytes === null || bytes === undefined) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-}
-
-function formatRate(rate) {
-    if (rate === 0 || rate === null || rate === undefined) return '0';
-    if (rate >= 1000000) return (rate / 1000000).toFixed(1) + 'M';
-    if (rate >= 1000) return (rate / 1000).toFixed(1) + 'K';
-    return Math.round(rate).toString();
-}
-
-// =============================================================================
 // Core Logic Functions
 // =============================================================================
 
+// Format bytes rate compactly
+function formatBytesCompact(bytes) {
+    if (bytes < 1024) return bytes + 'B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'K';
+    return (bytes / (1024 * 1024)).toFixed(1) + 'M';
+}
+
 // Check if source node can reach target node
 function canNodeReach(source, target) {
+    // Offline nodes can't communicate
     if (!source.online || !target.online) {
         return false;
     }
+    // All online nodes can reach each other (direct if connectable, else via relay)
     return true;
 }
 
@@ -180,11 +163,10 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
         }
     }
 
-    // Sort by traffic (busiest first) for both sides
-    // This prioritizes showing the most active connections
-    const sortByTraffic = (a, b) => b.totalTraffic - a.totalTraffic;
-    incoming.sort(sortByTraffic);
-    outgoing.sort(sortByTraffic);
+    // Sort consistently
+    const sortByName = (a, b) => a.name.localeCompare(b.name);
+    incoming.sort(sortByName);
+    outgoing.sort(sortByName);
 
     // Create slots for each column
     layoutColumn(incoming, centerX - columnSpacing, centerY, stackInfo.left, slots, 'left');
@@ -282,11 +264,8 @@ class NodeVisualizer {
                 node.activeTunnels = peer.stats?.active_tunnels ?? 0;
                 node.version = peer.version || '';
                 node.nodeType = nodeType;
-                // Update traffic stats
-                node.bytesTxRate = peer.bytes_sent_rate || 0;
-                node.bytesRxRate = peer.bytes_received_rate || 0;
-                node.packetsTxRate = peer.packets_sent_rate || 0;
-                node.packetsRxRate = peer.packets_received_rate || 0;
+                node.bytesSentRate = peer.bytes_sent_rate || 0;
+                node.bytesReceivedRate = peer.bytes_received_rate || 0;
             } else {
                 // Add new node
                 const node = new VisualizerNode(peer, this.domainSuffix, nodeType);
@@ -622,40 +601,31 @@ class NodeVisualizer {
 
         // Content
         const contentX = x + 10;
-        const contentY = y + 12;
-        const lineHeight = 15;
+        const contentY = y + 14;
+        const lineHeight = 16;
 
-        // Line 1: Mesh IP + version
         ctx.fillStyle = COLORS.text;
-        ctx.font = '11px monospace';
+        ctx.font = '12px monospace';
         ctx.textAlign = 'left';
         ctx.fillText(node.meshIP, contentX, contentY + 4);
 
         if (node.version) {
             ctx.fillStyle = COLORS.textDim;
-            ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+            ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
             ctx.textAlign = 'right';
             ctx.fillText(node.version, x + CARD_WIDTH - 10, contentY + 4);
         }
 
-        // Line 2: Throughput TX/RX
-        ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.fillStyle = '#3fb950';  // Green for TX
-        ctx.fillText('↑' + formatBytes(node.bytesTxRate) + '/s', contentX, contentY + lineHeight + 4);
-        ctx.fillStyle = '#58a6ff';  // Blue for RX
-        ctx.fillText('↓' + formatBytes(node.bytesRxRate) + '/s', contentX + 70, contentY + lineHeight + 4);
-
-        // Line 3: Packets TX/RX
-        ctx.fillStyle = '#3fb950';
-        ctx.fillText('↑' + formatRate(node.packetsTxRate) + ' pkt', contentX, contentY + lineHeight * 2 + 4);
-        ctx.fillStyle = '#58a6ff';
-        ctx.fillText('↓' + formatRate(node.packetsRxRate) + ' pkt', contentX + 70, contentY + lineHeight * 2 + 4);
-
-        // Line 4: Tunnel count
         ctx.fillStyle = COLORS.textDim;
-        const tunnelText = node.activeTunnels === 1 ? '1 tunnel' : `${node.activeTunnels} tunnels`;
-        ctx.fillText(tunnelText, contentX, contentY + lineHeight * 3 + 4);
+        ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+        ctx.textAlign = 'left';
+        const tunnelText = `${node.activeTunnels}t`;
+        ctx.fillText(tunnelText, contentX, contentY + lineHeight + 6);
+
+        // Throughput (right side of line 2)
+        const throughputText = `↑${formatBytesCompact(node.bytesSentRate)} ↓${formatBytesCompact(node.bytesReceivedRate)}`;
+        ctx.textAlign = 'right';
+        ctx.fillText(throughputText, x + CARD_WIDTH - 10, contentY + lineHeight + 6);
     }
 
 }
