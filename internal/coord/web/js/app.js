@@ -310,6 +310,7 @@ function initCharts() {
                 type: 'time',
                 time: {
                     displayFormats: {
+                        second: 'HH:mm',
                         minute: 'HH:mm',
                         hour: 'HH:mm',
                         day: 'd MMM'
