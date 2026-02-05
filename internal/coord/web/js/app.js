@@ -14,7 +14,7 @@ const state = {
             throughput: {},  // { peerName: [values] }
             packets: {}      // { peerName: [values] }
         },
-        maxChartPoints: 25920  // 3 days at 10-second intervals
+        maxChartPoints: 4320  // 12 hours at 10-second intervals
     }
 };
 
@@ -28,11 +28,11 @@ const GREEN_GRADIENT = [
     '#7ee787'  // brightest - outliers
 ];
 
-// Max time range in days (clamp to 3 days)
-const MAX_RANGE_DAYS = 3;
-// At 10-second heartbeat intervals, 3 days = 25920 points
+// Max time range for charts (12 hours)
+const MAX_RANGE_HOURS = 12;
+// At 10-second heartbeat intervals, 12 hours = 4320 points
 // Request full resolution (no downsampling)
-const MAX_CHART_POINTS = 25920;
+const MAX_CHART_POINTS = 4320;
 
 // Fetch and update dashboard
 async function fetchData(includeHistory = false) {
@@ -306,8 +306,8 @@ function initCharts() {
 
 async function fetchChartHistory() {
     try {
-        // Fetch up to 3 days of history
-        const since = new Date(Date.now() - MAX_RANGE_DAYS * 24 * 60 * 60 * 1000);
+        // Fetch up to 12 hours of history
+        const since = new Date(Date.now() - MAX_RANGE_HOURS * 60 * 60 * 1000);
 
         const url = `/admin/api/overview?since=${since.toISOString()}&maxPoints=${MAX_CHART_POINTS}`;
         const resp = await fetch(url);
