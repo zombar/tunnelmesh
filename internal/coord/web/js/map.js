@@ -138,9 +138,6 @@ class NodeMap {
             }).addTo(this.map);
         }
 
-        // Bind popup
-        marker.bindPopup(this.createPopupContent(peer, loc));
-
         this.markers.set(name, { marker, circle });
     }
 
@@ -158,9 +155,6 @@ class NodeMap {
             fillColor: color,
             color: color
         });
-
-        // Update popup
-        marker.setPopupContent(this.createPopupContent(peer, loc));
 
         // Update or remove accuracy circle
         if (loc.source === 'ip' && loc.accuracy > 1000 && peer.online) {
@@ -196,51 +190,6 @@ class NodeMap {
         if (entry.circle) this.map.removeLayer(entry.circle);
 
         this.markers.delete(name);
-    }
-
-    createPopupContent(peer, loc) {
-        const statusClass = peer.online ? 'online' : 'offline';
-        const statusText = peer.online ? 'Online' : 'Offline';
-
-        // Build location string
-        const locationParts = [];
-        if (loc.city) locationParts.push(loc.city);
-        if (loc.region && loc.region !== loc.city) locationParts.push(loc.region);
-        if (loc.country) locationParts.push(loc.country);
-        const locationStr = locationParts.join(', ') || 'Unknown';
-
-        // Source label
-        const sourceLabel = loc.source === 'manual' ? 'Manual config' : 'IP geolocation';
-        const sourceAccuracy = loc.source === 'ip' ? ` (~${Math.round(loc.accuracy / 1000)}km)` : '';
-
-        return `
-            <div class="map-popup">
-                <div class="popup-header">
-                    <strong>${this.escapeHtml(peer.name)}</strong>
-                    <span class="status-badge ${statusClass}">${statusText}</span>
-                </div>
-                <div class="popup-content">
-                    <div class="popup-row">
-                        <span class="popup-label">Mesh IP:</span>
-                        <code>${peer.mesh_ip}</code>
-                    </div>
-                    <div class="popup-row">
-                        <span class="popup-label">Location:</span>
-                        <span>${locationStr}</span>
-                    </div>
-                    <div class="popup-row">
-                        <span class="popup-label">Source:</span>
-                        <span>${sourceLabel}${sourceAccuracy}</span>
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
     }
 
     // Force map to recalculate size (call after container becomes visible)
