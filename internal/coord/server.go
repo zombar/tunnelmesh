@@ -29,6 +29,7 @@ type peerInfo struct {
 	registeredAt   time.Time
 	lastStatsTime  time.Time
 	prevStatsTime  time.Time
+	aliases        []string // DNS aliases registered by this peer
 }
 
 // serverStats tracks server-level statistics.
@@ -45,6 +46,7 @@ type Server struct {
 	peersMu      sync.RWMutex
 	ipAlloc      *ipAllocator
 	dnsCache     map[string]string // hostname -> mesh IP
+	aliasOwner   map[string]string // alias -> peer name (reverse lookup for ownership)
 	serverStats  serverStats
 	statsHistory *StatsHistory // Per-peer stats time series
 	relay        *relayManager
@@ -155,6 +157,7 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		peers:        make(map[string]*peerInfo),
 		ipAlloc:      ipAlloc,
 		dnsCache:     make(map[string]string),
+		aliasOwner:   make(map[string]string),
 		statsHistory: NewStatsHistory(),
 		serverStats: serverStats{
 			startTime: time.Now(),
@@ -308,6 +311,23 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// validateAliases checks if all aliases are valid and available for the requesting peer.
+// Returns an error if any alias conflicts. Must be called with peersMu held.
+func (s *Server) validateAliases(aliases []string, requestingPeer string) error {
+	for _, alias := range aliases {
+		// Can't use another peer's name
+		if _, exists := s.peers[alias]; exists && alias != requestingPeer {
+			return fmt.Errorf("alias %q conflicts with existing peer name", alias)
+		}
+
+		// Can't use another peer's alias
+		if owner, exists := s.aliasOwner[alias]; exists && owner != requestingPeer {
+			return fmt.Errorf("alias %q is already registered by peer %q", alias, owner)
+		}
+	}
+	return nil
+}
+
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -322,6 +342,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	s.peersMu.Lock()
 	defer s.peersMu.Unlock()
+
+	// Validate aliases first (before any state changes)
+	if len(req.Aliases) > 0 {
+		if err := s.validateAliases(req.Aliases, req.Name); err != nil {
+			s.jsonError(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
 
 	// Allocate IP deterministically based on peer name
 	// This ensures the same peer always gets the same IP
@@ -390,11 +418,23 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	registeredAt := time.Now()
 	if isExisting {
 		registeredAt = existing.registeredAt
+		// Clean up old aliases before registering new ones
+		for _, oldAlias := range existing.aliases {
+			delete(s.aliasOwner, oldAlias)
+			delete(s.dnsCache, oldAlias)
+		}
+	}
+
+	// Register new aliases
+	for _, alias := range req.Aliases {
+		s.aliasOwner[alias] = req.Name
+		s.dnsCache[alias] = meshIP
 	}
 
 	s.peers[req.Name] = &peerInfo{
 		peer:         peer,
 		registeredAt: registeredAt,
+		aliases:      req.Aliases,
 	}
 	s.dnsCache[req.Name] = meshIP
 
@@ -405,10 +445,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info().
+	logEvent := log.Info().
 		Str("name", req.Name).
-		Str("mesh_ip", meshIP).
-		Msg("peer registered")
+		Str("mesh_ip", meshIP)
+	if len(req.Aliases) > 0 {
+		logEvent = logEvent.Strs("aliases", req.Aliases)
+	}
+	logEvent.Msg("peer registered")
 
 	// Trigger IP geolocation only for new peers or when IP has changed (if locations enabled)
 	if needsGeoLookup && s.cfg.Locations && s.ipGeoCache != nil {
@@ -472,6 +515,11 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 		info, exists := s.peers[name]
 		if exists {
 			s.ipAlloc.release(info.peer.MeshIP)
+			// Clean up aliases
+			for _, alias := range info.aliases {
+				delete(s.aliasOwner, alias)
+				delete(s.dnsCache, alias)
+			}
 			delete(s.peers, name)
 			delete(s.dnsCache, name)
 		}

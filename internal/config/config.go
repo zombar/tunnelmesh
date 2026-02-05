@@ -79,9 +79,10 @@ type TUNConfig struct {
 
 // DNSConfig holds configuration for the local DNS resolver.
 type DNSConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	Listen   string `yaml:"listen"`
-	CacheTTL int    `yaml:"cache_ttl"`
+	Enabled  bool     `yaml:"enabled"`
+	Listen   string   `yaml:"listen"`
+	CacheTTL int      `yaml:"cache_ttl"`
+	Aliases  []string `yaml:"aliases,omitempty"` // Custom DNS aliases for this peer
 }
 
 // GeolocationConfig holds manual geolocation coordinates for a peer.
@@ -296,5 +297,58 @@ func (c *PeerConfig) Validate() error {
 			return err
 		}
 	}
+	// Validate DNS aliases
+	if err := c.DNS.ValidateAliases(c.Name); err != nil {
+		return err
+	}
 	return nil
+}
+
+// ValidateAliases checks if DNS aliases are valid DNS labels.
+func (d *DNSConfig) ValidateAliases(peerName string) error {
+	seen := make(map[string]bool)
+	for _, alias := range d.Aliases {
+		if err := validateDNSLabel(alias); err != nil {
+			return fmt.Errorf("dns.aliases: %q is invalid: %w", alias, err)
+		}
+		if alias == peerName {
+			return fmt.Errorf("dns.aliases: %q cannot be the same as peer name", alias)
+		}
+		if seen[alias] {
+			return fmt.Errorf("dns.aliases: duplicate alias %q", alias)
+		}
+		seen[alias] = true
+	}
+	return nil
+}
+
+// validateDNSLabel checks if a string is a valid DNS label (RFC 1123).
+func validateDNSLabel(label string) error {
+	if len(label) == 0 {
+		return fmt.Errorf("empty label")
+	}
+	if len(label) > 63 {
+		return fmt.Errorf("exceeds 63 characters")
+	}
+	if label != strings.ToLower(label) {
+		return fmt.Errorf("must be lowercase")
+	}
+	// Must start and end with alphanumeric
+	if !isAlphanumeric(label[0]) {
+		return fmt.Errorf("must start with alphanumeric character")
+	}
+	if !isAlphanumeric(label[len(label)-1]) {
+		return fmt.Errorf("must end with alphanumeric character")
+	}
+	// Only alphanumeric and hyphens allowed
+	for _, c := range label {
+		if !isAlphanumeric(byte(c)) && c != '-' && c != '.' {
+			return fmt.Errorf("contains invalid character %q", c)
+		}
+	}
+	return nil
+}
+
+func isAlphanumeric(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
 }

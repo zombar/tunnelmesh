@@ -76,6 +76,7 @@ type RegisterRequest struct {
 	Location          *GeoLocation `json:"location,omitempty"`            // Geographic location (manual config)
 	AllowsExitTraffic bool         `json:"allows_exit_traffic,omitempty"` // Allow this node to act as exit node
 	ExitNode          string       `json:"exit_node,omitempty"`           // Name of peer to use as exit node
+	Aliases           []string     `json:"aliases,omitempty"`             // Custom DNS aliases for this peer
 }
 
 // RegisterResponse is returned after successful registration.
