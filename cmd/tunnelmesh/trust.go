@@ -133,6 +133,9 @@ func removeCA(certPath string) error {
 func installCAMacOS(certPath string) error {
 	log.Info().Msg("installing CA certificate (requires sudo)")
 
+	// Remove any existing TunnelMesh CA first to avoid duplicates
+	_ = removeCAMacOSQuiet(false) // Ignore error if not found
+
 	// Add to system keychain
 	cmd := exec.Command("sudo", "security", "add-trusted-cert",
 		"-d", "-r", "trustRoot",
@@ -152,21 +155,31 @@ func installCAMacOS(certPath string) error {
 }
 
 func removeCAMacOS() error {
-	log.Info().Msg("removing CA certificate (requires sudo)")
+	return removeCAMacOSQuiet(true)
+}
+
+func removeCAMacOSQuiet(verbose bool) error {
+	if verbose {
+		log.Info().Msg("removing CA certificate (requires sudo)")
+	}
 
 	// Find and delete the cert by name
 	cmd := exec.Command("sudo", "security", "delete-certificate",
 		"-c", "TunnelMesh CA",
 		"/Library/Keychains/System.keychain")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	cmd.Stdin = os.Stdin
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("security delete-certificate failed: %w", err)
 	}
 
-	log.Info().Msg("CA certificate removed successfully")
+	if verbose {
+		log.Info().Msg("CA certificate removed successfully")
+	}
 	return nil
 }
 
@@ -326,6 +339,9 @@ func removeCALinux() error {
 func installCAWindows(certPath string) error {
 	log.Info().Msg("installing CA certificate (requires Administrator)")
 
+	// Remove any existing TunnelMesh CA first to avoid duplicates
+	_ = removeCAWindowsQuiet(false) // Ignore error if not found
+
 	// Convert path to Windows format
 	absPath, err := filepath.Abs(certPath)
 	if err != nil {
@@ -346,18 +362,28 @@ func installCAWindows(certPath string) error {
 }
 
 func removeCAWindows() error {
-	log.Info().Msg("removing CA certificate (requires Administrator)")
+	return removeCAWindowsQuiet(true)
+}
+
+func removeCAWindowsQuiet(verbose bool) error {
+	if verbose {
+		log.Info().Msg("removing CA certificate (requires Administrator)")
+	}
 
 	// Use certutil to delete from root store
 	cmd := exec.Command("certutil", "-delstore", "ROOT", "TunnelMesh CA")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("certutil failed (run as Administrator): %w", err)
 	}
 
-	log.Info().Msg("CA certificate removed successfully")
+	if verbose {
+		log.Info().Msg("CA certificate removed successfully")
+	}
 	return nil
 }
 
