@@ -130,6 +130,12 @@ type Config struct {
 	// HolePunchTimeout for NAT traversal
 	HolePunchTimeout time.Duration
 
+	// SessionTimeout is the duration after which a session is considered dead
+	// if no packets have been received. This handles stale sessions where the
+	// peer has restarted and our rekey-required messages don't reach us (NAT timeout).
+	// Default: 2 minutes (4+ keepalive intervals worth of missed packets)
+	SessionTimeout time.Duration
+
 	// PeerResolver looks up peer name from their X25519 public key
 	// Returns empty string if peer is unknown
 	PeerResolver func(pubKey [32]byte) string
@@ -155,6 +161,7 @@ func DefaultConfig() Config {
 		KeepaliveInterval: 25 * time.Second,
 		HandshakeTimeout:  10 * time.Second,
 		HolePunchTimeout:  10 * time.Second,
+		SessionTimeout:    2 * time.Minute,
 		HolePunchRetries:  5,
 	}
 }
@@ -172,6 +179,9 @@ func New(cfg Config) (*Transport, error) {
 	}
 	if cfg.HolePunchRetries == 0 {
 		cfg.HolePunchRetries = 5
+	}
+	if cfg.SessionTimeout == 0 {
+		cfg.SessionTimeout = 2 * time.Minute
 	}
 
 	// Use provided HTTP client or create a new one with sensible defaults
@@ -888,7 +898,7 @@ func (t *Transport) keepaliveLoop() {
 	}
 }
 
-// sendKeepalives sends keepalive packets to all active sessions.
+// sendKeepalives sends keepalive packets to all active sessions and checks for dead sessions.
 func (t *Transport) sendKeepalives() {
 	t.mu.RLock()
 	sessions := make([]*Session, 0, len(t.sessions))
@@ -897,14 +907,58 @@ func (t *Transport) sendKeepalives() {
 			sessions = append(sessions, s)
 		}
 	}
+	sessionTimeout := t.config.SessionTimeout
+	cb := t.onSessionInvalid
 	t.mu.RUnlock()
 
+	now := time.Now()
+	var deadSessions []*Session
+
 	for _, s := range sessions {
+		// Check if session has timed out (no packets received for too long)
+		lastRecv := s.LastReceive()
+		if !lastRecv.IsZero() && now.Sub(lastRecv) > sessionTimeout {
+			log.Warn().
+				Str("peer", s.PeerName()).
+				Dur("since_last_recv", now.Sub(lastRecv)).
+				Dur("timeout", sessionTimeout).
+				Msg("session timed out, no packets received")
+			deadSessions = append(deadSessions, s)
+			continue
+		}
+
 		if err := s.SendKeepalive(); err != nil {
 			log.Debug().
 				Err(err).
 				Str("peer", s.PeerName()).
 				Msg("keepalive failed")
+		}
+	}
+
+	// Clean up dead sessions
+	for _, s := range deadSessions {
+		peerName := s.PeerName()
+		localIndex := s.LocalIndex()
+
+		// Remove from transport's session maps
+		t.mu.Lock()
+		delete(t.sessions, localIndex)
+		if existing, ok := t.peerSessions[peerName]; ok && existing.LocalIndex() == localIndex {
+			delete(t.peerSessions, peerName)
+		}
+		t.mu.Unlock()
+
+		// Close the session
+		s.Close()
+
+		log.Info().
+			Str("peer", peerName).
+			Uint32("local_index", localIndex).
+			Msg("removed dead session due to receive timeout")
+
+		// Trigger reconnection
+		if cb != nil {
+			cb(peerName)
 		}
 	}
 }

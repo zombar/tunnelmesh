@@ -96,7 +96,9 @@ func (s *Session) SetCrypto(crypto *CryptoState, remoteIndex uint32) {
 	s.crypto = crypto
 	s.remoteIndex = remoteIndex
 	s.state = SessionStateEstablished
-	s.established = time.Now()
+	now := time.Now()
+	s.established = now
+	s.lastRecv = now // Initialize lastRecv so session timeout check works from establishment
 }
 
 // SetOnClose sets a callback to be invoked when the session is closed.
