@@ -135,6 +135,66 @@ header h1 {
     }
 }
 
+/* Visualizer Section */
+#visualizer-section {
+    max-width: 1400px;
+    margin: 1.5rem auto 0;
+    padding: 0 2rem;
+    width: 100%;
+}
+
+.visualizer-card {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+}
+
+.visualizer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    border-radius: 6px 6px 0 0;
+}
+
+.visualizer-header h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #e6edf3;
+    margin: 0;
+}
+
+.visualizer-container {
+    position: relative;
+    height: 300px;
+    background: #0d1117;
+    border-radius: 0 0 6px 6px;
+}
+
+#visualizer-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+}
+
+#visualizer-canvas:active {
+    cursor: grabbing;
+}
+
+@media (max-width: 900px) {
+    #visualizer-section {
+        padding: 0 1rem;
+        margin: 1rem auto 0;
+    }
+
+    .visualizer-container {
+        height: 250px;
+    }
+}
+
 main {
     flex: 1;
     padding: 1.5rem 2rem;

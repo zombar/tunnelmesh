@@ -14,8 +14,12 @@ const state = {
             throughput: {},  // { peerName: [values] }
             packets: {}      // { peerName: [values] }
         },
-        maxChartPoints: 360  // 1 hour at 10-second intervals
-    }
+        maxChartPoints: 360,  // 1 hour at 10-second intervals
+        highlightedPeer: null // Peer to highlight on charts (selected in visualizer)
+    },
+    // Visualizer state
+    visualizer: null,
+    domainSuffix: '.tunnelmesh'
 };
 
 // Green gradient for chart lines (dim to bright based on outlier status)
@@ -132,6 +136,17 @@ function updateDashboard(data, loadHistory = false) {
     const versionEl = document.getElementById('server-version');
     if (versionEl && data.server_version) {
         versionEl.textContent = data.server_version;
+    }
+
+    // Store domain suffix for visualizer
+    state.domainSuffix = data.domain_suffix || '.tunnelmesh';
+
+    // Update visualizer with peer data
+    if (state.visualizer) {
+        state.visualizer.setDomainSuffix(state.domainSuffix);
+        // TODO: Detect which peer is the WG concentrator (for now, null)
+        state.visualizer.syncNodes(data.peers, null);
+        state.visualizer.render();
     }
 
     // Update charts with new data during polling (not on initial history load)
@@ -679,7 +694,7 @@ function rebuildChartDatasets() {
     const throughputColors = calculatePeerColors(state.charts.chartData.throughput);
     const packetsColors = calculatePeerColors(state.charts.chartData.packets);
 
-    // Helper to build dataset with offline detection
+    // Helper to build dataset with offline detection and highlighting
     // null = peer didn't exist yet (don't show)
     // -1 = peer was offline (show red dashed line at y=0)
     const buildDataset = (peerName, values, baseColor) => {
@@ -691,16 +706,22 @@ function rebuildChartDatasets() {
         // Track which segments are offline (were -1 in original data)
         const offlineSegments = values.map(v => v === -1);
 
+        // Check if this peer is highlighted (selected in visualizer)
+        const isHighlighted = peerName === state.charts.highlightedPeer;
+        const lineColor = isHighlighted ? '#58a6ff' : baseColor;
+        const lineWidth = isHighlighted ? 3 : 1.5;
+
         return {
             label: peerName,
             data: data,
-            borderColor: baseColor,
-            borderWidth: 1.5,
+            borderColor: lineColor,
+            borderWidth: lineWidth,
             pointRadius: 0,
             tension: 0.3,
             cubicInterpolationMode: 'monotone',
             fill: false,
             spanGaps: false, // Don't connect across null gaps
+            order: isHighlighted ? 0 : 1, // Highlighted peer drawn on top
             segment: {
                 borderColor: ctx => {
                     const p0Offline = offlineSegments[ctx.p0DataIndex];
@@ -708,7 +729,7 @@ function rebuildChartDatasets() {
                     if (p0Offline || p1Offline) {
                         return '#d32f2f'; // Red for offline
                     }
-                    return baseColor;
+                    return lineColor;
                 },
                 borderDash: ctx => {
                     const p0Offline = offlineSegments[ctx.p0DataIndex];
@@ -1012,9 +1033,32 @@ async function deleteWGClient(id, name) {
     }
 }
 
+// Highlight peer on charts when selected in visualizer
+function highlightPeerOnCharts(peerName) {
+    state.charts.highlightedPeer = peerName;
+    rebuildChartDatasets();
+}
+
+// Initialize visualizer
+function initVisualizer() {
+    const canvas = document.getElementById('visualizer-canvas');
+    if (!canvas) return;
+
+    state.visualizer = new NodeVisualizer(canvas);
+    state.visualizer.setDomainSuffix(state.domainSuffix);
+
+    // Wire up node selection to chart highlighting
+    state.visualizer.onNodeSelected = (nodeId) => {
+        highlightPeerOnCharts(nodeId);
+    };
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    // Initialize charts first
+    // Initialize visualizer
+    initVisualizer();
+
+    // Initialize charts
     initCharts();
 
     // Fetch initial chart history (up to 1 hour)
