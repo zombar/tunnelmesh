@@ -15,11 +15,9 @@ const CARD_WIDTH = 200;
 const CARD_HEIGHT = 80;
 const TAB_HEIGHT = 20;
 const COLUMN_SPACING = 280;
-const ROW_SPACING = 120;
-const STACK_OFFSET_X = 6;
-const STACK_OFFSET_Y = 3;
+const ROW_SPACING = 110;  // Vertical spacing between spread nodes
 const CONNECTION_DOT_RADIUS = 5;
-const MAX_VISIBLE_STACK = 3;  // Show max 3 nodes, then "+ N more"
+const MAX_VISIBLE_NODES = 3;  // Show max 3 nodes per column, then "+ N more"
 
 // Colors matching dashboard theme
 const COLORS = {
@@ -36,8 +34,7 @@ const COLORS = {
     hovered: '#1f6feb',
     hoveredStroke: '#58a6ff',
     connection: '#30363d',
-    connectionHighlight: '#58a6ff',
-    stackShadow: '#30363d'
+    connectionHighlight: '#58a6ff'
 };
 
 // =============================================================================
@@ -143,31 +140,26 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
     selectedNode.targetY = centerY;
     selectedNode.visible = true;
 
-    // Classify other nodes
-    const incoming = [];  // Can reach selected
-    const outgoing = [];  // Selected can reach
+    // Classify other nodes by connectivity type:
+    // Left (incoming): NAT nodes that must connect TO the network
+    // Right (outgoing): Connectable nodes that can be reached directly
+    const incoming = [];  // NAT nodes
+    const outgoing = [];  // Connectable nodes
 
     for (const [id, node] of nodes) {
         if (id === selectedId) continue;
+        if (!node.online) continue;  // Skip offline nodes
 
-        const canReachSelected = canNodeReach(node, selectedNode);
-        const canBeReached = canNodeReach(selectedNode, node);
-
-        // In a mesh, most nodes are both incoming and outgoing
-        // Prioritize by connectable status for visual clarity
-        if (node.connectable && !selectedNode.connectable) {
-            // Node is connectable, selected is NAT - show as outgoing
+        if (node.connectable) {
+            // Connectable nodes go on right (outgoing targets)
             outgoing.push(node);
-        } else if (!node.connectable && selectedNode.connectable) {
-            // Node is NAT, selected is connectable - show as incoming
-            incoming.push(node);
-        } else if (canReachSelected) {
-            // Default: show online nodes that can reach selected as incoming
+        } else {
+            // NAT nodes go on left (incoming connections)
             incoming.push(node);
         }
     }
 
-    // Layout columns with stacking limit
+    // Layout columns - spread nodes vertically
     layoutColumn(incoming, centerX - COLUMN_SPACING, centerY, stackInfo.left);
     layoutColumn(outgoing, centerX + COLUMN_SPACING, centerY, stackInfo.right);
 }
@@ -177,49 +169,33 @@ function layoutColumn(nodes, centerX, centerY, stackInfo) {
 
     stackInfo.total = nodes.length;
 
-    // Group by category
-    const groups = new Map();
-    for (const node of nodes) {
-        const cat = node.category;
-        if (!groups.has(cat)) groups.set(cat, []);
-        groups.get(cat).push(node);
-    }
+    // Sort nodes for consistent ordering (by name)
+    nodes.sort((a, b) => a.name.localeCompare(b.name));
 
-    // Sort groups for consistent ordering
-    const groupArray = Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    // Limit visible nodes
+    const visibleCount = Math.min(nodes.length, MAX_VISIBLE_NODES);
+    const hiddenCount = nodes.length - visibleCount;
+    stackInfo.hidden = hiddenCount;
 
-    // Calculate total height
-    const totalHeight = groupArray.length * ROW_SPACING;
+    // Calculate total height for visible nodes
+    const totalHeight = (visibleCount - 1) * ROW_SPACING;
     let currentY = centerY - totalHeight / 2;
 
-    let visibleCount = 0;
-    let hiddenCount = 0;
+    // Position each visible node vertically spread
+    for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        node.stackIndex = i;
+        node.stackSize = nodes.length;
 
-    for (const [category, groupNodes] of groupArray) {
-        const stackSize = groupNodes.length;
-        const visibleInStack = Math.min(stackSize, MAX_VISIBLE_STACK);
-
-        groupNodes.forEach((node, idx) => {
-            node.stackIndex = idx;
-            node.stackSize = stackSize;
-
-            if (idx < MAX_VISIBLE_STACK) {
-                // Visible node - stack with small offset
-                node.visible = true;
-                node.targetX = centerX + (idx - (visibleInStack - 1) / 2) * STACK_OFFSET_X;
-                node.targetY = currentY + idx * STACK_OFFSET_Y;
-                visibleCount++;
-            } else {
-                // Hidden node
-                node.visible = false;
-                hiddenCount++;
-            }
-        });
-
-        currentY += ROW_SPACING;
+        if (i < MAX_VISIBLE_NODES) {
+            node.visible = true;
+            node.targetX = centerX;
+            node.targetY = currentY;
+            currentY += ROW_SPACING;
+        } else {
+            node.visible = false;
+        }
     }
-
-    stackInfo.hidden = hiddenCount;
 }
 
 // =============================================================================
@@ -500,9 +476,6 @@ class NodeVisualizer {
         // Draw connections first (behind nodes)
         this.renderConnections(ctx);
 
-        // Draw stack shadows (grey cards behind visible ones)
-        this.renderStackShadows(ctx);
-
         // Draw visible nodes (sorted so selected is on top)
         const visibleNodes = Array.from(this.nodes.values())
             .filter(n => n.visible)
@@ -521,51 +494,6 @@ class NodeVisualizer {
 
         // Draw "+ N more" labels
         this.renderStackLabels(ctx, width, height);
-    }
-
-    renderStackShadows(ctx) {
-        // Draw grey shadows to indicate hidden nodes in stack
-        const selected = this.nodes.get(this.selectedNodeId);
-        if (!selected) return;
-
-        // Group visible nodes by side and category
-        const leftGroups = new Map();
-        const rightGroups = new Map();
-
-        for (const node of this.nodes.values()) {
-            if (node.id === this.selectedNodeId) continue;
-            if (node.stackSize <= MAX_VISIBLE_STACK) continue;  // No hidden nodes
-
-            const isLeft = node.targetX < selected.targetX;
-            const groups = isLeft ? leftGroups : rightGroups;
-
-            if (!groups.has(node.category)) {
-                groups.set(node.category, node);
-            }
-        }
-
-        // Draw shadow cards for groups with hidden nodes
-        ctx.fillStyle = COLORS.stackShadow;
-        ctx.strokeStyle = COLORS.cardStroke;
-        ctx.lineWidth = 1;
-
-        for (const [groups] of [[leftGroups], [rightGroups]]) {
-            for (const [cat, node] of groups) {
-                const hiddenCount = node.stackSize - MAX_VISIBLE_STACK;
-                // Draw grey shadow cards behind the stack
-                for (let i = 0; i < Math.min(hiddenCount, 3); i++) {
-                    const offsetX = (MAX_VISIBLE_STACK + i) * STACK_OFFSET_X;
-                    const offsetY = (MAX_VISIBLE_STACK + i) * STACK_OFFSET_Y;
-                    const x = node.targetX + offsetX - CARD_WIDTH / 2;
-                    const y = node.targetY + offsetY - CARD_HEIGHT / 2;
-
-                    ctx.beginPath();
-                    ctx.roundRect(x, y, CARD_WIDTH, CARD_HEIGHT, 6);
-                    ctx.fill();
-                    ctx.stroke();
-                }
-            }
-        }
     }
 
     renderStackLabels(ctx, width, height) {
