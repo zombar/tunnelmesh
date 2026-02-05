@@ -223,6 +223,11 @@ header h1 {
     color: var(--color-accent-blue) !important;
 }
 
+/* Make map markers show pointer cursor on hover */
+.leaflet-interactive {
+    cursor: pointer;
+}
+
 @media (max-width: 900px) {
     #map-section {
         padding: 0 1rem;

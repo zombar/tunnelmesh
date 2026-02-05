@@ -304,6 +304,13 @@ class NodeMap {
             fillOpacity: 0.8
         }).addTo(this.map);
 
+        // Click to select this node
+        marker.on('click', () => {
+            if (typeof selectNode === 'function') {
+                selectNode(name);
+            }
+        });
+
         // Store location info for accuracy circle (only shown for selected node)
         this.markers.set(name, { marker, circle: null, loc, peer });
     }
