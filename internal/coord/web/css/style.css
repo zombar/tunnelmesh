@@ -206,15 +206,27 @@ header h1 {
 /* Fix tile seams (white lines between tiles) */
 .leaflet-tile {
     outline: none !important;
-    filter: brightness(1.05) contrast(1.05);
+    /* GPU acceleration prevents subpixel gaps */
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    transform: translate3d(0, 0, 0);
+    /* Slightly enlarge tiles to overlap seams */
+    margin: -0.5px;
 }
 
 .leaflet-tile-pane {
-    opacity: 1;
+    /* Force GPU layer for entire tile pane */
+    transform: translateZ(0);
+}
+
+.leaflet-tile-container {
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
 }
 
 .leaflet-tile-container img {
-    outline: 1px solid transparent;
+    /* Prevent image edges from showing gaps */
+    display: block;
 }
 
 /* Leaflet control styling for dark theme */
