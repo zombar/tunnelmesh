@@ -47,9 +47,15 @@ variable "wireguard_enabled" {
 # --- Coordinator Settings ---
 
 variable "coordinator_port" {
-  description = "HTTP port for the coordination server"
+  description = "HTTP port for the coordination server (internal)"
   type        = number
   default     = 8080
+}
+
+variable "external_api_port" {
+  description = "HTTPS port for external API (nginx). Port 443 is reserved for mesh-internal admin."
+  type        = number
+  default     = 8443
 }
 
 variable "mesh_cidr" {

@@ -216,7 +216,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 
 // setupAdminRoutes registers the admin API routes and static file server.
 // Note: Admin routes have no authentication - access is controlled by bind address.
-// With join_mesh + mesh_only_admin=true (default): HTTPS on mesh IP at /
+// With join_mesh + mesh_only_admin=true (default): HTTPS on mesh IP at root (https://this.tunnelmesh/)
 // With join_mesh + mesh_only_admin=false: HTTP on bind_address at /admin/
 // Without join_mesh: HTTP on bind_address at /admin/
 func (s *Server) setupAdminRoutes() {
@@ -230,7 +230,7 @@ func (s *Server) setupAdminRoutes() {
 
 	if meshOnlyAdmin {
 		// Mesh-only: create separate adminMux for HTTPS server on mesh IP
-		// Serve at root (no /admin/ prefix needed - dedicated server)
+		// Serve at root - dedicated server doesn't need /admin/ prefix
 		s.adminMux = http.NewServeMux()
 
 		s.adminMux.HandleFunc("/api/overview", s.handleAdminOverview)

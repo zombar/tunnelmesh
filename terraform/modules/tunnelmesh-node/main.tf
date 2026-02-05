@@ -62,6 +62,7 @@ resource "digitalocean_droplet" "node" {
 
     # Coordinator settings
     coordinator_port  = var.coordinator_port
+    external_api_port = var.external_api_port
     mesh_cidr         = var.mesh_cidr
     relay_enabled     = var.relay_enabled
     auth_token        = var.auth_token
@@ -142,12 +143,12 @@ resource "digitalocean_firewall" "node" {
     }
   }
 
-  # HTTPS (coordinator API)
+  # HTTPS (external coordinator API)
   dynamic "inbound_rule" {
     for_each = var.coordinator_enabled ? [1] : []
     content {
       protocol         = "tcp"
-      port_range       = "443"
+      port_range       = tostring(var.external_api_port)
       source_addresses = ["0.0.0.0/0", "::/0"]
     }
   }

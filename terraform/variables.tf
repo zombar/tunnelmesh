@@ -99,6 +99,12 @@ variable "default_ssh_port" {
   default     = 2222
 }
 
+variable "external_api_port" {
+  description = "HTTPS port for external coordinator API. Port 443 is reserved for mesh-internal admin."
+  type        = number
+  default     = 8443
+}
+
 # ============================================================================
 # GLOBAL SETTINGS
 # ============================================================================

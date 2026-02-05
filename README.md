@@ -105,6 +105,19 @@ Standard WireGuard clients on mobile devices can connect to the mesh via a WireG
 - Clients get mesh DNS names (e.g., `iphone.tunnelmesh`)
 - Managed via coordination server admin panel
 
+### Admin Interface
+
+When the coordination server runs with `join_mesh` configured, the admin interface is accessible only from within the mesh network at `https://this.tunnelmesh/`. This provides secure access without exposing the admin panel to the internet.
+
+**First-time setup - trust the CA certificate:**
+
+```bash
+# Install the mesh CA certificate (requires sudo)
+tunnelmesh trust-ca --server https://your-coordinator:8443
+```
+
+This installs the TunnelMesh CA in your system trust store, allowing HTTPS connections to mesh services without browser warnings. After trusting the CA, access the admin panel at `https://this.tunnelmesh/` from any mesh peer.
+
 ## Configuration
 
 ### Server Configuration
@@ -277,6 +290,8 @@ The tool searches for config files in the following order:
 | `tunnelmesh service start/stop` | Control the service |
 | `tunnelmesh service status` | Show service status |
 | `tunnelmesh service logs` | View service logs |
+| `tunnelmesh trust-ca` | Install mesh CA certificate in system trust store |
+| `tunnelmesh update` | Update to latest version |
 
 ### Global Flags
 

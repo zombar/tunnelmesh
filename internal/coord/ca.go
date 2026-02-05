@@ -20,15 +20,18 @@ import (
 
 // CertificateAuthority manages TLS certificates for the mesh network.
 type CertificateAuthority struct {
-	dataDir string
-	caCert  *x509.Certificate
-	caKey   *ecdsa.PrivateKey
+	dataDir      string
+	domainSuffix string
+	caCert       *x509.Certificate
+	caKey        *ecdsa.PrivateKey
 }
 
 // NewCertificateAuthority creates or loads a CA from the given data directory.
-func NewCertificateAuthority(dataDir string) (*CertificateAuthority, error) {
+// The domainSuffix is used in the CA name to allow multiple mesh networks.
+func NewCertificateAuthority(dataDir, domainSuffix string) (*CertificateAuthority, error) {
 	ca := &CertificateAuthority{
-		dataDir: dataDir,
+		dataDir:      dataDir,
+		domainSuffix: domainSuffix,
 	}
 
 	certPath := filepath.Join(dataDir, "ca.crt")
@@ -70,11 +73,16 @@ func (ca *CertificateAuthority) generate() error {
 	}
 
 	// Create CA certificate template
+	// Include domain suffix in CA name to allow multiple mesh networks
+	caName := "TunnelMesh CA"
+	if ca.domainSuffix != "" {
+		caName = fmt.Sprintf("TunnelMesh CA (%s)", ca.domainSuffix)
+	}
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			Organization: []string{"TunnelMesh"},
-			CommonName:   "TunnelMesh CA",
+			CommonName:   caName,
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().AddDate(10, 0, 0), // 10 years
@@ -169,6 +177,15 @@ func (ca *CertificateAuthority) save(certPath, keyPath string) error {
 	}
 
 	return nil
+}
+
+// Name returns the CA certificate's Common Name.
+// This is used by clients to identify which CA to trust/remove.
+func (ca *CertificateAuthority) Name() string {
+	if ca.caCert != nil {
+		return ca.caCert.Subject.CommonName
+	}
+	return ""
 }
 
 // GeneratePeerCert creates a new certificate for a peer, signed by the CA.
@@ -266,5 +283,6 @@ func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/x-pem-file")
 	w.Header().Set("Content-Disposition", "attachment; filename=\"tunnelmesh-ca.crt\"")
+	w.Header().Set("X-TunnelMesh-CA-Name", s.ca.Name())
 	_, _ = w.Write(s.ca.CACertPEM())
 }
