@@ -79,7 +79,6 @@ function setupSSE() {
     eventSource.addEventListener('heartbeat', (event) => {
         // Refresh dashboard when a heartbeat is received
         const data = JSON.parse(event.data);
-        console.log(`SSE heartbeat: peer=${data.peer} time=${new Date().toISOString()}`);
         fetchData(false);
     });
 
@@ -503,8 +502,6 @@ function updateChartsWithNewData(peers) {
         const peerLastSeenQuantized = quantizeTimestamp(peerLastSeen.getTime());
         const knownLastSeen = state.charts.lastSeenTimes[peer.name] || 0;
 
-        console.log(`Chart check: ${peer.name} lastSeen=${peerLastSeenQuantized} known=${knownLastSeen} new=${peerLastSeenQuantized > knownLastSeen}`);
-
         // Only process if this is a new heartbeat (quantized)
         if (peerLastSeenQuantized > knownLastSeen) {
             state.charts.lastSeenTimes[peer.name] = peerLastSeenQuantized;
@@ -520,10 +517,8 @@ function updateChartsWithNewData(peers) {
 
     // No new data
     if (newPoints.length === 0) {
-        console.log('Chart update: no new data points');
         return;
     }
-    console.log(`Chart update: ${newPoints.length} new points`);
 
     // Group new points by quantized timestamp (10-second intervals)
     const groups = new Map();
@@ -570,7 +565,6 @@ function updateChartsWithNewData(peers) {
 
         // Only add if this timestamp is newer than the last one in the chart
         if (groupTime <= lastChartTime) {
-            console.log(`Chart update: skipping point (${group.timestamp.toISOString()} <= ${new Date(lastChartTime).toISOString()})`);
             return; // Skip data points in the past
         }
 
@@ -635,9 +629,6 @@ function updateChartsWithNewData(peers) {
         }
     });
 
-    if (addedPoints > 0 || updatedPoints > 0) {
-        console.log(`Chart update: added ${addedPoints} timestamps, updated ${updatedPoints} existing, rebuilding datasets`);
-    }
     rebuildChartDatasets();
 }
 
