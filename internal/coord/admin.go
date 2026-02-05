@@ -228,17 +228,14 @@ func (s *Server) setupAdminRoutes() {
 		// Serve at root (no /admin/ prefix needed - dedicated server)
 		s.adminMux = http.NewServeMux()
 
-		// API endpoints
 		s.adminMux.HandleFunc("/api/overview", s.handleAdminOverview)
 		s.adminMux.HandleFunc("/api/events", s.handleSSE)
 
-		// WireGuard client management endpoints (if enabled)
 		if s.cfg.WireGuard.Enabled {
 			s.adminMux.HandleFunc("/api/wireguard/clients", s.handleWGClients)
 			s.adminMux.HandleFunc("/api/wireguard/clients/", s.handleWGClientByID)
 		}
 
-		// Serve static files at root
 		s.adminMux.Handle("/", fileServer)
 	} else {
 		// Without join_mesh: register on main mux with /admin/ prefix
