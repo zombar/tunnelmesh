@@ -360,16 +360,30 @@ function initializeChartData(data) {
         const throughputData = [];
         const packetsData = [];
 
+        // Find the earliest timestamp this peer has data for
+        const peerTimestamps = history.map(p => new Date(p.ts).getTime());
+        const peerFirstTs = Math.min(...peerTimestamps);
+        const peerLastTs = Math.max(...peerTimestamps);
+
         sortedTimestamps.forEach(ts => {
             const point = historyMap.get(ts);
             if (point) {
                 // Combine TX and RX for total throughput/packets
                 throughputData.push((point.txB || 0) + (point.rxB || 0));
                 packetsData.push((point.txP || 0) + (point.rxP || 0));
-            } else {
-                // No data for this timestamp - use null for gap
+            } else if (ts < peerFirstTs) {
+                // Before peer existed - use null (won't be shown)
                 throughputData.push(null);
                 packetsData.push(null);
+            } else if (ts > peerLastTs) {
+                // After last known data - use null (peer may have gone offline)
+                throughputData.push(null);
+                packetsData.push(null);
+            } else {
+                // Gap in the middle - peer was offline, mark with special value
+                // Use -1 to indicate "was online but missed heartbeat"
+                throughputData.push(-1);
+                packetsData.push(-1);
             }
         });
 
@@ -479,20 +493,28 @@ function updateChartsWithNewData(peers) {
         ]);
 
         allPeers.forEach(peerName => {
-            // Initialize arrays if needed
-            if (!state.charts.chartData.throughput[peerName]) {
-                state.charts.chartData.throughput[peerName] = [];
-                state.charts.chartData.packets[peerName] = [];
+            // Check if this is a new peer
+            const isNewPeer = !state.charts.chartData.throughput[peerName];
+
+            // Initialize arrays if needed (fill with nulls for timestamps before they existed)
+            if (isNewPeer) {
+                const chartLen = state.charts.chartData.labels.length - 1; // -1 because we just added the new timestamp
+                state.charts.chartData.throughput[peerName] = new Array(chartLen).fill(null);
+                state.charts.chartData.packets[peerName] = new Array(chartLen).fill(null);
             }
 
             if (group.peers[peerName]) {
                 // This peer has data for this timestamp
                 state.charts.chartData.throughput[peerName].push(group.peers[peerName].throughput);
                 state.charts.chartData.packets[peerName].push(group.peers[peerName].packets);
-            } else {
-                // Peer has no data for this timestamp - use null (gap)
+            } else if (isNewPeer) {
+                // New peer with no data yet - use null (didn't exist)
                 state.charts.chartData.throughput[peerName].push(null);
                 state.charts.chartData.packets[peerName].push(null);
+            } else {
+                // Existing peer with no data - went offline, use -1 (shows as red line at 0)
+                state.charts.chartData.throughput[peerName].push(-1);
+                state.charts.chartData.packets[peerName].push(-1);
             }
         });
     });
@@ -570,50 +592,62 @@ function rebuildChartDatasets() {
     const throughputColors = calculatePeerColors(state.charts.chartData.throughput);
     const packetsColors = calculatePeerColors(state.charts.chartData.packets);
 
-    // Build throughput datasets
-    const throughputDatasets = Object.entries(state.charts.chartData.throughput).map(([peerName, values]) => {
-        // Ensure line connects from Y axis by filling leading nulls with first real value
-        const firstRealIdx = values.findIndex(v => v !== null);
-        const filledValues = values.map((v, i) => {
-            if (v === null && i < firstRealIdx && firstRealIdx >= 0) {
-                return values[firstRealIdx];
-            }
-            return v;
-        });
+    // Helper to build dataset with offline detection
+    // null = peer didn't exist yet (don't show)
+    // -1 = peer was offline (show red dashed line at y=0)
+    // >= 0 = actual value
+    const buildDataset = (peerName, values, baseColor) => {
+        // Convert values: null stays null (gap), -1 becomes 0 (offline), else keep value
+        const data = values.map((v, i) => ({
+            x: labels[i],
+            y: v === null ? null : (v === -1 ? 0 : v)
+        }));
+
+        // Track which segments are offline (were -1 in original data)
+        const offlineSegments = values.map(v => v === -1);
+
         return {
             label: peerName,
-            data: filledValues.map((v, i) => ({ x: labels[i], y: v })),
-            borderColor: throughputColors[peerName] || GREEN_GRADIENT[2],
+            data: data,
+            borderColor: baseColor,
             borderWidth: 1.5,
             pointRadius: 0,
             tension: 0.3,
             cubicInterpolationMode: 'monotone',
             fill: false,
-            spanGaps: true
+            spanGaps: false, // Don't connect across null gaps (peer didn't exist)
+            // Use segment styling to show offline periods in red
+            segment: {
+                borderColor: ctx => {
+                    // If either endpoint of segment was offline, show red
+                    const p0Offline = offlineSegments[ctx.p0DataIndex];
+                    const p1Offline = offlineSegments[ctx.p1DataIndex];
+                    if (p0Offline || p1Offline) {
+                        return '#d32f2f'; // Red for offline
+                    }
+                    return baseColor;
+                },
+                borderDash: ctx => {
+                    // Dashed line for offline periods
+                    const p0Offline = offlineSegments[ctx.p0DataIndex];
+                    const p1Offline = offlineSegments[ctx.p1DataIndex];
+                    if (p0Offline || p1Offline) {
+                        return [5, 5];
+                    }
+                    return undefined;
+                }
+            }
         };
+    };
+
+    // Build throughput datasets
+    const throughputDatasets = Object.entries(state.charts.chartData.throughput).map(([peerName, values]) => {
+        return buildDataset(peerName, values, throughputColors[peerName] || GREEN_GRADIENT[2]);
     });
 
     // Build packets datasets
     const packetsDatasets = Object.entries(state.charts.chartData.packets).map(([peerName, values]) => {
-        // Ensure line connects from Y axis by filling leading nulls with first real value
-        const firstRealIdx = values.findIndex(v => v !== null);
-        const filledValues = values.map((v, i) => {
-            if (v === null && i < firstRealIdx && firstRealIdx >= 0) {
-                return values[firstRealIdx];
-            }
-            return v;
-        });
-        return {
-            label: peerName,
-            data: filledValues.map((v, i) => ({ x: labels[i], y: v })),
-            borderColor: packetsColors[peerName] || GREEN_GRADIENT[2],
-            borderWidth: 1.5,
-            pointRadius: 0,
-            tension: 0.3,
-            cubicInterpolationMode: 'monotone',
-            fill: false,
-            spanGaps: true
-        };
+        return buildDataset(peerName, values, packetsColors[peerName] || GREEN_GRADIENT[2]);
     });
 
     if (state.charts.throughput) {
