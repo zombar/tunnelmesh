@@ -13,6 +13,7 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 - **NAT Traversal** - UDP hole-punching with STUN-like endpoint discovery, plus relay fallback
 - **Multi-Platform** - Linux, macOS, and Windows support
 - **Admin Dashboard** - Web interface showing mesh status, peers, traffic statistics, and per-peer transport controls
+- **Node Location Map** - Optional geographic visualization of mesh nodes (requires `--locations` flag)
 - **Server-as-Client** - Coordination server can also participate as a mesh node
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
 
@@ -119,6 +120,10 @@ mesh_cidr: "10.99.0.0/16"
 
 # Domain suffix for hostnames
 domain_suffix: ".tunnelmesh"
+
+# Enable node location tracking (optional, disabled by default)
+# WARNING: Uses external IP geolocation API (ip-api.com)
+locations: false
 
 # Admin web interface
 admin:
@@ -413,6 +418,22 @@ Deploy the coordination server to DigitalOcean App Platform using Terraform.
 | `image_tag` | Docker image tag | `latest` |
 | `mesh_cidr` | Mesh network CIDR | `10.99.0.0/16` |
 | `region` | DO region | `ams` |
+| `locations_enabled` | Enable node location tracking | `false` |
+
+### Node Location Tracking
+
+The `--locations` flag (or `locations: true` in config) enables geographic visualization of mesh nodes on a map in the admin dashboard. **This feature is disabled by default** because it:
+
+1. **Uses external services**: The coordinator queries [ip-api.com](http://ip-api.com) to geolocate nodes by their public IP addresses
+2. **Sends IP data externally**: Public IP addresses of your mesh nodes are sent to the geolocation API
+3. **Requires internet access**: The coordinator must be able to reach external APIs
+
+To enable:
+- **CLI**: `tunnelmesh serve --locations`
+- **Config**: Add `locations: true` to server.yaml
+- **Terraform**: Set `locations_enabled = true` in terraform.tfvars
+
+When enabled, nodes can also provide manual coordinates via `--latitude` and `--longitude` flags, which takes precedence over IP-based geolocation.
 
 ### Outputs
 

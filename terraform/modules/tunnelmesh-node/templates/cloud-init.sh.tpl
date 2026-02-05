@@ -62,6 +62,8 @@ relay:
   enabled: ${relay_enabled}
   pair_timeout: "90s"
 
+locations: ${locations_enabled}
+
 %{ if wireguard_enabled ~}
 wireguard:
   enabled: true

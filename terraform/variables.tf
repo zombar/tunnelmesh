@@ -112,6 +112,12 @@ variable "domain_suffix" {
   default     = ".tunnelmesh"
 }
 
+variable "locations_enabled" {
+  description = "Enable node location tracking (uses external IP geolocation API)"
+  type        = bool
+  default     = false
+}
+
 variable "ssh_key_name" {
   description = "Name of SSH key in DigitalOcean (for droplet access)"
   type        = string

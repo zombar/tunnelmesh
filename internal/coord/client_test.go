@@ -47,6 +47,7 @@ func TestClient_RegisterWithLocation(t *testing.T) {
 		AuthToken:    "test-token",
 		MeshCIDR:     "10.99.0.0/16",
 		DomainSuffix: ".tunnelmesh",
+		Locations:    true, // Enable location tracking for this test
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -343,6 +344,7 @@ func TestServer_GeolocationOnlyOnNewOrChangedIP(t *testing.T) {
 		AuthToken:    "test-token",
 		MeshCIDR:     "10.99.0.0/16",
 		DomainSuffix: ".tunnelmesh",
+		Locations:    true, // Enable location tracking for this test
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -396,6 +398,7 @@ func TestServer_ManualLocationPreservedOnIPChange(t *testing.T) {
 		AuthToken:    "test-token",
 		MeshCIDR:     "10.99.0.0/16",
 		DomainSuffix: ".tunnelmesh",
+		Locations:    true, // Enable location tracking for this test
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)

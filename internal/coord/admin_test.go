@@ -96,6 +96,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 		AuthToken:    "test-token",
 		MeshCIDR:     "10.99.0.0/16",
 		DomainSuffix: ".tunnelmesh",
+		Locations:    true, // Enable location tracking for this test
 		Admin: config.AdminConfig{
 			Enabled: true,
 		},

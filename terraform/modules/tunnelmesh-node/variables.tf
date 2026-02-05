@@ -77,6 +77,12 @@ variable "admin_token" {
   default     = ""
 }
 
+variable "locations_enabled" {
+  description = "Enable node location tracking (uses external IP geolocation API)"
+  type        = bool
+  default     = false
+}
+
 # --- Peer Settings ---
 
 variable "peer_server_url" {

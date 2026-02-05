@@ -73,8 +73,9 @@ module "node" {
   wireguard_enabled   = lookup(each.value, "wireguard", false)
 
   # Coordinator settings
-  mesh_cidr     = var.mesh_cidr
-  domain_suffix = var.domain_suffix
+  mesh_cidr         = var.mesh_cidr
+  domain_suffix     = var.domain_suffix
+  locations_enabled = var.locations_enabled
 
   # Peer server URL (for non-coordinator nodes)
   # If this node is the coordinator, it connects to localhost

@@ -81,6 +81,9 @@ var (
 	latitude  float64
 	longitude float64
 
+	// Server feature flags
+	locationsEnabled bool
+
 	// Service mode flags (hidden, used when running as a service)
 	serviceRun     bool
 	serviceRunMode string
@@ -122,6 +125,7 @@ The server manages peer registration, discovery, and DNS records.
 It does not route traffic - peers connect directly to each other.`,
 		RunE: runServe,
 	}
+	serveCmd.Flags().BoolVar(&locationsEnabled, "locations", false, "enable node location tracking (uses external IP geolocation API)")
 	rootCmd.AddCommand(serveCmd)
 
 	// Join command
@@ -396,6 +400,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 		if cfg == nil {
 			return fmt.Errorf("config file required (use --config or create server.yaml)")
 		}
+	}
+
+	// Apply command-line flag overrides
+	if locationsEnabled {
+		cfg.Locations = true
 	}
 
 	if err := cfg.Validate(); err != nil {

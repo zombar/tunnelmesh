@@ -61,11 +61,12 @@ resource "digitalocean_droplet" "node" {
     domain_suffix = var.domain_suffix
 
     # Coordinator settings
-    coordinator_port = var.coordinator_port
-    mesh_cidr        = var.mesh_cidr
-    relay_enabled    = var.relay_enabled
-    auth_token       = var.auth_token
-    admin_token      = var.admin_token
+    coordinator_port  = var.coordinator_port
+    mesh_cidr         = var.mesh_cidr
+    relay_enabled     = var.relay_enabled
+    auth_token        = var.auth_token
+    admin_token       = var.admin_token
+    locations_enabled = var.locations_enabled
 
     # Peer settings
     peer_server     = local.peer_server

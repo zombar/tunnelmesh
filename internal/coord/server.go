@@ -159,8 +159,13 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		serverStats: serverStats{
 			startTime: time.Now(),
 		},
-		sseHub:     newSSEHub(),
-		ipGeoCache: NewIPGeoCache(""), // Use default ip-api.com URL
+		sseHub: newSSEHub(),
+	}
+
+	// Initialize IP geolocation cache if locations feature is enabled
+	if cfg.Locations {
+		srv.ipGeoCache = NewIPGeoCache("") // Use default ip-api.com URL
+		log.Info().Msg("node location tracking enabled (uses external IP geolocation API)")
 	}
 
 	// Initialize WireGuard client store if enabled
@@ -327,39 +332,41 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Preserve existing location if re-registering without new location
-	// Only trigger IP geolocation if peer is new or IP has changed
+	// Only process locations if the feature is enabled
 	var location *proto.GeoLocation
 	var needsGeoLookup bool
 	var geoLookupIP string
 
 	existing, isExisting := s.peers[req.Name]
 
-	if req.Location != nil {
-		// Manual location provided - use it
-		location = req.Location
-	} else if isExisting && existing.peer.Location != nil {
-		// Existing peer has location - check if we should keep it
-		existingLoc := existing.peer.Location
-		if existingLoc.Source == "manual" {
-			// Always preserve manual locations
-			location = existingLoc
-		} else if existingLoc.Source == "ip" && len(req.PublicIPs) > 0 && len(existing.peer.PublicIPs) > 0 {
-			// IP-based location - keep if IP hasn't changed
-			if req.PublicIPs[0] == existing.peer.PublicIPs[0] {
+	if s.cfg.Locations {
+		if req.Location != nil {
+			// Manual location provided - use it
+			location = req.Location
+		} else if isExisting && existing.peer.Location != nil {
+			// Existing peer has location - check if we should keep it
+			existingLoc := existing.peer.Location
+			if existingLoc.Source == "manual" {
+				// Always preserve manual locations
 				location = existingLoc
+			} else if existingLoc.Source == "ip" && len(req.PublicIPs) > 0 && len(existing.peer.PublicIPs) > 0 {
+				// IP-based location - keep if IP hasn't changed
+				if req.PublicIPs[0] == existing.peer.PublicIPs[0] {
+					location = existingLoc
+				} else {
+					// IP changed - need new lookup
+					needsGeoLookup = true
+					geoLookupIP = req.PublicIPs[0]
+				}
 			} else {
-				// IP changed - need new lookup
-				needsGeoLookup = true
-				geoLookupIP = req.PublicIPs[0]
+				// Keep existing location as fallback
+				location = existingLoc
 			}
-		} else {
-			// Keep existing location as fallback
-			location = existingLoc
+		} else if len(req.PublicIPs) > 0 {
+			// New peer with public IPs - need geolocation lookup
+			needsGeoLookup = true
+			geoLookupIP = req.PublicIPs[0]
 		}
-	} else if len(req.PublicIPs) > 0 {
-		// New peer with public IPs - need geolocation lookup
-		needsGeoLookup = true
-		geoLookupIP = req.PublicIPs[0]
 	}
 
 	peer := &proto.Peer{
@@ -401,8 +408,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Str("mesh_ip", meshIP).
 		Msg("peer registered")
 
-	// Trigger IP geolocation only for new peers or when IP has changed
-	if needsGeoLookup {
+	// Trigger IP geolocation only for new peers or when IP has changed (if locations enabled)
+	if needsGeoLookup && s.cfg.Locations && s.ipGeoCache != nil {
 		go s.lookupPeerLocation(req.Name, geoLookupIP)
 	}
 

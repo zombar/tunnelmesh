@@ -48,6 +48,7 @@ type ServerConfig struct {
 	DomainSuffix      string                `yaml:"domain_suffix"`
 	DataDir           string                `yaml:"data_dir"`            // Data directory for persistence (default: /var/lib/tunnelmesh)
 	HeartbeatInterval string                `yaml:"heartbeat_interval"`  // Heartbeat interval (default: 10s)
+	Locations         bool                  `yaml:"locations"`           // Enable node location tracking (requires external IP geolocation API)
 	Admin             AdminConfig           `yaml:"admin"`
 	Relay             RelayConfig           `yaml:"relay"`
 	WireGuard         WireGuardServerConfig `yaml:"wireguard"`

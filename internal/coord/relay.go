@@ -619,7 +619,7 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 			peer.lastStatsTime = now
 			peer.heartbeatCount++
 			// Update location from heartbeat (keeps map positions after coordinator restart)
-			if stats.Location != nil && stats.Location.IsSet() {
+			if s.cfg.Locations && stats.Location != nil && stats.Location.IsSet() {
 				peer.peer.Location = stats.Location
 			}
 		}

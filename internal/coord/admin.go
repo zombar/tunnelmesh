@@ -19,14 +19,15 @@ import (
 
 // AdminOverview is the response for the admin overview endpoint.
 type AdminOverview struct {
-	ServerUptime    string          `json:"server_uptime"`
-	ServerVersion   string          `json:"server_version"`
-	TotalPeers      int             `json:"total_peers"`
-	OnlinePeers     int             `json:"online_peers"`
-	TotalHeartbeats uint64          `json:"total_heartbeats"`
-	MeshCIDR        string          `json:"mesh_cidr"`
-	DomainSuffix    string          `json:"domain_suffix"`
-	Peers           []AdminPeerInfo `json:"peers"`
+	ServerUptime     string          `json:"server_uptime"`
+	ServerVersion    string          `json:"server_version"`
+	TotalPeers       int             `json:"total_peers"`
+	OnlinePeers      int             `json:"online_peers"`
+	TotalHeartbeats  uint64          `json:"total_heartbeats"`
+	MeshCIDR         string          `json:"mesh_cidr"`
+	DomainSuffix     string          `json:"domain_suffix"`
+	LocationsEnabled bool            `json:"locations_enabled"` // Whether node location tracking is enabled
+	Peers            []AdminPeerInfo `json:"peers"`
 }
 
 // AdminPeerInfo contains peer information for the admin UI.
@@ -97,13 +98,14 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	onlineThreshold := 2 * time.Minute
 
 	overview := AdminOverview{
-		ServerUptime:    time.Since(s.serverStats.startTime).Round(time.Second).String(),
-		ServerVersion:   s.version,
-		TotalPeers:      len(s.peers),
-		TotalHeartbeats: s.serverStats.totalHeartbeats,
-		MeshCIDR:        s.cfg.MeshCIDR,
-		DomainSuffix:    s.cfg.DomainSuffix,
-		Peers:           make([]AdminPeerInfo, 0, len(s.peers)),
+		ServerUptime:     time.Since(s.serverStats.startTime).Round(time.Second).String(),
+		ServerVersion:    s.version,
+		TotalPeers:       len(s.peers),
+		TotalHeartbeats:  s.serverStats.totalHeartbeats,
+		MeshCIDR:         s.cfg.MeshCIDR,
+		DomainSuffix:     s.cfg.DomainSuffix,
+		LocationsEnabled: s.cfg.Locations,
+		Peers:            make([]AdminPeerInfo, 0, len(s.peers)),
 	}
 
 	for _, info := range s.peers {
@@ -127,7 +129,11 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			HeartbeatCount: info.heartbeatCount,
 			Stats:          info.stats,
 			Version:        info.peer.Version,
-			Location:       info.peer.Location,
+		}
+
+		// Only include location if the feature is enabled
+		if s.cfg.Locations {
+			peerInfo.Location = info.peer.Location
 		}
 
 		// Get UDP endpoint addresses if available

@@ -52,6 +52,7 @@ const state = {
     visualizer: null,
     // Map state
     nodeMap: null,
+    locationsEnabled: false, // Server-side locations feature flag
     domainSuffix: '.tunnelmesh',
     // Pagination state
     peersVisibleCount: ROWS_PER_PAGE,
@@ -241,6 +242,9 @@ function updateDashboard(data, loadHistory = false) {
     // Store domain suffix for visualizer
     state.domainSuffix = data.domain_suffix || '.tunnelmesh';
 
+    // Track if locations feature is enabled
+    state.locationsEnabled = data.locations_enabled || false;
+
     // Update visualizer with peer data
     if (state.visualizer) {
         state.visualizer.setDomainSuffix(state.domainSuffix);
@@ -249,9 +253,15 @@ function updateDashboard(data, loadHistory = false) {
         state.visualizer.render();
     }
 
-    // Update map with peer locations
-    if (state.nodeMap) {
-        state.nodeMap.updatePeers(data.peers);
+    // Update map with peer locations (only if locations feature is enabled)
+    const mapSection = document.getElementById('map-section');
+    if (state.locationsEnabled) {
+        if (state.nodeMap) {
+            state.nodeMap.updatePeers(data.peers);
+        }
+    } else if (mapSection) {
+        // Hide map section entirely when locations is disabled
+        mapSection.style.display = 'none';
     }
 
     // Update charts with new data during polling (not on initial history load)

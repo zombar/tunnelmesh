@@ -150,6 +150,11 @@ nodes = {
 # Domain suffix for mesh hostnames
 # domain_suffix = ".tunnelmesh"
 
+# Enable node location tracking (requires external IP geolocation API)
+# WARNING: When enabled, the coordinator will query ip-api.com to geolocate nodes
+# by their public IP addresses. This is disabled by default for privacy.
+# locations_enabled = false
+
 # GitHub owner for binary downloads
 # github_owner = "zombar"
 
