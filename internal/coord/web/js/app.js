@@ -207,86 +207,9 @@ function updateDashboard(data, loadHistory = false) {
     // Store peers data for pagination
     state.currentPeers = data.peers;
 
-    // Update DNS records table with pagination
-    const dnsTbody = document.getElementById('dns-body');
-    const noDns = document.getElementById('no-dns');
-    const dnsShowMore = document.getElementById('dns-show-more');
-    const domainSuffix = data.domain_suffix || '.tunnelmesh';
-
-    if (data.peers.length === 0) {
-        dnsTbody.innerHTML = '';
-        noDns.style.display = 'block';
-        dnsShowMore.style.display = 'none';
-    } else {
-        noDns.style.display = 'none';
-        const visiblePeers = data.peers.slice(0, state.dnsVisibleCount);
-        dnsTbody.innerHTML = visiblePeers.map(peer => `
-            <tr>
-                <td><code>${escapeHtml(peer.name)}${domainSuffix}</code></td>
-                <td><code>${peer.mesh_ip}</code></td>
-            </tr>
-        `).join('');
-
-        // Show/hide "Show more" button
-        if (data.peers.length > state.dnsVisibleCount) {
-            dnsShowMore.style.display = 'block';
-            document.getElementById('dns-shown-count').textContent = state.dnsVisibleCount;
-            document.getElementById('dns-total-count').textContent = data.peers.length;
-        } else {
-            dnsShowMore.style.display = 'none';
-        }
-    }
-
-    // Update peers table with pagination
-    const tbody = document.getElementById('peers-body');
-    const noPeers = document.getElementById('no-peers');
-    const peersShowMore = document.getElementById('peers-show-more');
-
-    if (data.peers.length === 0) {
-        tbody.innerHTML = '';
-        noPeers.style.display = 'block';
-        peersShowMore.style.display = 'none';
-    } else {
-        noPeers.style.display = 'none';
-        const visiblePeers = data.peers.slice(0, state.peersVisibleCount);
-        tbody.innerHTML = visiblePeers.map(peer => {
-            const history = state.peerHistory[peer.name];
-            const peerNameEscaped = escapeHtml(peer.name);
-            return `
-            <tr>
-                <td><strong>${peerNameEscaped}</strong></td>
-                <td><code>${peer.mesh_ip}</code></td>
-                <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
-                <td class="ports-cell">${formatPorts(peer)}</td>
-                <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
-                <td>${peer.stats?.active_tunnels ?? '-'}</td>
-                <td class="sparkline-cell">
-                    ${createSparklineSVG(history.throughputTx, history.throughputRx)}
-                    <div class="rate-values">
-                        <span class="tx">${formatBytes(peer.bytes_sent_rate)}/s</span>
-                        <span class="rx">${formatBytes(peer.bytes_received_rate)}/s</span>
-                    </div>
-                </td>
-                <td class="sparkline-cell">
-                    ${createSparklineSVG(history.packetsTx, history.packetsRx)}
-                    <div class="rate-values">
-                        <span class="tx">${formatRate(peer.packets_sent_rate)}</span>
-                        <span class="rx">${formatRate(peer.packets_received_rate)}</span>
-                    </div>
-                </td>
-                <td><code>${escapeHtml(peer.version || '-')}</code></td>
-            </tr>
-        `}).join('');
-
-        // Show/hide "Show more" button
-        if (data.peers.length > state.peersVisibleCount) {
-            peersShowMore.style.display = 'block';
-            document.getElementById('peers-shown-count').textContent = state.peersVisibleCount;
-            document.getElementById('peers-total-count').textContent = data.peers.length;
-        } else {
-            peersShowMore.style.display = 'none';
-        }
-    }
+    // Render tables with pagination (reuse the render functions)
+    renderDnsTable();
+    renderPeersTable();
 }
 
 function createSparklineSVG(dataTx, dataRx) {
@@ -333,8 +256,18 @@ function showMorePeers() {
     renderPeersTable();
 }
 
+function showLessPeers() {
+    state.peersVisibleCount = state.rowsPerPage;
+    renderPeersTable();
+}
+
 function showMoreDns() {
     state.dnsVisibleCount += state.rowsPerPage;
+    renderDnsTable();
+}
+
+function showLessDns() {
+    state.dnsVisibleCount = state.rowsPerPage;
     renderDnsTable();
 }
 
@@ -342,12 +275,14 @@ function renderPeersTable() {
     const peers = state.currentPeers;
     const tbody = document.getElementById('peers-body');
     const noPeers = document.getElementById('no-peers');
+    const peersPagination = document.getElementById('peers-pagination');
     const peersShowMore = document.getElementById('peers-show-more');
+    const peersShowLess = document.getElementById('peers-show-less');
 
     if (peers.length === 0) {
         tbody.innerHTML = '';
         noPeers.style.display = 'block';
-        peersShowMore.style.display = 'none';
+        peersPagination.style.display = 'none';
         return;
     }
 
@@ -382,13 +317,20 @@ function renderPeersTable() {
         </tr>
     `}).join('');
 
-    // Show/hide "Show more" button
-    if (peers.length > state.peersVisibleCount) {
-        peersShowMore.style.display = 'block';
-        document.getElementById('peers-shown-count').textContent = state.peersVisibleCount;
-        document.getElementById('peers-total-count').textContent = peers.length;
+    // Show/hide pagination links
+    const hasMore = peers.length > state.peersVisibleCount;
+    const canShowLess = state.peersVisibleCount > state.rowsPerPage;
+
+    if (hasMore || canShowLess) {
+        peersPagination.style.display = 'block';
+        peersShowMore.style.display = hasMore ? 'inline' : 'none';
+        peersShowLess.style.display = canShowLess ? 'inline' : 'none';
+        if (hasMore) {
+            document.getElementById('peers-shown-count').textContent = state.peersVisibleCount;
+            document.getElementById('peers-total-count').textContent = peers.length;
+        }
     } else {
-        peersShowMore.style.display = 'none';
+        peersPagination.style.display = 'none';
     }
 }
 
@@ -396,13 +338,15 @@ function renderDnsTable() {
     const peers = state.currentPeers;
     const dnsTbody = document.getElementById('dns-body');
     const noDns = document.getElementById('no-dns');
+    const dnsPagination = document.getElementById('dns-pagination');
     const dnsShowMore = document.getElementById('dns-show-more');
+    const dnsShowLess = document.getElementById('dns-show-less');
     const domainSuffix = state.domainSuffix;
 
     if (peers.length === 0) {
         dnsTbody.innerHTML = '';
         noDns.style.display = 'block';
-        dnsShowMore.style.display = 'none';
+        dnsPagination.style.display = 'none';
         return;
     }
 
@@ -415,13 +359,20 @@ function renderDnsTable() {
         </tr>
     `).join('');
 
-    // Show/hide "Show more" button
-    if (peers.length > state.dnsVisibleCount) {
-        dnsShowMore.style.display = 'block';
-        document.getElementById('dns-shown-count').textContent = state.dnsVisibleCount;
-        document.getElementById('dns-total-count').textContent = peers.length;
+    // Show/hide pagination links
+    const hasMore = peers.length > state.dnsVisibleCount;
+    const canShowLess = state.dnsVisibleCount > state.rowsPerPage;
+
+    if (hasMore || canShowLess) {
+        dnsPagination.style.display = 'block';
+        dnsShowMore.style.display = hasMore ? 'inline' : 'none';
+        dnsShowLess.style.display = canShowLess ? 'inline' : 'none';
+        if (hasMore) {
+            document.getElementById('dns-shown-count').textContent = state.dnsVisibleCount;
+            document.getElementById('dns-total-count').textContent = peers.length;
+        }
     } else {
-        dnsShowMore.style.display = 'none';
+        dnsPagination.style.display = 'none';
     }
 }
 

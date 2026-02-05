@@ -76,8 +76,8 @@
                 </thead>
                 <tbody id="peers-body"></tbody>
             </table>
-            <div id="peers-show-more" class="show-more-container" style="display: none;">
-                <button class="show-more-btn" onclick="showMorePeers()">Show more... (<span id="peers-shown-count">0</span> / <span id="peers-total-count">0</span>)</button>
+            <div id="peers-pagination" class="show-more-container" style="display: none;">
+                <span id="peers-show-more"><button class="show-more-link" onclick="showMorePeers()">show more (<span id="peers-shown-count">0</span> / <span id="peers-total-count">0</span>)</button></span><span id="peers-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessPeers()">show less</button></span>
             </div>
             <div id="no-peers" class="empty-state" style="display: none;">
                 No peers connected yet.
@@ -118,8 +118,8 @@
                 </thead>
                 <tbody id="dns-body"></tbody>
             </table>
-            <div id="dns-show-more" class="show-more-container" style="display: none;">
-                <button class="show-more-btn" onclick="showMoreDns()">Show more... (<span id="dns-shown-count">0</span> / <span id="dns-total-count">0</span>)</button>
+            <div id="dns-pagination" class="show-more-container" style="display: none;">
+                <span id="dns-show-more"><button class="show-more-link" onclick="showMoreDns()">show more (<span id="dns-shown-count">0</span> / <span id="dns-total-count">0</span>)</button></span><span id="dns-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessDns()">show less</button></span>
             </div>
             <div id="no-dns" class="empty-state" style="display: none;">
                 No DNS records yet.

@@ -592,28 +592,31 @@ td {
     color: #8b949e;
 }
 
-/* Show more pagination */
+/* Show more/less pagination */
 .show-more-container {
     text-align: center;
-    padding: 0.75rem 1rem;
-    border-top: 1px solid #21262d;
-}
-
-.show-more-btn {
-    background: #21262d;
-    color: #8b949e;
-    border: 1px solid #30363d;
-    border-radius: 6px;
     padding: 0.5rem 1rem;
-    font-size: 0.875rem;
-    cursor: pointer;
-    transition: all 0.2s;
+    font-size: 0.75rem;
+    color: #8b949e;
 }
 
-.show-more-btn:hover {
-    background: #30363d;
-    border-color: #58a6ff;
-    color: #e6edf3;
+.show-more-link {
+    background: none;
+    border: none;
+    color: #8b949e;
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0;
+}
+
+.show-more-link:hover {
+    color: #58a6ff;
+    text-decoration: underline;
+}
+
+.show-more-separator {
+    margin: 0 0.5rem;
+    color: #30363d;
 }
 
 .ips-cell,
