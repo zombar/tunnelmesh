@@ -99,7 +99,16 @@ class NodeMap {
         // Show/hide map section based on whether any peers have locations
         const mapSection = document.getElementById('map-section');
         if (mapSection) {
+            const wasHidden = mapSection.style.display === 'none';
             mapSection.style.display = hasLocations ? 'block' : 'none';
+
+            // If map just became visible, invalidate size so Leaflet recalculates
+            if (wasHidden && hasLocations && this.map) {
+                // Small delay to let the DOM update
+                setTimeout(() => {
+                    this.map.invalidateSize();
+                }, 100);
+            }
         }
 
         // Fit map to show all markers
@@ -107,7 +116,13 @@ class NodeMap {
             const bounds = L.latLngBounds(boundsArray);
             // Only fit bounds if they've changed significantly
             if (!this.bounds || !this.bounds.equals(bounds)) {
-                this.map.fitBounds(bounds, { padding: [50, 50], maxZoom: 10 });
+                // Delay fitBounds if map was just shown to ensure invalidateSize completed
+                const fitBoundsDelay = (mapSection && mapSection.style.display !== 'none') ? 150 : 0;
+                setTimeout(() => {
+                    if (this.map) {
+                        this.map.fitBounds(bounds, { padding: [50, 50], maxZoom: 10 });
+                    }
+                }, fitBoundsDelay);
                 this.bounds = bounds;
             }
         }

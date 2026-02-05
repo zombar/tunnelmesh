@@ -194,8 +194,13 @@ header h1 {
 
 .map-container {
     height: 350px;
-    background: var(--color-bg-primary);
+    background: #1a1a2e;
     border-radius: 0 0 6px 6px;
+}
+
+/* Leaflet map background (for areas without tiles) */
+.leaflet-container {
+    background: #1a1a2e;
 }
 
 /* Leaflet control styling for dark theme */
