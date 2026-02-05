@@ -47,8 +47,17 @@ Examples:
 func runTrustCA(cmd *cobra.Command, args []string) error {
 	setupLogging()
 
+	if trustCARemove {
+		return removeCAFromSystem()
+	}
+	return InstallCAFromServer(trustCAServer)
+}
+
+// InstallCAFromServer fetches and installs the CA certificate from the given server URL.
+// This is exported so it can be called from the join command with --trust-ca flag.
+func InstallCAFromServer(serverURL string) error {
 	// Normalize server URL
-	server := strings.TrimSuffix(trustCAServer, "/")
+	server := strings.TrimSuffix(serverURL, "/")
 
 	// Fetch CA cert
 	log.Info().Str("server", server).Msg("fetching CA certificate")
@@ -87,11 +96,11 @@ func runTrustCA(cmd *cobra.Command, args []string) error {
 	}
 	tmpFile.Close()
 
-	// Install based on OS
-	if trustCARemove {
-		return removeCA(tmpPath)
-	}
 	return installCA(tmpPath)
+}
+
+func removeCAFromSystem() error {
+	return removeCA("")
 }
 
 func installCA(certPath string) error {

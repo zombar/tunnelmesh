@@ -83,8 +83,11 @@ var (
 	city      string
 
 	// Exit node flags
-	exitNodeFlag       string
-	allowExitTraffic   bool
+	exitNodeFlag     string
+	allowExitTraffic bool
+
+	// CA trust flag
+	trustCA bool
 
 	// Server feature flags
 	locationsEnabled bool
@@ -149,6 +152,7 @@ It does not route traffic - peers connect directly to each other.`,
 	joinCmd.Flags().StringVar(&city, "city", "", "city name for manual geolocation (shown in admin UI)")
 	joinCmd.Flags().StringVar(&exitNodeFlag, "exit-node", "", "name of peer to route internet traffic through")
 	joinCmd.Flags().BoolVar(&allowExitTraffic, "allow-exit-traffic", false, "allow this node to act as exit node for other peers")
+	joinCmd.Flags().BoolVar(&trustCA, "trust-ca", false, "install mesh CA certificate in system trust store (requires sudo)")
 	rootCmd.AddCommand(joinCmd)
 
 	// Status command
@@ -691,6 +695,15 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 				Str("cert", tlsMgr.CertPath()).
 				Str("key", tlsMgr.KeyPath()).
 				Msg("TLS certificate stored")
+		}
+
+		// Install CA certificate if --trust-ca flag is set
+		if trustCA {
+			if err := InstallCAFromServer(cfg.Server); err != nil {
+				log.Warn().Err(err).Msg("failed to install CA certificate (you may need sudo)")
+				log.Info().Str("command", fmt.Sprintf("sudo tunnelmesh trust-ca --server %s", cfg.Server)).
+					Msg("run manually with sudo to install CA")
+			}
 		}
 	}
 
