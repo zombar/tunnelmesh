@@ -214,7 +214,7 @@ class NodeMap {
         const entry = this.markers.get(peerName);
         if (entry && entry.marker) {
             const latLng = entry.marker.getLatLng();
-            this.map.panTo(latLng, { animate: true });
+            this.map.panTo(latLng, { animate: false });
         }
     }
 
