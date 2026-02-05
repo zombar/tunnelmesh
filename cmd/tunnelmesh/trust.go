@@ -109,10 +109,6 @@ func removeCAFromSystem() error {
 	return removeCA("")
 }
 
-func installCA(certPath string) error {
-	return installCAWithName(certPath, "TunnelMesh CA")
-}
-
 func installCAWithName(certPath, caName string) error {
 	switch runtime.GOOS {
 	case "darwin":
