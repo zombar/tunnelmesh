@@ -688,11 +688,6 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		}
 	}
 
-	// Notify callback if provided (used by server to start admin HTTPS)
-	if onJoined != nil {
-		onJoined(resp.MeshIP, tlsMgr)
-	}
-
 	// Create TUN device
 	tunCfg := tun.Config{
 		Name:    cfg.TUN.Name,
@@ -716,6 +711,12 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			Str("name", tunDev.Name()).
 			Str("ip", resp.MeshIP).
 			Msg("TUN device created")
+	}
+
+	// Notify callback if provided (used by server to start admin HTTPS on mesh IP)
+	// Must be after TUN device creation so the mesh IP is assigned to an interface
+	if onJoined != nil {
+		onJoined(resp.MeshIP, tlsMgr)
 	}
 
 	// Create peer identity and mesh node
