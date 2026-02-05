@@ -261,6 +261,9 @@ class NodeVisualizer {
         // Callbacks
         this.onNodeSelected = null;
 
+        // Bound event handlers (stored for cleanup)
+        this._boundResize = () => this.resize();
+
         // Setup
         this.setupInteraction();
         this.resize();
@@ -460,8 +463,13 @@ class NodeVisualizer {
         this.canvas.addEventListener('mouseup', (e) => this.onMouseUp(e));
         this.canvas.addEventListener('mouseleave', () => this.onMouseLeave());
 
-        // Resize
-        window.addEventListener('resize', () => this.resize());
+        // Resize - use bound handler for cleanup
+        window.addEventListener('resize', this._boundResize);
+    }
+
+    // Clean up event listeners to prevent memory leaks
+    destroy() {
+        window.removeEventListener('resize', this._boundResize);
     }
 
     // Convert screen coordinates to content coordinates (accounting for pan and centering)

@@ -1,10 +1,25 @@
+// Constants
+const HEARTBEAT_INTERVAL_MS = 10000;    // 10 seconds between heartbeats
+const POLL_INTERVAL_MS = 10000;         // Polling fallback interval
+const SSE_RETRY_DELAY_MS = 2000;        // Base delay for SSE reconnection
+const MAX_SSE_RETRIES = 3;              // Max SSE reconnection attempts
+const ROWS_PER_PAGE = 7;                // Default pagination size
+const MAX_HISTORY_POINTS = 20;          // Max sparkline history points per peer
+const MAX_CHART_POINTS = 360;           // 1 hour at 10-second intervals
+const TOAST_DURATION_MS = 4000;         // Toast notification duration
+const TOAST_FADE_MS = 300;              // Toast fade-out animation duration
+const QUANTIZE_INTERVAL_MS = 10000;     // Timestamp quantization interval
+
+// Cached DOM elements (populated on DOMContentLoaded)
+const dom = {};
+
 // Dashboard state - track history per peer
 const state = {
     peerHistory: {}, // { peerName: { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] } }
-    maxHistoryPoints: 20,
     wgClients: [],
     wgEnabled: false,
     currentWGConfig: null,
+    eventSource: null, // Store EventSource for cleanup
     // Chart state
     charts: {
         throughput: null,
@@ -14,18 +29,16 @@ const state = {
             throughput: {},  // { peerName: [values] }
             packets: {}      // { peerName: [values] }
         },
-        maxChartPoints: 360,  // 1 hour at 10-second intervals
         highlightedPeer: null // Peer to highlight on charts (selected in visualizer)
     },
     // Visualizer state
     visualizer: null,
     domainSuffix: '.tunnelmesh',
     // Pagination state
-    peersVisibleCount: 7,
-    dnsVisibleCount: 7,
-    wgVisibleCount: 7,
-    currentPeers: [],  // Store current peers data for pagination
-    rowsPerPage: 7
+    peersVisibleCount: ROWS_PER_PAGE,
+    dnsVisibleCount: ROWS_PER_PAGE,
+    wgVisibleCount: ROWS_PER_PAGE,
+    currentPeers: []  // Store current peers data for pagination
 };
 
 // Green gradient for chart lines (dim to bright based on outlier status)
@@ -41,30 +54,58 @@ const GREEN_GRADIENT = [
 // Max time range for charts (1 hour)
 const MAX_RANGE_HOURS = 1;
 
+// Initialize DOM cache - call once on DOMContentLoaded
+function initDOMCache() {
+    // Header elements
+    dom.uptime = document.getElementById('uptime');
+    dom.peerCount = document.getElementById('peer-count');
+    dom.serverVersion = document.getElementById('server-version');
+
+    // Peers table elements
+    dom.peersBody = document.getElementById('peers-body');
+    dom.noPeers = document.getElementById('no-peers');
+
+    // DNS table elements
+    dom.dnsBody = document.getElementById('dns-body');
+    dom.noDns = document.getElementById('no-dns');
+
+    // WireGuard elements
+    dom.wgClientsBody = document.getElementById('wg-clients-body');
+    dom.noWgClients = document.getElementById('no-wg-clients');
+    dom.addWgClientBtn = document.getElementById('add-wg-client-btn');
+    dom.wgModal = document.getElementById('wg-modal');
+
+    // Chart canvases
+    dom.throughputChart = document.getElementById('throughput-chart');
+    dom.packetsChart = document.getElementById('packets-chart');
+
+    // Visualizer
+    dom.visualizerCanvas = document.getElementById('visualizer-canvas');
+
+    // Toast container
+    dom.toastContainer = document.getElementById('toast-container');
+}
+
 // Toast notification system
-function showToast(message, type = 'error', duration = 4000) {
-    const container = document.getElementById('toast-container');
-    if (!container) return;
+function showToast(message, type = 'error', duration = TOAST_DURATION_MS) {
+    if (!dom.toastContainer) return;
 
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     toast.textContent = message;
-    container.appendChild(toast);
+    dom.toastContainer.appendChild(toast);
 
     // Auto-dismiss after duration
     setTimeout(() => {
         toast.classList.add('fade-out');
-        setTimeout(() => toast.remove(), 300);
+        setTimeout(() => toast.remove(), TOAST_FADE_MS);
     }, duration);
 }
-// At 10-second heartbeat intervals, 1 hour = 360 points
-// Request full resolution (no downsampling)
-const MAX_CHART_POINTS = 360;
 
 // Fetch and update dashboard
 async function fetchData(includeHistory = false) {
     try {
-        const url = includeHistory ? '/admin/api/overview?history=20' : '/admin/api/overview';
+        const url = includeHistory ? `/admin/api/overview?history=${MAX_HISTORY_POINTS}` : '/admin/api/overview';
         const resp = await fetch(url);
         if (resp.status === 401) {
             // Browser will show Basic Auth prompt on page load
@@ -85,7 +126,6 @@ async function fetchData(includeHistory = false) {
 
 // Setup Server-Sent Events for real-time updates
 let sseRetryCount = 0;
-const MAX_SSE_RETRIES = 3;
 
 function setupSSE() {
     // Check if EventSource is supported
@@ -95,29 +135,34 @@ function setupSSE() {
         return;
     }
 
-    // EventSource with credentials for authenticated endpoints
-    const eventSource = new EventSource('/admin/api/events', { withCredentials: true });
+    // Close existing connection if any
+    if (state.eventSource) {
+        state.eventSource.close();
+    }
 
-    eventSource.addEventListener('connected', () => {
+    // EventSource with credentials for authenticated endpoints
+    state.eventSource = new EventSource('/admin/api/events', { withCredentials: true });
+
+    state.eventSource.addEventListener('connected', () => {
         console.log('SSE connected - dashboard will update in real-time');
         sseRetryCount = 0; // Reset retry count on successful connection
     });
 
-    eventSource.addEventListener('heartbeat', (event) => {
+    state.eventSource.addEventListener('heartbeat', () => {
         // Refresh dashboard when a heartbeat is received
-        const data = JSON.parse(event.data);
         fetchData(false);
     });
 
-    eventSource.onerror = (err) => {
+    state.eventSource.onerror = (err) => {
         console.error('SSE error:', err);
-        eventSource.close();
+        state.eventSource.close();
+        state.eventSource = null;
 
         sseRetryCount++;
         if (sseRetryCount <= MAX_SSE_RETRIES) {
             // Retry SSE connection after a delay
             console.log(`SSE reconnecting (attempt ${sseRetryCount}/${MAX_SSE_RETRIES})...`);
-            setTimeout(setupSSE, 2000 * sseRetryCount);
+            setTimeout(setupSSE, SSE_RETRY_DELAY_MS * sseRetryCount);
         } else {
             // Fall back to polling after max retries
             console.log('SSE failed, falling back to polling');
@@ -127,9 +172,20 @@ function setupSSE() {
 }
 
 function startPolling() {
-    // Fallback polling every 10 seconds (matches heartbeat interval)
-    console.log('Starting polling mode (every 10 seconds)');
-    setInterval(() => fetchData(false), 10000);
+    // Fallback polling (matches heartbeat interval)
+    console.log(`Starting polling mode (every ${POLL_INTERVAL_MS / 1000} seconds)`);
+    setInterval(() => fetchData(false), POLL_INTERVAL_MS);
+}
+
+// Cleanup on page unload to prevent memory leaks
+function cleanup() {
+    if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
+    }
+    if (state.visualizer) {
+        state.visualizer.destroy();
+    }
 }
 
 function showAuthError() {
@@ -151,14 +207,13 @@ function hideAuthError() {
 }
 
 function updateDashboard(data, loadHistory = false) {
-    // Update header stats
-    document.getElementById('uptime').textContent = data.server_uptime;
-    document.getElementById('peer-count').textContent = `${data.online_peers}/${data.total_peers}`;
+    // Update header stats using cached DOM elements
+    if (dom.uptime) dom.uptime.textContent = data.server_uptime;
+    if (dom.peerCount) dom.peerCount.textContent = `${data.online_peers}/${data.total_peers}`;
 
     // Update footer version
-    const versionEl = document.getElementById('server-version');
-    if (versionEl && data.server_version) {
-        versionEl.textContent = data.server_version;
+    if (dom.serverVersion && data.server_version) {
+        dom.serverVersion.textContent = data.server_version;
     }
 
     // Store domain suffix for visualizer
@@ -289,7 +344,7 @@ function updatePaginationUI(config) {
     if (!paginationEl) return;
 
     const hasMore = totalCount > visibleCount;
-    const canShowLess = visibleCount > state.rowsPerPage;
+    const canShowLess = visibleCount > ROWS_PER_PAGE;
 
     if (hasMore || canShowLess) {
         paginationEl.style.display = 'block';
@@ -308,50 +363,49 @@ function updatePaginationUI(config) {
 
 // Pagination functions
 function showMorePeers() {
-    state.peersVisibleCount += state.rowsPerPage;
+    state.peersVisibleCount += ROWS_PER_PAGE;
     renderPeersTable();
 }
 
 function showLessPeers() {
-    state.peersVisibleCount = state.rowsPerPage;
+    state.peersVisibleCount = ROWS_PER_PAGE;
     renderPeersTable();
 }
 
 function showMoreDns() {
-    state.dnsVisibleCount += state.rowsPerPage;
+    state.dnsVisibleCount += ROWS_PER_PAGE;
     renderDnsTable();
 }
 
 function showLessDns() {
-    state.dnsVisibleCount = state.rowsPerPage;
+    state.dnsVisibleCount = ROWS_PER_PAGE;
     renderDnsTable();
 }
 
 function showMoreWg() {
-    state.wgVisibleCount += state.rowsPerPage;
+    state.wgVisibleCount += ROWS_PER_PAGE;
     updateWGClientsTable();
 }
 
 function showLessWg() {
-    state.wgVisibleCount = state.rowsPerPage;
+    state.wgVisibleCount = ROWS_PER_PAGE;
     updateWGClientsTable();
 }
 
 function renderPeersTable() {
     const peers = state.currentPeers;
-    const tbody = document.getElementById('peers-body');
-    const noPeers = document.getElementById('no-peers');
 
     if (peers.length === 0) {
-        tbody.innerHTML = '';
-        noPeers.style.display = 'block';
+        if (dom.peersBody) dom.peersBody.innerHTML = '';
+        if (dom.noPeers) dom.noPeers.style.display = 'block';
         document.getElementById('peers-pagination').style.display = 'none';
         return;
     }
 
-    noPeers.style.display = 'none';
+    if (dom.noPeers) dom.noPeers.style.display = 'none';
     const visiblePeers = peers.slice(0, state.peersVisibleCount);
-    tbody.innerHTML = visiblePeers.map(peer => {
+    if (!dom.peersBody) return;
+    dom.peersBody.innerHTML = visiblePeers.map(peer => {
         const history = state.peerHistory[peer.name] || { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] };
         const peerNameEscaped = escapeHtml(peer.name);
         return `
@@ -393,20 +447,19 @@ function renderPeersTable() {
 
 function renderDnsTable() {
     const peers = state.currentPeers;
-    const dnsTbody = document.getElementById('dns-body');
-    const noDns = document.getElementById('no-dns');
     const domainSuffix = state.domainSuffix;
 
     if (peers.length === 0) {
-        dnsTbody.innerHTML = '';
-        noDns.style.display = 'block';
+        if (dom.dnsBody) dom.dnsBody.innerHTML = '';
+        if (dom.noDns) dom.noDns.style.display = 'block';
         document.getElementById('dns-pagination').style.display = 'none';
         return;
     }
 
-    noDns.style.display = 'none';
+    if (dom.noDns) dom.noDns.style.display = 'none';
     const visiblePeers = peers.slice(0, state.dnsVisibleCount);
-    dnsTbody.innerHTML = visiblePeers.map(peer => `
+    if (!dom.dnsBody) return;
+    dom.dnsBody.innerHTML = visiblePeers.map(peer => `
         <tr>
             <td><code>${escapeHtml(peer.name)}${domainSuffix}</code></td>
             <td><code>${peer.mesh_ip}</code></td>
@@ -478,9 +531,8 @@ function initCharts() {
     };
 
     // Throughput chart
-    const throughputCtx = document.getElementById('throughput-chart');
-    if (throughputCtx) {
-        state.charts.throughput = new Chart(throughputCtx, {
+    if (dom.throughputChart) {
+        state.charts.throughput = new Chart(dom.throughputChart, {
             type: 'line',
             data: { datasets: [] },
             options: chartOptions
@@ -488,9 +540,8 @@ function initCharts() {
     }
 
     // Packets chart
-    const packetsCtx = document.getElementById('packets-chart');
-    if (packetsCtx) {
-        state.charts.packets = new Chart(packetsCtx, {
+    if (dom.packetsChart) {
+        state.charts.packets = new Chart(dom.packetsChart, {
             type: 'line',
             data: { datasets: [] },
             options: chartOptions
@@ -521,9 +572,9 @@ async function fetchChartHistory() {
     }
 }
 
-// Quantize timestamp to 10-second intervals
+// Quantize timestamp to heartbeat intervals
 function quantizeTimestamp(ts) {
-    return Math.round(ts / 10000) * 10000;
+    return Math.round(ts / QUANTIZE_INTERVAL_MS) * QUANTIZE_INTERVAL_MS;
 }
 
 function initializeChartData(data) {
@@ -683,8 +734,6 @@ function updateChartsWithNewData(peers) {
         ? state.charts.chartData.labels[state.charts.chartData.labels.length - 1].getTime()
         : 0;
 
-    let addedPoints = 0;
-    let updatedPoints = 0;
     sortedGroups.forEach(group => {
         const groupTime = group.timestamp.getTime();
 
@@ -695,7 +744,6 @@ function updateChartsWithNewData(peers) {
 
         if (existingIndex >= 0) {
             // Timestamp exists - update data for this timestamp
-            updatedPoints++;
             Object.entries(group.peers).forEach(([peerName, point]) => {
                 if (state.charts.chartData.throughput[peerName]) {
                     // Update existing value (overwrite null with actual data)
@@ -713,7 +761,6 @@ function updateChartsWithNewData(peers) {
             return; // Skip data points in the past
         }
 
-        addedPoints++;
         // Add timestamp
         state.charts.chartData.labels.push(group.timestamp);
 
@@ -983,33 +1030,34 @@ async function fetchWGClients() {
 }
 
 function updateWGClientsTable() {
-    const tbody = document.getElementById('wg-clients-body');
-    const noClients = document.getElementById('no-wg-clients');
-    const addBtn = document.getElementById('add-wg-client-btn');
-
     // Check if concentrator is connected
     if (!state.wgConcentratorConnected) {
-        tbody.innerHTML = '';
-        noClients.textContent = 'No WireGuard concentrator connected. Start a mesh peer with --wireguard flag.';
-        noClients.style.display = 'block';
+        if (dom.wgClientsBody) dom.wgClientsBody.innerHTML = '';
+        if (dom.noWgClients) {
+            dom.noWgClients.textContent = 'No WireGuard concentrator connected. Start a mesh peer with --wireguard flag.';
+            dom.noWgClients.style.display = 'block';
+        }
         document.getElementById('wg-pagination').style.display = 'none';
-        if (addBtn) addBtn.disabled = true;
+        if (dom.addWgClientBtn) dom.addWgClientBtn.disabled = true;
         return;
     }
 
-    if (addBtn) addBtn.disabled = false;
+    if (dom.addWgClientBtn) dom.addWgClientBtn.disabled = false;
 
     if (state.wgClients.length === 0) {
-        tbody.innerHTML = '';
-        noClients.textContent = 'No WireGuard peers yet. Add a peer to generate a QR code.';
-        noClients.style.display = 'block';
+        if (dom.wgClientsBody) dom.wgClientsBody.innerHTML = '';
+        if (dom.noWgClients) {
+            dom.noWgClients.textContent = 'No WireGuard peers yet. Add a peer to generate a QR code.';
+            dom.noWgClients.style.display = 'block';
+        }
         document.getElementById('wg-pagination').style.display = 'none';
         return;
     }
 
-    noClients.style.display = 'none';
+    if (dom.noWgClients) dom.noWgClients.style.display = 'none';
     const visibleClients = state.wgClients.slice(0, state.wgVisibleCount);
-    tbody.innerHTML = visibleClients.map(client => {
+    if (!dom.wgClientsBody) return;
+    dom.wgClientsBody.innerHTML = visibleClients.map(client => {
         const statusClass = client.enabled ? 'online' : 'offline';
         const statusText = client.enabled ? 'Enabled' : 'Disabled';
         const lastSeen = client.last_seen ? formatLastSeen(client.last_seen) : 'Never';
@@ -1194,6 +1242,9 @@ function initVisualizer() {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+    // Cache DOM elements first
+    initDOMCache();
+
     // Initialize visualizer
     initVisualizer();
 
@@ -1208,21 +1259,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Check if WireGuard is enabled and setup handlers
     checkWireGuardStatus();
-    setInterval(fetchWGClients, 10000); // Refresh WG clients every 10 seconds
+    setInterval(fetchWGClients, POLL_INTERVAL_MS);
 
     // Add client button handler
-    const addBtn = document.getElementById('add-wg-client-btn');
-    if (addBtn) {
-        addBtn.addEventListener('click', showAddWGClientModal);
+    if (dom.addWgClientBtn) {
+        dom.addWgClientBtn.addEventListener('click', showAddWGClientModal);
     }
 
     // Close modal on background click
-    const modal = document.getElementById('wg-modal');
-    if (modal) {
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
+    if (dom.wgModal) {
+        dom.wgModal.addEventListener('click', (e) => {
+            if (e.target === dom.wgModal) {
                 closeWGModal();
             }
         });
     }
 });
+
+// Cleanup on page unload to prevent memory leaks
+window.addEventListener('beforeunload', cleanup);
