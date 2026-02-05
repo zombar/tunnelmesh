@@ -87,6 +87,16 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
+# Configure DNS to use TunnelMesh resolver for .tunnelmesh domains
+echo "Configuring DNS resolver..."
+# Backup original resolv.conf and add TunnelMesh DNS as primary
+cp /etc/resolv.conf /etc/resolv.conf.backup
+echo "nameserver 127.0.0.53" > /etc/resolv.conf
+echo "search tunnelmesh" >> /etc/resolv.conf
+cat /etc/resolv.conf.backup >> /etc/resolv.conf
+echo "DNS configured:"
+cat /etc/resolv.conf
+
 # Give time for initial peer discovery (Go code handles jitter and fast retries)
 echo "Waiting for initial peer discovery..."
 sleep 5

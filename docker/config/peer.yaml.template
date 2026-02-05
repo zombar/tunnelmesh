@@ -11,6 +11,6 @@ tun:
   mtu: 1400
 dns:
   enabled: true
-  listen: "127.0.0.53:5353"
+  listen: "127.0.0.53:53"
   aliases:
     - "alt.${NODE_NAME}"
