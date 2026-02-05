@@ -19,8 +19,8 @@ const CONNECTION_DOT_RADIUS = 5;
 const MAX_VISIBLE_NODES = 3;  // Show max 3 nodes per column, then "+ N more"
 
 // Content dimension bounds (content size scales with canvas, within these limits)
-const MIN_CONTENT_WIDTH = 800;
-const MAX_CONTENT_WIDTH = 1400;
+const MIN_CONTENT_WIDTH = 1200;
+const MAX_CONTENT_WIDTH = 2200;
 const MIN_CONTENT_HEIGHT = 350;
 const MAX_CONTENT_HEIGHT = 500;
 
@@ -131,7 +131,7 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
 
     // Dynamic column spacing based on canvas width (adjust to fit)
     // Increased spacing to move nodes further from center
-    const columnSpacing = Math.min(340, (canvasWidth - CARD_WIDTH * 3) / 2);
+    const columnSpacing = Math.min(500, (canvasWidth - CARD_WIDTH * 3) / 2);
 
     // Reset stack info
     stackInfo.left = { total: 0, hidden: 0 };
