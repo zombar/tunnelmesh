@@ -10,6 +10,7 @@ tun:
   name: "tun-mesh0"
   mtu: 1400
 dns:
-  enabled: false
+  enabled: true
+  listen: "127.0.0.53:5353"
   aliases:
     - "alt.${NODE_NAME}"
