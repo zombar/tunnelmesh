@@ -16,7 +16,7 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 - **Server-as-Client** - Coordination server can also participate as a mesh node
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
 
-![Admin Dashboard](docs/images/admin-dashboard.png)
+![Admin Dashboard](docs/images/admin-dashboard.webp)
 
 ## Getting Started
 
