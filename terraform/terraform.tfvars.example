@@ -47,20 +47,25 @@ admin_token = ""
 # Single $4/month droplet with everything
 nodes = {
   "tunnelmesh" = {
-    coordinator = true
-    peer        = true
-    wireguard   = true
+    coordinator        = true
+    peer               = true
+    wireguard          = true
+    allow_exit_traffic = true  # Allow clients to route internet through this node
+    # location = { latitude = 52.37, longitude = 4.90, city = "Amsterdam", country = "NL" }
   }
 }
 
-# --- Example 2: Coordinator + Separate WireGuard Peer ---
+# --- Example 2: Coordinator Peer (Exit Node) + Separate WireGuard Peer ---
 # nodes = {
 #   "tunnelmesh" = {
-#     coordinator = true
+#     coordinator        = true
+#     peer               = true
+#     allow_exit_traffic = true
 #   }
 #   "tm-wg" = {
 #     peer      = true
 #     wireguard = true
+#     exit_node = "tunnelmesh"  # Route internet through coordinator
 #   }
 # }
 
