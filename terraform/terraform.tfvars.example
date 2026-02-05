@@ -176,6 +176,9 @@ nodes = {
 # SSH tunnel port for mesh connections
 # default_ssh_port = 2222
 
+# External API HTTPS port (peers connect here, port 443 reserved for mesh admin)
+# external_api_port = 8443
+
 # ============================================================================
 # GLOBAL SETTINGS
 # ============================================================================

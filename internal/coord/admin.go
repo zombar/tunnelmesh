@@ -216,7 +216,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 
 // setupAdminRoutes registers the admin API routes and static file server.
 // Note: Admin routes have no authentication - access is controlled by bind address.
-// With join_mesh + mesh_only_admin=true (default): HTTPS on mesh IP at /
+// With join_mesh + mesh_only_admin=true (default): HTTPS on mesh IP at /admin/
 // With join_mesh + mesh_only_admin=false: HTTP on bind_address at /admin/
 // Without join_mesh: HTTP on bind_address at /admin/
 func (s *Server) setupAdminRoutes() {
@@ -230,18 +230,21 @@ func (s *Server) setupAdminRoutes() {
 
 	if meshOnlyAdmin {
 		// Mesh-only: create separate adminMux for HTTPS server on mesh IP
-		// Serve at root (no /admin/ prefix needed - dedicated server)
+		// Serve at /admin/ for consistency with external access mode
 		s.adminMux = http.NewServeMux()
 
-		s.adminMux.HandleFunc("/api/overview", s.handleAdminOverview)
-		s.adminMux.HandleFunc("/api/events", s.handleSSE)
+		s.adminMux.HandleFunc("/admin/api/overview", s.handleAdminOverview)
+		s.adminMux.HandleFunc("/admin/api/events", s.handleSSE)
 
 		if s.cfg.WireGuard.Enabled {
-			s.adminMux.HandleFunc("/api/wireguard/clients", s.handleWGClients)
-			s.adminMux.HandleFunc("/api/wireguard/clients/", s.handleWGClientByID)
+			s.adminMux.HandleFunc("/admin/api/wireguard/clients", s.handleWGClients)
+			s.adminMux.HandleFunc("/admin/api/wireguard/clients/", s.handleWGClientByID)
 		}
 
-		s.adminMux.Handle("/", fileServer)
+		s.adminMux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
+		})
+		s.adminMux.Handle("/admin/", http.StripPrefix("/admin/", fileServer))
 	} else {
 		// External: register on main mux with /admin/ prefix
 		// (shares mux with coordination API, needs prefix to avoid conflicts)

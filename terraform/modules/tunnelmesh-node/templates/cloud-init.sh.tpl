@@ -57,8 +57,9 @@ domain_suffix: "${domain_suffix}"
 admin:
   enabled: true
 %{ if peer_enabled ~}
-  port: 8443  # Use non-standard port to avoid conflict with nginx on 443
+  port: 443  # Mesh-internal admin on port 443 (nginx uses 8443 for external API)
 %{ endif ~}
+  # Admin accessible at https://this.tunnelmesh/admin/ from mesh peers
 
 relay:
   enabled: ${relay_enabled}
@@ -126,12 +127,12 @@ server {
     }
 
     location / {
-        return 301 https://$host$request_uri;
+        return 301 https://$host:${external_api_port}$request_uri;
     }
 }
 
 server {
-    listen 443 ssl http2;
+    listen ${external_api_port} ssl http2;
     server_name ${node_name}.${domain};
 
     # SSL certificates (will be configured by certbot)
@@ -143,7 +144,7 @@ server {
     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
     ssl_prefer_server_ciphers off;
 
-    # API endpoints only - admin is mesh-internal at https://this.tunnelmesh:8443/
+    # External coordination API - admin is mesh-internal at https://this.tunnelmesh/admin/
     location / {
         proxy_pass http://127.0.0.1:${coordinator_port};
         proxy_http_version 1.1;
@@ -244,9 +245,9 @@ ufw allow ${ssh_tunnel_port + 1}/udp comment 'TunnelMesh UDP'
 
 %{ if coordinator_enabled ~}
 ufw allow 80/tcp comment 'HTTP'
-ufw allow 443/tcp comment 'HTTPS'
+ufw allow ${external_api_port}/tcp comment 'HTTPS API'
 %{ if peer_enabled ~}
-ufw allow in on tun-mesh to any port 8443 proto tcp comment 'Mesh Admin HTTPS'
+ufw allow in on tun-mesh to any port 443 proto tcp comment 'Mesh Admin HTTPS'
 %{ endif ~}
 %{ endif ~}
 

@@ -67,7 +67,8 @@ locals {
 
   # Find the coordinator node (there should be exactly one if any nodes need it)
   coordinator_name = one([for name, cfg in var.nodes : name if lookup(cfg, "coordinator", false)])
-  coordinator_url  = local.coordinator_name != null ? "https://${local.coordinator_name}.${var.domain}" : var.external_coordinator_url
+  # External API on configurable port (port 443 reserved for mesh-internal admin)
+  coordinator_url  = local.coordinator_name != null ? "https://${local.coordinator_name}.${var.domain}:${var.external_api_port}" : var.external_coordinator_url
 }
 
 # Deploy all nodes using the tunnelmesh-node module
@@ -90,6 +91,7 @@ module "node" {
   mesh_cidr         = var.mesh_cidr
   domain_suffix     = var.domain_suffix
   locations_enabled = var.locations_enabled
+  external_api_port = var.external_api_port
 
   # Peer server URL (for non-coordinator nodes)
   # If this node is the coordinator, it connects to localhost
