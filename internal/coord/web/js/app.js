@@ -1244,14 +1244,11 @@ function initVisualizer() {
     state.visualizer = new NodeVisualizer(canvas);
     state.visualizer.setDomainSuffix(state.domainSuffix);
 
-    // Wire up node selection to chart highlighting and map centering
+    // Wire up node selection to chart highlighting and map zoom
     state.visualizer.onNodeSelected = (nodeId) => {
         highlightPeerOnCharts(nodeId);
         if (state.nodeMap) {
             state.nodeMap.setSelectedPeer(nodeId);
-            if (nodeId) {
-                state.nodeMap.centerOnPeer(nodeId);
-            }
         }
     };
 }

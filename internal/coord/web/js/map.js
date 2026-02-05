@@ -185,7 +185,7 @@ class NodeMap {
     }
 
     // Calculate bezier curve points between two locations
-    // Trims first and last 5% to avoid crowding the node markers
+    // Trims a fixed distance from each end to avoid crowding the node markers
     calculateCurvePoints(lat1, lng1, lat2, lng2, numPoints = 20) {
         const points = [];
 
@@ -213,11 +213,20 @@ class NodeMap {
         const ctrlLat = midLat + perpY;
         const ctrlLng = midLng + perpX;
 
-        // Generate points along quadratic bezier curve
-        // Trim first and last 5% to avoid crowding node markers
-        const startT = 0.05;
-        const endT = 0.95;
+        // Fixed trim distance in degrees (~0.5 degrees ≈ 55km at equator)
+        // This keeps a consistent gap around markers regardless of line length
+        const trimDistance = 0.5;
+        const trimT = Math.min(trimDistance / distance, 0.4); // Cap at 40% for very short lines
 
+        const startT = trimT;
+        const endT = 1 - trimT;
+
+        // If line is too short after trimming, don't draw it
+        if (startT >= endT) {
+            return [];
+        }
+
+        // Generate points along quadratic bezier curve
         for (let i = 0; i <= numPoints; i++) {
             const t = startT + (i / numPoints) * (endT - startT);
             const t1 = 1 - t;
@@ -396,6 +405,38 @@ class NodeMap {
 
         // Update connections to show only from selected peer
         this.updateConnections();
+
+        // Zoom to fit selected peer and all its connections
+        this.fitToConnections();
+    }
+
+    // Zoom map to fit the selected peer and all connected peers
+    fitToConnections() {
+        if (!this.map || !this.selectedPeer) return;
+
+        const boundsArray = [];
+
+        // Add selected peer location
+        const selectedLoc = this.onlinePeersWithLocation.get(this.selectedPeer);
+        if (selectedLoc) {
+            boundsArray.push([selectedLoc.lat, selectedLoc.lng]);
+        }
+
+        // Add all connected peer locations
+        this.onlinePeersWithLocation.forEach((loc, peerName) => {
+            if (peerName !== this.selectedPeer) {
+                boundsArray.push([loc.lat, loc.lng]);
+            }
+        });
+
+        // Fit bounds if we have locations
+        if (boundsArray.length > 1) {
+            const bounds = L.latLngBounds(boundsArray);
+            this.map.fitBounds(bounds, { padding: [50, 50], maxZoom: 10, animate: false });
+        } else if (boundsArray.length === 1) {
+            // Only selected peer - just center on it
+            this.map.setView(boundsArray[0], this.map.getZoom(), { animate: false });
+        }
     }
 
     // Force map to recalculate size (call after container becomes visible)
