@@ -3,6 +3,7 @@ package coord
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -42,6 +43,8 @@ type serverStats struct {
 type Server struct {
 	cfg          *config.ServerConfig
 	mux          *http.ServeMux
+	adminMux     *http.ServeMux  // Separate mux for admin routes (used with join_mesh)
+	adminServer  *http.Server    // Separate admin HTTP server (HTTPS on mesh IP)
 	peers        map[string]*peerInfo
 	peersMu      sync.RWMutex
 	ipAlloc      *ipAllocator
@@ -51,10 +54,11 @@ type Server struct {
 	statsHistory *StatsHistory // Per-peer stats time series
 	relay        *relayManager
 	holePunch    *holePunchManager
-	wgStore      *wireguard.Store // WireGuard client storage
-	version      string           // Server version for admin display
-	sseHub       *sseHub          // SSE hub for real-time dashboard updates
-	ipGeoCache   *IPGeoCache      // IP geolocation cache for location fallback
+	wgStore      *wireguard.Store      // WireGuard client storage
+	ca           *CertificateAuthority // Internal CA for mesh TLS certs
+	version      string                // Server version for admin display
+	sseHub       *sseHub               // SSE hub for real-time dashboard updates
+	ipGeoCache   *IPGeoCache           // IP geolocation cache for location fallback
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -177,6 +181,13 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		log.Info().Msg("WireGuard client management enabled")
 	}
 
+	// Initialize Certificate Authority for mesh TLS
+	ca, err := NewCertificateAuthority(cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("initialize CA: %w", err)
+	}
+	srv.ca = ca
+
 	// Load persisted stats history
 	if err := srv.LoadStatsHistory(); err != nil {
 		log.Warn().Err(err).Msg("failed to load stats history, starting fresh")
@@ -252,6 +263,7 @@ func (s *Server) SetVersion(version string) {
 
 func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/health", s.handleHealth)
+	s.mux.HandleFunc("/ca.crt", s.handleCACert) // CA cert for mesh TLS (no auth)
 	s.mux.HandleFunc("/api/v1/register", s.withAuth(s.handleRegister))
 	s.mux.HandleFunc("/api/v1/peers", s.withAuth(s.handlePeers))
 	s.mux.HandleFunc("/api/v1/peers/", s.withAuth(s.handlePeerByName))
@@ -465,6 +477,17 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Token:    token,
 	}
 
+	// Generate TLS certificate for the peer
+	if s.ca != nil {
+		certPEM, keyPEM, err := s.ca.GeneratePeerCert(req.Name, s.cfg.DomainSuffix, meshIP)
+		if err != nil {
+			log.Warn().Err(err).Str("peer", req.Name).Msg("failed to generate TLS cert")
+		} else {
+			resp.TLSCert = string(certPEM)
+			resp.TLSKey = string(keyPEM)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
@@ -610,6 +633,47 @@ func (s *Server) lookupPeerLocation(peerName, ip string) {
 func (s *Server) ListenAndServe() error {
 	log.Info().Str("listen", s.cfg.Listen).Msg("starting coordination server")
 	return http.ListenAndServe(s.cfg.Listen, s)
+}
+
+// StartAdminServer starts the admin interface on the specified address.
+// If tlsCert is provided, the server uses HTTPS; otherwise HTTP.
+// This is called after join_mesh completes to bind admin to the mesh IP.
+func (s *Server) StartAdminServer(addr string, tlsCert *tls.Certificate) error {
+	if s.adminMux == nil {
+		return fmt.Errorf("admin routes not initialized")
+	}
+
+	s.adminServer = &http.Server{
+		Addr:    addr,
+		Handler: s.adminMux,
+	}
+
+	if tlsCert != nil {
+		s.adminServer.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{*tlsCert},
+			MinVersion:   tls.VersionTLS12,
+		}
+		log.Info().Str("addr", addr).Msg("starting admin server (HTTPS)")
+		go func() {
+			if err := s.adminServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("admin server error")
+			}
+		}()
+	} else {
+		log.Info().Str("addr", addr).Msg("starting admin server (HTTP)")
+		go func() {
+			if err := s.adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("admin server error")
+			}
+		}()
+	}
+
+	return nil
+}
+
+// GetCA returns the server's certificate authority.
+func (s *Server) GetCA() *CertificateAuthority {
+	return s.ca
 }
 
 // setupWireGuardRoutes registers the WireGuard API routes for concentrator sync.

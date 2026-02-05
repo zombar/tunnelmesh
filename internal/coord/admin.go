@@ -2,7 +2,6 @@ package coord
 
 import (
 	"bytes"
-	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -215,73 +214,43 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(overview)
 }
 
-// withAdminAuth wraps a handler with admin authentication using HTTP Basic Auth.
-// If no admin token is configured, requests are allowed without authentication.
-func (s *Server) withAdminAuth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.checkAdminAuth(w, r) {
-			return
-		}
-		next(w, r)
-	}
-}
-
-// withAdminAuthHandler wraps an http.Handler with admin authentication.
-func (s *Server) withAdminAuthHandler(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.checkAdminAuth(w, r) {
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// checkAdminAuth verifies admin credentials and returns false if auth failed (response already sent).
-func (s *Server) checkAdminAuth(w http.ResponseWriter, r *http.Request) bool {
-	// If no admin token configured, allow access without auth
-	if s.cfg.Admin.Token == "" {
-		return true
-	}
-
-	// Check for Basic Auth credentials
-	_, password, ok := r.BasicAuth()
-	if !ok {
-		w.Header().Set("WWW-Authenticate", `Basic realm="TunnelMesh Admin"`)
-		s.jsonError(w, "authentication required", http.StatusUnauthorized)
-		return false
-	}
-
-	// Constant-time comparison to prevent timing attacks
-	if subtle.ConstantTimeCompare([]byte(password), []byte(s.cfg.Admin.Token)) != 1 {
-		w.Header().Set("WWW-Authenticate", `Basic realm="TunnelMesh Admin"`)
-		s.jsonError(w, "invalid credentials", http.StatusUnauthorized)
-		return false
-	}
-
-	return true
-}
-
 // setupAdminRoutes registers the admin API routes and static file server.
+// Note: Admin routes have no authentication - access is controlled by bind address.
+// With join_mesh: admin binds to mesh IP (HTTPS) - only accessible from mesh network.
+// Without join_mesh: admin binds to configured address (HTTP) - typically localhost only.
 func (s *Server) setupAdminRoutes() {
-	// API endpoints (protected by admin auth)
-	s.mux.HandleFunc("/admin/api/overview", s.withAdminAuth(s.handleAdminOverview))
-	s.mux.HandleFunc("/admin/api/events", s.withAdminAuth(s.handleSSE))
+	// Create a helper to register routes on a mux
+	registerAdminRoutes := func(mux *http.ServeMux) {
+		// API endpoints (no auth - access controlled by bind address)
+		mux.HandleFunc("/admin/api/overview", s.handleAdminOverview)
+		mux.HandleFunc("/admin/api/events", s.handleSSE)
 
-	// WireGuard client management endpoints (if enabled)
-	if s.cfg.WireGuard.Enabled {
-		s.mux.HandleFunc("/admin/api/wireguard/clients", s.withAdminAuth(s.handleWGClients))
-		s.mux.HandleFunc("/admin/api/wireguard/clients/", s.withAdminAuth(s.handleWGClientByID))
+		// WireGuard client management endpoints (if enabled)
+		if s.cfg.WireGuard.Enabled {
+			mux.HandleFunc("/admin/api/wireguard/clients", s.handleWGClients)
+			mux.HandleFunc("/admin/api/wireguard/clients/", s.handleWGClientByID)
+		}
+
+		// Serve embedded static files
+		staticFS, _ := fs.Sub(web.Assets, ".")
+		fileServer := http.FileServer(http.FS(staticFS))
+
+		// Serve index.html at /admin/ and /admin
+		mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
+		})
+		mux.Handle("/admin/", http.StripPrefix("/admin/", fileServer))
 	}
 
-	// Serve embedded static files (also protected by admin auth)
-	staticFS, _ := fs.Sub(web.Assets, ".")
-	fileServer := http.FileServer(http.FS(staticFS))
-
-	// Serve index.html at /admin/ and /admin
-	s.mux.HandleFunc("/admin", s.withAdminAuth(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
-	}))
-	s.mux.Handle("/admin/", s.withAdminAuthHandler(http.StripPrefix("/admin/", fileServer)))
+	if s.cfg.JoinMesh != nil {
+		// With join_mesh: create separate adminMux for HTTPS server on mesh IP
+		// Don't register on main mux - admin only accessible via mesh
+		s.adminMux = http.NewServeMux()
+		registerAdminRoutes(s.adminMux)
+	} else {
+		// Without join_mesh: register on main mux (HTTP on bind_address)
+		registerAdminRoutes(s.mux)
+	}
 }
 
 // handleWGClients handles GET (list) and POST (create) for WireGuard clients.

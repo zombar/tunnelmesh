@@ -16,12 +16,18 @@ mesh_cidr: "10.99.0.0/16"
 domain_suffix: ".tunnelmesh"
 
 # Admin web interface configuration
+# Access is controlled by bind_address (no authentication)
 admin:
   enabled: true
-  # Token for admin authentication (uses HTTP Basic Auth, username is ignored)
-  # If not set, admin interface is open (NOT recommended for production)
-  # Generate a secure token, e.g.: openssl rand -hex 32
-  token: "your-admin-token-here"
+  # bind_address: "127.0.0.1"  # Default: localhost only (secure)
+  # port: 8080                 # Default: 8080
+  #
+  # WARNING: Setting bind_address to "0.0.0.0" exposes admin WITHOUT authentication!
+  # For external access, use join_mesh (mesh-only HTTPS) or put behind authenticated proxy.
+  #
+  # With join_mesh configured: admin is served via HTTPS on the mesh IP only,
+  # accessible at https://<name>.tunnelmesh:<port>/admin/
+  # Users should trust the mesh CA once: tunnelmesh trust-ca --server http://server:8080
 
 # WebSocket relay for peers that can't establish direct connections
 relay:

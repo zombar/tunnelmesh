@@ -81,10 +81,12 @@ type RegisterRequest struct {
 
 // RegisterResponse is returned after successful registration.
 type RegisterResponse struct {
-	MeshIP   string `json:"mesh_ip"`   // Assigned mesh IP address
-	MeshCIDR string `json:"mesh_cidr"` // Full mesh CIDR for routing
-	Domain   string `json:"domain"`    // Domain suffix (e.g., ".tunnelmesh")
-	Token    string `json:"token"`     // JWT token for relay authentication
+	MeshIP   string `json:"mesh_ip"`            // Assigned mesh IP address
+	MeshCIDR string `json:"mesh_cidr"`          // Full mesh CIDR for routing
+	Domain   string `json:"domain"`             // Domain suffix (e.g., ".tunnelmesh")
+	Token    string `json:"token"`              // JWT token for relay authentication
+	TLSCert  string `json:"tls_cert,omitempty"` // PEM-encoded TLS certificate signed by mesh CA
+	TLSKey   string `json:"tls_key,omitempty"`  // PEM-encoded TLS private key
 }
 
 // PeerStats contains traffic statistics reported by peers.

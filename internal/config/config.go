@@ -13,8 +13,9 @@ import (
 
 // AdminConfig holds configuration for the admin web interface.
 type AdminConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Token   string `yaml:"token"` // Authentication token for admin access (optional, but recommended)
+	Enabled     bool   `yaml:"enabled"`
+	BindAddress string `yaml:"bind_address"` // Bind address for admin server (default: "127.0.0.1" - localhost only)
+	Port        int    `yaml:"port"`         // Port for admin server (default: 8080)
 }
 
 // RelayConfig holds configuration for the relay server.
@@ -137,8 +138,14 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 			cfg.DataDir = filepath.Join(homeDir, cfg.DataDir[2:])
 		}
 	}
-	// Admin enabled by default
+	// Admin defaults
 	cfg.Admin.Enabled = true
+	if cfg.Admin.BindAddress == "" {
+		cfg.Admin.BindAddress = "127.0.0.1" // Secure by default - localhost only
+	}
+	if cfg.Admin.Port == 0 {
+		cfg.Admin.Port = 8080
+	}
 	// Relay enabled by default
 	if !cfg.Relay.Enabled {
 		cfg.Relay.Enabled = true

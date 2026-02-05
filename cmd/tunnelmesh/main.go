@@ -210,6 +210,9 @@ It does not route traffic - peers connect directly to each other.`,
 	// Update command - self-update
 	rootCmd.AddCommand(newUpdateCmd())
 
+	// Trust CA command - install mesh CA cert in system trust store
+	rootCmd.AddCommand(newTrustCACmd())
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -319,9 +322,25 @@ func runServeFromService(ctx context.Context, configPath string) error {
 			Str("name", cfg.JoinMesh.Name).
 			Msg("joining mesh as client")
 
+		// Callback to start admin HTTPS server after joining mesh
+		onJoined := func(meshIP string, tlsMgr *peer.TLSManager) {
+			if cfg.Admin.Enabled && tlsMgr != nil {
+				// Load TLS cert for admin HTTPS
+				tlsCert, err := tlsMgr.LoadCert()
+				if err != nil {
+					log.Error().Err(err).Msg("failed to load TLS cert for admin")
+					return
+				}
+				adminAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", cfg.Admin.Port))
+				if err := srv.StartAdminServer(adminAddr, tlsCert); err != nil {
+					log.Error().Err(err).Msg("failed to start admin server")
+				}
+			}
+		}
+
 		go func() {
 			time.Sleep(500 * time.Millisecond)
-			if err := runJoinWithConfig(ctx, cfg.JoinMesh); err != nil {
+			if err := runJoinWithConfigAndCallback(ctx, cfg.JoinMesh, onJoined); err != nil {
 				log.Error().Err(err).Msg("failed to join mesh as client")
 			}
 		}()
@@ -466,11 +485,27 @@ func runServe(cmd *cobra.Command, args []string) error {
 			Str("name", cfg.JoinMesh.Name).
 			Msg("joining mesh as client")
 
+		// Callback to start admin HTTPS server after joining mesh
+		onJoined := func(meshIP string, tlsMgr *peer.TLSManager) {
+			if cfg.Admin.Enabled && tlsMgr != nil {
+				// Load TLS cert for admin HTTPS
+				tlsCert, err := tlsMgr.LoadCert()
+				if err != nil {
+					log.Error().Err(err).Msg("failed to load TLS cert for admin")
+					return
+				}
+				adminAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", cfg.Admin.Port))
+				if err := srv.StartAdminServer(adminAddr, tlsCert); err != nil {
+					log.Error().Err(err).Msg("failed to start admin server")
+				}
+			}
+		}
+
 		// Run join in a goroutine so we can handle shutdown
 		go func() {
 			// Small delay to ensure server is ready
 			time.Sleep(500 * time.Millisecond)
-			if err := runJoinWithConfig(ctx, cfg.JoinMesh); err != nil {
+			if err := runJoinWithConfigAndCallback(ctx, cfg.JoinMesh, onJoined); err != nil {
 				log.Error().Err(err).Msg("failed to join mesh as client")
 			}
 		}()
@@ -569,7 +604,15 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	return runJoinWithConfig(ctx, cfg)
 }
 
+// OnJoinedFunc is called after successfully joining the mesh.
+// It receives the mesh IP and TLS manager (if TLS cert was provided).
+type OnJoinedFunc func(meshIP string, tlsMgr *peer.TLSManager)
+
 func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
+	return runJoinWithConfigAndCallback(ctx, cfg, nil)
+}
+
+func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, onJoined OnJoinedFunc) error {
 	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
 		return fmt.Errorf("server, token, and name are required")
 	}
@@ -628,6 +671,27 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		Str("mesh_cidr", resp.MeshCIDR).
 		Str("domain", resp.Domain).
 		Msg("joined mesh network")
+
+	// Store TLS certificate if provided
+	var tlsMgr *peer.TLSManager
+	if resp.TLSCert != "" && resp.TLSKey != "" {
+		// Use the directory of the private key for TLS storage
+		tlsDataDir := filepath.Dir(cfg.PrivateKey)
+		tlsMgr = peer.NewTLSManager(tlsDataDir)
+		if err := tlsMgr.StoreCert([]byte(resp.TLSCert), []byte(resp.TLSKey)); err != nil {
+			log.Warn().Err(err).Msg("failed to store TLS certificate")
+		} else {
+			log.Info().
+				Str("cert", tlsMgr.CertPath()).
+				Str("key", tlsMgr.KeyPath()).
+				Msg("TLS certificate stored")
+		}
+	}
+
+	// Notify callback if provided (used by server to start admin HTTPS)
+	if onJoined != nil {
+		onJoined(resp.MeshIP, tlsMgr)
+	}
 
 	// Create TUN device
 	tunCfg := tun.Config{
@@ -1053,6 +1117,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	var dnsConfigured bool
 	if cfg.DNS.Enabled {
 		resolver := meshdns.NewResolver(resp.Domain, cfg.DNS.CacheTTL)
+		resolver.SetLocalMeshIP(resp.MeshIP) // Enable "this.tunnelmesh" resolution
 		node.Resolver = resolver
 
 		// Initial DNS sync
