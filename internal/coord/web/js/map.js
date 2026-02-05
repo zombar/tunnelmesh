@@ -207,6 +207,17 @@ class NodeMap {
         this.markers.delete(name);
     }
 
+    // Center map on a specific peer
+    centerOnPeer(peerName) {
+        if (!this.map) return;
+
+        const entry = this.markers.get(peerName);
+        if (entry && entry.marker) {
+            const latLng = entry.marker.getLatLng();
+            this.map.setView(latLng, 6, { animate: true });
+        }
+    }
+
     // Force map to recalculate size (call after container becomes visible)
     invalidateSize() {
         if (this.map) {
