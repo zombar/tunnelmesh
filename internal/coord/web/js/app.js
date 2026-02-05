@@ -68,15 +68,17 @@ function setupSSE() {
         return;
     }
 
-    const eventSource = new EventSource('/admin/api/events');
+    // EventSource with credentials for authenticated endpoints
+    const eventSource = new EventSource('/admin/api/events', { withCredentials: true });
 
     eventSource.addEventListener('connected', () => {
-        console.log('SSE connected');
+        console.log('SSE connected - dashboard will update in real-time');
         sseRetryCount = 0; // Reset retry count on successful connection
     });
 
     eventSource.addEventListener('heartbeat', (event) => {
         // Refresh dashboard when a heartbeat is received
+        console.log('SSE heartbeat received');
         fetchData(false);
     });
 
@@ -98,8 +100,9 @@ function setupSSE() {
 }
 
 function startPolling() {
-    // Fallback polling every 5 seconds
-    setInterval(() => fetchData(false), 5000);
+    // Fallback polling every 10 seconds (matches heartbeat interval)
+    console.log('Starting polling mode (every 10 seconds)');
+    setInterval(() => fetchData(false), 10000);
 }
 
 function showAuthError() {
