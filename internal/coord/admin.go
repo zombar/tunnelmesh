@@ -57,6 +57,8 @@ type AdminPeerInfo struct {
 // handleAdminOverview returns the admin overview data.
 // Query params:
 //   - history=N: include last N stats data points per peer (default: 0)
+//   - since=<RFC3339>: include stats data points since this timestamp
+//   - maxPoints=N: downsample history to at most N points (for chart display)
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -68,6 +70,22 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	if h := r.URL.Query().Get("history"); h != "" {
 		if n, err := strconv.Atoi(h); err == nil && n > 0 {
 			historyLimit = n
+		}
+	}
+
+	// Parse since query param (RFC3339 timestamp)
+	var sinceTime time.Time
+	if since := r.URL.Query().Get("since"); since != "" {
+		if t, err := time.Parse(time.RFC3339, since); err == nil {
+			sinceTime = t
+		}
+	}
+
+	// Parse maxPoints query param for downsampling
+	maxPoints := 0
+	if mp := r.URL.Query().Get("maxPoints"); mp != "" {
+		if n, err := strconv.Atoi(mp); err == nil && n > 0 {
+			maxPoints = n
 		}
 	}
 
@@ -120,15 +138,26 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 
 		// Calculate rates if we have previous stats
 		if info.prevStats != nil && info.stats != nil && !info.lastStatsTime.IsZero() {
-			// Rate is calculated as delta over 30 seconds (heartbeat interval)
-			peerInfo.BytesSentRate = float64(info.stats.BytesSent-info.prevStats.BytesSent) / 30.0
-			peerInfo.BytesReceivedRate = float64(info.stats.BytesReceived-info.prevStats.BytesReceived) / 30.0
-			peerInfo.PacketsSentRate = float64(info.stats.PacketsSent-info.prevStats.PacketsSent) / 30.0
-			peerInfo.PacketsReceivedRate = float64(info.stats.PacketsReceived-info.prevStats.PacketsReceived) / 30.0
+			// Use actual time delta for rate calculation (more accurate than fixed interval)
+			delta := info.lastStatsTime.Sub(info.prevStatsTime).Seconds()
+			if delta > 0 {
+				peerInfo.BytesSentRate = float64(info.stats.BytesSent-info.prevStats.BytesSent) / delta
+				peerInfo.BytesReceivedRate = float64(info.stats.BytesReceived-info.prevStats.BytesReceived) / delta
+				peerInfo.PacketsSentRate = float64(info.stats.PacketsSent-info.prevStats.PacketsSent) / delta
+				peerInfo.PacketsReceivedRate = float64(info.stats.PacketsReceived-info.prevStats.PacketsReceived) / delta
+			}
 		}
 
 		// Include history if requested
-		if historyLimit > 0 {
+		if !sinceTime.IsZero() {
+			// Time-based history query (for charts)
+			peerInfo.History = s.statsHistory.GetHistorySince(info.peer.Name, sinceTime)
+			// Downsample if needed
+			if maxPoints > 0 && len(peerInfo.History) > maxPoints {
+				peerInfo.History = downsampleHistory(peerInfo.History, maxPoints)
+			}
+		} else if historyLimit > 0 {
+			// Count-based history query (legacy)
 			peerInfo.History = s.statsHistory.GetHistory(info.peer.Name, historyLimit)
 		}
 
@@ -358,4 +387,26 @@ func (s *Server) handleWGClientByID(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(apiResp.StatusCode)
 	}
 	_, _ = w.Write(apiResp.Body)
+}
+
+// downsampleHistory reduces the number of data points using uniform sampling.
+// This preserves the general shape of the data while reducing payload size for charts.
+func downsampleHistory(data []StatsDataPoint, targetPoints int) []StatsDataPoint {
+	if len(data) <= targetPoints || targetPoints <= 0 {
+		return data
+	}
+
+	// Use uniform sampling - pick evenly spaced points
+	step := float64(len(data)-1) / float64(targetPoints-1)
+	result := make([]StatsDataPoint, targetPoints)
+
+	for i := 0; i < targetPoints; i++ {
+		idx := int(float64(i) * step)
+		if idx >= len(data) {
+			idx = len(data) - 1
+		}
+		result[i] = data[idx]
+	}
+
+	return result
 }

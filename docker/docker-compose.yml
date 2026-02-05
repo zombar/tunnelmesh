@@ -9,6 +9,7 @@ services:
     volumes:
       - ./config/server.yaml:/etc/tunnelmesh/server.yaml:ro
       - ./scripts/server-entrypoint.sh:/scripts/server-entrypoint.sh:ro
+      - metrics-data:/var/lib/tunnelmesh
     cap_add:
       - NET_ADMIN
     devices:
@@ -56,3 +57,9 @@ networks:
     ipam:
       config:
         - subnet: 172.28.0.0/24
+
+volumes:
+  metrics-data:
+    name: tunnelmesh-metrics-data
+    labels:
+      - "com.tunnelmesh.description=Stats history for dashboard charts"

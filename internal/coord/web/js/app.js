@@ -4,8 +4,35 @@ const state = {
     maxHistoryPoints: 20,
     wgClients: [],
     wgEnabled: false,
-    currentWGConfig: null
+    currentWGConfig: null,
+    // Chart state
+    charts: {
+        throughput: null,
+        packets: null,
+        chartData: {
+            labels: [],      // timestamps (shared across both charts)
+            throughput: {},  // { peerName: [values] }
+            packets: {}      // { peerName: [values] }
+        },
+        maxChartPoints: 4320  // 12 hours at 10-second intervals
+    }
 };
+
+// Green gradient for chart lines (dim to bright based on outlier status)
+// Dimmest green for average peers, brightest for outliers
+const GREEN_GRADIENT = [
+    '#2d4a37', // dimmest - most average
+    '#3d6b4a',
+    '#3fb950', // middle
+    '#56d364',
+    '#7ee787'  // brightest - outliers
+];
+
+// Max time range for charts (12 hours)
+const MAX_RANGE_HOURS = 12;
+// At 10-second heartbeat intervals, 12 hours = 4320 points
+// Request full resolution (no downsampling)
+const MAX_CHART_POINTS = 4320;
 
 // Fetch and update dashboard
 async function fetchData(includeHistory = false) {
@@ -56,6 +83,11 @@ function updateDashboard(data, loadHistory = false) {
     const versionEl = document.getElementById('server-version');
     if (versionEl && data.server_version) {
         versionEl.textContent = data.server_version;
+    }
+
+    // Update charts with new data during polling (not on initial history load)
+    if (!loadHistory && state.charts.throughput) {
+        updateChartsWithNewData(data.peers);
     }
 
     // Update history for each peer
@@ -211,6 +243,422 @@ function formatBytes(bytes) {
 function formatRate(rate) {
     if (rate === 0 || rate === undefined || rate === null) return '0';
     return rate.toFixed(1);
+}
+
+// Chart functions
+
+function initCharts() {
+    const chartOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: {
+            mode: 'index',
+            intersect: false
+        },
+        scales: {
+            x: {
+                type: 'time',
+                time: {
+                    displayFormats: {
+                        minute: 'HH:mm',
+                        hour: 'HH:mm',
+                        day: 'd MMM'
+                    }
+                },
+                grid: { display: false },
+                ticks: { color: '#8b949e', maxTicksLimit: 5, maxRotation: 0 },
+                border: { display: false }
+            },
+            y: {
+                beginAtZero: true,
+                grid: { color: '#21262d' },
+                ticks: { color: '#8b949e', maxTicksLimit: 4 },
+                border: { display: false }
+            }
+        },
+        plugins: {
+            legend: { display: false },
+            tooltip: { enabled: false }
+        }
+    };
+
+    // Throughput chart
+    const throughputCtx = document.getElementById('throughput-chart');
+    if (throughputCtx) {
+        state.charts.throughput = new Chart(throughputCtx, {
+            type: 'line',
+            data: { datasets: [] },
+            options: chartOptions
+        });
+    }
+
+    // Packets chart
+    const packetsCtx = document.getElementById('packets-chart');
+    if (packetsCtx) {
+        state.charts.packets = new Chart(packetsCtx, {
+            type: 'line',
+            data: { datasets: [] },
+            options: chartOptions
+        });
+    }
+}
+
+async function fetchChartHistory() {
+    try {
+        // Fetch up to 12 hours of history
+        const since = new Date(Date.now() - MAX_RANGE_HOURS * 60 * 60 * 1000);
+
+        const url = `/admin/api/overview?since=${since.toISOString()}&maxPoints=${MAX_CHART_POINTS}`;
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}`);
+        }
+
+        const data = await resp.json();
+        initializeChartData(data);
+    } catch (err) {
+        console.error('Failed to fetch chart history:', err);
+    }
+}
+
+// Quantize timestamp to 10-second intervals
+function quantizeTimestamp(ts) {
+    return Math.round(ts / 10000) * 10000;
+}
+
+function initializeChartData(data) {
+    // Clear existing chart data and lastSeenTimes
+    state.charts.chartData.labels = [];
+    state.charts.chartData.throughput = {};
+    state.charts.chartData.packets = {};
+    state.charts.lastSeenTimes = {};
+
+    // Build chart data from peer histories
+    // Quantize timestamps to 10-second intervals so they align across peers
+    const allTimestamps = new Set();
+    const peerHistories = {};
+    const peerFirstTs = {}; // Track when each peer first came online
+    const peerLastTs = {};  // Track when each peer was last seen
+
+    data.peers.forEach(peer => {
+        if (!peer.history || peer.history.length === 0) return;
+
+        // History comes newest first, reverse to get oldest first
+        const history = [...peer.history].reverse();
+        peerHistories[peer.name] = {};
+
+        history.forEach(point => {
+            const quantized = quantizeTimestamp(new Date(point.ts).getTime());
+            allTimestamps.add(quantized);
+            // Store by quantized timestamp (last value wins if multiple in same interval)
+            peerHistories[peer.name][quantized] = point;
+
+            // Track first/last timestamps for this peer
+            if (!peerFirstTs[peer.name] || quantized < peerFirstTs[peer.name]) {
+                peerFirstTs[peer.name] = quantized;
+            }
+            if (!peerLastTs[peer.name] || quantized > peerLastTs[peer.name]) {
+                peerLastTs[peer.name] = quantized;
+            }
+        });
+    });
+
+    // Sort timestamps
+    const sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b);
+    state.charts.chartData.labels = sortedTimestamps.map(ts => new Date(ts));
+
+    // Build data arrays for each peer
+    Object.entries(peerHistories).forEach(([peerName, historyMap]) => {
+        const throughputData = [];
+        const packetsData = [];
+        const firstTs = peerFirstTs[peerName];
+        const lastTs = peerLastTs[peerName];
+
+        sortedTimestamps.forEach(ts => {
+            const point = historyMap[ts];
+            if (point) {
+                // Combine TX and RX for total throughput/packets
+                throughputData.push((point.txB || 0) + (point.rxB || 0));
+                packetsData.push((point.txP || 0) + (point.rxP || 0));
+            } else if (ts < firstTs || ts > lastTs) {
+                // Before peer existed or after last seen - use null (no line)
+                throughputData.push(null);
+                packetsData.push(null);
+            } else {
+                // Gap in the middle - peer was offline, use -1 (red line at 0)
+                throughputData.push(-1);
+                packetsData.push(-1);
+            }
+        });
+
+        state.charts.chartData.throughput[peerName] = throughputData;
+        state.charts.chartData.packets[peerName] = packetsData;
+
+        // Initialize lastSeenTimes from the peer's last timestamp (quantized)
+        if (lastTs) {
+            state.charts.lastSeenTimes[peerName] = lastTs;
+        }
+    });
+
+    rebuildChartDatasets();
+
+    // Zoom out to show all available data
+    fitChartsToData();
+}
+
+function fitChartsToData() {
+    const labels = state.charts.chartData.labels;
+    if (labels.length === 0) return;
+
+    // Get the time range of the data
+    const minTime = labels[0];
+    const maxTime = labels[labels.length - 1];
+
+    // Update both charts to show full data range
+    if (state.charts.throughput) {
+        state.charts.throughput.options.scales.x.min = minTime;
+        state.charts.throughput.options.scales.x.max = maxTime;
+        state.charts.throughput.update();
+    }
+
+    if (state.charts.packets) {
+        state.charts.packets.options.scales.x.min = minTime;
+        state.charts.packets.options.scales.x.max = maxTime;
+        state.charts.packets.update();
+    }
+}
+
+function updateChartsWithNewData(peers) {
+    if (!state.charts.throughput || !state.charts.packets) return;
+
+    // Track last seen times to detect new heartbeats
+    if (!state.charts.lastSeenTimes) {
+        state.charts.lastSeenTimes = {};
+    }
+
+    // Build set of currently online peers (present in API response)
+    const onlinePeers = new Set(peers.map(p => p.name));
+
+    // Collect new data points with their timestamps
+    const newPoints = [];
+
+    peers.forEach(peer => {
+        const peerLastSeen = new Date(peer.last_seen);
+        const peerLastSeenQuantized = quantizeTimestamp(peerLastSeen.getTime());
+        const knownLastSeen = state.charts.lastSeenTimes[peer.name] || 0;
+
+        // Only process if this is a new heartbeat (quantized)
+        if (peerLastSeenQuantized > knownLastSeen) {
+            state.charts.lastSeenTimes[peer.name] = peerLastSeenQuantized;
+
+            newPoints.push({
+                peer: peer.name,
+                timestamp: new Date(peerLastSeenQuantized),
+                throughput: (peer.bytes_sent_rate || 0) + (peer.bytes_received_rate || 0),
+                packets: (peer.packets_sent_rate || 0) + (peer.packets_received_rate || 0)
+            });
+        }
+    });
+
+    // No new data
+    if (newPoints.length === 0) return;
+
+    // Group new points by quantized timestamp (10-second intervals)
+    const groups = new Map();
+    newPoints.forEach(point => {
+        const key = point.timestamp.getTime();
+        if (!groups.has(key)) {
+            groups.set(key, { timestamp: point.timestamp, peers: {} });
+        }
+        groups.get(key).peers[point.peer] = point;
+    });
+
+    // Sort groups by timestamp and add each as a data point
+    const sortedGroups = Array.from(groups.values()).sort((a, b) => a.timestamp - b.timestamp);
+
+    // Get the last timestamp in the chart (if any)
+    const lastChartTime = state.charts.chartData.labels.length > 0
+        ? state.charts.chartData.labels[state.charts.chartData.labels.length - 1].getTime()
+        : 0;
+
+    sortedGroups.forEach(group => {
+        // Only add if this timestamp is newer than the last one in the chart
+        if (group.timestamp.getTime() <= lastChartTime) {
+            return; // Skip data points in the past
+        }
+
+        // Add timestamp
+        state.charts.chartData.labels.push(group.timestamp);
+
+        // For each existing peer, add their value
+        const allPeers = new Set([
+            ...Object.keys(state.charts.chartData.throughput),
+            ...Object.keys(group.peers)
+        ]);
+
+        allPeers.forEach(peerName => {
+            // Check if this is a new peer
+            const isNewPeer = !state.charts.chartData.throughput[peerName];
+
+            // Initialize arrays if needed (fill with nulls for timestamps before they existed)
+            if (isNewPeer) {
+                const chartLen = state.charts.chartData.labels.length - 1; // -1 because we just added the new timestamp
+                state.charts.chartData.throughput[peerName] = new Array(chartLen).fill(null);
+                state.charts.chartData.packets[peerName] = new Array(chartLen).fill(null);
+            }
+
+            if (group.peers[peerName]) {
+                // This peer has data for this timestamp
+                state.charts.chartData.throughput[peerName].push(group.peers[peerName].throughput);
+                state.charts.chartData.packets[peerName].push(group.peers[peerName].packets);
+            } else if (!onlinePeers.has(peerName)) {
+                // Peer is gone from API response - truly offline, use -1 (red line at 0)
+                state.charts.chartData.throughput[peerName].push(-1);
+                state.charts.chartData.packets[peerName].push(-1);
+            } else {
+                // Peer is online but no new heartbeat yet - use null (gap, no line drawn)
+                state.charts.chartData.throughput[peerName].push(null);
+                state.charts.chartData.packets[peerName].push(null);
+            }
+        });
+    });
+
+    // Trim to max points (rolling window)
+    const maxPoints = state.charts.maxChartPoints;
+    while (state.charts.chartData.labels.length > maxPoints) {
+        state.charts.chartData.labels.shift();
+        Object.keys(state.charts.chartData.throughput).forEach(peerName => {
+            if (state.charts.chartData.throughput[peerName].length > maxPoints) {
+                state.charts.chartData.throughput[peerName].shift();
+            }
+            if (state.charts.chartData.packets[peerName].length > maxPoints) {
+                state.charts.chartData.packets[peerName].shift();
+            }
+        });
+    }
+
+    // Clean up peers that are no longer present
+    const currentPeers = new Set(peers.map(p => p.name));
+    Object.keys(state.charts.chartData.throughput).forEach(peerName => {
+        if (!currentPeers.has(peerName)) {
+            delete state.charts.chartData.throughput[peerName];
+            delete state.charts.chartData.packets[peerName];
+            delete state.charts.lastSeenTimes[peerName];
+        }
+    });
+
+    rebuildChartDatasets();
+}
+
+// Calculate color for each peer based on how much they deviate from average
+// Peers close to average get dim green, outliers get bright green
+function calculatePeerColors(dataMap) {
+    const peerAverages = {};
+    const allAverages = [];
+
+    // Calculate average for each peer
+    Object.entries(dataMap).forEach(([peerName, values]) => {
+        const validValues = values.filter(v => v !== null && v > 0);
+        if (validValues.length > 0) {
+            const avg = validValues.reduce((a, b) => a + b, 0) / validValues.length;
+            peerAverages[peerName] = avg;
+            allAverages.push(avg);
+        } else {
+            peerAverages[peerName] = 0;
+        }
+    });
+
+    if (allAverages.length === 0) return {};
+
+    // Calculate overall average
+    const overallAvg = allAverages.reduce((a, b) => a + b, 0) / allAverages.length;
+
+    // Calculate max deviation from average
+    const deviations = allAverages.map(avg => Math.abs(avg - overallAvg));
+    const maxDeviation = Math.max(...deviations, 1); // avoid division by zero
+
+    // Assign colors based on deviation (normalized 0-1)
+    const colors = {};
+    Object.entries(peerAverages).forEach(([peerName, avg]) => {
+        const deviation = Math.abs(avg - overallAvg);
+        const normalizedDeviation = deviation / maxDeviation; // 0 = average, 1 = max outlier
+        const colorIndex = Math.floor(normalizedDeviation * (GREEN_GRADIENT.length - 1));
+        colors[peerName] = GREEN_GRADIENT[colorIndex];
+    });
+
+    return colors;
+}
+
+function rebuildChartDatasets() {
+    const labels = state.charts.chartData.labels;
+
+    // Calculate colors based on outlier status
+    const throughputColors = calculatePeerColors(state.charts.chartData.throughput);
+    const packetsColors = calculatePeerColors(state.charts.chartData.packets);
+
+    // Helper to build dataset with offline detection
+    // null = peer didn't exist yet (don't show)
+    // -1 = peer was offline (show red dashed line at y=0)
+    const buildDataset = (peerName, values, baseColor) => {
+        const data = values.map((v, i) => ({
+            x: labels[i],
+            y: v === null ? null : (v === -1 ? 0 : v)
+        }));
+
+        // Track which segments are offline (were -1 in original data)
+        const offlineSegments = values.map(v => v === -1);
+
+        return {
+            label: peerName,
+            data: data,
+            borderColor: baseColor,
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.3,
+            cubicInterpolationMode: 'monotone',
+            fill: false,
+            spanGaps: false, // Don't connect across null gaps
+            segment: {
+                borderColor: ctx => {
+                    const p0Offline = offlineSegments[ctx.p0DataIndex];
+                    const p1Offline = offlineSegments[ctx.p1DataIndex];
+                    if (p0Offline || p1Offline) {
+                        return '#d32f2f'; // Red for offline
+                    }
+                    return baseColor;
+                },
+                borderDash: ctx => {
+                    const p0Offline = offlineSegments[ctx.p0DataIndex];
+                    const p1Offline = offlineSegments[ctx.p1DataIndex];
+                    if (p0Offline || p1Offline) {
+                        return [5, 5];
+                    }
+                    return undefined;
+                }
+            }
+        };
+    };
+
+    // Build throughput datasets
+    const throughputDatasets = Object.entries(state.charts.chartData.throughput).map(([peerName, values]) => {
+        return buildDataset(peerName, values, throughputColors[peerName] || GREEN_GRADIENT[2]);
+    });
+
+    // Build packets datasets
+    const packetsDatasets = Object.entries(state.charts.chartData.packets).map(([peerName, values]) => {
+        return buildDataset(peerName, values, packetsColors[peerName] || GREEN_GRADIENT[2]);
+    });
+
+    if (state.charts.throughput) {
+        state.charts.throughput.data.datasets = throughputDatasets;
+        state.charts.throughput.update();
+    }
+
+    if (state.charts.packets) {
+        state.charts.packets.data.datasets = packetsDatasets;
+        state.charts.packets.update();
+    }
 }
 
 function formatNumber(num) {
@@ -484,6 +932,12 @@ async function deleteWGClient(id, name) {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+    // Initialize charts first
+    initCharts();
+
+    // Fetch initial chart history (up to 3 days)
+    fetchChartHistory();
+
     fetchData(true); // Load with history on initial fetch
     setInterval(() => fetchData(false), 5000); // Refresh every 5 seconds without history
 

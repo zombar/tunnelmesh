@@ -42,26 +42,29 @@ type WireGuardPeerConfig struct {
 
 // ServerConfig holds configuration for the coordination server.
 type ServerConfig struct {
-	Listen       string                `yaml:"listen"`
-	AuthToken    string                `yaml:"auth_token"`
-	MeshCIDR     string                `yaml:"mesh_cidr"`
-	DomainSuffix string                `yaml:"domain_suffix"`
-	Admin        AdminConfig           `yaml:"admin"`
-	Relay        RelayConfig           `yaml:"relay"`
-	WireGuard    WireGuardServerConfig `yaml:"wireguard"`
-	JoinMesh     *PeerConfig           `yaml:"join_mesh,omitempty"`
+	Listen            string                `yaml:"listen"`
+	AuthToken         string                `yaml:"auth_token"`
+	MeshCIDR          string                `yaml:"mesh_cidr"`
+	DomainSuffix      string                `yaml:"domain_suffix"`
+	DataDir           string                `yaml:"data_dir"`            // Data directory for persistence (default: /var/lib/tunnelmesh)
+	HeartbeatInterval string                `yaml:"heartbeat_interval"`  // Heartbeat interval (default: 10s)
+	Admin             AdminConfig           `yaml:"admin"`
+	Relay             RelayConfig           `yaml:"relay"`
+	WireGuard         WireGuardServerConfig `yaml:"wireguard"`
+	JoinMesh          *PeerConfig           `yaml:"join_mesh,omitempty"`
 }
 
 // PeerConfig holds configuration for a peer node.
 type PeerConfig struct {
-	Name       string              `yaml:"name"`
-	Server     string              `yaml:"server"`
-	AuthToken  string              `yaml:"auth_token"`
-	SSHPort    int                 `yaml:"ssh_port"`
-	PrivateKey string              `yaml:"private_key"`
-	TUN        TUNConfig           `yaml:"tun"`
-	DNS        DNSConfig           `yaml:"dns"`
-	WireGuard  WireGuardPeerConfig `yaml:"wireguard"`
+	Name              string              `yaml:"name"`
+	Server            string              `yaml:"server"`
+	AuthToken         string              `yaml:"auth_token"`
+	SSHPort           int                 `yaml:"ssh_port"`
+	PrivateKey        string              `yaml:"private_key"`
+	HeartbeatInterval string              `yaml:"heartbeat_interval"` // Heartbeat interval (default: 10s)
+	TUN               TUNConfig           `yaml:"tun"`
+	DNS               DNSConfig           `yaml:"dns"`
+	WireGuard         WireGuardPeerConfig `yaml:"wireguard"`
 }
 
 // TUNConfig holds configuration for the TUN interface.
@@ -96,6 +99,16 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 	if cfg.DomainSuffix == "" {
 		cfg.DomainSuffix = ".tunnelmesh"
 	}
+	if cfg.DataDir == "" {
+		cfg.DataDir = "/var/lib/tunnelmesh"
+	}
+	// Expand home directory in data dir
+	if strings.HasPrefix(cfg.DataDir, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			cfg.DataDir = filepath.Join(homeDir, cfg.DataDir[2:])
+		}
+	}
 	// Admin enabled by default
 	cfg.Admin.Enabled = true
 	// Relay enabled by default
@@ -104,6 +117,9 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 	}
 	if cfg.Relay.PairTimeout == "" {
 		cfg.Relay.PairTimeout = "90s"
+	}
+	if cfg.HeartbeatInterval == "" {
+		cfg.HeartbeatInterval = "10s"
 	}
 
 	// WireGuard defaults are applied on demand (endpoint must be set manually)
@@ -168,6 +184,9 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 	// DNS enabled by default
 	if !cfg.DNS.Enabled && cfg.DNS.Listen == "127.0.0.53:5353" {
 		cfg.DNS.Enabled = true
+	}
+	if cfg.HeartbeatInterval == "" {
+		cfg.HeartbeatInterval = "10s"
 	}
 
 	// Expand home directory in private key path

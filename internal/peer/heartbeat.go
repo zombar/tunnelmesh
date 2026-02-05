@@ -13,8 +13,16 @@ import (
 // Note: Push notification handlers (relay/hole-punch) are set in setupRelayHandlers to ensure
 // they're re-registered after relay reconnection.
 func (m *MeshNode) RunHeartbeat(ctx context.Context) {
-	// Send heartbeats every 30 seconds (no fast phase needed - notifications are pushed instantly)
-	ticker := time.NewTicker(30 * time.Second)
+	// Parse heartbeat interval from config (default: 10s)
+	interval := 10 * time.Second
+	if m.identity.Config != nil && m.identity.Config.HeartbeatInterval != "" {
+		if parsed, err := time.ParseDuration(m.identity.Config.HeartbeatInterval); err == nil {
+			interval = parsed
+		}
+	}
+
+	log.Debug().Dur("interval", interval).Msg("starting heartbeat loop")
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	// Perform initial heartbeat immediately
