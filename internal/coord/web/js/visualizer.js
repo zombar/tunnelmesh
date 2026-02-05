@@ -11,28 +11,20 @@ const NodeType = {
     EXIT_NODE: 'exit_node'
 };
 
-const CARD_WIDTH = 200;
-const CARD_HEIGHT = 80;
+const CARD_WIDTH = 180;
+const CARD_HEIGHT = 70;
 const TAB_HEIGHT = 20;
-const COLUMN_SPACING = 280;
-const ROW_SPACING = 110;  // Vertical spacing between spread nodes
-const CONNECTION_DOT_RADIUS = 5;
+const ROW_SPACING = 100;  // Vertical spacing between spread nodes
+const CONNECTION_DOT_RADIUS = 4;
 const MAX_VISIBLE_NODES = 3;  // Show max 3 nodes per column, then "+ N more"
 
-// Colors matching dashboard theme
+// Colors matching dashboard theme - simplified uniform styling
 const COLORS = {
     background: '#0d1117',
     cardFill: '#21262d',
-    cardStroke: '#30363d',
+    cardStroke: '#484f58',  // Light grey stroke for all nodes
     text: '#e6edf3',
     textDim: '#8b949e',
-    online: '#3fb950',
-    nat: '#d29922',
-    offline: '#f85149',
-    selected: '#238636',
-    selectedStroke: '#3fb950',
-    hovered: '#1f6feb',
-    hoveredStroke: '#58a6ff',
     connection: '#30363d',
     connectionHighlight: '#58a6ff'
 };
@@ -75,31 +67,6 @@ class VisualizerNode {
     get category() {
         return `${this.nodeType}_${this.connectable}_${this.online}`;
     }
-
-    // Get stroke color based on state
-    getStrokeColor() {
-        if (this.selected) return COLORS.selectedStroke;
-        if (this.hovered) return COLORS.hoveredStroke;
-        if (!this.online) return COLORS.offline;
-        if (!this.connectable) return COLORS.nat;
-        return COLORS.online;
-    }
-
-    // Get fill color based on state
-    getFillColor() {
-        if (this.selected) return COLORS.selected;
-        if (this.hovered) return COLORS.hovered;
-        return COLORS.cardFill;
-    }
-
-    // Get status icon color
-    getIconColor() {
-        if (this.selected) return '#ffffff';
-        if (this.hovered) return COLORS.hoveredStroke;
-        if (!this.online) return COLORS.offline;
-        if (!this.connectable) return COLORS.nat;
-        return COLORS.online;
-    }
 }
 
 // =============================================================================
@@ -124,9 +91,13 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
     const centerX = canvasWidth / 2;
     const centerY = canvasHeight / 2;
 
+    // Dynamic column spacing based on canvas width (adjust to fit)
+    const columnSpacing = Math.min(280, (canvasWidth - CARD_WIDTH * 3) / 2.5);
+
     // Reset stack info
     stackInfo.left = { total: 0, hidden: 0 };
     stackInfo.right = { total: 0, hidden: 0 };
+    stackInfo.columnSpacing = columnSpacing;
 
     if (!selectedId || !nodes.has(selectedId)) {
         // No selection - show prompt
@@ -160,8 +131,8 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
     }
 
     // Layout columns - spread nodes vertically
-    layoutColumn(incoming, centerX - COLUMN_SPACING, centerY, stackInfo.left);
-    layoutColumn(outgoing, centerX + COLUMN_SPACING, centerY, stackInfo.right);
+    layoutColumn(incoming, centerX - columnSpacing, centerY, stackInfo.left);
+    layoutColumn(outgoing, centerX + columnSpacing, centerY, stackInfo.right);
 }
 
 function layoutColumn(nodes, centerX, centerY, stackInfo) {
@@ -500,23 +471,25 @@ class NodeVisualizer {
         const selected = this.nodes.get(this.selectedNodeId);
         if (!selected) return;
 
+        const columnSpacing = this.stackInfo.columnSpacing || 280;
+
         ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
         ctx.fillStyle = COLORS.textDim;
 
         // Left side label
         if (this.stackInfo.left.hidden > 0) {
             ctx.textAlign = 'center';
-            const labelX = selected.x - COLUMN_SPACING;
+            const labelX = selected.x - columnSpacing;
             const labelY = height - 20;
-            ctx.fillText(`+ ${this.stackInfo.left.hidden} more connections`, labelX, labelY);
+            ctx.fillText(`+ ${this.stackInfo.left.hidden} more`, labelX, labelY);
         }
 
         // Right side label
         if (this.stackInfo.right.hidden > 0) {
             ctx.textAlign = 'center';
-            const labelX = selected.x + COLUMN_SPACING;
+            const labelX = selected.x + columnSpacing;
             const labelY = height - 20;
-            ctx.fillText(`+ ${this.stackInfo.right.hidden} more connections`, labelX, labelY);
+            ctx.fillText(`+ ${this.stackInfo.right.hidden} more`, labelX, labelY);
         }
     }
 
@@ -566,99 +539,70 @@ class NodeVisualizer {
         const x = node.x - CARD_WIDTH / 2;
         const y = node.y - CARD_HEIGHT / 2;
 
-        const strokeColor = node.getStrokeColor();
-        const fillColor = node.getFillColor();
-        const iconColor = node.getIconColor();
-
         // Draw tab label
         const tabText = node.name;
-        ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
-        const tabWidth = ctx.measureText(tabText).width + 16;
+        ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+        const tabWidth = ctx.measureText(tabText).width + 14;
         const tabX = x;
         const tabY = y - TAB_HEIGHT;
 
-        // Tab background
-        ctx.fillStyle = fillColor;
+        // Draw combined tab + card shape (tab flows into card)
+        ctx.fillStyle = COLORS.cardFill;
+        ctx.strokeStyle = COLORS.cardStroke;
+        ctx.lineWidth = 1;
+
+        // Draw tab (no separate stroke - part of card)
         ctx.beginPath();
-        ctx.roundRect(tabX, tabY, tabWidth, TAB_HEIGHT + 4, [4, 4, 0, 0]);
+        ctx.moveTo(tabX, y);  // Start at top-left of card
+        ctx.lineTo(tabX, tabY + 4);  // Go up to tab
+        ctx.arcTo(tabX, tabY, tabX + 4, tabY, 4);  // Top-left corner of tab
+        ctx.lineTo(tabX + tabWidth - 4, tabY);  // Top edge of tab
+        ctx.arcTo(tabX + tabWidth, tabY, tabX + tabWidth, tabY + 4, 4);  // Top-right corner of tab
+        ctx.lineTo(tabX + tabWidth, y);  // Down to card top
+        ctx.lineTo(x + CARD_WIDTH - 6, y);  // Continue along card top
+        ctx.arcTo(x + CARD_WIDTH, y, x + CARD_WIDTH, y + 6, 6);  // Top-right of card
+        ctx.lineTo(x + CARD_WIDTH, y + CARD_HEIGHT - 6);  // Right edge
+        ctx.arcTo(x + CARD_WIDTH, y + CARD_HEIGHT, x + CARD_WIDTH - 6, y + CARD_HEIGHT, 6);  // Bottom-right
+        ctx.lineTo(x + 6, y + CARD_HEIGHT);  // Bottom edge
+        ctx.arcTo(x, y + CARD_HEIGHT, x, y + CARD_HEIGHT - 6, 6);  // Bottom-left
+        ctx.lineTo(x, y);  // Left edge back to start
+        ctx.closePath();
         ctx.fill();
-        ctx.strokeStyle = strokeColor;
-        ctx.lineWidth = node.selected || node.hovered ? 2 : 1;
         ctx.stroke();
 
         // Tab text
         ctx.fillStyle = COLORS.text;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(tabText, tabX + 8, tabY + TAB_HEIGHT / 2);
-
-        // Card background
-        ctx.fillStyle = fillColor;
-        ctx.beginPath();
-        ctx.roundRect(x, y, CARD_WIDTH, CARD_HEIGHT, 6);
-        ctx.fill();
-        ctx.strokeStyle = strokeColor;
-        ctx.lineWidth = node.selected || node.hovered ? 2 : 1;
-        ctx.stroke();
+        ctx.fillText(tabText, tabX + 7, tabY + TAB_HEIGHT / 2);
 
         // Content padding
-        const contentX = x + 12;
-        const contentY = y + 16;
-        const lineHeight = 18;
+        const contentX = x + 10;
+        const contentY = y + 14;
+        const lineHeight = 16;
 
-        // Line 1: Status icon + DNS name + version
-        // Status icon
-        if (node.nodeType === NodeType.WG_CONCENTRATOR) {
-            // Shield icon for WG concentrator
-            this.drawShieldIcon(ctx, contentX, contentY - 2, iconColor);
-        } else {
-            // Circle for standard node
-            ctx.fillStyle = iconColor;
-            ctx.beginPath();
-            ctx.arc(contentX + 5, contentY, 5, 0, Math.PI * 2);
-            ctx.fill();
-        }
-
-        // DNS name
+        // Line 1: Mesh IP + version
         ctx.fillStyle = COLORS.text;
-        ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+        ctx.font = '12px monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(node.dnsName, contentX + 16, contentY + 4);
+        ctx.fillText(node.meshIP, contentX, contentY + 4);
 
         // Version (right aligned)
         if (node.version) {
             ctx.fillStyle = COLORS.textDim;
-            ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+            ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
             ctx.textAlign = 'right';
-            ctx.fillText(node.version, x + CARD_WIDTH - 12, contentY + 4);
+            ctx.fillText(node.version, x + CARD_WIDTH - 10, contentY + 4);
         }
 
-        // Line 2: Mesh IP
+        // Line 2: Tunnel count
         ctx.fillStyle = COLORS.textDim;
-        ctx.font = '12px monospace';
+        ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText(node.meshIP, contentX + 16, contentY + lineHeight + 4);
-
-        // Line 3: Tunnel count
-        ctx.fillStyle = COLORS.textDim;
-        ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
         const tunnelText = node.activeTunnels === 1 ? '1 tunnel' : `${node.activeTunnels} tunnels`;
-        ctx.fillText(tunnelText, contentX + 16, contentY + lineHeight * 2 + 4);
+        ctx.fillText(tunnelText, contentX, contentY + lineHeight + 6);
     }
 
-    drawShieldIcon(ctx, x, y, color) {
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        // Simple shield shape
-        ctx.moveTo(x + 5, y - 6);
-        ctx.lineTo(x + 10, y - 4);
-        ctx.lineTo(x + 10, y + 2);
-        ctx.quadraticCurveTo(x + 10, y + 6, x + 5, y + 8);
-        ctx.quadraticCurveTo(x, y + 6, x, y + 2);
-        ctx.lineTo(x, y - 4);
-        ctx.closePath();
-        ctx.fill();
-    }
 }
 
 // Export for use in app.js
