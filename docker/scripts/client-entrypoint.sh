@@ -149,12 +149,19 @@ while true; do
                 fi
             else
                 # Ping by DNS alias (alt.node-xxx.tunnelmesh)
+                # Use getent to resolve (musl's ping doesn't use custom resolvers properly)
                 TARGET_DNS="alt.${TARGET_NAME}.tunnelmesh"
-                echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME via DNS alias ($TARGET_DNS)..."
-                if ping -c 1 -W 2 "$TARGET_DNS" > /dev/null 2>&1; then
-                    echo "  SUCCESS: $TARGET_NAME is reachable via DNS alias!"
+                RESOLVED_IP=$(getent hosts "$TARGET_DNS" 2>/dev/null | awk '{print $1}')
+                if [ -n "$RESOLVED_IP" ]; then
+                    echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME via DNS alias ($TARGET_DNS -> $RESOLVED_IP)..."
+                    if ping -c 1 -W 2 "$RESOLVED_IP" > /dev/null 2>&1; then
+                        echo "  SUCCESS: $TARGET_NAME is reachable via DNS alias!"
+                    else
+                        echo "  FAILED: Cannot reach $TARGET_NAME via DNS alias (ping failed)"
+                    fi
                 else
-                    echo "  FAILED: Cannot reach $TARGET_NAME via DNS alias"
+                    echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME via DNS alias ($TARGET_DNS)..."
+                    echo "  FAILED: Cannot resolve DNS alias $TARGET_DNS"
                 fi
             fi
         fi
