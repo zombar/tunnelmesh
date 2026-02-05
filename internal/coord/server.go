@@ -183,7 +183,7 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	// Initialize Certificate Authority for mesh TLS
-	ca, err := NewCertificateAuthority(cfg.DataDir)
+	ca, err := NewCertificateAuthority(cfg.DataDir, cfg.DomainSuffix)
 	if err != nil {
 		return nil, fmt.Errorf("initialize CA: %w", err)
 	}

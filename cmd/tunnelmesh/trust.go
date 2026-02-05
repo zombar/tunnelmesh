@@ -73,6 +73,12 @@ func InstallCAFromServer(serverURL string) error {
 		return fmt.Errorf("server returned status %d", resp.StatusCode)
 	}
 
+	// Get CA name from header (used for removal)
+	caName := resp.Header.Get("X-TunnelMesh-CA-Name")
+	if caName == "" {
+		caName = "TunnelMesh CA" // Fallback for older servers
+	}
+
 	caPEM, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
@@ -96,7 +102,7 @@ func InstallCAFromServer(serverURL string) error {
 	}
 	tmpFile.Close()
 
-	return installCA(tmpPath)
+	return installCAWithName(tmpPath, caName)
 }
 
 func removeCAFromSystem() error {
@@ -104,13 +110,17 @@ func removeCAFromSystem() error {
 }
 
 func installCA(certPath string) error {
+	return installCAWithName(certPath, "TunnelMesh CA")
+}
+
+func installCAWithName(certPath, caName string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		return installCAMacOS(certPath)
+		return installCAMacOS(certPath, caName)
 	case "linux":
 		return installCALinux(certPath)
 	case "windows":
-		return installCAWindows(certPath)
+		return installCAWindows(certPath, caName)
 	default:
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
@@ -130,11 +140,11 @@ func removeCA(certPath string) error {
 }
 
 // macOS implementation
-func installCAMacOS(certPath string) error {
+func installCAMacOS(certPath, caName string) error {
 	log.Info().Msg("installing CA certificate (requires sudo)")
 
-	// Remove any existing TunnelMesh CA first to avoid duplicates
-	_ = removeCAMacOSQuiet(false) // Ignore error if not found
+	// Remove any existing TunnelMesh CA with same name to avoid duplicates
+	_ = removeCAMacOSByName(caName, false) // Ignore error if not found
 
 	// Add to system keychain
 	cmd := exec.Command("sudo", "security", "add-trusted-cert",
@@ -155,17 +165,18 @@ func installCAMacOS(certPath string) error {
 }
 
 func removeCAMacOS() error {
-	return removeCAMacOSQuiet(true)
+	// Remove all TunnelMesh CA certs (any domain suffix)
+	return removeCAMacOSByName("TunnelMesh CA", true)
 }
 
-func removeCAMacOSQuiet(verbose bool) error {
+func removeCAMacOSByName(caName string, verbose bool) error {
 	if verbose {
-		log.Info().Msg("removing CA certificate (requires sudo)")
+		log.Info().Str("name", caName).Msg("removing CA certificate (requires sudo)")
 	}
 
-	// Find and delete the cert by name
+	// Find and delete the cert by name (-c does substring match)
 	cmd := exec.Command("sudo", "security", "delete-certificate",
-		"-c", "TunnelMesh CA",
+		"-c", caName,
 		"/Library/Keychains/System.keychain")
 	if verbose {
 		cmd.Stdout = os.Stdout
@@ -336,11 +347,11 @@ func removeCALinux() error {
 }
 
 // Windows implementation
-func installCAWindows(certPath string) error {
+func installCAWindows(certPath, caName string) error {
 	log.Info().Msg("installing CA certificate (requires Administrator)")
 
-	// Remove any existing TunnelMesh CA first to avoid duplicates
-	_ = removeCAWindowsQuiet(false) // Ignore error if not found
+	// Remove any existing TunnelMesh CA with same name to avoid duplicates
+	_ = removeCAWindowsByName(caName, false) // Ignore error if not found
 
 	// Convert path to Windows format
 	absPath, err := filepath.Abs(certPath)
@@ -362,16 +373,17 @@ func installCAWindows(certPath string) error {
 }
 
 func removeCAWindows() error {
-	return removeCAWindowsQuiet(true)
+	// Remove all TunnelMesh CA certs (any domain suffix)
+	return removeCAWindowsByName("TunnelMesh CA", true)
 }
 
-func removeCAWindowsQuiet(verbose bool) error {
+func removeCAWindowsByName(caName string, verbose bool) error {
 	if verbose {
-		log.Info().Msg("removing CA certificate (requires Administrator)")
+		log.Info().Str("name", caName).Msg("removing CA certificate (requires Administrator)")
 	}
 
 	// Use certutil to delete from root store
-	cmd := exec.Command("certutil", "-delstore", "ROOT", "TunnelMesh CA")
+	cmd := exec.Command("certutil", "-delstore", "ROOT", caName)
 	if verbose {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
