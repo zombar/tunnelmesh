@@ -51,6 +51,7 @@ type Server struct {
 	holePunch    *holePunchManager
 	wgStore      *wireguard.Store // WireGuard client storage
 	version      string           // Server version for admin display
+	sseHub       *sseHub          // SSE hub for real-time dashboard updates
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -157,6 +158,7 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		serverStats: serverStats{
 			startTime: time.Now(),
 		},
+		sseHub: newSSEHub(),
 	}
 
 	// Initialize WireGuard client store if enabled

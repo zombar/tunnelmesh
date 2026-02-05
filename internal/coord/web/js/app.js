@@ -56,6 +56,52 @@ async function fetchData(includeHistory = false) {
     }
 }
 
+// Setup Server-Sent Events for real-time updates
+let sseRetryCount = 0;
+const MAX_SSE_RETRIES = 3;
+
+function setupSSE() {
+    // Check if EventSource is supported
+    if (typeof EventSource === 'undefined') {
+        console.log('SSE not supported, falling back to polling');
+        startPolling();
+        return;
+    }
+
+    const eventSource = new EventSource('/admin/api/events');
+
+    eventSource.addEventListener('connected', () => {
+        console.log('SSE connected');
+        sseRetryCount = 0; // Reset retry count on successful connection
+    });
+
+    eventSource.addEventListener('heartbeat', (event) => {
+        // Refresh dashboard when a heartbeat is received
+        fetchData(false);
+    });
+
+    eventSource.onerror = (err) => {
+        console.error('SSE error:', err);
+        eventSource.close();
+
+        sseRetryCount++;
+        if (sseRetryCount <= MAX_SSE_RETRIES) {
+            // Retry SSE connection after a delay
+            console.log(`SSE reconnecting (attempt ${sseRetryCount}/${MAX_SSE_RETRIES})...`);
+            setTimeout(setupSSE, 2000 * sseRetryCount);
+        } else {
+            // Fall back to polling after max retries
+            console.log('SSE failed, falling back to polling');
+            startPolling();
+        }
+    };
+}
+
+function startPolling() {
+    // Fallback polling every 5 seconds
+    setInterval(() => fetchData(false), 5000);
+}
+
 function showAuthError() {
     let banner = document.getElementById('auth-error-banner');
     if (!banner) {
@@ -939,7 +985,9 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchChartHistory();
 
     fetchData(true); // Load with history on initial fetch
-    setInterval(() => fetchData(false), 5000); // Refresh every 5 seconds without history
+
+    // Setup SSE for real-time updates (falls back to polling if SSE fails)
+    setupSSE();
 
     // Check if WireGuard is enabled and setup handlers
     checkWireGuardStatus();
