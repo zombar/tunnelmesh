@@ -544,9 +544,32 @@ function updateChartsWithNewData(peers) {
         : 0;
 
     let addedPoints = 0;
+    let updatedPoints = 0;
     sortedGroups.forEach(group => {
+        const groupTime = group.timestamp.getTime();
+
+        // Check if this timestamp already exists in the chart
+        const existingIndex = state.charts.chartData.labels.findIndex(
+            label => label.getTime() === groupTime
+        );
+
+        if (existingIndex >= 0) {
+            // Timestamp exists - update data for this timestamp
+            updatedPoints++;
+            Object.entries(group.peers).forEach(([peerName, point]) => {
+                if (state.charts.chartData.throughput[peerName]) {
+                    // Update existing value (overwrite null with actual data)
+                    if (state.charts.chartData.throughput[peerName][existingIndex] === null) {
+                        state.charts.chartData.throughput[peerName][existingIndex] = point.throughput;
+                        state.charts.chartData.packets[peerName][existingIndex] = point.packets;
+                    }
+                }
+            });
+            return;
+        }
+
         // Only add if this timestamp is newer than the last one in the chart
-        if (group.timestamp.getTime() <= lastChartTime) {
+        if (groupTime <= lastChartTime) {
             console.log(`Chart update: skipping point (${group.timestamp.toISOString()} <= ${new Date(lastChartTime).toISOString()})`);
             return; // Skip data points in the past
         }
@@ -612,10 +635,8 @@ function updateChartsWithNewData(peers) {
         }
     });
 
-    if (addedPoints > 0) {
-        console.log(`Chart update: added ${addedPoints} timestamps, rebuilding datasets`);
-    } else {
-        console.log('Chart update: no timestamps added, just rebuilding datasets');
+    if (addedPoints > 0 || updatedPoints > 0) {
+        console.log(`Chart update: added ${addedPoints} timestamps, updated ${updatedPoints} existing, rebuilding datasets`);
     }
     rebuildChartDatasets();
 }
