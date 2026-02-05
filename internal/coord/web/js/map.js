@@ -30,10 +30,11 @@ class NodeMap {
         }
 
         // Initialize map centered on (0, 0) with zoom 2
+        // Disable scroll wheel zoom to prevent accidental zooming while scrolling page
         this.map = L.map(this.containerId, {
             center: [20, 0],
             zoom: 2,
-            scrollWheelZoom: true,
+            scrollWheelZoom: false,
             attributionControl: false
         });
 
@@ -173,20 +174,18 @@ class NodeMap {
             }
         }
 
-        // Fit map to show all markers
-        if (boundsArray.length > 0 && this.map) {
+        // Fit map to show all markers (only on first load to avoid elastic zoom effect)
+        if (boundsArray.length > 0 && this.map && !this.bounds) {
             const bounds = L.latLngBounds(boundsArray);
-            // Only fit bounds if they've changed significantly
-            if (!this.bounds || !this.bounds.equals(bounds)) {
-                // Delay fitBounds if map was just shown to ensure invalidateSize completed
-                const fitBoundsDelay = (mapSection && mapSection.style.display !== 'none') ? 150 : 0;
-                setTimeout(() => {
-                    if (this.map) {
-                        this.map.fitBounds(bounds, { padding: [50, 50], maxZoom: 10 });
-                    }
-                }, fitBoundsDelay);
-                this.bounds = bounds;
-            }
+            // Delay fitBounds if map was just shown to ensure invalidateSize completed
+            const fitBoundsDelay = (mapSection && mapSection.style.display !== 'none') ? 150 : 0;
+            setTimeout(() => {
+                if (this.map) {
+                    // Disable animation to prevent elastic zoom on page load
+                    this.map.fitBounds(bounds, { padding: [50, 50], maxZoom: 10, animate: false });
+                }
+            }, fitBoundsDelay);
+            this.bounds = bounds;
         }
     }
 
