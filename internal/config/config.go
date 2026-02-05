@@ -13,9 +13,10 @@ import (
 
 // AdminConfig holds configuration for the admin web interface.
 type AdminConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	BindAddress string `yaml:"bind_address"` // Bind address for admin server (default: "127.0.0.1" - localhost only)
-	Port        int    `yaml:"port"`         // Port for admin server (default: 8080)
+	Enabled       bool   `yaml:"enabled"`
+	BindAddress   string `yaml:"bind_address"`     // Bind address for admin server (default: "127.0.0.1" - localhost only)
+	Port          int    `yaml:"port"`             // Port for admin server (default: 8080)
+	MeshOnlyAdmin *bool  `yaml:"mesh_only_admin"`  // When join_mesh is set: true=HTTPS on mesh IP only, false=HTTP externally (default: true)
 }
 
 // RelayConfig holds configuration for the relay server.

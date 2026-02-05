@@ -7,18 +7,16 @@ locations: true  # Enable node location tracking (uses ip-api.com)
 
 admin:
   enabled: true
-  bind_address: "0.0.0.0"  # External access at http://localhost:8880/admin/
+  bind_address: "0.0.0.0"    # External access at http://localhost:8880/admin/
+  mesh_only_admin: false     # Use HTTP externally instead of HTTPS on mesh
 
 # WireGuard client management (enables admin panel WireGuard section)
 # wireguard:
 #   enabled: true
 #   endpoint: "your-public-ip:51820"  # Set to concentrator's public endpoint
 
-# Server as mesh peer (enable for mesh-only HTTPS admin at https://server-node.tunnelmesh/)
-# join_mesh:
-#   name: "server-node"
-#   private_key: "/root/.tunnelmesh/id_ed25519"
-#   allow_exit_traffic: true
-#   tun:
-#     name: "tun-mesh0"
-#     mtu: 1400
+# Server joins the mesh as a peer (enables exit node functionality)
+join_mesh:
+  name: "server-node"
+  private_key: "/root/.tunnelmesh/id_ed25519"
+  allow_exit_traffic: true

@@ -216,15 +216,20 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 
 // setupAdminRoutes registers the admin API routes and static file server.
 // Note: Admin routes have no authentication - access is controlled by bind address.
-// With join_mesh: admin binds to mesh IP (HTTPS) - only accessible from mesh network.
-// Without join_mesh: admin binds to configured address (HTTP) - typically localhost only.
+// With join_mesh + mesh_only_admin=true (default): HTTPS on mesh IP at /
+// With join_mesh + mesh_only_admin=false: HTTP on bind_address at /admin/
+// Without join_mesh: HTTP on bind_address at /admin/
 func (s *Server) setupAdminRoutes() {
 	// Serve embedded static files
 	staticFS, _ := fs.Sub(web.Assets, ".")
 	fileServer := http.FileServer(http.FS(staticFS))
 
-	if s.cfg.JoinMesh != nil {
-		// With join_mesh: create separate adminMux for HTTPS server on mesh IP
+	// Determine if we should use mesh-only admin (HTTPS on mesh IP)
+	// Default to true when join_mesh is configured
+	meshOnlyAdmin := s.cfg.JoinMesh != nil && (s.cfg.Admin.MeshOnlyAdmin == nil || *s.cfg.Admin.MeshOnlyAdmin)
+
+	if meshOnlyAdmin {
+		// Mesh-only: create separate adminMux for HTTPS server on mesh IP
 		// Serve at root (no /admin/ prefix needed - dedicated server)
 		s.adminMux = http.NewServeMux()
 
@@ -238,7 +243,7 @@ func (s *Server) setupAdminRoutes() {
 
 		s.adminMux.Handle("/", fileServer)
 	} else {
-		// Without join_mesh: register on main mux with /admin/ prefix
+		// External: register on main mux with /admin/ prefix
 		// (shares mux with coordination API, needs prefix to avoid conflicts)
 		s.mux.HandleFunc("/admin/api/overview", s.handleAdminOverview)
 		s.mux.HandleFunc("/admin/api/events", s.handleSSE)
