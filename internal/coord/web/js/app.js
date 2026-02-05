@@ -78,7 +78,8 @@ function setupSSE() {
 
     eventSource.addEventListener('heartbeat', (event) => {
         // Refresh dashboard when a heartbeat is received
-        console.log('SSE heartbeat received');
+        const data = JSON.parse(event.data);
+        console.log(`SSE heartbeat: peer=${data.peer} time=${new Date().toISOString()}`);
         fetchData(false);
     });
 
@@ -366,8 +367,13 @@ async function fetchChartHistory() {
 
         const data = await resp.json();
         initializeChartData(data);
+
+        // Setup SSE AFTER history is loaded to avoid race conditions
+        setupSSE();
     } catch (err) {
         console.error('Failed to fetch chart history:', err);
+        // Still setup SSE even if history fails
+        setupSSE();
     }
 }
 
@@ -497,6 +503,8 @@ function updateChartsWithNewData(peers) {
         const peerLastSeenQuantized = quantizeTimestamp(peerLastSeen.getTime());
         const knownLastSeen = state.charts.lastSeenTimes[peer.name] || 0;
 
+        console.log(`Chart check: ${peer.name} lastSeen=${peerLastSeenQuantized} known=${knownLastSeen} new=${peerLastSeenQuantized > knownLastSeen}`);
+
         // Only process if this is a new heartbeat (quantized)
         if (peerLastSeenQuantized > knownLastSeen) {
             state.charts.lastSeenTimes[peer.name] = peerLastSeenQuantized;
@@ -511,7 +519,11 @@ function updateChartsWithNewData(peers) {
     });
 
     // No new data
-    if (newPoints.length === 0) return;
+    if (newPoints.length === 0) {
+        console.log('Chart update: no new data points');
+        return;
+    }
+    console.log(`Chart update: ${newPoints.length} new points`);
 
     // Group new points by quantized timestamp (10-second intervals)
     const groups = new Map();
@@ -531,12 +543,15 @@ function updateChartsWithNewData(peers) {
         ? state.charts.chartData.labels[state.charts.chartData.labels.length - 1].getTime()
         : 0;
 
+    let addedPoints = 0;
     sortedGroups.forEach(group => {
         // Only add if this timestamp is newer than the last one in the chart
         if (group.timestamp.getTime() <= lastChartTime) {
+            console.log(`Chart update: skipping point (${group.timestamp.toISOString()} <= ${new Date(lastChartTime).toISOString()})`);
             return; // Skip data points in the past
         }
 
+        addedPoints++;
         // Add timestamp
         state.charts.chartData.labels.push(group.timestamp);
 
@@ -597,6 +612,11 @@ function updateChartsWithNewData(peers) {
         }
     });
 
+    if (addedPoints > 0) {
+        console.log(`Chart update: added ${addedPoints} timestamps, rebuilding datasets`);
+    } else {
+        console.log('Chart update: no timestamps added, just rebuilding datasets');
+    }
     rebuildChartDatasets();
 }
 
@@ -984,13 +1004,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize charts first
     initCharts();
 
-    // Fetch initial chart history (up to 3 days)
+    // Fetch initial chart history (up to 12 hours)
+    // SSE is set up AFTER history is loaded (inside fetchChartHistory)
     fetchChartHistory();
 
     fetchData(true); // Load with history on initial fetch
-
-    // Setup SSE for real-time updates (falls back to polling if SSE fails)
-    setupSSE();
 
     // Check if WireGuard is enabled and setup handlers
     checkWireGuardStatus();
