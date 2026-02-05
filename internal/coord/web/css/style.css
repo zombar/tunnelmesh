@@ -63,14 +63,18 @@ header h1 {
     color: #e6edf3;
 }
 
-/* Charts Section */
+/* Charts Section - matches main's width constraints */
 #charts-section {
+    max-width: 1400px;
+    margin: 1.5rem auto 0;
+    padding: 0 2rem;
+    width: 100%;
+}
+
+.charts-card {
     background: #0d1117;
     border: 1px solid #30363d;
     border-radius: 6px;
-    margin: 1.5rem auto;
-    width: 80%;
-    max-width: none;
 }
 
 .charts-header {
@@ -104,6 +108,8 @@ header h1 {
     border: 1px solid #30363d;
     border-radius: 6px;
     padding: 1rem;
+    position: relative;
+    min-width: 0;
 }
 
 .chart-wrapper h3 {
@@ -114,12 +120,14 @@ header h1 {
 }
 
 .chart-wrapper canvas {
+    width: 100% !important;
     height: 200px !important;
 }
 
 @media (max-width: 900px) {
     #charts-section {
-        margin: 1rem;
+        padding: 0 1rem;
+        margin: 1rem auto 0;
     }
 
     .charts-container {

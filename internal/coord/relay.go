@@ -632,6 +632,9 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 			}
 		}
 
+		// Notify SSE clients of heartbeat
+		s.notifyHeartbeat(sourcePeer)
+
 	case MsgTypeSendPacket:
 		// Format: [MsgTypeSendPacket][target name len][target name][packet data]
 		if len(data) < 3 {

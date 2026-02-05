@@ -228,6 +228,7 @@ func (s *Server) checkAdminAuth(w http.ResponseWriter, r *http.Request) bool {
 func (s *Server) setupAdminRoutes() {
 	// API endpoints (protected by admin auth)
 	s.mux.HandleFunc("/admin/api/overview", s.withAdminAuth(s.handleAdminOverview))
+	s.mux.HandleFunc("/admin/api/events", s.withAdminAuth(s.handleSSE))
 
 	// WireGuard client management endpoints (if enabled)
 	if s.cfg.WireGuard.Enabled {

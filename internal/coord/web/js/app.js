@@ -56,6 +56,55 @@ async function fetchData(includeHistory = false) {
     }
 }
 
+// Setup Server-Sent Events for real-time updates
+let sseRetryCount = 0;
+const MAX_SSE_RETRIES = 3;
+
+function setupSSE() {
+    // Check if EventSource is supported
+    if (typeof EventSource === 'undefined') {
+        console.log('SSE not supported, falling back to polling');
+        startPolling();
+        return;
+    }
+
+    // EventSource with credentials for authenticated endpoints
+    const eventSource = new EventSource('/admin/api/events', { withCredentials: true });
+
+    eventSource.addEventListener('connected', () => {
+        console.log('SSE connected - dashboard will update in real-time');
+        sseRetryCount = 0; // Reset retry count on successful connection
+    });
+
+    eventSource.addEventListener('heartbeat', (event) => {
+        // Refresh dashboard when a heartbeat is received
+        const data = JSON.parse(event.data);
+        fetchData(false);
+    });
+
+    eventSource.onerror = (err) => {
+        console.error('SSE error:', err);
+        eventSource.close();
+
+        sseRetryCount++;
+        if (sseRetryCount <= MAX_SSE_RETRIES) {
+            // Retry SSE connection after a delay
+            console.log(`SSE reconnecting (attempt ${sseRetryCount}/${MAX_SSE_RETRIES})...`);
+            setTimeout(setupSSE, 2000 * sseRetryCount);
+        } else {
+            // Fall back to polling after max retries
+            console.log('SSE failed, falling back to polling');
+            startPolling();
+        }
+    };
+}
+
+function startPolling() {
+    // Fallback polling every 10 seconds (matches heartbeat interval)
+    console.log('Starting polling mode (every 10 seconds)');
+    setInterval(() => fetchData(false), 10000);
+}
+
 function showAuthError() {
     let banner = document.getElementById('auth-error-banner');
     if (!banner) {
@@ -317,8 +366,13 @@ async function fetchChartHistory() {
 
         const data = await resp.json();
         initializeChartData(data);
+
+        // Setup SSE AFTER history is loaded to avoid race conditions
+        setupSSE();
     } catch (err) {
         console.error('Failed to fetch chart history:', err);
+        // Still setup SSE even if history fails
+        setupSSE();
     }
 }
 
@@ -462,7 +516,9 @@ function updateChartsWithNewData(peers) {
     });
 
     // No new data
-    if (newPoints.length === 0) return;
+    if (newPoints.length === 0) {
+        return;
+    }
 
     // Group new points by quantized timestamp (10-second intervals)
     const groups = new Map();
@@ -482,12 +538,37 @@ function updateChartsWithNewData(peers) {
         ? state.charts.chartData.labels[state.charts.chartData.labels.length - 1].getTime()
         : 0;
 
+    let addedPoints = 0;
+    let updatedPoints = 0;
     sortedGroups.forEach(group => {
+        const groupTime = group.timestamp.getTime();
+
+        // Check if this timestamp already exists in the chart
+        const existingIndex = state.charts.chartData.labels.findIndex(
+            label => label.getTime() === groupTime
+        );
+
+        if (existingIndex >= 0) {
+            // Timestamp exists - update data for this timestamp
+            updatedPoints++;
+            Object.entries(group.peers).forEach(([peerName, point]) => {
+                if (state.charts.chartData.throughput[peerName]) {
+                    // Update existing value (overwrite null with actual data)
+                    if (state.charts.chartData.throughput[peerName][existingIndex] === null) {
+                        state.charts.chartData.throughput[peerName][existingIndex] = point.throughput;
+                        state.charts.chartData.packets[peerName][existingIndex] = point.packets;
+                    }
+                }
+            });
+            return;
+        }
+
         // Only add if this timestamp is newer than the last one in the chart
-        if (group.timestamp.getTime() <= lastChartTime) {
+        if (groupTime <= lastChartTime) {
             return; // Skip data points in the past
         }
 
+        addedPoints++;
         // Add timestamp
         state.charts.chartData.labels.push(group.timestamp);
 
@@ -935,11 +1016,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize charts first
     initCharts();
 
-    // Fetch initial chart history (up to 3 days)
+    // Fetch initial chart history (up to 12 hours)
+    // SSE is set up AFTER history is loaded (inside fetchChartHistory)
     fetchChartHistory();
 
     fetchData(true); // Load with history on initial fetch
-    setInterval(() => fetchData(false), 5000); // Refresh every 5 seconds without history
 
     // Check if WireGuard is enabled and setup handlers
     checkWireGuardStatus();

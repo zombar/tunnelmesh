@@ -9,9 +9,9 @@ admin:
   token: "admin"
 
 # WireGuard client management (enables admin panel WireGuard section)
-wireguard:
-  enabled: true
-  endpoint: "your-public-ip:51820"  # Set to concentrator's public endpoint
+# wireguard:
+#   enabled: true
+#   endpoint: "your-public-ip:51820"  # Set to concentrator's public endpoint
 
 # Server joins the mesh as a client node
 join_mesh:
