@@ -142,6 +142,8 @@ join_mesh:
     enabled: true
     listen: "127.0.0.53:5353"
     cache_ttl: 300
+    aliases:
+      - "coordinator"       # coordinator.tunnelmesh -> this node's IP
 ```
 
 ### Peer Configuration
@@ -181,6 +183,10 @@ dns:
   enabled: true
   listen: "127.0.0.53:5353"
   cache_ttl: 300
+  # Custom DNS aliases for this node (resolved mesh-wide)
+  aliases:
+    - "webserver"           # webserver.tunnelmesh -> this node's IP
+    - "api.mynode"          # api.mynode.tunnelmesh -> this node's IP
 ```
 
 ### Transport Layer

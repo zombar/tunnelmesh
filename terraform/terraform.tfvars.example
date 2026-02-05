@@ -42,6 +42,9 @@ admin_token = ""
 #
 # Location options (manual GPS - overrides IP geolocation):
 #   location = { latitude = 51.5, longitude = -0.12, city = "London", country = "UK" }
+#
+# DNS alias options (custom hostnames pointing to this node):
+#   dns_aliases = ["webserver", "api.mynode"]  # Additional DNS names for this peer
 
 # --- Example 1: All-in-One (recommended for getting started) ---
 # Single $4/month droplet with everything

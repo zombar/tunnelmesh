@@ -26,6 +26,10 @@ dns:
   enabled: true
   listen: "127.0.0.53:5353"  # Local DNS server address
   cache_ttl: 300              # DNS record cache TTL in seconds
+  # Custom DNS aliases for this node (resolved mesh-wide)
+  # aliases:
+  #   - "webserver"           # webserver.tunnelmesh -> this node's IP
+  #   - "api.mynode"          # api.mynode.tunnelmesh -> this node's IP
 
 # Exit node (split-tunnel VPN)
 # Route internet traffic through another peer while keeping mesh traffic direct.
