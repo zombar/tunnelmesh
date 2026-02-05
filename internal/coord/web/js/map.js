@@ -61,6 +61,35 @@ class NodeMap {
         // Clear online peers tracking for this update
         this.onlinePeersWithLocation.clear();
 
+        // Group peers by location to detect co-located nodes
+        const locationGroups = new Map(); // "lat,lng" -> [peer, ...]
+        peers.forEach(peer => {
+            if (!peer.location || peer.location.latitude === 0 && peer.location.longitude === 0) {
+                return;
+            }
+            const key = `${peer.location.latitude},${peer.location.longitude}`;
+            if (!locationGroups.has(key)) {
+                locationGroups.set(key, []);
+            }
+            locationGroups.get(key).push(peer);
+        });
+
+        // Calculate offsets for co-located nodes (arrange in a circle)
+        const peerOffsets = new Map(); // peerName -> {latOffset, lngOffset}
+        locationGroups.forEach(groupPeers => {
+            if (groupPeers.length > 1) {
+                // Offset in degrees (~0.45 degrees ≈ 50km)
+                const offsetRadius = 0.45;
+                groupPeers.forEach((peer, i) => {
+                    const angle = (2 * Math.PI * i) / groupPeers.length;
+                    peerOffsets.set(peer.name, {
+                        latOffset: offsetRadius * Math.sin(angle),
+                        lngOffset: offsetRadius * Math.cos(angle)
+                    });
+                });
+            }
+        });
+
         peers.forEach(peer => {
             if (!peer.location || peer.location.latitude === 0 && peer.location.longitude === 0) {
                 // No valid location - remove marker if exists
@@ -74,8 +103,16 @@ class NodeMap {
             seenPeers.add(peer.name);
 
             const loc = peer.location;
-            const lat = loc.latitude;
-            const lng = loc.longitude;
+            let lat = loc.latitude;
+            let lng = loc.longitude;
+
+            // Apply offset for co-located nodes
+            const offset = peerOffsets.get(peer.name);
+            if (offset) {
+                lat += offset.latOffset;
+                lng += offset.lngOffset;
+            }
+
             boundsArray.push([lat, lng]);
 
             // Track online peers with location for connection drawing
