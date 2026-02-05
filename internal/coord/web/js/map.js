@@ -154,10 +154,16 @@ class NodeMap {
         for (let i = 0; i < peerNames.length; i++) {
             for (let j = i + 1; j < peerNames.length; j++) {
                 const key = `${peerNames[i]}-${peerNames[j]}`;
-                expectedConnections.add(key);
 
                 const loc1 = this.onlinePeersWithLocation.get(peerNames[i]);
                 const loc2 = this.onlinePeersWithLocation.get(peerNames[j]);
+
+                // Skip if either location is invalid
+                if (!loc1 || !loc2 || isNaN(loc1.lat) || isNaN(loc1.lng) || isNaN(loc2.lat) || isNaN(loc2.lng)) {
+                    continue;
+                }
+
+                expectedConnections.add(key);
 
                 if (this.connections.has(key)) {
                     // Update existing connection
@@ -181,15 +187,20 @@ class NodeMap {
     calculateCurvePoints(lat1, lng1, lat2, lng2, numPoints = 20) {
         const points = [];
 
-        // Calculate midpoint
-        const midLat = (lat1 + lat2) / 2;
-        const midLng = (lng1 + lng2) / 2;
-
         // Calculate perpendicular offset for curve
         // Use distance-based offset (larger distances = more curve)
         const dx = lng2 - lng1;
         const dy = lat2 - lat1;
         const distance = Math.sqrt(dx * dx + dy * dy);
+
+        // Handle same location - return straight line (just the two endpoints)
+        if (distance < 0.0001) {
+            return [[lat1, lng1], [lat2, lng2]];
+        }
+
+        // Calculate midpoint
+        const midLat = (lat1 + lat2) / 2;
+        const midLng = (lng1 + lng2) / 2;
 
         // Offset perpendicular to the line (scale with distance)
         const curveAmount = distance * 0.15;
