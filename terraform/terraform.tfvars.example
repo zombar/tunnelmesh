@@ -54,6 +54,7 @@ nodes = {
     peer               = true
     wireguard          = true
     allow_exit_traffic = true  # Allow clients to route internet through this node
+    # dns_aliases = ["coordinator", "main"]  # Additional DNS names for this node
     # location = { latitude = 52.37, longitude = 4.90, city = "Amsterdam", country = "NL" }
   }
 }

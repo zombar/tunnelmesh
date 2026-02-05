@@ -48,16 +48,15 @@ locations: false
 #   dns:
 #     enabled: true
 #     listen: "127.0.0.1:5353"
-#   # Exit node (split-tunnel VPN)
-#   # allow_exit_traffic: true
+#     aliases:
+#       - "coordinator"
+#   allow_exit_traffic: true
 #   # exit_node: "other-peer"
-#   # Manual location (overrides IP geolocation)
 #   # location:
 #   #   latitude: 52.3676
 #   #   longitude: 4.9041
 #   #   city: "Amsterdam"
 #   #   country: "Netherlands"
-#   # WireGuard concentrator for mobile clients
 #   # wireguard:
 #   #   enabled: true
 #   #   listen_port: 51820
