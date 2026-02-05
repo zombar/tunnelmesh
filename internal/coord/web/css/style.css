@@ -104,6 +104,8 @@ header h1 {
     border: 1px solid #30363d;
     border-radius: 6px;
     padding: 1rem;
+    position: relative;
+    min-width: 0;
 }
 
 .chart-wrapper h3 {
@@ -114,6 +116,7 @@ header h1 {
 }
 
 .chart-wrapper canvas {
+    width: 100% !important;
     height: 200px !important;
 }
 
