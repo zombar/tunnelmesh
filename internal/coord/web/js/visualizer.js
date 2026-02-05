@@ -329,8 +329,9 @@ class NodeVisualizer {
 
             this.selectNode(nodeToSelect);
         } else {
-            // Recalculate layout
+            // Recalculate layout and animate to new positions
             this.recalculateLayout();
+            this.startAnimation();
         }
     }
 
