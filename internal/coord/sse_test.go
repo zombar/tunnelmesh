@@ -2,6 +2,7 @@ package coord
 
 import (
 	"bufio"
+	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -114,8 +115,9 @@ func TestHandleSSE(t *testing.T) {
 		t.Fatalf("failed to create server: %v", err)
 	}
 
-	// Create test request
-	req := httptest.NewRequest("GET", "/admin/api/events", nil)
+	// Create test request with cancellable context
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest("GET", "/admin/api/events", nil).WithContext(ctx)
 	w := httptest.NewRecorder()
 
 	// Run handler in goroutine since it blocks
@@ -134,12 +136,18 @@ func TestHandleSSE(t *testing.T) {
 	// Give it a moment to write heartbeat event
 	time.Sleep(100 * time.Millisecond)
 
-	// Check response headers
+	// Check response headers (safe to read before cancelling)
 	if w.Header().Get("Content-Type") != "text/event-stream" {
 		t.Errorf("unexpected Content-Type: %s", w.Header().Get("Content-Type"))
 	}
 
-	// Check that we got some events
+	// Cancel the request context to stop the SSE handler
+	cancel()
+
+	// Wait for handler to complete before reading body
+	<-done
+
+	// Now safe to check the body
 	body := w.Body.String()
 	if !strings.Contains(body, "event: connected") {
 		t.Errorf("missing connected event in response: %s", body)
