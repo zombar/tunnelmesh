@@ -14,6 +14,7 @@ class NodeMap {
         this.initialized = false;
         this.selectedPeer = null;
         this.onlinePeersWithLocation = new Map(); // peerName -> {lat, lng}
+        this.pendingFitToConnections = false; // Flag to fit after first updatePeers
     }
 
     // Initialize the Leaflet map with dark theme tiles
@@ -109,6 +110,12 @@ class NodeMap {
 
         // Update connections between online peers
         this.updateConnections();
+
+        // If we had a pending fitToConnections (selection happened before data loaded), do it now
+        if (this.pendingFitToConnections && this.onlinePeersWithLocation.size > 0) {
+            this.pendingFitToConnections = false;
+            this.fitToConnections();
+        }
 
         // Show/hide map section based on whether any peers have locations
         const mapSection = document.getElementById('map-section');
@@ -388,7 +395,12 @@ class NodeMap {
         this.updateConnections();
 
         // Zoom to fit selected peer and all its connections
-        this.fitToConnections();
+        // If map has no data yet, defer until updatePeers populates it
+        if (this.onlinePeersWithLocation.size === 0) {
+            this.pendingFitToConnections = true;
+        } else {
+            this.fitToConnections();
+        }
     }
 
     // Zoom map to fit the selected peer and all connected peers
