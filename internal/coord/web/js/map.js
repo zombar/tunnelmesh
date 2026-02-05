@@ -423,8 +423,14 @@ class NodeMap {
             if (entry.marker) {
                 entry.marker.setStyle({ fillColor: color, color: color });
             }
-            // Show accuracy circle for selected node (only for IP geolocation)
-            if (entry.loc && entry.loc.source === 'ip' && entry.loc.accuracy > 1000 && entry.peer && entry.peer.online) {
+            // Show accuracy circle for selected node (only for IP geolocation, never for manual)
+            const shouldShowCircle = entry.loc &&
+                entry.loc.source === 'ip' &&
+                entry.loc.accuracy &&
+                entry.loc.accuracy > 1000 &&
+                entry.peer &&
+                entry.peer.online;
+            if (shouldShowCircle) {
                 if (!entry.circle) {
                     entry.circle = L.circle([entry.loc.latitude, entry.loc.longitude], {
                         radius: entry.loc.accuracy,
@@ -436,6 +442,10 @@ class NodeMap {
                         dashArray: '5, 5'
                     }).addTo(this.map);
                 }
+            } else if (entry.circle) {
+                // Remove circle if source changed to manual or conditions no longer met
+                this.map.removeLayer(entry.circle);
+                entry.circle = null;
             }
             // Bring marker to front
             if (entry.marker) entry.marker.bringToFront();
