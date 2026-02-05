@@ -19,7 +19,12 @@ const state = {
     },
     // Visualizer state
     visualizer: null,
-    domainSuffix: '.tunnelmesh'
+    domainSuffix: '.tunnelmesh',
+    // Pagination state
+    peersVisibleCount: 7,
+    dnsVisibleCount: 7,
+    currentPeers: [],  // Store current peers data for pagination
+    rowsPerPage: 7
 };
 
 // Green gradient for chart lines (dim to bright based on outlier status)
@@ -199,34 +204,52 @@ function updateDashboard(data, loadHistory = false) {
         }
     });
 
-    // Update DNS records table
+    // Store peers data for pagination
+    state.currentPeers = data.peers;
+
+    // Update DNS records table with pagination
     const dnsTbody = document.getElementById('dns-body');
     const noDns = document.getElementById('no-dns');
+    const dnsShowMore = document.getElementById('dns-show-more');
     const domainSuffix = data.domain_suffix || '.tunnelmesh';
 
     if (data.peers.length === 0) {
         dnsTbody.innerHTML = '';
         noDns.style.display = 'block';
+        dnsShowMore.style.display = 'none';
     } else {
         noDns.style.display = 'none';
-        dnsTbody.innerHTML = data.peers.map(peer => `
+        const visiblePeers = data.peers.slice(0, state.dnsVisibleCount);
+        dnsTbody.innerHTML = visiblePeers.map(peer => `
             <tr>
                 <td><code>${escapeHtml(peer.name)}${domainSuffix}</code></td>
                 <td><code>${peer.mesh_ip}</code></td>
             </tr>
         `).join('');
+
+        // Show/hide "Show more" button
+        if (data.peers.length > state.dnsVisibleCount) {
+            dnsShowMore.style.display = 'block';
+            document.getElementById('dns-shown-count').textContent = state.dnsVisibleCount;
+            document.getElementById('dns-total-count').textContent = data.peers.length;
+        } else {
+            dnsShowMore.style.display = 'none';
+        }
     }
 
-    // Update peers table
+    // Update peers table with pagination
     const tbody = document.getElementById('peers-body');
     const noPeers = document.getElementById('no-peers');
+    const peersShowMore = document.getElementById('peers-show-more');
 
     if (data.peers.length === 0) {
         tbody.innerHTML = '';
         noPeers.style.display = 'block';
+        peersShowMore.style.display = 'none';
     } else {
         noPeers.style.display = 'none';
-        tbody.innerHTML = data.peers.map(peer => {
+        const visiblePeers = data.peers.slice(0, state.peersVisibleCount);
+        tbody.innerHTML = visiblePeers.map(peer => {
             const history = state.peerHistory[peer.name];
             const peerNameEscaped = escapeHtml(peer.name);
             return `
@@ -254,6 +277,15 @@ function updateDashboard(data, loadHistory = false) {
                 <td><code>${escapeHtml(peer.version || '-')}</code></td>
             </tr>
         `}).join('');
+
+        // Show/hide "Show more" button
+        if (data.peers.length > state.peersVisibleCount) {
+            peersShowMore.style.display = 'block';
+            document.getElementById('peers-shown-count').textContent = state.peersVisibleCount;
+            document.getElementById('peers-total-count').textContent = data.peers.length;
+        } else {
+            peersShowMore.style.display = 'none';
+        }
     }
 }
 
@@ -293,6 +325,104 @@ function createSparklinePath(data, width, height, padding, maxVal) {
     });
 
     return 'M' + points.join(' L');
+}
+
+// Pagination functions
+function showMorePeers() {
+    state.peersVisibleCount += state.rowsPerPage;
+    renderPeersTable();
+}
+
+function showMoreDns() {
+    state.dnsVisibleCount += state.rowsPerPage;
+    renderDnsTable();
+}
+
+function renderPeersTable() {
+    const peers = state.currentPeers;
+    const tbody = document.getElementById('peers-body');
+    const noPeers = document.getElementById('no-peers');
+    const peersShowMore = document.getElementById('peers-show-more');
+
+    if (peers.length === 0) {
+        tbody.innerHTML = '';
+        noPeers.style.display = 'block';
+        peersShowMore.style.display = 'none';
+        return;
+    }
+
+    noPeers.style.display = 'none';
+    const visiblePeers = peers.slice(0, state.peersVisibleCount);
+    tbody.innerHTML = visiblePeers.map(peer => {
+        const history = state.peerHistory[peer.name] || { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] };
+        const peerNameEscaped = escapeHtml(peer.name);
+        return `
+        <tr>
+            <td><strong>${peerNameEscaped}</strong></td>
+            <td><code>${peer.mesh_ip}</code></td>
+            <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
+            <td class="ports-cell">${formatPorts(peer)}</td>
+            <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
+            <td>${peer.stats?.active_tunnels ?? '-'}</td>
+            <td class="sparkline-cell">
+                ${createSparklineSVG(history.throughputTx, history.throughputRx)}
+                <div class="rate-values">
+                    <span class="tx">${formatBytes(peer.bytes_sent_rate)}/s</span>
+                    <span class="rx">${formatBytes(peer.bytes_received_rate)}/s</span>
+                </div>
+            </td>
+            <td class="sparkline-cell">
+                ${createSparklineSVG(history.packetsTx, history.packetsRx)}
+                <div class="rate-values">
+                    <span class="tx">${formatRate(peer.packets_sent_rate)}</span>
+                    <span class="rx">${formatRate(peer.packets_received_rate)}</span>
+                </div>
+            </td>
+            <td><code>${escapeHtml(peer.version || '-')}</code></td>
+        </tr>
+    `}).join('');
+
+    // Show/hide "Show more" button
+    if (peers.length > state.peersVisibleCount) {
+        peersShowMore.style.display = 'block';
+        document.getElementById('peers-shown-count').textContent = state.peersVisibleCount;
+        document.getElementById('peers-total-count').textContent = peers.length;
+    } else {
+        peersShowMore.style.display = 'none';
+    }
+}
+
+function renderDnsTable() {
+    const peers = state.currentPeers;
+    const dnsTbody = document.getElementById('dns-body');
+    const noDns = document.getElementById('no-dns');
+    const dnsShowMore = document.getElementById('dns-show-more');
+    const domainSuffix = state.domainSuffix;
+
+    if (peers.length === 0) {
+        dnsTbody.innerHTML = '';
+        noDns.style.display = 'block';
+        dnsShowMore.style.display = 'none';
+        return;
+    }
+
+    noDns.style.display = 'none';
+    const visiblePeers = peers.slice(0, state.dnsVisibleCount);
+    dnsTbody.innerHTML = visiblePeers.map(peer => `
+        <tr>
+            <td><code>${escapeHtml(peer.name)}${domainSuffix}</code></td>
+            <td><code>${peer.mesh_ip}</code></td>
+        </tr>
+    `).join('');
+
+    // Show/hide "Show more" button
+    if (peers.length > state.dnsVisibleCount) {
+        dnsShowMore.style.display = 'block';
+        document.getElementById('dns-shown-count').textContent = state.dnsVisibleCount;
+        document.getElementById('dns-total-count').textContent = peers.length;
+    } else {
+        dnsShowMore.style.display = 'none';
+    }
 }
 
 function formatBytes(bytes) {
