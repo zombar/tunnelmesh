@@ -76,6 +76,9 @@
                 </thead>
                 <tbody id="peers-body"></tbody>
             </table>
+            <div id="peers-pagination" class="show-more-container" style="display: none;">
+                <span id="peers-show-more"><button class="show-more-link" onclick="showMorePeers()">show more (<span id="peers-shown-count">0</span> / <span id="peers-total-count">0</span>)</button></span><span id="peers-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessPeers()">show less</button></span>
+            </div>
             <div id="no-peers" class="empty-state" style="display: none;">
                 No peers connected yet.
             </div>
@@ -99,6 +102,9 @@
                 </thead>
                 <tbody id="wg-clients-body"></tbody>
             </table>
+            <div id="wg-pagination" class="show-more-container" style="display: none;">
+                <span id="wg-show-more"><button class="show-more-link" onclick="showMoreWg()">show more (<span id="wg-shown-count">0</span> / <span id="wg-total-count">0</span>)</button></span><span id="wg-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessWg()">show less</button></span>
+            </div>
             <div id="no-wg-clients" class="empty-state" style="display: none;">
                 No WireGuard peers yet. Add a peer to generate a QR code.
             </div>
@@ -115,6 +121,9 @@
                 </thead>
                 <tbody id="dns-body"></tbody>
             </table>
+            <div id="dns-pagination" class="show-more-container" style="display: none;">
+                <span id="dns-show-more"><button class="show-more-link" onclick="showMoreDns()">show more (<span id="dns-shown-count">0</span> / <span id="dns-total-count">0</span>)</button></span><span id="dns-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessDns()">show less</button></span>
+            </div>
             <div id="no-dns" class="empty-state" style="display: none;">
                 No DNS records yet.
             </div>

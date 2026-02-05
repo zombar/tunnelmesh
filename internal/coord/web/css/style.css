@@ -592,6 +592,33 @@ td {
     color: #8b949e;
 }
 
+/* Show more/less pagination */
+.show-more-container {
+    text-align: center;
+    padding: 0.5rem 1rem;
+    font-size: 0.75rem;
+    color: #8b949e;
+}
+
+.show-more-link {
+    background: none;
+    border: none;
+    color: #8b949e;
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0;
+}
+
+.show-more-link:hover {
+    color: #58a6ff;
+    text-decoration: underline;
+}
+
+.show-more-separator {
+    margin: 0 0.5rem;
+    color: #30363d;
+}
+
 .ips-cell,
 .ports-cell {
     font-size: 0.75rem;

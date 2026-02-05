@@ -19,7 +19,13 @@ const state = {
     },
     // Visualizer state
     visualizer: null,
-    domainSuffix: '.tunnelmesh'
+    domainSuffix: '.tunnelmesh',
+    // Pagination state
+    peersVisibleCount: 7,
+    dnsVisibleCount: 7,
+    wgVisibleCount: 7,
+    currentPeers: [],  // Store current peers data for pagination
+    rowsPerPage: 7
 };
 
 // Green gradient for chart lines (dim to bright based on outlier status)
@@ -199,62 +205,12 @@ function updateDashboard(data, loadHistory = false) {
         }
     });
 
-    // Update DNS records table
-    const dnsTbody = document.getElementById('dns-body');
-    const noDns = document.getElementById('no-dns');
-    const domainSuffix = data.domain_suffix || '.tunnelmesh';
+    // Store peers data for pagination
+    state.currentPeers = data.peers;
 
-    if (data.peers.length === 0) {
-        dnsTbody.innerHTML = '';
-        noDns.style.display = 'block';
-    } else {
-        noDns.style.display = 'none';
-        dnsTbody.innerHTML = data.peers.map(peer => `
-            <tr>
-                <td><code>${escapeHtml(peer.name)}${domainSuffix}</code></td>
-                <td><code>${peer.mesh_ip}</code></td>
-            </tr>
-        `).join('');
-    }
-
-    // Update peers table
-    const tbody = document.getElementById('peers-body');
-    const noPeers = document.getElementById('no-peers');
-
-    if (data.peers.length === 0) {
-        tbody.innerHTML = '';
-        noPeers.style.display = 'block';
-    } else {
-        noPeers.style.display = 'none';
-        tbody.innerHTML = data.peers.map(peer => {
-            const history = state.peerHistory[peer.name];
-            const peerNameEscaped = escapeHtml(peer.name);
-            return `
-            <tr>
-                <td><strong>${peerNameEscaped}</strong></td>
-                <td><code>${peer.mesh_ip}</code></td>
-                <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
-                <td class="ports-cell">${formatPorts(peer)}</td>
-                <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
-                <td>${peer.stats?.active_tunnels ?? '-'}</td>
-                <td class="sparkline-cell">
-                    ${createSparklineSVG(history.throughputTx, history.throughputRx)}
-                    <div class="rate-values">
-                        <span class="tx">${formatBytes(peer.bytes_sent_rate)}/s</span>
-                        <span class="rx">${formatBytes(peer.bytes_received_rate)}/s</span>
-                    </div>
-                </td>
-                <td class="sparkline-cell">
-                    ${createSparklineSVG(history.packetsTx, history.packetsRx)}
-                    <div class="rate-values">
-                        <span class="tx">${formatRate(peer.packets_sent_rate)}</span>
-                        <span class="rx">${formatRate(peer.packets_received_rate)}</span>
-                    </div>
-                </td>
-                <td><code>${escapeHtml(peer.version || '-')}</code></td>
-            </tr>
-        `}).join('');
-    }
+    // Render tables with pagination (reuse the render functions)
+    renderDnsTable();
+    renderPeersTable();
 }
 
 function createSparklineSVG(dataTx, dataRx) {
@@ -293,6 +249,142 @@ function createSparklinePath(data, width, height, padding, maxVal) {
     });
 
     return 'M' + points.join(' L');
+}
+
+// Pagination functions
+function showMorePeers() {
+    state.peersVisibleCount += state.rowsPerPage;
+    renderPeersTable();
+}
+
+function showLessPeers() {
+    state.peersVisibleCount = state.rowsPerPage;
+    renderPeersTable();
+}
+
+function showMoreDns() {
+    state.dnsVisibleCount += state.rowsPerPage;
+    renderDnsTable();
+}
+
+function showLessDns() {
+    state.dnsVisibleCount = state.rowsPerPage;
+    renderDnsTable();
+}
+
+function showMoreWg() {
+    state.wgVisibleCount += state.rowsPerPage;
+    updateWGClientsTable();
+}
+
+function showLessWg() {
+    state.wgVisibleCount = state.rowsPerPage;
+    updateWGClientsTable();
+}
+
+function renderPeersTable() {
+    const peers = state.currentPeers;
+    const tbody = document.getElementById('peers-body');
+    const noPeers = document.getElementById('no-peers');
+    const peersPagination = document.getElementById('peers-pagination');
+    const peersShowMore = document.getElementById('peers-show-more');
+    const peersShowLess = document.getElementById('peers-show-less');
+
+    if (peers.length === 0) {
+        tbody.innerHTML = '';
+        noPeers.style.display = 'block';
+        peersPagination.style.display = 'none';
+        return;
+    }
+
+    noPeers.style.display = 'none';
+    const visiblePeers = peers.slice(0, state.peersVisibleCount);
+    tbody.innerHTML = visiblePeers.map(peer => {
+        const history = state.peerHistory[peer.name] || { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] };
+        const peerNameEscaped = escapeHtml(peer.name);
+        return `
+        <tr>
+            <td><strong>${peerNameEscaped}</strong></td>
+            <td><code>${peer.mesh_ip}</code></td>
+            <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
+            <td class="ports-cell">${formatPorts(peer)}</td>
+            <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
+            <td>${peer.stats?.active_tunnels ?? '-'}</td>
+            <td class="sparkline-cell">
+                ${createSparklineSVG(history.throughputTx, history.throughputRx)}
+                <div class="rate-values">
+                    <span class="tx">${formatBytes(peer.bytes_sent_rate)}/s</span>
+                    <span class="rx">${formatBytes(peer.bytes_received_rate)}/s</span>
+                </div>
+            </td>
+            <td class="sparkline-cell">
+                ${createSparklineSVG(history.packetsTx, history.packetsRx)}
+                <div class="rate-values">
+                    <span class="tx">${formatRate(peer.packets_sent_rate)}</span>
+                    <span class="rx">${formatRate(peer.packets_received_rate)}</span>
+                </div>
+            </td>
+            <td><code>${escapeHtml(peer.version || '-')}</code></td>
+        </tr>
+    `}).join('');
+
+    // Show/hide pagination links
+    const hasMore = peers.length > state.peersVisibleCount;
+    const canShowLess = state.peersVisibleCount > state.rowsPerPage;
+
+    if (hasMore || canShowLess) {
+        peersPagination.style.display = 'block';
+        peersShowMore.style.display = hasMore ? 'inline' : 'none';
+        peersShowLess.style.display = canShowLess ? 'inline' : 'none';
+        if (hasMore) {
+            document.getElementById('peers-shown-count').textContent = state.peersVisibleCount;
+            document.getElementById('peers-total-count').textContent = peers.length;
+        }
+    } else {
+        peersPagination.style.display = 'none';
+    }
+}
+
+function renderDnsTable() {
+    const peers = state.currentPeers;
+    const dnsTbody = document.getElementById('dns-body');
+    const noDns = document.getElementById('no-dns');
+    const dnsPagination = document.getElementById('dns-pagination');
+    const dnsShowMore = document.getElementById('dns-show-more');
+    const dnsShowLess = document.getElementById('dns-show-less');
+    const domainSuffix = state.domainSuffix;
+
+    if (peers.length === 0) {
+        dnsTbody.innerHTML = '';
+        noDns.style.display = 'block';
+        dnsPagination.style.display = 'none';
+        return;
+    }
+
+    noDns.style.display = 'none';
+    const visiblePeers = peers.slice(0, state.dnsVisibleCount);
+    dnsTbody.innerHTML = visiblePeers.map(peer => `
+        <tr>
+            <td><code>${escapeHtml(peer.name)}${domainSuffix}</code></td>
+            <td><code>${peer.mesh_ip}</code></td>
+        </tr>
+    `).join('');
+
+    // Show/hide pagination links
+    const hasMore = peers.length > state.dnsVisibleCount;
+    const canShowLess = state.dnsVisibleCount > state.rowsPerPage;
+
+    if (hasMore || canShowLess) {
+        dnsPagination.style.display = 'block';
+        dnsShowMore.style.display = hasMore ? 'inline' : 'none';
+        dnsShowLess.style.display = canShowLess ? 'inline' : 'none';
+        if (hasMore) {
+            document.getElementById('dns-shown-count').textContent = state.dnsVisibleCount;
+            document.getElementById('dns-total-count').textContent = peers.length;
+        }
+    } else {
+        dnsPagination.style.display = 'none';
+    }
 }
 
 function formatBytes(bytes) {
@@ -860,12 +952,16 @@ function updateWGClientsTable() {
     const tbody = document.getElementById('wg-clients-body');
     const noClients = document.getElementById('no-wg-clients');
     const addBtn = document.getElementById('add-wg-client-btn');
+    const wgPagination = document.getElementById('wg-pagination');
+    const wgShowMore = document.getElementById('wg-show-more');
+    const wgShowLess = document.getElementById('wg-show-less');
 
     // Check if concentrator is connected
     if (!state.wgConcentratorConnected) {
         tbody.innerHTML = '';
         noClients.textContent = 'No WireGuard concentrator connected. Start a mesh peer with --wireguard flag.';
         noClients.style.display = 'block';
+        if (wgPagination) wgPagination.style.display = 'none';
         if (addBtn) addBtn.disabled = true;
         return;
     }
@@ -876,11 +972,13 @@ function updateWGClientsTable() {
         tbody.innerHTML = '';
         noClients.textContent = 'No WireGuard peers yet. Add a peer to generate a QR code.';
         noClients.style.display = 'block';
+        if (wgPagination) wgPagination.style.display = 'none';
         return;
     }
 
     noClients.style.display = 'none';
-    tbody.innerHTML = state.wgClients.map(client => {
+    const visibleClients = state.wgClients.slice(0, state.wgVisibleCount);
+    tbody.innerHTML = visibleClients.map(client => {
         const statusClass = client.enabled ? 'online' : 'offline';
         const statusText = client.enabled ? 'Enabled' : 'Disabled';
         const lastSeen = client.last_seen ? formatLastSeen(client.last_seen) : 'Never';
@@ -901,6 +999,24 @@ function updateWGClientsTable() {
             </tr>
         `;
     }).join('');
+
+    // Show/hide pagination links
+    if (wgPagination) {
+        const hasMore = state.wgClients.length > state.wgVisibleCount;
+        const canShowLess = state.wgVisibleCount > state.rowsPerPage;
+
+        if (hasMore || canShowLess) {
+            wgPagination.style.display = 'block';
+            wgShowMore.style.display = hasMore ? 'inline' : 'none';
+            wgShowLess.style.display = canShowLess ? 'inline' : 'none';
+            if (hasMore) {
+                document.getElementById('wg-shown-count').textContent = state.wgVisibleCount;
+                document.getElementById('wg-total-count').textContent = state.wgClients.length;
+            }
+        } else {
+            wgPagination.style.display = 'none';
+        }
+    }
 }
 
 function formatLastSeen(timestamp) {
