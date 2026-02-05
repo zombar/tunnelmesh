@@ -117,7 +117,7 @@ while true; do
         fi
     fi
 
-    # Pick a random peer and ping it
+    # Pick a random peer and ping it (alternating between IP and DNS alias)
     if [ -n "$PEER_IPS" ]; then
         # Convert to array and pick random
         readarray -t PEER_ARRAY <<< "$PEER_IPS"
@@ -128,11 +128,24 @@ while true; do
             TARGET_IP="${PEER_ARRAY[$RANDOM_INDEX]}"
             TARGET_NAME=$(echo "$PEERS_JSON" | jq -r ".peers[] | select(.mesh_ip == \"$TARGET_IP\") | .name" 2>/dev/null || echo "unknown")
 
-            echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME ($TARGET_IP) via mesh..."
-            if ping -c 1 -W 2 "$TARGET_IP" > /dev/null 2>&1; then
-                echo "  SUCCESS: $TARGET_NAME is reachable!"
+            # Randomly choose to ping by IP or by DNS alias
+            if [ $((RANDOM % 2)) -eq 0 ]; then
+                # Ping by IP
+                echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME ($TARGET_IP) via mesh IP..."
+                if ping -c 1 -W 2 "$TARGET_IP" > /dev/null 2>&1; then
+                    echo "  SUCCESS: $TARGET_NAME is reachable via IP!"
+                else
+                    echo "  FAILED: Cannot reach $TARGET_NAME via IP"
+                fi
             else
-                echo "  FAILED: Cannot reach $TARGET_NAME"
+                # Ping by DNS alias (alt.node-xxx.tunnelmesh)
+                TARGET_DNS="alt.${TARGET_NAME}.tunnelmesh"
+                echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME via DNS alias ($TARGET_DNS)..."
+                if ping -c 1 -W 2 "$TARGET_DNS" > /dev/null 2>&1; then
+                    echo "  SUCCESS: $TARGET_NAME is reachable via DNS alias!"
+                else
+                    echo "  FAILED: Cannot reach $TARGET_NAME via DNS alias"
+                fi
             fi
         fi
     fi
