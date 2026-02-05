@@ -14,7 +14,7 @@ const state = {
             throughput: {},  // { peerName: [values] }
             packets: {}      // { peerName: [values] }
         },
-        maxChartPoints: 4320  // 12 hours at 10-second intervals
+        maxChartPoints: 360  // 1 hour at 10-second intervals
     }
 };
 
@@ -28,11 +28,11 @@ const GREEN_GRADIENT = [
     '#7ee787'  // brightest - outliers
 ];
 
-// Max time range for charts (12 hours)
-const MAX_RANGE_HOURS = 12;
-// At 10-second heartbeat intervals, 12 hours = 4320 points
+// Max time range for charts (1 hour)
+const MAX_RANGE_HOURS = 1;
+// At 10-second heartbeat intervals, 1 hour = 360 points
 // Request full resolution (no downsampling)
-const MAX_CHART_POINTS = 4320;
+const MAX_CHART_POINTS = 360;
 
 // Fetch and update dashboard
 async function fetchData(includeHistory = false) {
@@ -356,7 +356,7 @@ function initCharts() {
 
 async function fetchChartHistory() {
     try {
-        // Fetch up to 12 hours of history
+        // Fetch up to 1 hour of history
         const since = new Date(Date.now() - MAX_RANGE_HOURS * 60 * 60 * 1000);
 
         const url = `/admin/api/overview?since=${since.toISOString()}&maxPoints=${MAX_CHART_POINTS}`;
@@ -1017,7 +1017,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize charts first
     initCharts();
 
-    // Fetch initial chart history (up to 12 hours)
+    // Fetch initial chart history (up to 1 hour)
     // SSE is set up AFTER history is loaded (inside fetchChartHistory)
     fetchChartHistory();
 

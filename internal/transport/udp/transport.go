@@ -133,7 +133,7 @@ type Config struct {
 	// SessionTimeout is the duration after which a session is considered dead
 	// if no packets have been received. This handles stale sessions where the
 	// peer has restarted and our rekey-required messages don't reach us (NAT timeout).
-	// Default: 2 minutes (4+ keepalive intervals worth of missed packets)
+	// Default: 75 seconds (~3 keepalive intervals worth of missed packets)
 	SessionTimeout time.Duration
 
 	// PeerResolver looks up peer name from their X25519 public key
@@ -161,7 +161,7 @@ func DefaultConfig() Config {
 		KeepaliveInterval: 25 * time.Second,
 		HandshakeTimeout:  10 * time.Second,
 		HolePunchTimeout:  10 * time.Second,
-		SessionTimeout:    2 * time.Minute,
+		SessionTimeout:    75 * time.Second,
 		HolePunchRetries:  5,
 	}
 }
@@ -181,7 +181,7 @@ func New(cfg Config) (*Transport, error) {
 		cfg.HolePunchRetries = 5
 	}
 	if cfg.SessionTimeout == 0 {
-		cfg.SessionTimeout = 2 * time.Minute
+		cfg.SessionTimeout = 75 * time.Second
 	}
 
 	// Use provided HTTP client or create a new one with sensible defaults
