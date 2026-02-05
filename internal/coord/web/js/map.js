@@ -338,17 +338,6 @@ class NodeMap {
         this.markers.delete(name);
     }
 
-    // Center map on a specific peer
-    centerOnPeer(peerName) {
-        if (!this.map) return;
-
-        const entry = this.markers.get(peerName);
-        if (entry && entry.marker) {
-            const latLng = entry.marker.getLatLng();
-            this.map.panTo(latLng, { animate: false });
-        }
-    }
-
     // Set the selected peer and update marker colors
     setSelectedPeer(peerName) {
         const previousSelected = this.selectedPeer;
