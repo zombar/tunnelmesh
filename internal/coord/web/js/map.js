@@ -8,8 +8,9 @@ class NodeMap {
     constructor(containerId) {
         this.containerId = containerId;
         this.map = null;
-        this.markers = new Map(); // peerName -> { marker, circle }
+        this.markers = new Map(); // peerName -> { marker, loc, peer }
         this.connections = new Map(); // "peerA-peerB" -> polyline
+        this.accuracyCircle = null; // Single accuracy circle for selected node
         this.bounds = null;
         this.initialized = false;
         this.selectedPeer = null;
@@ -352,8 +353,8 @@ class NodeMap {
             }
         });
 
-        // Store location info for accuracy circle (only shown for selected node)
-        this.markers.set(name, { marker, circle: null, loc, peer });
+        // Store location info (accuracy circle is managed at map level, not per-marker)
+        this.markers.set(name, { marker, loc, peer });
     }
 
     updateMarker(name, lat, lng, color, peer, loc) {
@@ -375,13 +376,12 @@ class NodeMap {
         entry.loc = loc;
         entry.peer = peer;
 
-        // Update accuracy circle position if it exists (for selected node)
-        if (entry.circle) {
-            entry.circle.setLatLng([lat, lng]);
+        // Update accuracy circle if this is the selected node
+        if (name === this.selectedPeer && this.accuracyCircle) {
+            this.accuracyCircle.setLatLng([loc.latitude, loc.longitude]);
             if (loc.accuracy) {
-                entry.circle.setRadius(loc.accuracy);
+                this.accuracyCircle.setRadius(loc.accuracy);
             }
-            entry.circle.setStyle({ fillColor: color, color: color });
         }
     }
 
@@ -390,7 +390,12 @@ class NodeMap {
         if (!entry) return;
 
         if (entry.marker) this.map.removeLayer(entry.marker);
-        if (entry.circle) this.map.removeLayer(entry.circle);
+
+        // If removing the selected peer, also remove the accuracy circle
+        if (name === this.selectedPeer && this.accuracyCircle) {
+            this.map.removeLayer(this.accuracyCircle);
+            this.accuracyCircle = null;
+        }
 
         this.markers.delete(name);
     }
@@ -400,7 +405,7 @@ class NodeMap {
         const previousSelected = this.selectedPeer;
         this.selectedPeer = peerName;
 
-        // Update previous selected marker back to normal color and remove its accuracy circle
+        // Update previous selected marker back to normal color
         if (previousSelected && this.markers.has(previousSelected)) {
             const entry = this.markers.get(previousSelected);
             // Use correct color based on online status
@@ -409,30 +414,31 @@ class NodeMap {
             if (entry.marker) {
                 entry.marker.setStyle({ fillColor: color, color: color });
             }
-            // Remove accuracy circle from previously selected
-            if (entry.circle) {
-                this.map.removeLayer(entry.circle);
-                entry.circle = null;
-            }
         }
 
-        // Update newly selected marker to blue and show its accuracy circle
+        // Update newly selected marker to blue
         if (peerName && this.markers.has(peerName)) {
             const entry = this.markers.get(peerName);
             const color = '#58a6ff'; // blue for selected
             if (entry.marker) {
                 entry.marker.setStyle({ fillColor: color, color: color });
             }
-            // Show accuracy circle for selected node (only for IP geolocation, never for manual)
+
+            // Manage single accuracy circle (only for IP geolocation, never for manual)
             const shouldShowCircle = entry.loc &&
                 entry.loc.source === 'ip' &&
                 entry.loc.accuracy &&
                 entry.loc.accuracy > 1000 &&
                 entry.peer &&
                 entry.peer.online;
+
             if (shouldShowCircle) {
-                if (!entry.circle) {
-                    entry.circle = L.circle([entry.loc.latitude, entry.loc.longitude], {
+                // Move existing circle or create new one
+                if (this.accuracyCircle) {
+                    this.accuracyCircle.setLatLng([entry.loc.latitude, entry.loc.longitude]);
+                    this.accuracyCircle.setRadius(entry.loc.accuracy);
+                } else {
+                    this.accuracyCircle = L.circle([entry.loc.latitude, entry.loc.longitude], {
                         radius: entry.loc.accuracy,
                         fillColor: color,
                         color: color,
@@ -442,13 +448,22 @@ class NodeMap {
                         dashArray: '5, 5'
                     }).addTo(this.map);
                 }
-            } else if (entry.circle) {
-                // Remove circle if source changed to manual or conditions no longer met
-                this.map.removeLayer(entry.circle);
-                entry.circle = null;
+            } else {
+                // Remove circle if source is manual or conditions not met
+                if (this.accuracyCircle) {
+                    this.map.removeLayer(this.accuracyCircle);
+                    this.accuracyCircle = null;
+                }
             }
+
             // Bring marker to front
             if (entry.marker) entry.marker.bringToFront();
+        } else {
+            // No peer selected or peer not found - remove accuracy circle
+            if (this.accuracyCircle) {
+                this.map.removeLayer(this.accuracyCircle);
+                this.accuracyCircle = null;
+            }
         }
 
         // Update connections to show only from selected peer
@@ -506,6 +521,9 @@ class NodeMap {
 
     // Cleanup
     destroy() {
+        if (this.accuracyCircle) {
+            this.accuracyCircle = null;
+        }
         if (this.map) {
             this.map.remove();
             this.map = null;

@@ -203,6 +203,20 @@ header h1 {
     background: #1a1a2e;
 }
 
+/* Fix tile seams (white lines between tiles) */
+.leaflet-tile {
+    outline: none !important;
+    filter: brightness(1.05) contrast(1.05);
+}
+
+.leaflet-tile-pane {
+    opacity: 1;
+}
+
+.leaflet-tile-container img {
+    outline: 1px solid transparent;
+}
+
 /* Leaflet control styling for dark theme */
 .leaflet-control-zoom a {
     background: var(--color-bg-secondary) !important;
