@@ -144,7 +144,11 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 		cfg.Admin.BindAddress = "127.0.0.1" // Secure by default - localhost only
 	}
 	if cfg.Admin.Port == 0 {
-		cfg.Admin.Port = 8080
+		if cfg.JoinMesh != nil {
+			cfg.Admin.Port = 443 // Standard HTTPS port for mesh-only admin
+		} else {
+			cfg.Admin.Port = 8080 // HTTP on localhost
+		}
 	}
 	// Relay enabled by default
 	if !cfg.Relay.Enabled {

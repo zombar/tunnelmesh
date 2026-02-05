@@ -638,13 +638,24 @@ func (s *Server) ListenAndServe() error {
 // StartAdminServer starts the admin interface on the specified address.
 // If tlsCert is provided, the server uses HTTPS; otherwise HTTP.
 // This is called after join_mesh completes to bind admin to the mesh IP.
+// Uses SO_REUSEADDR to allow binding to mesh IP even when main server uses wildcard.
 func (s *Server) StartAdminServer(addr string, tlsCert *tls.Certificate) error {
 	if s.adminMux == nil {
 		return fmt.Errorf("admin routes not initialized")
 	}
 
+	// Create listener with SO_REUSEADDR to allow binding to specific IP
+	// even when main server is bound to 0.0.0.0 on the same port
+	lc := net.ListenConfig{
+		Control: setReuseAddr,
+	}
+
+	ln, err := lc.Listen(context.Background(), "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", addr, err)
+	}
+
 	s.adminServer = &http.Server{
-		Addr:    addr,
 		Handler: s.adminMux,
 	}
 
@@ -655,14 +666,14 @@ func (s *Server) StartAdminServer(addr string, tlsCert *tls.Certificate) error {
 		}
 		log.Info().Str("addr", addr).Msg("starting admin server (HTTPS)")
 		go func() {
-			if err := s.adminServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			if err := s.adminServer.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
 				log.Error().Err(err).Msg("admin server error")
 			}
 		}()
 	} else {
 		log.Info().Str("addr", addr).Msg("starting admin server (HTTP)")
 		go func() {
-			if err := s.adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := s.adminServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 				log.Error().Err(err).Msg("admin server error")
 			}
 		}()

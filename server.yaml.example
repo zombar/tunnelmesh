@@ -20,13 +20,13 @@ domain_suffix: ".tunnelmesh"
 admin:
   enabled: true
   # bind_address: "127.0.0.1"  # Default: localhost only (secure)
-  # port: 8080                 # Default: 8080
+  # port: 8080                 # Default: 8080 (or 443 with join_mesh for HTTPS)
   #
   # WARNING: Setting bind_address to "0.0.0.0" exposes admin WITHOUT authentication!
   # For external access, use join_mesh (mesh-only HTTPS) or put behind authenticated proxy.
   #
   # With join_mesh configured: admin is served via HTTPS on the mesh IP only,
-  # accessible at https://<name>.tunnelmesh:<port>/admin/
+  # accessible at https://<name>.tunnelmesh/admin/
   # Users should trust the mesh CA once: tunnelmesh trust-ca --server http://server:8080
 
 # WebSocket relay for peers that can't establish direct connections

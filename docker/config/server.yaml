@@ -7,7 +7,7 @@ locations: true  # Enable node location tracking (uses ip-api.com)
 
 admin:
   enabled: true
-  # With join_mesh: admin available via HTTPS at https://server-node.tunnelmesh:8080/admin/
+  # With join_mesh: admin available via HTTPS at https://server-node.tunnelmesh/admin/
   # Trust CA once: tunnelmesh trust-ca --server http://localhost:8080
 
 # WireGuard client management (enables admin panel WireGuard section)
