@@ -707,10 +707,10 @@ class NodeVisualizer {
         const centerSlot = this.slots.find(s => s.side === 'center');
         if (!centerSlot || this.nodes.size <= 1) return;
 
-        const arrowY = centerSlot.y + CARD_HEIGHT / 2 + 20;
-        const arrowSpacing = 30;
+        const arrowY = centerSlot.y + CARD_HEIGHT / 2 + 35;
+        const arrowSpacing = 50;
 
-        ctx.font = '16px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+        ctx.font = '48px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
 
         // Left arrow
         ctx.fillStyle = this.hoveredArrow === 'left' ? COLORS.text : COLORS.textDim;
@@ -732,7 +732,7 @@ class NodeVisualizer {
     hitTestNavArrows(contentX, contentY) {
         if (!this.navArrows || this.nodes.size <= 1) return null;
 
-        const hitRadius = 15;
+        const hitRadius = 30;
         const { y, leftX, rightX } = this.navArrows;
 
         if (Math.abs(contentX - leftX) < hitRadius && Math.abs(contentY - y) < hitRadius) {
