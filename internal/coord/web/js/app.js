@@ -322,6 +322,11 @@ async function fetchChartHistory() {
     }
 }
 
+// Quantize timestamp to 10-second intervals
+function quantizeTimestamp(ts) {
+    return Math.round(ts / 10000) * 10000;
+}
+
 function initializeChartData(data) {
     // Clear existing chart data and lastSeenTimes
     state.charts.chartData.labels = [];
@@ -330,19 +335,32 @@ function initializeChartData(data) {
     state.charts.lastSeenTimes = {};
 
     // Build chart data from peer histories
-    // Each peer may have different history lengths, so we need to align timestamps
+    // Quantize timestamps to 10-second intervals so they align across peers
     const allTimestamps = new Set();
     const peerHistories = {};
+    const peerFirstTs = {}; // Track when each peer first came online
+    const peerLastTs = {};  // Track when each peer was last seen
 
     data.peers.forEach(peer => {
         if (!peer.history || peer.history.length === 0) return;
 
         // History comes newest first, reverse to get oldest first
         const history = [...peer.history].reverse();
-        peerHistories[peer.name] = history;
+        peerHistories[peer.name] = {};
 
         history.forEach(point => {
-            allTimestamps.add(new Date(point.ts).getTime());
+            const quantized = quantizeTimestamp(new Date(point.ts).getTime());
+            allTimestamps.add(quantized);
+            // Store by quantized timestamp (last value wins if multiple in same interval)
+            peerHistories[peer.name][quantized] = point;
+
+            // Track first/last timestamps for this peer
+            if (!peerFirstTs[peer.name] || quantized < peerFirstTs[peer.name]) {
+                peerFirstTs[peer.name] = quantized;
+            }
+            if (!peerLastTs[peer.name] || quantized > peerLastTs[peer.name]) {
+                peerLastTs[peer.name] = quantized;
+            }
         });
     });
 
@@ -351,37 +369,24 @@ function initializeChartData(data) {
     state.charts.chartData.labels = sortedTimestamps.map(ts => new Date(ts));
 
     // Build data arrays for each peer
-    Object.entries(peerHistories).forEach(([peerName, history]) => {
-        const historyMap = new Map();
-        history.forEach(point => {
-            historyMap.set(new Date(point.ts).getTime(), point);
-        });
-
+    Object.entries(peerHistories).forEach(([peerName, historyMap]) => {
         const throughputData = [];
         const packetsData = [];
-
-        // Find the earliest timestamp this peer has data for
-        const peerTimestamps = history.map(p => new Date(p.ts).getTime());
-        const peerFirstTs = Math.min(...peerTimestamps);
-        const peerLastTs = Math.max(...peerTimestamps);
+        const firstTs = peerFirstTs[peerName];
+        const lastTs = peerLastTs[peerName];
 
         sortedTimestamps.forEach(ts => {
-            const point = historyMap.get(ts);
+            const point = historyMap[ts];
             if (point) {
                 // Combine TX and RX for total throughput/packets
                 throughputData.push((point.txB || 0) + (point.rxB || 0));
                 packetsData.push((point.txP || 0) + (point.rxP || 0));
-            } else if (ts < peerFirstTs) {
-                // Before peer existed - use null (won't be shown)
-                throughputData.push(null);
-                packetsData.push(null);
-            } else if (ts > peerLastTs) {
-                // After last known data - use null (peer may have gone offline)
+            } else if (ts < firstTs || ts > lastTs) {
+                // Before peer existed or after last seen - use null (no line)
                 throughputData.push(null);
                 packetsData.push(null);
             } else {
-                // Gap in the middle - peer was offline, mark with special value
-                // Use -1 to indicate "was online but missed heartbeat"
+                // Gap in the middle - peer was offline, use -1 (red line at 0)
                 throughputData.push(-1);
                 packetsData.push(-1);
             }
@@ -390,10 +395,9 @@ function initializeChartData(data) {
         state.charts.chartData.throughput[peerName] = throughputData;
         state.charts.chartData.packets[peerName] = packetsData;
 
-        // Initialize lastSeenTimes from the most recent history point
-        if (history.length > 0) {
-            const lastPoint = history[history.length - 1];
-            state.charts.lastSeenTimes[peerName] = new Date(lastPoint.ts).getTime();
+        // Initialize lastSeenTimes from the peer's last timestamp (quantized)
+        if (lastTs) {
+            state.charts.lastSeenTimes[peerName] = lastTs;
         }
     });
 
@@ -438,16 +442,16 @@ function updateChartsWithNewData(peers) {
 
     peers.forEach(peer => {
         const peerLastSeen = new Date(peer.last_seen);
-        const peerLastSeenMs = peerLastSeen.getTime();
+        const peerLastSeenQuantized = quantizeTimestamp(peerLastSeen.getTime());
         const knownLastSeen = state.charts.lastSeenTimes[peer.name] || 0;
 
-        // Only process if this is a new heartbeat
-        if (peerLastSeenMs > knownLastSeen) {
-            state.charts.lastSeenTimes[peer.name] = peerLastSeenMs;
+        // Only process if this is a new heartbeat (quantized)
+        if (peerLastSeenQuantized > knownLastSeen) {
+            state.charts.lastSeenTimes[peer.name] = peerLastSeenQuantized;
 
             newPoints.push({
                 peer: peer.name,
-                timestamp: peerLastSeen,
+                timestamp: new Date(peerLastSeenQuantized),
                 throughput: (peer.bytes_sent_rate || 0) + (peer.bytes_received_rate || 0),
                 packets: (peer.packets_sent_rate || 0) + (peer.packets_received_rate || 0)
             });
@@ -457,14 +461,12 @@ function updateChartsWithNewData(peers) {
     // No new data
     if (newPoints.length === 0) return;
 
-    // Group new points by timestamp (within 5 second window = same heartbeat cycle)
+    // Group new points by quantized timestamp (10-second intervals)
     const groups = new Map();
     newPoints.forEach(point => {
-        // Round to nearest 5 seconds to group peers from same heartbeat cycle
-        const roundedTime = new Date(Math.round(point.timestamp.getTime() / 5000) * 5000);
-        const key = roundedTime.getTime();
+        const key = point.timestamp.getTime();
         if (!groups.has(key)) {
-            groups.set(key, { timestamp: roundedTime, peers: {} });
+            groups.set(key, { timestamp: point.timestamp, peers: {} });
         }
         groups.get(key).peers[point.peer] = point;
     });
@@ -595,9 +597,7 @@ function rebuildChartDatasets() {
     // Helper to build dataset with offline detection
     // null = peer didn't exist yet (don't show)
     // -1 = peer was offline (show red dashed line at y=0)
-    // >= 0 = actual value
     const buildDataset = (peerName, values, baseColor) => {
-        // Convert values: null stays null (gap), -1 becomes 0 (offline), else keep value
         const data = values.map((v, i) => ({
             x: labels[i],
             y: v === null ? null : (v === -1 ? 0 : v)
@@ -615,11 +615,9 @@ function rebuildChartDatasets() {
             tension: 0.3,
             cubicInterpolationMode: 'monotone',
             fill: false,
-            spanGaps: false, // Don't connect across null gaps (peer didn't exist)
-            // Use segment styling to show offline periods in red
+            spanGaps: false, // Don't connect across null gaps
             segment: {
                 borderColor: ctx => {
-                    // If either endpoint of segment was offline, show red
                     const p0Offline = offlineSegments[ctx.p0DataIndex];
                     const p1Offline = offlineSegments[ctx.p1DataIndex];
                     if (p0Offline || p1Offline) {
@@ -628,7 +626,6 @@ function rebuildChartDatasets() {
                     return baseColor;
                 },
                 borderDash: ctx => {
-                    // Dashed line for offline periods
                     const p0Offline = offlineSegments[ctx.p0DataIndex];
                     const p1Offline = offlineSegments[ctx.p1DataIndex];
                     if (p0Offline || p1Offline) {
