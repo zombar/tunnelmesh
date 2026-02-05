@@ -134,6 +134,7 @@ admin:
 join_mesh:
   name: "server-node"
   private_key: "~/.tunnelmesh/id_ed25519"
+  allow_exit_traffic: true  # Allow clients to route internet through this node
   tun:
     name: "tun-mesh0"
     mtu: 1400
@@ -160,6 +161,15 @@ ssh_port: 2222
 
 # Path to SSH private key
 private_key: "~/.tunnelmesh/id_ed25519"
+
+# Exit node settings (optional)
+exit_node: "server-node"      # Route internet traffic through this peer
+allow_exit_traffic: false     # Set true to allow others to use this node as exit
+
+# Manual location (optional, overrides IP geolocation)
+location:
+  latitude: 52.3676
+  longitude: 4.9041
 
 # TUN interface settings
 tun:

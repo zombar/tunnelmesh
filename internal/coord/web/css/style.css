@@ -717,11 +717,17 @@ td {
     margin-left: 0.25rem;
 }
 
-/* Exit node badge */
+/* Exit node badge (square corners, compact) */
 .status-badge.exit {
-    background: rgba(240, 165, 0, 0.15);
+    background: rgba(240, 165, 0, 0.2);
     color: #f0a500;
-    border-color: rgba(240, 165, 0, 0.4);
+    border-color: rgba(240, 165, 0, 0.5);
+    border-radius: 0;
+    padding: 0.1rem 0.3rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    margin-left: 0.4rem;
+    vertical-align: middle;
 }
 
 /* Transport type badges */

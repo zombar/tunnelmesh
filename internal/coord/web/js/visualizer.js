@@ -909,7 +909,17 @@ class NodeVisualizer {
 
         const tabText = node.name;
         ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
-        const tabWidth = ctx.measureText(tabText).width + 14;
+        const tabTextWidth = ctx.measureText(tabText).width;
+
+        // Calculate EXIT badge width if needed
+        let exitBadgeWidth = 0;
+        if (node.allowsExitTraffic) {
+            ctx.font = 'bold 8px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+            const exitTextWidth = ctx.measureText('EXIT').width;
+            exitBadgeWidth = exitTextWidth + 6 + 6; // padding + gap before badge
+        }
+
+        const tabWidth = tabTextWidth + 14 + exitBadgeWidth;
         const tabX = x;
         const tabY = y - TAB_HEIGHT;
 
@@ -937,10 +947,18 @@ class NodeVisualizer {
         ctx.stroke();
 
         // Tab text
+        ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
         ctx.fillStyle = COLORS.text;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.fillText(tabText, tabX + 7, tabY + TAB_HEIGHT / 2);
+
+        // Exit badge next to title in tab (for nodes that allow exit traffic)
+        if (node.allowsExitTraffic) {
+            const badgeX = tabX + 7 + tabTextWidth + 6; // after text + gap
+            const badgeY = tabY + (TAB_HEIGHT - 12) / 2; // vertically centered (badge height = 12)
+            this.drawExitBadge(ctx, badgeX, badgeY);
+        }
 
         // Content
         const contentX = x + 10;
@@ -989,11 +1007,6 @@ class NodeVisualizer {
                 this.drawTransportBadge(ctx, x + CARD_WIDTH - 10, contentY + lineHeight * 2 + 8, transportType);
             }
         }
-
-        // Exit badge for nodes that allow exit traffic
-        if (node.allowsExitTraffic) {
-            this.drawExitBadge(ctx, x + CARD_WIDTH - 10, y + 6);
-        }
     }
 
     drawTransportBadge(ctx, x, y, transportType) {
@@ -1024,27 +1037,27 @@ class NodeVisualizer {
         ctx.font = 'bold 8px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
         const textWidth = ctx.measureText(text).width;
 
-        // Draw badge background
-        const padding = 3;
-        const badgeX = x - textWidth - padding * 2;
-        const badgeY = y;
-        const badgeWidth = textWidth + padding * 2;
+        // Draw badge background (square corners)
+        const paddingH = 3;  // horizontal padding
+        const paddingV = 2;  // vertical padding
+        const badgeWidth = textWidth + paddingH * 2;
         const badgeHeight = 12;
-        const radius = 3;
+        const badgeX = x;
+        const badgeY = y;
 
         ctx.fillStyle = 'rgba(240, 165, 0, 0.2)';
         ctx.strokeStyle = 'rgba(240, 165, 0, 0.5)';
         ctx.lineWidth = 1;
 
-        ctx.beginPath();
-        ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, radius);
-        ctx.fill();
-        ctx.stroke();
+        // Square corners - use fillRect/strokeRect instead of roundRect
+        ctx.fillRect(badgeX, badgeY, badgeWidth, badgeHeight);
+        ctx.strokeRect(badgeX, badgeY, badgeWidth, badgeHeight);
 
-        // Draw text
+        // Draw text centered in badge
         ctx.fillStyle = COLORS.exitConnection;
-        ctx.textAlign = 'right';
-        ctx.fillText(text, x - padding, badgeY + 9);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, badgeX + badgeWidth / 2, badgeY + badgeHeight / 2);
     }
 
 }
