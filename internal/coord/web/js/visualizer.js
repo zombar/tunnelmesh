@@ -321,6 +321,16 @@ class NodeVisualizer {
                 node.nodeType = nodeType;
                 node.bytesSentRate = peer.bytes_sent_rate || 0;
                 node.bytesReceivedRate = peer.bytes_received_rate || 0;
+                // Update region from location data
+                if (peer.location && peer.location.source) {
+                    let region = peer.location.city || peer.location.region || peer.location.country || null;
+                    if (region && region.length > 20) {
+                        region = region.substring(0, 18) + '…';
+                    }
+                    node.region = region;
+                } else {
+                    node.region = null;
+                }
             } else {
                 // Add new node
                 const node = new VisualizerNode(peer, this.domainSuffix, nodeType);
