@@ -437,6 +437,9 @@ function updateChartsWithNewData(peers) {
         state.charts.lastSeenTimes = {};
     }
 
+    // Build set of currently online peers (present in API response)
+    const onlinePeers = new Set(peers.map(p => p.name));
+
     // Collect new data points with their timestamps
     const newPoints = [];
 
@@ -488,7 +491,7 @@ function updateChartsWithNewData(peers) {
         // Add timestamp
         state.charts.chartData.labels.push(group.timestamp);
 
-        // For each existing peer, add their value (or null if no data in this group)
+        // For each existing peer, add their value
         const allPeers = new Set([
             ...Object.keys(state.charts.chartData.throughput),
             ...Object.keys(group.peers)
@@ -509,14 +512,14 @@ function updateChartsWithNewData(peers) {
                 // This peer has data for this timestamp
                 state.charts.chartData.throughput[peerName].push(group.peers[peerName].throughput);
                 state.charts.chartData.packets[peerName].push(group.peers[peerName].packets);
-            } else if (isNewPeer) {
-                // New peer with no data yet - use null (didn't exist)
-                state.charts.chartData.throughput[peerName].push(null);
-                state.charts.chartData.packets[peerName].push(null);
-            } else {
-                // Existing peer with no data - went offline, use -1 (shows as red line at 0)
+            } else if (!onlinePeers.has(peerName)) {
+                // Peer is gone from API response - truly offline, use -1 (red line at 0)
                 state.charts.chartData.throughput[peerName].push(-1);
                 state.charts.chartData.packets[peerName].push(-1);
+            } else {
+                // Peer is online but no new heartbeat yet - use null (gap, no line drawn)
+                state.charts.chartData.throughput[peerName].push(null);
+                state.charts.chartData.packets[peerName].push(null);
             }
         });
     });
