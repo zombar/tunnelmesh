@@ -33,37 +33,43 @@
 
     <section id="visualizer-section">
         <div class="visualizer-card">
-            <div class="visualizer-header">
+            <div class="visualizer-header section-toggle" onclick="toggleSection(this)">
                 <h2>Network Topology</h2>
             </div>
-            <div class="visualizer-container">
-                <canvas id="visualizer-canvas"></canvas>
+            <div class="collapsible-content">
+                <div class="visualizer-container">
+                    <canvas id="visualizer-canvas"></canvas>
+                </div>
             </div>
         </div>
     </section>
 
     <section id="map-section" style="display: none;">
         <div class="map-card">
-            <div class="map-header">
+            <div class="map-header section-toggle" onclick="toggleSection(this)">
                 <h2>Node Locations</h2>
             </div>
-            <div id="node-map" class="map-container"></div>
+            <div class="collapsible-content">
+                <div id="node-map" class="map-container"></div>
+            </div>
         </div>
     </section>
 
     <section id="charts-section">
         <div class="charts-card">
-            <div class="charts-header">
+            <div class="charts-header section-toggle" onclick="toggleSection(this)">
                 <h2>Network Activity</h2>
             </div>
-            <div class="charts-container">
-                <div class="chart-wrapper">
-                    <h3>Throughput</h3>
-                    <canvas id="throughput-chart"></canvas>
-                </div>
-                <div class="chart-wrapper">
-                    <h3>Packets/s</h3>
-                    <canvas id="packets-chart"></canvas>
+            <div class="collapsible-content">
+                <div class="charts-container">
+                    <div class="chart-wrapper">
+                        <h3>Throughput</h3>
+                        <canvas id="throughput-chart"></canvas>
+                    </div>
+                    <div class="chart-wrapper">
+                        <h3>Packets/s</h3>
+                        <canvas id="packets-chart"></canvas>
+                    </div>
                 </div>
             </div>
         </div>
@@ -71,73 +77,79 @@
 
     <main>
         <section id="peers-section">
-            <h2>Connected Peers</h2>
-            <table id="peers">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Mesh IP</th>
-                        <th>Advertised IPs</th>
-                        <th>Ports</th>
-                        <th>Status</th>
-                        <th>Tunnels</th>
-                        <th>Throughput</th>
-                        <th>Packets/s</th>
-                        <th>Version</th>
-                    </tr>
-                </thead>
-                <tbody id="peers-body"></tbody>
-            </table>
-            <div id="peers-pagination" class="show-more-container" style="display: none;">
-                <span id="peers-show-more"><button class="show-more-link" onclick="showMorePeers()">show more (<span id="peers-shown-count">0</span> / <span id="peers-total-count">0</span>)</button></span><span id="peers-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessPeers()">show less</button></span>
-            </div>
-            <div id="no-peers" class="empty-state" style="display: none;">
-                No peers connected yet.
+            <h2 class="section-toggle" onclick="toggleSection(this)">Connected Peers</h2>
+            <div class="collapsible-content">
+                <table id="peers">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Mesh IP</th>
+                            <th>Advertised IPs</th>
+                            <th>Ports</th>
+                            <th>Status</th>
+                            <th>Tunnels</th>
+                            <th>Throughput</th>
+                            <th>Packets/s</th>
+                            <th>Version</th>
+                        </tr>
+                    </thead>
+                    <tbody id="peers-body"></tbody>
+                </table>
+                <div id="peers-pagination" class="show-more-container" style="display: none;">
+                    <span id="peers-show-more"><button class="show-more-link" onclick="showMorePeers()">show more (<span id="peers-shown-count">0</span> / <span id="peers-total-count">0</span>)</button></span><span id="peers-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessPeers()">show less</button></span>
+                </div>
+                <div id="no-peers" class="empty-state" style="display: none;">
+                    No peers connected yet.
+                </div>
             </div>
         </section>
 
         <section id="wireguard-section" style="display: none;">
-            <div class="section-header">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>WireGuard Peers</h2>
-                <button id="add-wg-client-btn" class="btn-primary">+ Add Peer</button>
+                <button id="add-wg-client-btn" class="btn-primary" onclick="event.stopPropagation()">+ Add Peer</button>
             </div>
-            <table id="wireguard-clients">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Mesh IP</th>
-                        <th>DNS Name</th>
-                        <th>Status</th>
-                        <th>Last Seen</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="wg-clients-body"></tbody>
-            </table>
-            <div id="wg-pagination" class="show-more-container" style="display: none;">
-                <span id="wg-show-more"><button class="show-more-link" onclick="showMoreWg()">show more (<span id="wg-shown-count">0</span> / <span id="wg-total-count">0</span>)</button></span><span id="wg-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessWg()">show less</button></span>
-            </div>
-            <div id="no-wg-clients" class="empty-state" style="display: none;">
-                No WireGuard peers yet. Add a peer to generate a QR code.
+            <div class="collapsible-content">
+                <table id="wireguard-clients">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Mesh IP</th>
+                            <th>DNS Name</th>
+                            <th>Status</th>
+                            <th>Last Seen</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="wg-clients-body"></tbody>
+                </table>
+                <div id="wg-pagination" class="show-more-container" style="display: none;">
+                    <span id="wg-show-more"><button class="show-more-link" onclick="showMoreWg()">show more (<span id="wg-shown-count">0</span> / <span id="wg-total-count">0</span>)</button></span><span id="wg-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessWg()">show less</button></span>
+                </div>
+                <div id="no-wg-clients" class="empty-state" style="display: none;">
+                    No WireGuard peers yet. Add a peer to generate a QR code.
+                </div>
             </div>
         </section>
 
         <section id="dns-section">
-            <h2>DNS Records</h2>
-            <table id="dns">
-                <thead>
-                    <tr>
-                        <th>Hostname</th>
-                        <th>Mesh IP</th>
-                    </tr>
-                </thead>
-                <tbody id="dns-body"></tbody>
-            </table>
-            <div id="dns-pagination" class="show-more-container" style="display: none;">
-                <span id="dns-show-more"><button class="show-more-link" onclick="showMoreDns()">show more (<span id="dns-shown-count">0</span> / <span id="dns-total-count">0</span>)</button></span><span id="dns-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessDns()">show less</button></span>
-            </div>
-            <div id="no-dns" class="empty-state" style="display: none;">
-                No DNS records yet.
+            <h2 class="section-toggle" onclick="toggleSection(this)">DNS Records</h2>
+            <div class="collapsible-content">
+                <table id="dns">
+                    <thead>
+                        <tr>
+                            <th>Hostname</th>
+                            <th>Mesh IP</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dns-body"></tbody>
+                </table>
+                <div id="dns-pagination" class="show-more-container" style="display: none;">
+                    <span id="dns-show-more"><button class="show-more-link" onclick="showMoreDns()">show more (<span id="dns-shown-count">0</span> / <span id="dns-total-count">0</span>)</button></span><span id="dns-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessDns()">show less</button></span>
+                </div>
+                <div id="no-dns" class="empty-state" style="display: none;">
+                    No DNS records yet.
+                </div>
             </div>
         </section>
 

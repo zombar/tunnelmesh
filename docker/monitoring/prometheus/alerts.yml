@@ -1,0 +1,156 @@
+groups:
+  - name: tunnelmesh-warnings
+    rules:
+      # Early warning: Elevated packet drops
+      - alert: TunnelMeshElevatedPacketDrops
+        expr: sum(rate(tunnelmesh_dropped_no_route_total[5m])) > 1 or sum(rate(tunnelmesh_dropped_no_tunnel_total[5m])) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated packet drops detected"
+          description: "Packet drop rate exceeds 1/s for 2 minutes"
+
+      # Early warning: Reconnection attempts increasing
+      - alert: TunnelMeshReconnectionAttempts
+        expr: sum(rate(tunnelmesh_reconnects_total[5m])) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Frequent reconnection attempts"
+          description: "Reconnection rate indicates unstable connections"
+
+      # Early warning: Some peers disconnected
+      - alert: TunnelMeshPeerDisconnected
+        expr: count(tunnelmesh_connection_state == 0) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Peer(s) disconnected"
+          description: "One or more peers have been disconnected for 2+ minutes"
+
+      # Early warning: Tunnel health degraded
+      - alert: TunnelMeshUnhealthyTunnels
+        expr: (sum(tunnelmesh_active_tunnels) - sum(tunnelmesh_healthy_tunnels)) > 2
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unhealthy tunnels detected"
+          description: "Multiple tunnels are active but not healthy"
+
+      # Early warning: Forwarder errors occurring
+      - alert: TunnelMeshForwarderErrors
+        expr: sum(rate(tunnelmesh_forwarder_errors_total[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Forwarder errors detected"
+          description: "Forwarder error rate is elevated"
+
+  - name: tunnelmesh-critical
+    rules:
+      # Critical: Multiple peers disconnected
+      - alert: TunnelMeshMultiplePeersDown
+        expr: count(tunnelmesh_connection_state == 0) >= 3
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Multiple peers disconnected"
+          description: "3+ peers are currently disconnected - mesh connectivity severely impacted"
+
+      # Critical: High error rate
+      - alert: TunnelMeshHighErrorRate
+        expr: sum(rate(tunnelmesh_forwarder_errors_total[1m])) > 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High forwarder error rate"
+          description: "Forwarder errors exceeding 1/s - service is degraded"
+
+      # Critical: Significant packet loss
+      - alert: TunnelMeshSignificantPacketLoss
+        expr: (sum(rate(tunnelmesh_dropped_no_route_total[1m])) + sum(rate(tunnelmesh_dropped_no_tunnel_total[1m]))) / (sum(rate(tunnelmesh_packets_sent_total[1m])) + 1) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Significant packet loss detected"
+          description: "Packet drop rate exceeds 5% of total traffic"
+
+      # Critical: No healthy tunnels for a peer
+      - alert: TunnelMeshNoHealthyTunnels
+        expr: tunnelmesh_active_tunnels > 0 and tunnelmesh_healthy_tunnels == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Peer has no healthy tunnels"
+          description: "Active tunnels exist but none are healthy - connectivity impaired"
+
+      # Critical: Relay connection lost (affects NAT traversal)
+      - alert: TunnelMeshRelayDisconnected
+        expr: tunnelmesh_relay_connected == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Relay connection lost"
+          description: "Peer lost connection to relay server - NAT traversal may fail"
+
+  - name: tunnelmesh-page
+    rules:
+      # Page: All tunnels down
+      - alert: TunnelMeshAllTunnelsDown
+        expr: sum(tunnelmesh_active_tunnels) == 0 and count(tunnelmesh_peer_info) > 1
+        for: 30s
+        labels:
+          severity: page
+        annotations:
+          summary: "All mesh tunnels are down"
+          description: "Complete mesh network failure - no active tunnels between any peers"
+
+      # Page: Majority of peers unreachable
+      - alert: TunnelMeshMajorOutage
+        expr: count(tunnelmesh_connection_state == 0) / count(tunnelmesh_connection_state) > 0.5
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "Majority of peers unreachable"
+          description: "Over 50% of peers are disconnected - major outage"
+
+      # Page: Complete relay failure (when relay is configured)
+      - alert: TunnelMeshRelayCompleteFailure
+        expr: count(tunnelmesh_relay_connected == 0) == count(tunnelmesh_relay_connected) and count(tunnelmesh_relay_connected) > 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "All peers lost relay connection"
+          description: "Complete relay server failure - NAT traversal unavailable for all peers"
+
+      # Page: No peers responding (scrape failure or complete outage)
+      - alert: TunnelMeshNoPeersResponding
+        expr: absent(tunnelmesh_peer_info)
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "No TunnelMesh peers responding"
+          description: "Cannot reach any TunnelMesh peer metrics - possible complete network outage"
+
+      # Page: WireGuard concentrator down (if enabled)
+      - alert: TunnelMeshWireGuardDown
+        expr: tunnelmesh_wireguard_enabled == 1 and tunnelmesh_wireguard_device_running == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "WireGuard concentrator device down"
+          description: "WireGuard is enabled but the device is not running"

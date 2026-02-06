@@ -973,3 +973,42 @@ footer {
         opacity: 0;
     }
 }
+
+/* Collapsible sections */
+.section-toggle {
+    cursor: pointer;
+    user-select: none;
+}
+
+.section-toggle::after {
+    content: '';
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid var(--color-text-secondary);
+    transition: transform 0.2s ease;
+    margin-left: 0.5rem;
+    vertical-align: middle;
+}
+
+.section-toggle.collapsed::after {
+    transform: rotate(-90deg);
+}
+
+.section-toggle:hover::after {
+    border-top-color: var(--color-text-primary);
+}
+
+.collapsible-content {
+    overflow: hidden;
+    transition: max-height 0.3s ease-out, opacity 0.2s ease-out;
+    max-height: 2000px;
+    opacity: 1;
+}
+
+.collapsible-content.collapsed {
+    max-height: 0;
+    opacity: 0;
+}

@@ -10,6 +10,16 @@ const TOAST_DURATION_MS = 4000;         // Toast notification duration
 const TOAST_FADE_MS = 300;              // Toast fade-out animation duration
 const QUANTIZE_INTERVAL_MS = 10000;     // Timestamp quantization interval
 
+// Toggle collapsible section
+function toggleSection(header) {
+    header.classList.toggle('collapsed');
+    const content = header.nextElementSibling;
+    if (content?.classList.contains('collapsible-content')) {
+        content.classList.toggle('collapsed');
+    }
+}
+window.toggleSection = toggleSection;
+
 // Cached DOM elements (populated on DOMContentLoaded)
 const dom = {};
 

@@ -69,6 +69,7 @@ services:
       - '--web.route-prefix=/prometheus/'
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - ./monitoring/targets:/targets:ro
       - prometheus-data:/prometheus
     depends_on:
