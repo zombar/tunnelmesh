@@ -629,8 +629,10 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 			if s.cfg.Locations && stats.Location != nil && stats.Location.IsSet() {
 				peer.peer.Location = stats.Location
 			}
-			// Store reported latency metrics
-			peer.coordinatorRTT = stats.CoordinatorRTTMs
+			// Store reported latency metrics (only update if peer reported a value)
+			if stats.CoordinatorRTTMs > 0 {
+				peer.coordinatorRTT = stats.CoordinatorRTTMs
+			}
 			if stats.PeerLatencies != nil {
 				peer.peerLatencies = stats.PeerLatencies
 			}

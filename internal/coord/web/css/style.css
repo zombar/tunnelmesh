@@ -780,16 +780,20 @@ td {
     right: 0;
     bottom: 0;
     pointer-events: none; /* Allow text selection through overlay */
-    /* Noise/stipple pattern using multiple radial gradients */
+    /* Dense noise/stipple pattern using multiple radial gradients */
     background-image:
-        radial-gradient(circle at 20% 30%, var(--color-bg-primary) 1px, transparent 1px),
-        radial-gradient(circle at 60% 70%, var(--color-bg-primary) 1px, transparent 1px),
-        radial-gradient(circle at 80% 20%, var(--color-bg-primary) 1px, transparent 1px),
-        radial-gradient(circle at 40% 80%, var(--color-bg-primary) 1px, transparent 1px),
-        radial-gradient(circle at 10% 60%, var(--color-bg-primary) 1px, transparent 1px),
-        radial-gradient(circle at 90% 50%, var(--color-bg-primary) 1px, transparent 1px);
-    background-size: 8px 8px, 10px 10px, 7px 9px, 9px 7px, 11px 11px, 6px 8px;
-    opacity: 0.7;
+        radial-gradient(circle at 15% 25%, var(--color-bg-primary) 1.5px, transparent 1.5px),
+        radial-gradient(circle at 45% 15%, var(--color-bg-primary) 1.5px, transparent 1.5px),
+        radial-gradient(circle at 75% 35%, var(--color-bg-primary) 1.5px, transparent 1.5px),
+        radial-gradient(circle at 25% 55%, var(--color-bg-primary) 1.5px, transparent 1.5px),
+        radial-gradient(circle at 55% 45%, var(--color-bg-primary) 1.5px, transparent 1.5px),
+        radial-gradient(circle at 85% 65%, var(--color-bg-primary) 1.5px, transparent 1.5px),
+        radial-gradient(circle at 35% 85%, var(--color-bg-primary) 1.5px, transparent 1.5px),
+        radial-gradient(circle at 65% 75%, var(--color-bg-primary) 1.5px, transparent 1.5px),
+        radial-gradient(circle at 95% 95%, var(--color-bg-primary) 1.5px, transparent 1.5px),
+        radial-gradient(circle at 5% 5%, var(--color-bg-primary) 1.5px, transparent 1.5px);
+    background-size: 4px 4px, 5px 5px, 4px 6px, 6px 4px, 5px 5px, 4px 4px, 6px 5px, 5px 6px, 4px 5px, 5px 4px;
+    opacity: 0.85;
 }
 
 /* Reveal on hover for usability */
