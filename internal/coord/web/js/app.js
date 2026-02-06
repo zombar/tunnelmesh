@@ -1155,12 +1155,29 @@ async function checkPrometheusAvailable() {
             processAlertData(data);
             // Start polling
             setInterval(fetchAlerts, POLL_INTERVAL_MS);
+            // Enable chart wrappers as clickable links to Grafana
+            enableChartLinks();
         }
     } catch (err) {
         // Prometheus not available
         console.debug('Prometheus not available:', err.message);
         state.alertsEnabled = false;
     }
+}
+
+function enableChartLinks() {
+    const throughputWrapper = document.getElementById('throughput-wrapper');
+    const packetsWrapper = document.getElementById('packets-wrapper');
+    const grafanaUrl = '/grafana/';
+
+    [throughputWrapper, packetsWrapper].forEach(wrapper => {
+        if (wrapper) {
+            wrapper.classList.add('clickable');
+            wrapper.addEventListener('click', () => {
+                window.open(grafanaUrl, '_blank');
+            });
+        }
+    });
 }
 
 async function fetchAlerts() {

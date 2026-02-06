@@ -140,6 +140,17 @@ header h1 {
     padding: 1rem;
     position: relative;
     min-width: 0;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.chart-wrapper.clickable {
+    cursor: pointer;
+}
+
+.chart-wrapper.clickable:hover {
+    background: var(--color-card-hover-bg);
+    border-color: var(--color-card-hover-border);
+    border-width: 2px;
 }
 
 .chart-wrapper h3 {
