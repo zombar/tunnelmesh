@@ -32,6 +32,10 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
+  - job_name: 'tunnelmesh-coordinator'
+    static_configs:
+      - targets: ['localhost:${coordinator_port}']
+
   - job_name: 'tunnelmesh-peers'
     scheme: https
     tls_config:
