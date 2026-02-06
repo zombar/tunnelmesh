@@ -128,16 +128,6 @@ function extractRegion(peer) {
     return region;
 }
 
-// Check if source node can reach target node
-function canNodeReach(source, target) {
-    // Offline nodes can't communicate
-    if (!source.online || !target.online) {
-        return false;
-    }
-    // All online nodes can reach each other (direct if connectable, else via relay)
-    return true;
-}
-
 // =============================================================================
 // Visual Slot - represents a node's position on one side (left or right)
 // =============================================================================
@@ -160,6 +150,7 @@ class VisualSlot {
 
 // =============================================================================
 // Layout Algorithm
+// Selected node centered, connected peers distributed evenly on both sides
 // =============================================================================
 
 function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo, slots) {
@@ -190,70 +181,37 @@ function calculateLayout(nodes, selectedId, canvasWidth, canvasHeight, stackInfo
     centerSlot.targetY = centerY;
     slots.push(centerSlot);
 
-    // Bidirectional mesh visualization:
-    // Left: nodes that can reach selected (incoming), plus exit clients using selected as exit
-    // Right: nodes that selected can reach (outgoing), plus selected's exit node
-    const incoming = [];
-    const outgoing = [];
-    const incomingSet = new Set();
-    const outgoingSet = new Set();
+    // Collect all connected (online) peers
+    const connected = [];
 
     for (const [id, node] of nodes) {
         if (id === selectedId) continue;
         if (!node.online) continue;
-
-        if (canNodeReach(node, selectedNode)) {
-            incoming.push(node);
-            incomingSet.add(id);
-        }
-        if (canNodeReach(selectedNode, node)) {
-            outgoing.push(node);
-            outgoingSet.add(id);
-        }
+        connected.push(node);
     }
 
-    // Always include selected node's exit node in outgoing (if configured and exists)
-    if (selectedNode.exitNode && nodes.has(selectedNode.exitNode) && !outgoingSet.has(selectedNode.exitNode)) {
-        const exitNodeObj = nodes.get(selectedNode.exitNode);
-        outgoing.push(exitNodeObj);
-        outgoingSet.add(selectedNode.exitNode);
-    }
-
-    // Always include exit clients (nodes using selected as their exit) in incoming
-    if (selectedNode.exitClients) {
-        for (const clientName of selectedNode.exitClients) {
-            if (nodes.has(clientName) && !incomingSet.has(clientName)) {
-                const clientNode = nodes.get(clientName);
-                if (clientNode.online) {
-                    incoming.push(clientNode);
-                    incomingSet.add(clientName);
-                }
-            }
+    // Sort: exit nodes first (selected's exit node, then other exit-capable nodes), then by name
+    connected.sort((a, b) => {
+        // Selected's exit node goes first
+        if (selectedNode.exitNode) {
+            if (a.name === selectedNode.exitNode) return -1;
+            if (b.name === selectedNode.exitNode) return 1;
         }
-    }
-
-    // Sort: exit nodes first, then by name
-    // For outgoing: selected's exit node first, then other exit-capable nodes, then rest
-    // For incoming: nodes using selected as exit first, then other exit-capable nodes, then rest
-    const sortWithExitPriority = (selectedExitNode, isIncoming) => (a, b) => {
-        // Selected's exit node goes first (only for outgoing)
-        if (!isIncoming && selectedExitNode) {
-            if (a.name === selectedExitNode) return -1;
-            if (b.name === selectedExitNode) return 1;
-        }
-        // Exit-capable nodes (allowsExitTraffic) come next
+        // Exit-capable nodes come next
         if (a.allowsExitTraffic && !b.allowsExitTraffic) return -1;
         if (!a.allowsExitTraffic && b.allowsExitTraffic) return 1;
         // Then sort by name
         return a.name.localeCompare(b.name);
-    };
+    });
 
-    incoming.sort(sortWithExitPriority(null, true));
-    outgoing.sort(sortWithExitPriority(selectedNode.exitNode, false));
+    // Split connected nodes evenly between left and right sides
+    const midpoint = Math.ceil(connected.length / 2);
+    const leftNodes = connected.slice(0, midpoint);
+    const rightNodes = connected.slice(midpoint);
 
     // Create slots for each column
-    layoutColumn(incoming, centerX - columnSpacing, centerY, stackInfo.left, slots, 'left');
-    layoutColumn(outgoing, centerX + columnSpacing, centerY, stackInfo.right, slots, 'right');
+    layoutColumn(leftNodes, centerX - columnSpacing, centerY, stackInfo.left, slots, 'left');
+    layoutColumn(rightNodes, centerX + columnSpacing, centerY, stackInfo.right, slots, 'right');
 }
 
 function layoutColumn(nodes, centerX, centerY, stackInfo, slots, side) {
@@ -880,11 +838,11 @@ class NodeVisualizer {
 
             const isLeft = slot.side === 'left';
 
-            // Check if this is an exit path connection (only for outbound/right side)
-            // Exit path is golden only when: slot is on right AND it's the center node's exit node
+            // Check if this is an exit path connection
+            // Exit path is golden when this node is the center node's exit node
             const centerNode = centerSlot.node;
             const otherNode = slot.node;
-            const isExitPath = !isLeft && (centerNode.exitNode === otherNode.name);
+            const isExitPath = centerNode.exitNode === otherNode.name;
 
             ctx.beginPath();
             ctx.strokeStyle = isExitPath ? COLORS.exitConnection : COLORS.connectionHighlight;
