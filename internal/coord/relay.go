@@ -632,6 +632,7 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 			// Store reported latency metrics (only update if peer reported a value)
 			if stats.CoordinatorRTTMs > 0 {
 				peer.coordinatorRTT = stats.CoordinatorRTTMs
+				log.Debug().Str("peer", sourcePeer).Int64("rtt_ms", stats.CoordinatorRTTMs).Msg("updated peer coordinator RTT")
 			}
 			if stats.PeerLatencies != nil {
 				peer.peerLatencies = stats.PeerLatencies
