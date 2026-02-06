@@ -176,5 +176,11 @@ variable "monitoring_enabled" {
 variable "prometheus_retention_days" {
   description = "Prometheus data retention in days"
   type        = number
-  default     = 30
+  default     = 3
+}
+
+variable "loki_retention_days" {
+  description = "Loki log retention in days"
+  type        = number
+  default     = 3
 }

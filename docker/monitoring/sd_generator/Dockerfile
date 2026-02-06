@@ -1,8 +1,13 @@
 FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
-COPY main.go .
-RUN go build -o sd-generator main.go
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd/tunnelmesh-prometheus-sd-generator/ ./cmd/tunnelmesh-prometheus-sd-generator/
+COPY internal/promsd/ ./internal/promsd/
+
+RUN go build -o sd-generator ./cmd/tunnelmesh-prometheus-sd-generator
 
 FROM alpine:latest
 

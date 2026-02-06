@@ -132,6 +132,7 @@ module "node" {
   # Monitoring (coordinator only)
   monitoring_enabled        = lookup(each.value, "coordinator", false) && var.monitoring_enabled
   prometheus_retention_days = var.prometheus_retention_days
+  loki_retention_days       = var.loki_retention_days
 
   tags = concat(
     ["tunnelmesh"],
