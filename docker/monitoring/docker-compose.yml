@@ -1,5 +1,8 @@
 version: '3.8'
 
+# This monitoring stack is designed to run on a host that is part of the TunnelMesh network.
+# Prometheus and SD-generator use host networking to access mesh IPs (10.99.x.x).
+
 services:
   prometheus:
     image: prom/prometheus:latest
@@ -13,11 +16,9 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./targets:/targets:ro
       - prometheus_data:/prometheus
-    ports:
-      - "9090:9090"
+    # Host networking required to reach mesh IPs via TUN interface
+    network_mode: host
     restart: unless-stopped
-    networks:
-      - monitoring
 
   sd-generator:
     build:
@@ -33,9 +34,9 @@ services:
       - TLS_SKIP_VERIFY=true
     volumes:
       - ./targets:/targets
+    # Host networking to resolve coord.tunnelmesh via mesh DNS
+    network_mode: host
     restart: unless-stopped
-    networks:
-      - monitoring
 
   grafana:
     image: grafana/grafana:latest
@@ -51,18 +52,10 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
-    ports:
-      - "3000:3000"
-    depends_on:
-      - prometheus
+    # Host networking so it can reach Prometheus on localhost:9090
+    network_mode: host
     restart: unless-stopped
-    networks:
-      - monitoring
 
 volumes:
   prometheus_data:
   grafana_data:
-
-networks:
-  monitoring:
-    driver: bridge
