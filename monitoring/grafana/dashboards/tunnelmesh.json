@@ -1194,7 +1194,7 @@
           "refId": "A"
         }
       ],
-      "title": "Coordinator View: Peer RTT",
+      "title": "Coordinator Latency by Peer",
       "type": "timeseries"
     },
     {
