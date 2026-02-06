@@ -40,11 +40,18 @@ type serverStats struct {
 }
 
 // Server is the coordination server that manages peer registration and discovery.
+//
+// The server uses two separate HTTP muxes for security isolation:
+//   - mux (port 8080): Public API for peer registration, exposed to internet
+//   - adminMux (port 443 on mesh IP): Private admin interface, only accessible from within mesh
+//
+// This separation ensures the admin interface (dashboards, monitoring, config) is never
+// exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
 	cfg          *config.ServerConfig
-	mux          *http.ServeMux
-	adminMux     *http.ServeMux // Separate mux for admin routes (used with join_mesh)
-	adminServer  *http.Server   // Separate admin HTTP server (HTTPS on mesh IP)
+	mux          *http.ServeMux // Public coordination API (peer registration, heartbeats)
+	adminMux     *http.ServeMux // Private admin interface (dashboards, monitoring) - mesh-only
+	adminServer  *http.Server   // HTTPS server for adminMux, bound to mesh IP only
 	peers        map[string]*peerInfo
 	peersMu      sync.RWMutex
 	ipAlloc      *ipAllocator
