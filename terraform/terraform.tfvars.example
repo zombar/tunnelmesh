@@ -200,6 +200,30 @@ nodes = {
 # by their public IP addresses. This is disabled by default for privacy.
 # locations_enabled = false
 
+# ============================================================================
+# MONITORING SETTINGS
+# ============================================================================
+
+# Enable monitoring stack (Prometheus, Grafana, Loki) on coordinator node
+# Includes: Prometheus for metrics, Grafana for dashboards, Loki for logs
+# monitoring_enabled = false
+
+# Prometheus data retention in days (default: 3)
+# prometheus_retention_days = 3
+
+# Loki log retention in days (default: 3)
+# loki_retention_days = 3
+
+# ============================================================================
+# AUTO-UPDATE SETTINGS
+# ============================================================================
+
+# Enable automatic updates on all nodes
+# auto_update_enabled = true
+
+# Schedule for auto-updates (systemd OnCalendar format: hourly, daily, weekly)
+# auto_update_schedule = "hourly"
+
 # GitHub owner for binary downloads
 # github_owner = "zombar"
 

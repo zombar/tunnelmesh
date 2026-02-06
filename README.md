@@ -524,6 +524,29 @@ Deploy the coordination server to DigitalOcean App Platform using Terraform.
 | `mesh_cidr` | Mesh network CIDR | `10.99.0.0/16` |
 | `region` | DO region | `ams` |
 | `locations_enabled` | Enable node location tracking | `false` |
+| `monitoring_enabled` | Enable monitoring stack (Prometheus, Grafana, Loki) | `false` |
+| `prometheus_retention_days` | Prometheus data retention in days | `3` |
+| `loki_retention_days` | Loki log retention in days | `3` |
+| `auto_update_enabled` | Enable automatic binary updates | `true` |
+| `auto_update_schedule` | Update schedule (hourly, daily, weekly) | `hourly` |
+
+### Monitoring Stack
+
+When `monitoring_enabled = true` is set in terraform.tfvars, the coordinator node is deployed with a full monitoring stack:
+
+- **Prometheus** - Metrics collection and alerting (scrapes peer metrics via mesh network)
+- **Grafana** - Dashboards and visualization (accessible at `/grafana/`)
+- **Loki** - Log aggregation (localhost:3100)
+- **SD Generator** - Automatic peer discovery for Prometheus targets
+
+All monitoring services listen on localhost only and are accessed through the nginx reverse proxy within the mesh network.
+
+The monitoring stack includes pre-configured alert rules for:
+- Peer disconnections and connectivity issues
+- Packet drops and error rates
+- WireGuard and relay status
+
+Access Grafana at `https://this.tunnelmesh/grafana/` from within the mesh network.
 
 ### Node Location Tracking
 
