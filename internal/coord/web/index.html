@@ -31,6 +31,38 @@
         </div>
     </header>
 
+    <section id="alerts-section" style="display: none;">
+        <div class="alert-tiles">
+            <div class="alert-tile warning" id="alert-tile-warning">
+                <svg class="alert-sparkline" id="alert-sparkline-warning" viewBox="0 0 100 40" preserveAspectRatio="none">
+                    <path class="sparkline-path" d="M0,40 L100,40"/>
+                </svg>
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-warning">0</span>
+                    <span class="alert-label">Warning</span>
+                </div>
+            </div>
+            <div class="alert-tile critical" id="alert-tile-critical">
+                <svg class="alert-sparkline" id="alert-sparkline-critical" viewBox="0 0 100 40" preserveAspectRatio="none">
+                    <path class="sparkline-path" d="M0,40 L100,40"/>
+                </svg>
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-critical">0</span>
+                    <span class="alert-label">Critical</span>
+                </div>
+            </div>
+            <div class="alert-tile page" id="alert-tile-page">
+                <svg class="alert-sparkline" id="alert-sparkline-page" viewBox="0 0 100 40" preserveAspectRatio="none">
+                    <path class="sparkline-path" d="M0,40 L100,40"/>
+                </svg>
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-page">0</span>
+                    <span class="alert-label">Page</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <section id="visualizer-section">
         <div class="visualizer-card">
             <div class="visualizer-header section-toggle" onclick="toggleSection(this)">

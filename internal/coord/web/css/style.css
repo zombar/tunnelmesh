@@ -1020,3 +1020,127 @@ footer {
     max-height: 0;
     opacity: 0;
 }
+
+/* Alert tiles section */
+#alerts-section {
+    max-width: 1400px;
+    margin: 1.5rem auto 0;
+    padding: 0 2rem;
+    width: 100%;
+}
+
+.alert-tiles {
+    display: flex;
+    gap: 1rem;
+}
+
+.alert-tile {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    border-radius: 6px;
+    border: 1px solid var(--color-border-primary);
+    background: var(--color-bg-secondary);
+    min-height: 80px;
+}
+
+.alert-sparkline {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0.3;
+}
+
+.alert-sparkline .sparkline-path {
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.alert-tile.warning .sparkline-path {
+    stroke: var(--color-accent-orange);
+}
+
+.alert-tile.critical .sparkline-path {
+    stroke: var(--color-accent-red);
+}
+
+.alert-tile.page .sparkline-path {
+    stroke: #a855f7;
+}
+
+.alert-content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    padding: 1rem;
+}
+
+.alert-count {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.alert-tile.warning .alert-count {
+    color: var(--color-accent-orange);
+}
+
+.alert-tile.critical .alert-count {
+    color: var(--color-accent-red);
+}
+
+.alert-tile.page .alert-count {
+    color: #a855f7;
+}
+
+.alert-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.25rem;
+}
+
+/* Highlight tile when alerts are firing */
+.alert-tile.warning.active {
+    border-color: var(--color-accent-orange);
+    background: rgba(210, 153, 34, 0.1);
+}
+
+.alert-tile.critical.active {
+    border-color: var(--color-accent-red);
+    background: rgba(248, 81, 73, 0.1);
+}
+
+.alert-tile.page.active {
+    border-color: #a855f7;
+    background: rgba(168, 85, 247, 0.1);
+}
+
+@media (max-width: 900px) {
+    #alerts-section {
+        padding: 0 1rem;
+        margin: 1rem auto 0;
+    }
+
+    .alert-tiles {
+        gap: 0.5rem;
+    }
+
+    .alert-tile {
+        min-height: 60px;
+    }
+
+    .alert-count {
+        font-size: 1.5rem;
+    }
+}

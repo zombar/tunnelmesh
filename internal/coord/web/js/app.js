@@ -68,7 +68,14 @@ const state = {
     peersVisibleCount: ROWS_PER_PAGE,
     dnsVisibleCount: ROWS_PER_PAGE,
     wgVisibleCount: ROWS_PER_PAGE,
-    currentPeers: []  // Store current peers data for pagination
+    currentPeers: [],  // Store current peers data for pagination
+    // Alerts state
+    alertsEnabled: false,
+    alertHistory: {
+        warning: [],
+        critical: [],
+        page: []
+    }
 };
 
 // Green gradient for chart lines (dim to bright based on outlier status)
@@ -1133,6 +1140,106 @@ async function fetchWGClients() {
     }
 }
 
+// Prometheus alerts polling
+const MAX_ALERT_HISTORY = 30;
+
+async function checkPrometheusAvailable() {
+    try {
+        const resp = await fetch('prometheus/api/v1/status/config', { method: 'HEAD' });
+        if (resp.ok || resp.status === 405) {
+            state.alertsEnabled = true;
+            document.getElementById('alerts-section').style.display = 'block';
+            fetchAlerts();
+            setInterval(fetchAlerts, POLL_INTERVAL_MS);
+        }
+    } catch (err) {
+        // Prometheus not available
+        state.alertsEnabled = false;
+    }
+}
+
+async function fetchAlerts() {
+    if (!state.alertsEnabled) return;
+
+    try {
+        const resp = await fetch('prometheus/api/v1/alerts');
+        if (!resp.ok) return;
+
+        const data = await resp.json();
+        const alerts = data.data?.alerts || [];
+
+        // Count alerts by severity
+        const counts = { warning: 0, critical: 0, page: 0 };
+        for (const alert of alerts) {
+            if (alert.state === 'firing') {
+                const severity = alert.labels?.severity || 'warning';
+                if (counts.hasOwnProperty(severity)) {
+                    counts[severity]++;
+                }
+            }
+        }
+
+        // Update history for sparklines
+        for (const severity of ['warning', 'critical', 'page']) {
+            state.alertHistory[severity].push(counts[severity]);
+            if (state.alertHistory[severity].length > MAX_ALERT_HISTORY) {
+                state.alertHistory[severity].shift();
+            }
+        }
+
+        updateAlertTiles(counts);
+    } catch (err) {
+        console.error('Failed to fetch alerts:', err);
+    }
+}
+
+function updateAlertTiles(counts) {
+    for (const severity of ['warning', 'critical', 'page']) {
+        const countEl = document.getElementById(`alert-count-${severity}`);
+        const tileEl = document.getElementById(`alert-tile-${severity}`);
+        const sparklineEl = document.getElementById(`alert-sparkline-${severity}`);
+
+        if (countEl) countEl.textContent = counts[severity];
+
+        if (tileEl) {
+            if (counts[severity] > 0) {
+                tileEl.classList.add('active');
+            } else {
+                tileEl.classList.remove('active');
+            }
+        }
+
+        if (sparklineEl) {
+            updateAlertSparkline(sparklineEl, state.alertHistory[severity]);
+        }
+    }
+}
+
+function updateAlertSparkline(svgEl, data) {
+    if (!data.length) return;
+
+    const width = 100;
+    const height = 40;
+    const padding = 2;
+
+    const maxVal = Math.max(...data, 1);
+    const points = data.map((val, i) => {
+        const x = (i / (MAX_ALERT_HISTORY - 1)) * width;
+        const y = height - padding - ((val / maxVal) * (height - 2 * padding));
+        return `${x},${y}`;
+    });
+
+    // Create area path (filled below the line)
+    const pathEl = svgEl.querySelector('.sparkline-path');
+    if (pathEl && points.length > 1) {
+        const linePath = `M${points.join(' L')}`;
+        const areaPath = `${linePath} L${width},${height} L0,${height} Z`;
+        pathEl.setAttribute('d', areaPath);
+        pathEl.style.fill = 'currentColor';
+        pathEl.style.fillOpacity = '0.2';
+    }
+}
+
 function updateWGClientsTable() {
     // Check if concentrator is connected
     if (!state.wgConcentratorConnected) {
@@ -1401,6 +1508,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Check if WireGuard is enabled and setup handlers
     checkWireGuardStatus();
     setInterval(fetchWGClients, POLL_INTERVAL_MS);
+
+    // Check if Prometheus is available for alerts
+    checkPrometheusAvailable();
 
     // Add client button handler
     if (dom.addWgClientBtn) {
