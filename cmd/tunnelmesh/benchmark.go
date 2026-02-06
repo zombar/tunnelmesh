@@ -27,6 +27,9 @@ var (
 	chaosLatency    time.Duration
 	chaosJitter     time.Duration
 	chaosBandwidth  string
+
+	// lookupHost is the function used to resolve hostnames. It can be overridden in tests.
+	lookupHost = net.DefaultResolver.LookupHost
 )
 
 func newBenchmarkCmd() *cobra.Command {
@@ -118,8 +121,8 @@ func runBenchmark(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config (is the mesh daemon running?): %w", err)
 	}
 
-	// Get peer's mesh IP from the daemon
-	peerIP, err := getPeerMeshIP(meshCfg, peerName)
+	// Get peer's mesh IP via DNS
+	peerIP, err := getPeerMeshIP(peerName)
 	if err != nil {
 		return err
 	}
@@ -174,16 +177,16 @@ func runBenchmark(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func getPeerMeshIP(cfg *config.PeerConfig, peerName string) (string, error) {
-	// For now, we'll resolve the peer name using DNS
+func getPeerMeshIP(peerName string) (string, error) {
+	// Resolve the peer name using DNS
 	// The mesh DNS should resolve peer-name.tunnelmesh to its mesh IP
 	hostname := peerName + ".tunnelmesh"
 
 	// Try to resolve using the system resolver (which should use mesh DNS)
-	addrs, err := net.DefaultResolver.LookupHost(context.Background(), hostname)
+	addrs, err := lookupHost(context.Background(), hostname)
 	if err != nil {
 		// Fallback: try direct hostname
-		addrs, err = net.DefaultResolver.LookupHost(context.Background(), peerName)
+		addrs, err = lookupHost(context.Background(), peerName)
 		if err != nil {
 			return "", fmt.Errorf("cannot resolve peer %q: is the mesh daemon running?", peerName)
 		}
