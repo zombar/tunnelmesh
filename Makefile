@@ -7,6 +7,7 @@
 
 # Build variables
 BINARY_NAME=tunnelmesh
+SD_GENERATOR_NAME=tunnelmesh-prometheus-sd-generator
 BUILD_DIR=bin
 GO=go
 
@@ -81,13 +82,19 @@ release-all:
 		./cmd/tunnelmesh; \
 		echo "Built: $(BINARY_NAME)-$${platform%/*}-$${platform#*/}"; \
 	done
+	@for platform in $(PLATFORMS); do \
+		GOOS=$${platform%/*} GOARCH=$${platform#*/} \
+		$(GO) build $(LDFLAGS) -o $(BUILD_DIR)/release/$(SD_GENERATOR_NAME)-$${platform%/*}-$${platform#*/}$$([ "$${platform%/*}" = "windows" ] && echo ".exe") \
+		./cmd/$(SD_GENERATOR_NAME); \
+		echo "Built: $(SD_GENERATOR_NAME)-$${platform%/*}-$${platform#*/}"; \
+	done
 	@echo "Release binaries in $(BUILD_DIR)/release/"
 	@$(MAKE) release-checksums
 
 # Generate SHA256 checksums for release binaries
 release-checksums:
 	@echo "Generating checksums..."
-	@cd $(BUILD_DIR)/release && shasum -a 256 $(BINARY_NAME)-* > checksums.txt
+	@cd $(BUILD_DIR)/release && shasum -a 256 tunnelmesh-darwin-* tunnelmesh-linux-* tunnelmesh-windows-* tunnelmesh-prometheus-sd-generator-* 2>/dev/null | sort -u > checksums.txt
 	@echo "Checksums written to $(BUILD_DIR)/release/checksums.txt"
 
 # Build release for current platform

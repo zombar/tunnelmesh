@@ -86,8 +86,8 @@ services:
 
   sd-generator:
     build:
-      context: ./monitoring/sd_generator
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/monitoring/sd_generator/Dockerfile
     container_name: tunnelmesh-sd-generator
     # Share server's network to reach coord API and resolve mesh DNS
     network_mode: "service:server"

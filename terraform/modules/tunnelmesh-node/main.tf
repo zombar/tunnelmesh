@@ -30,30 +30,20 @@ locals {
     var.tags,
     var.coordinator_enabled ? ["coordinator"] : [],
     var.peer_enabled ? ["peer"] : [],
-    var.wireguard_enabled ? ["wireguard"] : []
+    var.wireguard_enabled ? ["wireguard"] : [],
+    var.monitoring_enabled ? ["monitoring"] : []
   )
 
   # SSL email defaults to admin@domain if not specified
   ssl_email = var.ssl_email != "" ? var.ssl_email : "admin@${var.domain}"
-}
 
-# The droplet
-resource "digitalocean_droplet" "node" {
-  name     = var.name
-  region   = var.region
-  size     = var.droplet_size
-  image    = var.droplet_image
-  ssh_keys = var.ssh_key_ids
-
-  monitoring = true
-  tags       = local.feature_tags
-
-  user_data = templatefile("${path.module}/templates/cloud-init.sh.tpl", {
-    # Feature flags
+  # Common template variables for all fragments
+  common_vars = {
     coordinator_enabled = var.coordinator_enabled
     peer_enabled        = var.peer_enabled
     wireguard_enabled   = var.wireguard_enabled
     ssl_enabled         = var.ssl_enabled && var.coordinator_enabled
+    monitoring_enabled  = var.monitoring_enabled
 
     # Names and domains
     node_name     = var.name
@@ -77,7 +67,7 @@ resource "digitalocean_droplet" "node" {
     exit_node          = var.exit_node
     allow_exit_traffic = var.allow_exit_traffic
 
-    # Location settings (manual GPS override)
+    # Location settings
     location_latitude  = var.location_latitude
     location_longitude = var.location_longitude
     location_city      = var.location_city
@@ -97,7 +87,69 @@ resource "digitalocean_droplet" "node" {
     # Auto-update settings
     auto_update_enabled  = var.auto_update_enabled
     auto_update_schedule = var.auto_update_schedule
+  }
+
+  # Monitoring-specific variables
+  monitoring_vars = merge(local.common_vars, {
+    prometheus_url            = var.monitoring_enabled ? "http://localhost:9090" : ""
+    grafana_url               = var.monitoring_enabled ? "http://localhost:3000" : ""
+    prometheus_version        = var.prometheus_version
+    loki_version              = var.loki_version
+    prometheus_retention_days = var.prometheus_retention_days
+    loki_retention_days       = var.loki_retention_days
+    loki_enabled              = var.monitoring_enabled
   })
+}
+
+# The droplet
+resource "digitalocean_droplet" "node" {
+  name     = var.name
+  region   = var.region
+  size     = var.droplet_size
+  image    = var.droplet_image
+  ssh_keys = var.ssh_key_ids
+
+  monitoring = true
+  tags       = local.feature_tags
+
+  user_data = join("\n", [
+    templatefile("${path.module}/templates/fragments/00-header.sh.tpl", local.common_vars),
+    templatefile("${path.module}/templates/fragments/10-base-setup.sh.tpl", local.common_vars),
+    templatefile("${path.module}/templates/fragments/20-binary-download.sh.tpl", local.common_vars),
+
+    # Coordinator config (includes monitoring URLs when enabled)
+    var.coordinator_enabled ? templatefile("${path.module}/templates/fragments/30-coordinator-config.sh.tpl", local.monitoring_vars) : "",
+
+    # Peer-only config (when coordinator not enabled)
+    templatefile("${path.module}/templates/fragments/31-peer-config.sh.tpl", local.common_vars),
+
+    # Nginx/SSL (coordinator only)
+    var.coordinator_enabled && var.ssl_enabled ? templatefile("${path.module}/templates/fragments/40-nginx-ssl.sh.tpl", local.common_vars) : "",
+
+    # Firewall
+    templatefile("${path.module}/templates/fragments/50-firewall.sh.tpl", local.common_vars),
+
+    # Sysctl (IP forwarding)
+    templatefile("${path.module}/templates/fragments/60-sysctl.sh.tpl", local.common_vars),
+
+    # Service start
+    templatefile("${path.module}/templates/fragments/70-service-install.sh.tpl", local.common_vars),
+
+    # Monitoring (coordinator only, when enabled)
+    var.coordinator_enabled && var.monitoring_enabled ? templatefile("${path.module}/templates/fragments/80-monitoring/monitoring-common.sh.tpl", local.monitoring_vars) : "",
+    var.coordinator_enabled && var.monitoring_enabled ? templatefile("${path.module}/templates/fragments/80-monitoring/prometheus.sh.tpl", local.monitoring_vars) : "",
+    var.coordinator_enabled && var.monitoring_enabled ? templatefile("${path.module}/templates/fragments/80-monitoring/sd-generator.sh.tpl", local.monitoring_vars) : "",
+    var.coordinator_enabled && var.monitoring_enabled ? templatefile("${path.module}/templates/fragments/80-monitoring/loki.sh.tpl", local.monitoring_vars) : "",
+    var.coordinator_enabled && var.monitoring_enabled ? templatefile("${path.module}/templates/fragments/80-monitoring/grafana.sh.tpl", local.monitoring_vars) : "",
+
+    # SSL certificate (after services are running)
+    var.coordinator_enabled && var.ssl_enabled ? templatefile("${path.module}/templates/fragments/90-ssl-cert.sh.tpl", local.common_vars) : "",
+
+    # Auto-update timer
+    templatefile("${path.module}/templates/fragments/99-auto-update.sh.tpl", local.common_vars),
+
+    "echo '=== TunnelMesh Node Setup Complete ==='",
+  ])
 }
 
 # Reserved IP for static addressing

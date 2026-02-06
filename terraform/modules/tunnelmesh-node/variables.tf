@@ -224,3 +224,35 @@ variable "auto_update_schedule" {
   type        = string
   default     = "hourly"
 }
+
+# --- Monitoring Settings ---
+
+variable "monitoring_enabled" {
+  description = "Enable monitoring stack (Prometheus, Grafana, Loki, SD Generator) on coordinator nodes"
+  type        = bool
+  default     = false
+}
+
+variable "prometheus_version" {
+  description = "Prometheus version to install"
+  type        = string
+  default     = "3.8.0"
+}
+
+variable "loki_version" {
+  description = "Loki version to install"
+  type        = string
+  default     = "3.6.3"
+}
+
+variable "loki_retention_days" {
+  description = "Loki log retention in days"
+  type        = number
+  default     = 3
+}
+
+variable "prometheus_retention_days" {
+  description = "Prometheus data retention in days"
+  type        = number
+  default     = 3
+}

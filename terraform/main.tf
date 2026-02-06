@@ -129,6 +129,11 @@ module "node" {
   auto_update_enabled  = var.auto_update_enabled
   auto_update_schedule = var.auto_update_schedule
 
+  # Monitoring (coordinator only)
+  monitoring_enabled        = lookup(each.value, "coordinator", false) && var.monitoring_enabled
+  prometheus_retention_days = var.prometheus_retention_days
+  loki_retention_days       = var.loki_retention_days
+
   tags = concat(
     ["tunnelmesh"],
     lookup(each.value, "coordinator", false) ? ["coordinator"] : [],

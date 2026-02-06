@@ -162,3 +162,25 @@ variable "auto_update_schedule" {
   type        = string
   default     = "hourly"
 }
+
+# ============================================================================
+# MONITORING SETTINGS
+# ============================================================================
+
+variable "monitoring_enabled" {
+  description = "Enable monitoring stack (Prometheus, Grafana, Loki) on coordinator"
+  type        = bool
+  default     = false
+}
+
+variable "prometheus_retention_days" {
+  description = "Prometheus data retention in days"
+  type        = number
+  default     = 3
+}
+
+variable "loki_retention_days" {
+  description = "Loki log retention in days"
+  type        = number
+  default     = 3
+}
