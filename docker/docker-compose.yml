@@ -68,9 +68,9 @@ services:
       - '--web.external-url=/prometheus/'
       - '--web.route-prefix=/prometheus/'
     volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
-      - ./monitoring/targets:/targets:ro
+      - ../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ../monitoring/targets:/targets:ro
       - prometheus-data:/prometheus
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/prometheus/-/ready"]
@@ -87,7 +87,7 @@ services:
   sd-generator:
     build:
       context: ..
-      dockerfile: docker/monitoring/sd_generator/Dockerfile
+      dockerfile: monitoring/sd_generator/Dockerfile
     container_name: tunnelmesh-sd-generator
     # Share server's network to reach coord API and resolve mesh DNS
     network_mode: "service:server"
@@ -99,7 +99,7 @@ services:
       - METRICS_PORT=9443
       - TLS_SKIP_VERIFY=true
     volumes:
-      - ./monitoring/targets:/targets
+      - ../monitoring/targets:/targets
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
       interval: 10s
@@ -129,8 +129,8 @@ services:
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/tunnelmesh.json
     volumes:
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
@@ -155,7 +155,7 @@ services:
     network_mode: "service:server"
     command: -config.file=/etc/loki/local-config.yaml
     volumes:
-      - ./monitoring/loki/config.yaml:/etc/loki/local-config.yaml:ro
+      - ../monitoring/loki/config.yaml:/etc/loki/local-config.yaml:ro
       - loki-data:/loki
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3100/ready"]

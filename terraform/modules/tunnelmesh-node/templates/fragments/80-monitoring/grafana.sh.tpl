@@ -68,6 +68,11 @@ providers:
 DASHBOARDS
 
 mkdir -p /var/lib/grafana/dashboards
+
+# Download TunnelMesh dashboard from repository
+curl -sL https://raw.githubusercontent.com/zombar/tunnelmesh/main/monitoring/grafana/dashboards/tunnelmesh.json \
+  -o /var/lib/grafana/dashboards/tunnelmesh.json
+
 chown -R grafana:grafana /var/lib/grafana/dashboards
 
 systemctl daemon-reload
