@@ -793,3 +793,122 @@ dns:
 	assert.True(t, cfg.DNS.Enabled)
 	assert.Equal(t, []string{"webserver", "api.mynode", "db-primary"}, cfg.DNS.Aliases)
 }
+
+// Log Level Configuration Tests
+
+func TestLoadServerConfig_WithLogLevel(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+listen: ":8080"
+auth_token: "test-token-123"
+log_level: "debug"
+`
+	configPath := testutil.TempFile(t, dir, "server.yaml", content)
+
+	cfg, err := LoadServerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, ":8080", cfg.Listen)
+	assert.Equal(t, "debug", cfg.LogLevel)
+}
+
+func TestLoadServerConfig_LogLevelDefaults(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config without log_level - should default to empty string
+	content := `
+listen: ":8080"
+auth_token: "test-token-123"
+`
+	configPath := testutil.TempFile(t, dir, "server.yaml", content)
+
+	cfg, err := LoadServerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, "", cfg.LogLevel, "log_level should default to empty string")
+}
+
+func TestLoadPeerConfig_WithLogLevel(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+name: "mynode"
+server: "http://localhost:8080"
+auth_token: "token"
+log_level: "warn"
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, "mynode", cfg.Name)
+	assert.Equal(t, "warn", cfg.LogLevel)
+}
+
+func TestLoadPeerConfig_LogLevelDefaults(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config without log_level - should default to empty string
+	content := `
+name: "testnode"
+server: "http://localhost:8080"
+auth_token: "token"
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, "", cfg.LogLevel, "log_level should default to empty string")
+}
+
+func TestLoadServerConfig_AllLogLevels(t *testing.T) {
+	levels := []string{"trace", "debug", "info", "warn", "error"}
+
+	for _, level := range levels {
+		t.Run(level, func(t *testing.T) {
+			dir, cleanup := testutil.TempDir(t)
+			defer cleanup()
+
+			content := `
+listen: ":8080"
+auth_token: "token"
+log_level: "` + level + `"
+`
+			configPath := testutil.TempFile(t, dir, "server.yaml", content)
+
+			cfg, err := LoadServerConfig(configPath)
+			require.NoError(t, err)
+			assert.Equal(t, level, cfg.LogLevel)
+		})
+	}
+}
+
+func TestLoadPeerConfig_AllLogLevels(t *testing.T) {
+	levels := []string{"trace", "debug", "info", "warn", "error"}
+
+	for _, level := range levels {
+		t.Run(level, func(t *testing.T) {
+			dir, cleanup := testutil.TempDir(t)
+			defer cleanup()
+
+			content := `
+name: "testnode"
+server: "http://localhost:8080"
+auth_token: "token"
+log_level: "` + level + `"
+`
+			configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+			cfg, err := LoadPeerConfig(configPath)
+			require.NoError(t, err)
+			assert.Equal(t, level, cfg.LogLevel)
+		})
+	}
+}
