@@ -84,6 +84,9 @@ type Transport struct {
 	// Callback for session invalidation (called when we receive rekey-required)
 	onSessionInvalid func(peerName string)
 
+	// Callback for pong responses (used for latency measurement)
+	onPong func(peerName string, rtt time.Duration)
+
 	// Worker pool for packet processing (avoids per-packet goroutine spawning)
 	packetQueue chan packetWork
 
@@ -272,6 +275,43 @@ func (t *Transport) SetSessionInvalidCallback(cb func(peerName string)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.onSessionInvalid = cb
+}
+
+// SetPongCallback sets the callback for pong responses.
+// This is called when we receive a pong response, providing the peer name and RTT.
+func (t *Transport) SetPongCallback(cb func(peerName string, rtt time.Duration)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.onPong = cb
+}
+
+// SendPingToPeer sends a ping packet to the specified peer for latency measurement.
+// Returns an error if the peer doesn't have an active session.
+func (t *Transport) SendPingToPeer(peerName string) error {
+	t.mu.RLock()
+	session, ok := t.peerSessions[peerName]
+	t.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("no session for peer %s", peerName)
+	}
+
+	_, err := session.SendPing()
+	return err
+}
+
+// ListConnectedPeers returns a list of peer names with active UDP sessions.
+func (t *Transport) ListConnectedPeers() []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	peers := make([]string, 0, len(t.peerSessions))
+	for name, session := range t.peerSessions {
+		if session.IsEstablished() {
+			peers = append(peers, name)
+		}
+	}
+	return peers
 }
 
 // RegisterPendingOutbound pre-registers intent to connect to a peer.
@@ -502,6 +542,10 @@ func (t *Transport) handlePacket(data []byte, remoteAddr *net.UDPAddr, conn *net
 		}
 	case PacketTypeRekeyRequired:
 		t.handleRekeyRequired(data, remoteAddr)
+	case PacketTypePing:
+		t.handlePing(data, remoteAddr)
+	case PacketTypePong:
+		t.handlePong(data, remoteAddr)
 	}
 }
 
@@ -548,6 +592,70 @@ func (t *Transport) handleKeepalive(header *PacketHeader, remoteAddr *net.UDPAdd
 
 	if ok {
 		session.UpdateRemoteAddrIfChanged(remoteAddr)
+	}
+}
+
+// handlePing processes a ping packet and sends a pong response.
+func (t *Transport) handlePing(data []byte, remoteAddr *net.UDPAddr) {
+	ping, err := UnmarshalPing(data)
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to parse ping packet")
+		return
+	}
+
+	t.mu.RLock()
+	session, ok := t.sessions[ping.Receiver]
+	t.mu.RUnlock()
+
+	if !ok {
+		log.Debug().
+			Uint32("receiver_index", ping.Receiver).
+			Str("from", remoteAddr.String()).
+			Msg("ping for unknown session")
+		return
+	}
+
+	// Update remote address for NAT roaming
+	session.UpdateRemoteAddrIfChanged(remoteAddr)
+
+	// Send pong response
+	if err := session.SendPong(ping.Timestamp); err != nil {
+		log.Debug().Err(err).Str("peer", session.PeerName()).Msg("failed to send pong")
+	}
+}
+
+// handlePong processes a pong packet and calculates RTT.
+func (t *Transport) handlePong(data []byte, remoteAddr *net.UDPAddr) {
+	pong, err := UnmarshalPong(data)
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to parse pong packet")
+		return
+	}
+
+	t.mu.RLock()
+	session, ok := t.sessions[pong.Receiver]
+	cb := t.onPong
+	t.mu.RUnlock()
+
+	if !ok {
+		log.Debug().
+			Uint32("receiver_index", pong.Receiver).
+			Str("from", remoteAddr.String()).
+			Msg("pong for unknown session")
+		return
+	}
+
+	// Calculate RTT
+	rtt := time.Duration(time.Now().UnixNano() - pong.Timestamp)
+
+	log.Debug().
+		Str("peer", session.PeerName()).
+		Dur("rtt", rtt).
+		Msg("received pong, calculated RTT")
+
+	// Notify callback
+	if cb != nil {
+		cb(session.PeerName(), rtt)
 	}
 }
 

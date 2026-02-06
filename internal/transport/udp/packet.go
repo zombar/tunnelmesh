@@ -4,6 +4,7 @@ package udp
 import (
 	"encoding/binary"
 	"fmt"
+	"time"
 )
 
 // Packet types
@@ -13,6 +14,8 @@ const (
 	PacketTypeData              = 0x04
 	PacketTypeKeepalive         = 0x05
 	PacketTypeRekeyRequired     = 0x06 // Sent when session not found, tells peer to re-handshake
+	PacketTypePing              = 0x07 // Latency probe request
+	PacketTypePong              = 0x08 // Latency probe response
 )
 
 // Packet sizes
@@ -158,5 +161,78 @@ func UnmarshalRekeyRequired(data []byte) (*RekeyRequiredPacket, error) {
 	}
 	return &RekeyRequiredPacket{
 		UnknownIndex: binary.BigEndian.Uint32(data[1:5]),
+	}, nil
+}
+
+// PingPacketSize is the size of a ping/pong packet.
+// Format: [1 type][4 receiver][8 timestamp_nanos]
+const PingPacketSize = 13
+
+// PingPacket is used for latency measurement.
+// The timestamp is echoed back in the pong response.
+type PingPacket struct {
+	Receiver  uint32 // Receiver's session index
+	Timestamp int64  // Unix nano timestamp
+}
+
+// NewPingPacket creates a new ping packet with the current timestamp.
+func NewPingPacket(receiver uint32) *PingPacket {
+	return &PingPacket{
+		Receiver:  receiver,
+		Timestamp: time.Now().UnixNano(),
+	}
+}
+
+// Marshal serializes the ping packet.
+func (p *PingPacket) Marshal() []byte {
+	buf := make([]byte, PingPacketSize)
+	buf[0] = PacketTypePing
+	binary.BigEndian.PutUint32(buf[1:5], p.Receiver)
+	binary.BigEndian.PutUint64(buf[5:13], uint64(p.Timestamp))
+	return buf
+}
+
+// UnmarshalPing parses a ping packet from bytes.
+func UnmarshalPing(data []byte) (*PingPacket, error) {
+	if len(data) < PingPacketSize {
+		return nil, fmt.Errorf("ping packet too short: %d < %d", len(data), PingPacketSize)
+	}
+	return &PingPacket{
+		Receiver:  binary.BigEndian.Uint32(data[1:5]),
+		Timestamp: int64(binary.BigEndian.Uint64(data[5:13])),
+	}, nil
+}
+
+// PongPacket is the response to a ping.
+type PongPacket struct {
+	Receiver  uint32 // Receiver's session index (the original sender)
+	Timestamp int64  // Echoed timestamp from ping
+}
+
+// NewPongPacket creates a pong packet from a ping.
+func NewPongPacket(receiver uint32, timestamp int64) *PongPacket {
+	return &PongPacket{
+		Receiver:  receiver,
+		Timestamp: timestamp,
+	}
+}
+
+// Marshal serializes the pong packet.
+func (p *PongPacket) Marshal() []byte {
+	buf := make([]byte, PingPacketSize) // Same size as ping
+	buf[0] = PacketTypePong
+	binary.BigEndian.PutUint32(buf[1:5], p.Receiver)
+	binary.BigEndian.PutUint64(buf[5:13], uint64(p.Timestamp))
+	return buf
+}
+
+// UnmarshalPong parses a pong packet from bytes.
+func UnmarshalPong(data []byte) (*PongPacket, error) {
+	if len(data) < PingPacketSize {
+		return nil, fmt.Errorf("pong packet too short: %d < %d", len(data), PingPacketSize)
+	}
+	return &PongPacket{
+		Receiver:  binary.BigEndian.Uint32(data[1:5]),
+		Timestamp: int64(binary.BigEndian.Uint64(data[5:13])),
 	}, nil
 }

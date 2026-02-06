@@ -74,6 +74,9 @@ type MeshNode struct {
 
 	// Optional components
 	Resolver *dns.Resolver
+
+	// Latency measurement
+	LatencyProber *LatencyProber
 }
 
 // NewMeshNode creates a new MeshNode with the given identity and client.
@@ -248,7 +251,10 @@ func (m *MeshNode) CollectStats() *proto.PeerStats {
 		}
 	}
 
-	// Note: PeerLatencies will be added once tunnel latency probing is implemented
+	// Include peer latencies from latency prober
+	if m.LatencyProber != nil {
+		stats.PeerLatencies = m.LatencyProber.GetLatencies()
+	}
 
 	return stats
 }

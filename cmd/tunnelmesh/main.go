@@ -1018,6 +1018,11 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 							}
 						}
 					}()
+
+					// Create and start latency prober for peer latency measurement
+					node.LatencyProber = peer.NewLatencyProber(udpTransport)
+					go node.LatencyProber.Start(ctx)
+					log.Info().Msg("latency prober started for peer RTT measurement")
 				}
 			}
 		}
