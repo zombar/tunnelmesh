@@ -225,15 +225,16 @@ func (c *Collector) collectLatencyStats() {
 	if c.rttProvider != nil {
 		rtt := c.rttProvider.GetLastRTT()
 		if rtt > 0 {
-			c.metrics.CoordinatorRTTMs.Set(float64(rtt.Milliseconds()))
+			c.metrics.CoordinatorRTTSeconds.Set(rtt.Seconds())
 		}
 	}
 
 	// Peer-to-peer latencies (UDP tunnel RTT)
 	if c.peerLatencyProvider != nil {
 		latencies := c.peerLatencyProvider.GetLatencies()
-		for peerName, latencyMs := range latencies {
-			c.metrics.PeerLatencyMs.WithLabelValues(peerName).Set(float64(latencyMs))
+		for peerName, latencyUs := range latencies {
+			// Convert microseconds to seconds
+			c.metrics.PeerLatencySeconds.WithLabelValues(peerName).Set(float64(latencyUs) / 1e6)
 		}
 	}
 }

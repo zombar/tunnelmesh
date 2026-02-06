@@ -1064,15 +1064,15 @@
               },
               {
                 "color": "yellow",
-                "value": 100
+                "value": 0.1
               },
               {
                 "color": "red",
-                "value": 500
+                "value": 0.5
               }
             ]
           },
-          "unit": "ms"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -1097,7 +1097,7 @@
       },
       "targets": [
         {
-          "expr": "tunnelmesh_peer_coordinator_rtt_ms",
+          "expr": "tunnelmesh_peer_coordinator_rtt_seconds",
           "legendFormat": "{{peer}}",
           "refId": "A"
         }
@@ -1156,15 +1156,15 @@
               },
               {
                 "color": "yellow",
-                "value": 100
+                "value": 0.1
               },
               {
                 "color": "red",
-                "value": 500
+                "value": 0.5
               }
             ]
           },
-          "unit": "ms"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -1189,12 +1189,12 @@
       },
       "targets": [
         {
-          "expr": "tunnelmesh_coordinator_peer_latency_ms",
+          "expr": "tunnelmesh_coordinator_udp_peer_latency_seconds",
           "legendFormat": "{{source}} → {{target}}",
           "refId": "A"
         }
       ],
-      "title": "Coordinator Latency by Peer",
+      "title": "UDP Latency Between Peers",
       "type": "timeseries"
     },
     {

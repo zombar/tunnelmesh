@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
@@ -182,7 +183,7 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 			startTime: time.Now(),
 		},
 		sseHub:       newSSEHub(),
-		coordMetrics: InitCoordMetrics(),
+		coordMetrics: nil, // Initialized lazily when SetMetricsRegistry is called
 	}
 
 	// Initialize IP geolocation cache if locations feature is enabled
@@ -684,6 +685,15 @@ func (s *Server) ListenAndServe() error {
 func (s *Server) SetCoordMeshIP(ip string) {
 	s.coordMeshIP = ip
 	log.Info().Str("ip", ip).Msg("coordinator mesh IP set for 'this.tunnelmesh' resolution")
+}
+
+// SetMetricsRegistry initializes coordinator metrics with the given registry.
+// This should be called after the server is created if you want coordinator
+// metrics to be exposed on a specific registry (e.g., metrics.Registry for
+// the peer /metrics endpoint).
+func (s *Server) SetMetricsRegistry(registry prometheus.Registerer) {
+	s.coordMetrics = InitCoordMetrics(registry)
+	log.Debug().Msg("coordinator metrics initialized")
 }
 
 // StartAdminServer starts the admin interface on the specified address.

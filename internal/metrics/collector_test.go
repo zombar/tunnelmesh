@@ -682,13 +682,13 @@ func TestCollector_LatencyStats(t *testing.T) {
 
 	var found bool
 	for _, mf := range mfs {
-		if mf.GetName() == "tunnelmesh_peer_coordinator_rtt_ms" {
+		if mf.GetName() == "tunnelmesh_peer_coordinator_rtt_seconds" {
 			found = true
 			val := mf.GetMetric()[0].GetGauge().GetValue()
-			assert.Equal(t, float64(42), val, "Expected peer_coordinator_rtt_ms=42")
+			assert.Equal(t, float64(0.042), val, "Expected peer_coordinator_rtt_seconds=0.042")
 		}
 	}
-	assert.True(t, found, "Expected to find tunnelmesh_peer_coordinator_rtt_ms metric")
+	assert.True(t, found, "Expected to find tunnelmesh_peer_coordinator_rtt_seconds metric")
 }
 
 func TestCollector_LatencyStats_ZeroRTT(t *testing.T) {

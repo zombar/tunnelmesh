@@ -12,7 +12,7 @@ import (
 // LatencyProber periodically measures RTT to connected peers.
 type LatencyProber struct {
 	mu         sync.RWMutex
-	latencies  map[string]int64 // peer name -> latency in milliseconds
+	latencies  map[string]int64 // peer name -> latency in microseconds
 	udp        *udptransport.Transport
 	probeEvery time.Duration
 }
@@ -36,12 +36,12 @@ func (lp *LatencyProber) Start(ctx context.Context) {
 	// Set up pong callback to record latencies
 	lp.udp.SetPongCallback(func(peerName string, rtt time.Duration) {
 		lp.mu.Lock()
-		lp.latencies[peerName] = rtt.Milliseconds()
+		lp.latencies[peerName] = rtt.Microseconds()
 		lp.mu.Unlock()
 
 		log.Debug().
 			Str("peer", peerName).
-			Int64("rtt_ms", rtt.Milliseconds()).
+			Float64("rtt_ms", float64(rtt.Microseconds())/1000.0).
 			Msg("recorded peer latency")
 	})
 
@@ -85,7 +85,7 @@ func (lp *LatencyProber) probeAllPeers() {
 }
 
 // GetLatencies returns a copy of the current latency measurements.
-// Returns map of peer name -> latency in milliseconds.
+// Returns map of peer name -> latency in microseconds.
 func (lp *LatencyProber) GetLatencies() map[string]int64 {
 	lp.mu.RLock()
 	defer lp.mu.RUnlock()

@@ -645,10 +645,18 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 		if s.coordMetrics != nil {
 			s.coordMetrics.TotalHeartbeats.Inc()
 			if stats.CoordinatorRTTMs > 0 {
-				s.coordMetrics.PeerRTTMs.WithLabelValues(sourcePeer).Set(float64(stats.CoordinatorRTTMs))
+				// Convert milliseconds to seconds for Prometheus
+				s.coordMetrics.PeerRTTSeconds.WithLabelValues(sourcePeer).Set(float64(stats.CoordinatorRTTMs) / 1000.0)
 			}
-			for targetPeer, latencyMs := range stats.PeerLatencies {
-				s.coordMetrics.PeerLatencyMs.WithLabelValues(sourcePeer, targetPeer).Set(float64(latencyMs))
+			if len(stats.PeerLatencies) > 0 {
+				log.Debug().
+					Str("source", sourcePeer).
+					Int("latency_count", len(stats.PeerLatencies)).
+					Msg("received peer latencies in heartbeat")
+			}
+			for targetPeer, latencyUs := range stats.PeerLatencies {
+				// Convert microseconds to seconds for Prometheus
+				s.coordMetrics.PeerLatencySeconds.WithLabelValues(sourcePeer, targetPeer).Set(float64(latencyUs) / 1e6)
 			}
 		}
 

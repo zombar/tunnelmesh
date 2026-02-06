@@ -74,7 +74,7 @@ cat /etc/tunnelmesh/peer.yaml
 # Function to start the mesh daemon
 start_daemon() {
     echo "Starting mesh daemon..."
-    tunnelmesh join --config /etc/tunnelmesh/peer.yaml --log-level info --latitude "$LATITUDE" --longitude "$LONGITUDE" --city "$CITY_NAME" &
+    tunnelmesh join --config /etc/tunnelmesh/peer.yaml --latitude "$LATITUDE" --longitude "$LONGITUDE" --city "$CITY_NAME" &
     MESH_PID=$!
     echo "Daemon started with PID $MESH_PID"
 }
