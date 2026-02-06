@@ -624,7 +624,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "mappings": [],
           "thresholds": {
@@ -647,133 +647,51 @@
       },
       "id": 10,
       "options": {
-        "basemap": {
-          "config": {},
-          "name": "Layer 0",
-          "type": "carto"
+        "barRadius": 0,
+        "barWidth": 0.8,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
         },
-        "controls": {
-          "mouseWheelZoom": true,
-          "showAttribution": false,
-          "showDebug": false,
-          "showMeasure": false,
-          "showScale": false,
-          "showZoom": true
-        },
-        "layers": [
-          {
-            "config": {
-              "showLegend": false,
-              "style": {
-                "color": {
-                  "fixed": "#73BF69"
-                },
-                "opacity": 0.9,
-                "rotation": {
-                  "fixed": 0,
-                  "max": 360,
-                  "min": -360,
-                  "mode": "mod"
-                },
-                "size": {
-                  "fixed": 10,
-                  "max": 15,
-                  "min": 5
-                },
-                "symbol": {
-                  "fixed": "img/icons/marker/circle.svg",
-                  "mode": "fixed"
-                },
-                "textConfig": {
-                  "fontSize": 12,
-                  "offsetX": 0,
-                  "offsetY": 0,
-                  "textAlign": "center",
-                  "textBaseline": "middle"
-                }
-              }
-            },
-            "location": {
-              "latitude": "latitude",
-              "longitude": "longitude",
-              "mode": "coords"
-            },
-            "name": "Peers",
-            "tooltip": true,
-            "type": "markers"
-          }
-        ],
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "none",
         "tooltip": {
-          "mode": "details"
+          "mode": "single",
+          "sort": "none"
         },
-        "view": {
-          "allLayers": true,
-          "id": "coords",
-          "lat": 50,
-          "lon": 10,
-          "zoom": 3
-        }
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
       "pluginVersion": "10.0.0",
       "targets": [
         {
-          "expr": "tunnelmesh_peer_latitude",
+          "expr": "count by (city) (tunnelmesh_peer_location_info)",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "A"
-        },
-        {
-          "expr": "tunnelmesh_peer_longitude",
-          "format": "table",
-          "instant": true,
-          "legendFormat": "__auto",
-          "refId": "B"
         }
       ],
-      "title": "Peer Locations",
+      "title": "Peers by Location",
       "transformations": [
-        {
-          "id": "merge",
-          "options": {}
-        },
-        {
-          "id": "filterByValue",
-          "options": {
-            "filters": [
-              {
-                "config": {
-                  "id": "notEqual",
-                  "options": {
-                    "value": 0
-                  }
-                },
-                "fieldName": "Value #A"
-              }
-            ],
-            "match": "all",
-            "type": "include"
-          }
-        },
         {
           "id": "organize",
           "options": {
             "excludeByName": {
-              "Time": true,
-              "__name__": true,
-              "exported_peer": true,
-              "instance": true,
-              "job": true
+              "Time": true
             },
             "renameByName": {
-              "Value #A": "latitude",
-              "Value #B": "longitude",
-              "peer": "Peer"
+              "Value": "Peers",
+              "city": "City"
             }
           }
         }
       ],
-      "type": "geomap"
+      "type": "barchart"
     },
     {
       "datasource": {
