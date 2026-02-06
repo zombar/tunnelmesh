@@ -780,20 +780,19 @@ td {
     right: 0;
     bottom: 0;
     pointer-events: none; /* Allow text selection through overlay */
-    /* Dense noise/stipple pattern using multiple radial gradients */
+    /* Solid stipple pattern - dots are fully opaque */
     background-image:
-        radial-gradient(circle at 15% 25%, var(--color-bg-primary) 1.5px, transparent 1.5px),
-        radial-gradient(circle at 45% 15%, var(--color-bg-primary) 1.5px, transparent 1.5px),
-        radial-gradient(circle at 75% 35%, var(--color-bg-primary) 1.5px, transparent 1.5px),
-        radial-gradient(circle at 25% 55%, var(--color-bg-primary) 1.5px, transparent 1.5px),
-        radial-gradient(circle at 55% 45%, var(--color-bg-primary) 1.5px, transparent 1.5px),
-        radial-gradient(circle at 85% 65%, var(--color-bg-primary) 1.5px, transparent 1.5px),
-        radial-gradient(circle at 35% 85%, var(--color-bg-primary) 1.5px, transparent 1.5px),
-        radial-gradient(circle at 65% 75%, var(--color-bg-primary) 1.5px, transparent 1.5px),
-        radial-gradient(circle at 95% 95%, var(--color-bg-primary) 1.5px, transparent 1.5px),
-        radial-gradient(circle at 5% 5%, var(--color-bg-primary) 1.5px, transparent 1.5px);
+        radial-gradient(circle at 15% 25%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 45% 15%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 75% 35%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 25% 55%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 55% 45%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 85% 65%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 35% 85%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 65% 75%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 95% 95%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 5% 5%, #161b22 1.5px, transparent 1.5px);
     background-size: 6px 6px, 7px 7px, 6px 8px, 8px 6px, 7px 7px, 6px 6px, 8px 7px, 7px 8px, 6px 7px, 7px 6px;
-    opacity: 0.54;
 }
 
 /* Reveal on hover for usability */
