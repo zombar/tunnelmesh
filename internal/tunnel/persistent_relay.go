@@ -232,7 +232,7 @@ func (p *PersistentRelay) readLoop() {
 		p.mu.Lock()
 		p.connected = false
 		if p.conn != nil {
-			p.conn.Close()
+			_ = p.conn.Close()
 			p.conn = nil
 		}
 		// Close write channel to stop write loop

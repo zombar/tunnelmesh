@@ -738,7 +738,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		log.Error().Err(err).Msg("failed to create TUN device (requires root)")
 		// Continue without TUN for now
 	} else {
-		defer tunDev.Close()
+		defer func() { _ = tunDev.Close() }()
 		log.Info().
 			Str("name", tunDev.Name()).
 			Str("ip", resp.MeshIP).
@@ -1200,9 +1200,9 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		networkChanges, err := netMonitor.Start(ctx)
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to start network monitor")
-			netMonitor.Close()
+			_ = netMonitor.Close()
 		} else {
-			defer netMonitor.Close()
+			defer func() { _ = netMonitor.Close() }()
 			go node.RunNetworkMonitor(ctx, networkChanges)
 		}
 	}

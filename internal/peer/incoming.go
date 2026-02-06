@@ -14,7 +14,7 @@ func (m *MeshNode) handleIncomingConnection(ctx context.Context, conn transport.
 	peerName := conn.PeerName()
 	if peerName == "" {
 		log.Warn().Str("transport", transportName).Msg("connection without peer name, rejecting")
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
@@ -33,7 +33,7 @@ func (m *MeshNode) handleIncomingConnection(ctx context.Context, conn transport.
 			log.Debug().
 				Str("peer", peerName).
 				Msg("already have healthy tunnel, rejecting incoming connection")
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 	}
@@ -57,7 +57,7 @@ func (m *MeshNode) handleIncomingConnection(ctx context.Context, conn transport.
 	pc := m.Connections.GetOrCreate(peerName, meshIP)
 	if err := pc.Connected(tun, transportName, "incoming "+transportName+" connection"); err != nil {
 		log.Warn().Err(err).Str("peer", peerName).Msg("failed to transition to connected state")
-		tun.Close()
+		_ = tun.Close()
 		return
 	}
 

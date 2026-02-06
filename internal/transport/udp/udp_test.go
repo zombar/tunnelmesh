@@ -825,7 +825,7 @@ func TestSessionHandlePacketBeforeEstablished(t *testing.T) {
 func TestSessionStats(t *testing.T) {
 	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:0")
 	conn, _ := net.ListenUDP("udp", addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	remoteAddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 
@@ -848,7 +848,7 @@ func TestSessionStats(t *testing.T) {
 func TestSessionUpdateRemoteAddr(t *testing.T) {
 	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:0")
 	conn, _ := net.ListenUDP("udp", addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	remoteAddr1, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 	remoteAddr2, _ := net.ResolveUDPAddr("udp", "192.168.1.1:54321")
@@ -1380,7 +1380,7 @@ func TestWorkerPoolQueueFullDropsPackets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start transport: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	remoteAddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 
@@ -1504,7 +1504,7 @@ func TestPendingOutboundPeersTracking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create transport: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	// Initially no pending outbound peers
 	transport.mu.RLock()

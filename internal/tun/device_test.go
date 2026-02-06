@@ -130,7 +130,7 @@ func TestDevice_Create(t *testing.T) {
 	if err != nil {
 		t.Skipf("Could not create TUN device (may need privileges): %v", err)
 	}
-	defer dev.Close()
+	defer func() { _ = dev.Close() }()
 
 	assert.Equal(t, cfg.Name, dev.Name())
 }

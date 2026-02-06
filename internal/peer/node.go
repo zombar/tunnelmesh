@@ -520,7 +520,7 @@ func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
 
 		if err := newRelay.Connect(ctx); err != nil {
 			log.Warn().Err(err).Int("attempt", attempt).Msg("relay reconnection failed")
-			newRelay.Close()
+			_ = newRelay.Close()
 
 			if attempt < maxAttempts {
 				select {
@@ -545,7 +545,7 @@ func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
 
 		// NOW close old relay (packets already routing to new)
 		if oldRelay != nil {
-			oldRelay.Close()
+			_ = oldRelay.Close()
 		}
 
 		log.Info().Int("attempt", attempt).Msg("persistent relay reconnected after network change")
@@ -554,7 +554,7 @@ func (m *MeshNode) ReconnectPersistentRelay(ctx context.Context) {
 
 	// All attempts failed - now clear references as last resort
 	if oldRelay != nil {
-		oldRelay.Close()
+		_ = oldRelay.Close()
 	}
 	m.PersistentRelay = nil
 	if m.Forwarder != nil {

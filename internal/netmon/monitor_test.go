@@ -45,7 +45,7 @@ func TestNewWithDefaults(t *testing.T) {
 	monitor, err := New(cfg)
 	require.NoError(t, err)
 	require.NotNil(t, monitor)
-	defer monitor.Close()
+	defer func() { _ = monitor.Close() }()
 }
 
 func TestNewWithCustomConfig(t *testing.T) {
@@ -56,7 +56,7 @@ func TestNewWithCustomConfig(t *testing.T) {
 	monitor, err := New(cfg)
 	require.NoError(t, err)
 	require.NotNil(t, monitor)
-	defer monitor.Close()
+	defer func() { _ = monitor.Close() }()
 }
 
 func TestDebouncerCoalesces(t *testing.T) {

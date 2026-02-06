@@ -42,7 +42,7 @@ func (t *TunnelAdapter) Add(name string, tunnel io.ReadWriteCloser) {
 	defer t.mu.Unlock()
 	// Close existing tunnel if present
 	if existing, ok := t.tunnels[name]; ok {
-		existing.Close()
+		_ = existing.Close()
 	}
 	t.tunnels[name] = tunnel
 	log.Debug().Str("peer", name).Msg("tunnel added")
@@ -53,7 +53,7 @@ func (t *TunnelAdapter) Remove(name string) {
 	t.mu.Lock()
 	callback := t.onRemove
 	if tunnel, ok := t.tunnels[name]; ok {
-		tunnel.Close()
+		_ = tunnel.Close()
 		delete(t.tunnels, name)
 		log.Debug().Str("peer", name).Msg("tunnel removed")
 	}
@@ -91,7 +91,7 @@ func (t *TunnelAdapter) CloseAll() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for name, tunnel := range t.tunnels {
-		tunnel.Close()
+		_ = tunnel.Close()
 		delete(t.tunnels, name)
 	}
 	log.Debug().Msg("all tunnels closed")

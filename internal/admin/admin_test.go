@@ -41,7 +41,7 @@ func TestAdminServer_HealthEndpoint(t *testing.T) {
 		t.Fatalf("Failed to find free port: %v", err)
 	}
 	addr := listener.Addr().String()
-	listener.Close()
+	_ = listener.Close()
 
 	// Start without TLS for testing
 	if err := server.StartInsecure(addr); err != nil {
@@ -57,7 +57,7 @@ func TestAdminServer_HealthEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get /health: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -87,7 +87,7 @@ func TestAdminServer_MetricsEndpoint(t *testing.T) {
 		t.Fatalf("Failed to find free port: %v", err)
 	}
 	addr := listener.Addr().String()
-	listener.Close()
+	_ = listener.Close()
 
 	if err := server.StartInsecure(addr); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -100,7 +100,7 @@ func TestAdminServer_MetricsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get /metrics: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -126,7 +126,7 @@ func TestAdminServer_StartStop(t *testing.T) {
 		t.Fatalf("Failed to find free port: %v", err)
 	}
 	addr := listener.Addr().String()
-	listener.Close()
+	_ = listener.Close()
 
 	if err := server.StartInsecure(addr); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -169,7 +169,7 @@ func TestAdminServer_StartTLS(t *testing.T) {
 		t.Fatalf("Failed to find free port: %v", err)
 	}
 	addr := listener.Addr().String()
-	listener.Close()
+	_ = listener.Close()
 
 	if err := server.Start(addr, cert); err != nil {
 		t.Fatalf("Failed to start TLS server: %v", err)
@@ -191,7 +191,7 @@ func TestAdminServer_StartTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get /health over TLS: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -206,7 +206,7 @@ func TestAdminServer_NotFoundHandler(t *testing.T) {
 		t.Fatalf("Failed to find free port: %v", err)
 	}
 	addr := listener.Addr().String()
-	listener.Close()
+	_ = listener.Close()
 
 	if err := server.StartInsecure(addr); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -219,7 +219,7 @@ func TestAdminServer_NotFoundHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get /nonexistent: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("Expected status 404, got %d", resp.StatusCode)

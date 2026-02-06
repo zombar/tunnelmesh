@@ -327,7 +327,7 @@ func TestUpdaterDownloadWithProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Download() error: %v", err)
 	}
-	defer os.Remove(downloadPath)
+	defer func() { _ = os.Remove(downloadPath) }()
 
 	if !progressCalled {
 		t.Error("progress callback was not called")

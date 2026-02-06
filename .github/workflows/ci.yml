@@ -93,12 +93,19 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Setup Go 1.26
+        id: setup-go
+        uses: actions/setup-go@v5
+        continue-on-error: true
         with:
           go-version: '1.26'
           check-latest: true
       - name: Run tests
+        if: steps.setup-go.outcome == 'success'
         run: go test -race ./...
+      - name: Skip notice
+        if: steps.setup-go.outcome != 'success'
+        run: echo "::notice::Go 1.26 not yet available, skipping tests"
 
   build:
     name: Build

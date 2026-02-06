@@ -338,7 +338,7 @@ func (m *TunnelManager) Add(name string, tunnel TunnelConnection) {
 
 	// Close existing tunnel if present
 	if existing, ok := m.tunnels[name]; ok {
-		existing.Close()
+		_ = existing.Close()
 	}
 
 	m.tunnels[name] = tunnel
@@ -360,7 +360,7 @@ func (m *TunnelManager) Remove(name string) {
 	defer m.mu.Unlock()
 
 	if tunnel, ok := m.tunnels[name]; ok {
-		tunnel.Close()
+		_ = tunnel.Close()
 		delete(m.tunnels, name)
 		log.Debug().Str("peer", name).Msg("tunnel removed")
 	}
@@ -384,7 +384,7 @@ func (m *TunnelManager) CloseAll() {
 	defer m.mu.Unlock()
 
 	for name, tunnel := range m.tunnels {
-		tunnel.Close()
+		_ = tunnel.Close()
 		delete(m.tunnels, name)
 	}
 	log.Debug().Msg("all tunnels closed")

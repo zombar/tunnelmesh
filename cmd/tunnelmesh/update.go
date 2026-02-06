@@ -134,7 +134,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
-	defer os.Remove(downloadPath)
+	defer func() { _ = os.Remove(downloadPath) }()
 	fmt.Println() // newline after progress
 
 	// Verify checksum

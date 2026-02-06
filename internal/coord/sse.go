@@ -94,7 +94,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	defer s.sseHub.unregister(client)
 
 	// Send initial connection event
-	fmt.Fprintf(w, "event: connected\ndata: {}\n\n")
+	_, _ = fmt.Fprintf(w, "event: connected\ndata: {}\n\n")
 	flusher.Flush()
 
 	// Stream events until client disconnects
@@ -104,7 +104,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			fmt.Fprintf(w, "%s\n\n", event)
+			_, _ = fmt.Fprintf(w, "%s\n\n", event)
 			flusher.Flush()
 		case <-r.Context().Done():
 			return

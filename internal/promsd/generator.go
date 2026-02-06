@@ -66,7 +66,7 @@ func (f *httpFetcher) FetchPeers() ([]Peer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch peers: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -118,7 +118,7 @@ func WriteTargets(targets []Target, outputFile string) error {
 
 	if err := os.Rename(tmpFile, outputFile); err != nil {
 		// Clean up temp file on rename failure
-		os.Remove(tmpFile)
+		_ = os.Remove(tmpFile)
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 

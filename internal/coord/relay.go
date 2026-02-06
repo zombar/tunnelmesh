@@ -263,7 +263,7 @@ func (pc *persistentConn) Close() {
 	}
 	pc.closed = true
 	close(pc.closeChan)
-	pc.conn.Close()
+	_ = pc.conn.Close()
 }
 
 // UnregisterPersistent removes a peer's persistent relay connection.
@@ -848,7 +848,7 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 		_ = conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "pairing timeout"),
 			time.Now().Add(5*time.Second))
-		conn.Close()
+		_ = conn.Close()
 	}
 }
 
@@ -876,8 +876,8 @@ func (s *Server) bridgeConnections(conn1, conn2 *websocket.Conn, peer1, peer2 st
 
 	wg.Wait()
 
-	conn1.Close()
-	conn2.Close()
+	_ = conn1.Close()
+	_ = conn2.Close()
 
 	log.Info().
 		Str("peer1", peer1).

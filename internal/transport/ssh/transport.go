@@ -103,7 +103,7 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 		// Open the tunnelmesh data channel, sending our identity as extra data
 		channel, reqs, err := r.client.OpenChannel(tunnel.ChannelType, []byte(opts.LocalName))
 		if err != nil {
-			r.client.Close()
+			_ = r.client.Close()
 			return nil, fmt.Errorf("open channel: %w", err)
 		}
 
@@ -185,7 +185,7 @@ func (t *Transport) Probe(ctx context.Context, opts transport.ProbeOptions) (tim
 		return 0, err
 	}
 	latency := time.Since(start)
-	conn.Close()
+	_ = conn.Close()
 
 	return latency, nil
 }
@@ -239,7 +239,7 @@ func (l *Listener) Accept(ctx context.Context) (transport.Connection, error) {
 			sshConn, err := l.transport.sshServer.Accept(r.conn)
 			if err != nil {
 				log.Warn().Err(err).Str("remote", r.conn.RemoteAddr().String()).Msg("SSH handshake failed")
-				r.conn.Close()
+				_ = r.conn.Close()
 				continue // Try next connection
 			}
 

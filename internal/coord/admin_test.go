@@ -123,7 +123,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 	// Fetch admin overview
 	resp, err := http.Get(ts.URL + "/admin/api/overview")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -169,7 +169,7 @@ func TestAdminOverview_ExitNodeInfo(t *testing.T) {
 	// Fetch admin overview
 	resp, err := http.Get(ts.URL + "/admin/api/overview")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -240,7 +240,7 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 	// Fetch admin overview
 	resp, err := http.Get(ts.URL + "/admin/api/overview")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 

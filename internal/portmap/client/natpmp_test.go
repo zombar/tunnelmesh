@@ -14,7 +14,7 @@ func TestNATMPClient_Probe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewNATMPClient(net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -41,7 +41,7 @@ func TestNATMPClient_ProbeTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	igd.SetFailProbe(true)
 
@@ -61,7 +61,7 @@ func TestNATMPClient_GetExternalAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewNATMPClient(net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -83,7 +83,7 @@ func TestNATMPClient_RequestMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewNATMPClient(net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -119,7 +119,7 @@ func TestNATMPClient_RequestMappingTCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewNATMPClient(net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -149,7 +149,7 @@ func TestNATMPClient_RefreshMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewNATMPClient(net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -186,7 +186,7 @@ func TestNATMPClient_DeleteMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewNATMPClient(net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -211,7 +211,7 @@ func TestNATMPClient_MappingFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	igd.SetFailMapping(true)
 
@@ -231,7 +231,7 @@ func TestNATMPClient_CustomExternalPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	// Configure IGD to assign a specific external port
 	igd.SetMappedPort(54321)
