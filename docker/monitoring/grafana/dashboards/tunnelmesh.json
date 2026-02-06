@@ -598,22 +598,22 @@
       "pluginVersion": "10.0.0",
       "targets": [
         {
-          "expr": "rate(tunnelmesh_dropped_no_route_total[1m])",
-          "legendFormat": "{{peer}} no route",
+          "expr": "sum(rate(tunnelmesh_dropped_no_route_total[1m]))",
+          "legendFormat": "No route",
           "refId": "A"
         },
         {
-          "expr": "rate(tunnelmesh_dropped_no_tunnel_total[1m])",
-          "legendFormat": "{{peer}} no tunnel",
+          "expr": "sum(rate(tunnelmesh_dropped_no_tunnel_total[1m]))",
+          "legendFormat": "No tunnel",
           "refId": "B"
         },
         {
-          "expr": "rate(tunnelmesh_forwarder_errors_total[1m])",
-          "legendFormat": "{{peer}} errors",
+          "expr": "sum(rate(tunnelmesh_forwarder_errors_total[1m]))",
+          "legendFormat": "Errors",
           "refId": "C"
         }
       ],
-      "title": "Drops & Errors",
+      "title": "Drops & Errors (Total)",
       "type": "timeseries"
     },
     {
@@ -694,12 +694,12 @@
       "pluginVersion": "10.0.0",
       "targets": [
         {
-          "expr": "rate(tunnelmesh_reconnects_total[5m])",
-          "legendFormat": "{{peer}} -> {{target_peer}}",
+          "expr": "sum(rate(tunnelmesh_reconnects_total[5m]))",
+          "legendFormat": "Total reconnects",
           "refId": "A"
         }
       ],
-      "title": "Reconnections",
+      "title": "Reconnections (Total)",
       "type": "timeseries"
     },
     {
@@ -780,12 +780,12 @@
       "pluginVersion": "10.0.0",
       "targets": [
         {
-          "expr": "rate(tunnelmesh_exit_bytes_sent_total[1m])",
-          "legendFormat": "{{peer}}",
+          "expr": "sum(rate(tunnelmesh_exit_bytes_sent_total[1m]))",
+          "legendFormat": "Total exit traffic",
           "refId": "A"
         }
       ],
-      "title": "Exit Node Traffic",
+      "title": "Exit Node Traffic (Total)",
       "type": "timeseries"
     },
     {
