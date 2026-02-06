@@ -71,6 +71,7 @@ const state = {
     currentPeers: [],  // Store current peers data for pagination
     // Alerts state
     alertsEnabled: false,
+    peerAlerts: {}, // { peerName: { warning: count, critical: count, page: count } }
     // Loki logs state
     lokiEnabled: false
 };
@@ -471,16 +472,24 @@ function renderPeersTable() {
     dom.peersBody.innerHTML = visiblePeers.map(peer => {
         const history = state.peerHistory[peer.name] || { throughputTx: [], throughputRx: [], packetsTx: [], packetsRx: [] };
         const peerNameEscaped = escapeHtml(peer.name);
+        // Alert badge - show if peer has any firing alerts
+        const peerAlert = state.peerAlerts[peer.name];
+        const hasAlert = peerAlert && (peerAlert.warning > 0 || peerAlert.critical > 0 || peerAlert.page > 0);
+        const alertSeverity = peerAlert?.page > 0 ? 'page' : (peerAlert?.critical > 0 ? 'critical' : 'warning');
+        const alertBadge = hasAlert ? `<span class="status-badge alert-icon" title="${alertSeverity}">⚠</span>` : '';
         const exitBadge = peer.allows_exit_traffic ? '<span class="status-badge exit">EXIT</span>' : '';
         const exitVia = peer.exit_node ? `<span class="exit-via">via ${escapeHtml(peer.exit_node)}</span>` : '';
+        // Tunnel count from connections map
+        const tunnelCount = peer.connections ? Object.keys(peer.connections).length : 0;
+        const tunnelSuffix = tunnelCount > 0 ? ` <span class="tunnel-count">(${tunnelCount})</span>` : '';
         return `
         <tr>
-            <td><strong>${peerNameEscaped}</strong>${exitBadge}${exitVia}</td>
-            <td><code>${peer.mesh_ip}</code></td>
+            <td><strong>${peerNameEscaped}</strong>${alertBadge}${exitBadge}${exitVia}</td>
+            <td><code>${peer.mesh_ip}</code>${tunnelSuffix}</td>
             <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
             <td class="ports-cell">${formatPorts(peer)}</td>
             <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
-            <td>${peer.stats?.active_tunnels ?? '-'}</td>
+            <td>${formatLatency(peer.coordinator_rtt_ms)}</td>
             <td class="sparkline-cell">
                 ${createSparklineSVG(history.throughputTx, history.throughputRx)}
                 <div class="rate-values">
@@ -589,6 +598,13 @@ function formatBytes(bytes) {
 function formatRate(rate) {
     if (rate === 0 || rate === undefined || rate === null) return '0';
     return rate.toFixed(1);
+}
+
+function formatLatency(ms) {
+    if (ms === 0 || ms === undefined || ms === null) return '-';
+    if (ms < 1) return '<1 ms';
+    if (ms < 1000) return Math.round(ms) + ' ms';
+    return (ms / 1000).toFixed(1) + ' s';
 }
 
 // Chart functions
@@ -1061,17 +1077,17 @@ function formatAdvertisedIPs(peer) {
 
     if (peer.public_ips && peer.public_ips.length > 0) {
         const natBadge = peer.behind_nat ? '<span class="nat-badge">NAT</span>' : '';
-        parts.push(`<span class="ip-label">Public:</span> ${peer.public_ips.map(ip => `<code>${ip}</code>`).join(', ')}${natBadge}`);
+        parts.push(`<span class="ip-label">Public:</span> ${peer.public_ips.map(ip => `<code class="obscured-ip">${ip}</code>`).join(', ')}${natBadge}`);
     }
     if (peer.private_ips && peer.private_ips.length > 0) {
         parts.push(`<span class="ip-label">Private:</span> ${peer.private_ips.map(ip => `<code>${ip}</code>`).join(', ')}`);
     }
-    // Show IPv6 external address if available
+    // Show IPv6 external address if available (visually obscured)
     if (peer.udp_external_addr6) {
         // Extract just the IP from [ip]:port format
         const ipv6Match = peer.udp_external_addr6.match(/^\[([^\]]+)\]/);
         const ipv6 = ipv6Match ? ipv6Match[1] : peer.udp_external_addr6;
-        parts.push(`<span class="ip-label">IPv6:</span> <code>${ipv6}</code>`);
+        parts.push(`<span class="ip-label">IPv6:</span> <code class="obscured-ip">${ipv6}</code>`);
     }
 
     return parts.length > 0 ? parts.join('<br>') : '<span class="no-ips">-</span>';
@@ -1345,16 +1361,35 @@ function processAlertData(data) {
 
     // Count alerts by severity
     const counts = { warning: 0, critical: 0, page: 0 };
+    // Track alerts per peer
+    const peerAlerts = {};
+
     for (const alert of alerts) {
         if (alert.state === 'firing') {
             const severity = alert.labels?.severity || 'warning';
             if (counts.hasOwnProperty(severity)) {
                 counts[severity]++;
             }
+
+            // Extract peer name from instance label (format: name.tunnelmesh:port or mesh_ip:port)
+            const instance = alert.labels?.instance || '';
+            const peerMatch = instance.match(/^([^.:]+)/);
+            if (peerMatch) {
+                const peerName = peerMatch[1];
+                if (!peerAlerts[peerName]) {
+                    peerAlerts[peerName] = { warning: 0, critical: 0, page: 0 };
+                }
+                if (peerAlerts[peerName].hasOwnProperty(severity)) {
+                    peerAlerts[peerName][severity]++;
+                }
+            }
         }
     }
 
+    state.peerAlerts = peerAlerts;
     updateAlertTiles(counts);
+    // Re-render peers table to show alert badges
+    renderPeersTable();
 }
 
 function updateAlertTiles(counts) {

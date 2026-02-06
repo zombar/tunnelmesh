@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/web"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -63,6 +64,9 @@ type AdminPeerInfo struct {
 	Connections map[string]string `json:"connections,omitempty"`
 	// DNS aliases for this peer
 	Aliases []string `json:"aliases,omitempty"`
+	// Latency metrics
+	CoordinatorRTTMs int64            `json:"coordinator_rtt_ms,omitempty"`
+	PeerLatencies    map[string]int64 `json:"peer_latencies,omitempty"`
 }
 
 // handleAdminOverview returns the admin overview data.
@@ -161,6 +165,12 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			peerInfo.Connections = info.stats.Connections
 		}
 
+		// Include latency metrics
+		peerInfo.CoordinatorRTTMs = info.coordinatorRTT
+		if len(info.peerLatencies) > 0 {
+			peerInfo.PeerLatencies = info.peerLatencies
+		}
+
 		// Only include location if the feature is enabled
 		if s.cfg.Locations {
 			peerInfo.Location = info.peer.Location
@@ -242,6 +252,9 @@ func (s *Server) setupAdminRoutes() {
 			s.adminMux.HandleFunc("/api/wireguard/clients", s.handleWGClients)
 			s.adminMux.HandleFunc("/api/wireguard/clients/", s.handleWGClientByID)
 		}
+
+		// Expose metrics on admin interface for Prometheus scraping via mesh IP
+		s.adminMux.Handle("/metrics", promhttp.Handler())
 
 		s.adminMux.Handle("/", fileServer)
 	} else {

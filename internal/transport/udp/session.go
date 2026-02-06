@@ -309,6 +309,53 @@ func (s *Session) SendKeepalive() error {
 	return nil
 }
 
+// SendPing sends a ping packet for latency measurement.
+// Returns the timestamp that was sent (for calculating RTT when pong arrives).
+func (s *Session) SendPing() (int64, error) {
+	s.mu.RLock()
+	if s.state != SessionStateEstablished {
+		s.mu.RUnlock()
+		return 0, ErrSessionNotEstablished
+	}
+	remoteIndex := s.remoteIndex
+	remoteAddr := s.remoteAddr
+	s.mu.RUnlock()
+
+	pkt := NewPingPacket(remoteIndex)
+	data := pkt.Marshal()
+
+	_, err := s.conn.WriteToUDP(data, remoteAddr)
+	if err != nil {
+		return 0, err
+	}
+
+	s.lastSend = time.Now()
+	return pkt.Timestamp, nil
+}
+
+// SendPong sends a pong packet in response to a ping.
+func (s *Session) SendPong(timestamp int64) error {
+	s.mu.RLock()
+	if s.state != SessionStateEstablished {
+		s.mu.RUnlock()
+		return ErrSessionNotEstablished
+	}
+	remoteIndex := s.remoteIndex
+	remoteAddr := s.remoteAddr
+	s.mu.RUnlock()
+
+	pkt := NewPongPacket(remoteIndex, timestamp)
+	data := pkt.Marshal()
+
+	_, err := s.conn.WriteToUDP(data, remoteAddr)
+	if err != nil {
+		return err
+	}
+
+	s.lastSend = time.Now()
+	return nil
+}
+
 // Close closes the session.
 func (s *Session) Close() error {
 	s.mu.Lock()

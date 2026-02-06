@@ -103,6 +103,11 @@ type PeerStats struct {
 	ActiveTunnels   int               `json:"active_tunnels"`
 	Location        *GeoLocation      `json:"location,omitempty"`    // Geographic location (sent with every heartbeat)
 	Connections     map[string]string `json:"connections,omitempty"` // Active connections: peerName -> transport type ("ssh", "udp", "relay")
+
+	// Latency metrics
+	HeartbeatSentAt  int64            `json:"heartbeat_sent_at,omitempty"`  // Unix nano timestamp when heartbeat was sent
+	CoordinatorRTTMs int64            `json:"coordinator_rtt_ms,omitempty"` // Last measured RTT to coordinator in milliseconds
+	PeerLatencies    map[string]int64 `json:"peer_latencies,omitempty"`     // Peer name -> latency in microseconds
 }
 
 // Note: HeartbeatRequest and HeartbeatResponse removed.

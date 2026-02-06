@@ -1544,3 +1544,132 @@ func TestPendingOutboundPeersTracking(t *testing.T) {
 		t.Error("expected pending outbound peer to be removed")
 	}
 }
+
+// =============================================================================
+// Ping/Pong Packet Tests (for latency measurement)
+// =============================================================================
+
+func TestPingPacket(t *testing.T) {
+	receiver := uint32(0x12345678)
+	ping := NewPingPacket(receiver)
+
+	// Verify fields
+	if ping.Receiver != receiver {
+		t.Errorf("expected receiver 0x%x, got 0x%x", receiver, ping.Receiver)
+	}
+	if ping.Timestamp == 0 {
+		t.Error("expected non-zero timestamp")
+	}
+
+	// Marshal and unmarshal
+	data := ping.Marshal()
+	if len(data) != PingPacketSize {
+		t.Errorf("expected ping size %d, got %d", PingPacketSize, len(data))
+	}
+	if data[0] != PacketTypePing {
+		t.Errorf("expected packet type %d, got %d", PacketTypePing, data[0])
+	}
+
+	parsed, err := UnmarshalPing(data)
+	if err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if parsed.Receiver != receiver {
+		t.Errorf("parsed receiver mismatch: expected 0x%x, got 0x%x", receiver, parsed.Receiver)
+	}
+	if parsed.Timestamp != ping.Timestamp {
+		t.Errorf("parsed timestamp mismatch: expected %d, got %d", ping.Timestamp, parsed.Timestamp)
+	}
+}
+
+func TestPongPacket(t *testing.T) {
+	receiver := uint32(0x87654321)
+	timestamp := int64(1234567890)
+	pong := NewPongPacket(receiver, timestamp)
+
+	// Verify fields
+	if pong.Receiver != receiver {
+		t.Errorf("expected receiver 0x%x, got 0x%x", receiver, pong.Receiver)
+	}
+	if pong.Timestamp != timestamp {
+		t.Errorf("expected timestamp %d, got %d", timestamp, pong.Timestamp)
+	}
+
+	// Marshal and unmarshal
+	data := pong.Marshal()
+	if len(data) != PingPacketSize { // Same size as ping
+		t.Errorf("expected pong size %d, got %d", PingPacketSize, len(data))
+	}
+	if data[0] != PacketTypePong {
+		t.Errorf("expected packet type %d, got %d", PacketTypePong, data[0])
+	}
+
+	parsed, err := UnmarshalPong(data)
+	if err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if parsed.Receiver != receiver {
+		t.Errorf("parsed receiver mismatch: expected 0x%x, got 0x%x", receiver, parsed.Receiver)
+	}
+	if parsed.Timestamp != timestamp {
+		t.Errorf("parsed timestamp mismatch: expected %d, got %d", timestamp, parsed.Timestamp)
+	}
+}
+
+func TestPingPacketTooShort(t *testing.T) {
+	data := []byte{PacketTypePing, 0x01, 0x02} // Only 3 bytes, need 13
+
+	_, err := UnmarshalPing(data)
+	if err == nil {
+		t.Error("expected error for short packet")
+	}
+}
+
+func TestPongPacketTooShort(t *testing.T) {
+	data := []byte{PacketTypePong, 0x01, 0x02, 0x03, 0x04} // Only 5 bytes, need 13
+
+	_, err := UnmarshalPong(data)
+	if err == nil {
+		t.Error("expected error for short packet")
+	}
+}
+
+func TestPingPongRoundtrip(t *testing.T) {
+	// Simulate ping/pong exchange
+	receiver := uint32(0xABCDEF12)
+
+	// Create ping
+	ping := NewPingPacket(receiver)
+	pingData := ping.Marshal()
+
+	// Parse ping (simulating receiving it)
+	parsedPing, err := UnmarshalPing(pingData)
+	if err != nil {
+		t.Fatalf("unmarshal ping failed: %v", err)
+	}
+
+	// Create pong response with echoed timestamp
+	pong := NewPongPacket(receiver, parsedPing.Timestamp)
+	pongData := pong.Marshal()
+
+	// Parse pong (simulating receiving it)
+	parsedPong, err := UnmarshalPong(pongData)
+	if err != nil {
+		t.Fatalf("unmarshal pong failed: %v", err)
+	}
+
+	// Verify timestamp was echoed correctly
+	if parsedPong.Timestamp != ping.Timestamp {
+		t.Errorf("timestamp not echoed correctly: expected %d, got %d", ping.Timestamp, parsedPong.Timestamp)
+	}
+
+	// Calculate RTT (should be very small in this test)
+	rtt := time.Duration(time.Now().UnixNano() - parsedPong.Timestamp)
+	if rtt < 0 {
+		t.Error("RTT should be positive")
+	}
+	// Just verify it's a reasonable value (less than 1 second for a local test)
+	if rtt > time.Second {
+		t.Errorf("RTT too large: %v", rtt)
+	}
+}

@@ -30,14 +30,16 @@ type Collector struct {
 	config  CollectorConfig
 
 	// References to collect from
-	forwarder      ForwarderStats
-	tunnelMgr      TunnelManager
-	connections    ConnectionManager
-	relay          RelayStatus
-	identity       *peer.PeerIdentity
-	allowsExit     bool
-	wgEnabled      bool
-	wgConcentrator WGConcentrator
+	forwarder           ForwarderStats
+	tunnelMgr           TunnelManager
+	connections         ConnectionManager
+	relay               RelayStatus
+	rttProvider         RTTProvider
+	peerLatencyProvider PeerLatencyProvider
+	identity            *peer.PeerIdentity
+	allowsExit          bool
+	wgEnabled           bool
+	wgConcentrator      WGConcentrator
 
 	// Last snapshot for delta calculation
 	lastForwarder ForwarderSnapshot
@@ -65,6 +67,16 @@ type RelayStatus interface {
 	IsConnected() bool
 }
 
+// RTTProvider interface for getting RTT measurements.
+type RTTProvider interface {
+	GetLastRTT() time.Duration
+}
+
+// PeerLatencyProvider interface for getting peer-to-peer latency measurements.
+type PeerLatencyProvider interface {
+	GetLatencies() map[string]int64
+}
+
 // WGConcentrator interface for WireGuard concentrator.
 type WGConcentrator interface {
 	IsDeviceRunning() bool
@@ -73,29 +85,33 @@ type WGConcentrator interface {
 
 // CollectorConfig holds configuration for the collector.
 type CollectorConfig struct {
-	Forwarder      ForwarderStats
-	TunnelMgr      TunnelManager
-	Connections    ConnectionManager
-	Relay          RelayStatus
-	Identity       *peer.PeerIdentity
-	AllowsExit     bool
-	WGEnabled      bool
-	WGConcentrator WGConcentrator
+	Forwarder           ForwarderStats
+	TunnelMgr           TunnelManager
+	Connections         ConnectionManager
+	Relay               RelayStatus
+	RTTProvider         RTTProvider
+	PeerLatencyProvider PeerLatencyProvider
+	Identity            *peer.PeerIdentity
+	AllowsExit          bool
+	WGEnabled           bool
+	WGConcentrator      WGConcentrator
 }
 
 // NewCollector creates a new metrics collector.
 func NewCollector(m *PeerMetrics, cfg CollectorConfig) *Collector {
 	return &Collector{
-		metrics:        m,
-		config:         cfg,
-		forwarder:      cfg.Forwarder,
-		tunnelMgr:      cfg.TunnelMgr,
-		connections:    cfg.Connections,
-		relay:          cfg.Relay,
-		identity:       cfg.Identity,
-		allowsExit:     cfg.AllowsExit,
-		wgEnabled:      cfg.WGEnabled,
-		wgConcentrator: cfg.WGConcentrator,
+		metrics:             m,
+		config:              cfg,
+		forwarder:           cfg.Forwarder,
+		tunnelMgr:           cfg.TunnelMgr,
+		connections:         cfg.Connections,
+		relay:               cfg.Relay,
+		rttProvider:         cfg.RTTProvider,
+		peerLatencyProvider: cfg.PeerLatencyProvider,
+		identity:            cfg.Identity,
+		allowsExit:          cfg.AllowsExit,
+		wgEnabled:           cfg.WGEnabled,
+		wgConcentrator:      cfg.WGConcentrator,
 	}
 }
 
@@ -105,6 +121,7 @@ func (c *Collector) Collect() {
 	c.collectTunnelStats()
 	c.collectConnectionStats()
 	c.collectRelayStats()
+	c.collectLatencyStats()
 	c.collectExitNodeStats()
 	c.collectWireGuardStats()
 	c.collectGeolocationStats()
@@ -200,6 +217,25 @@ func (c *Collector) collectRelayStats() {
 		c.metrics.RelayConnected.Set(1)
 	} else {
 		c.metrics.RelayConnected.Set(0)
+	}
+}
+
+func (c *Collector) collectLatencyStats() {
+	// Coordinator RTT
+	if c.rttProvider != nil {
+		rtt := c.rttProvider.GetLastRTT()
+		if rtt > 0 {
+			c.metrics.CoordinatorRTTSeconds.Set(rtt.Seconds())
+		}
+	}
+
+	// Peer-to-peer latencies (UDP tunnel RTT)
+	if c.peerLatencyProvider != nil {
+		latencies := c.peerLatencyProvider.GetLatencies()
+		for peerName, latencyUs := range latencies {
+			// Convert microseconds to seconds
+			c.metrics.PeerLatencySeconds.WithLabelValues(peerName).Set(float64(latencyUs) / 1e6)
+		}
 	}
 }
 
@@ -315,13 +351,13 @@ func (w *simpleWGWrapper) ClientCount() (total, enabled int) {
 	return w.clientCount()
 }
 
-// RelayWrapper wraps a PersistentRelay to implement RelayStatus interface.
+// RelayWrapper wraps a PersistentRelay to implement RelayStatus and RTTProvider interfaces.
 type RelayWrapper struct {
 	relay *tunnel.PersistentRelay
 }
 
 // NewRelayWrapper creates a new relay wrapper.
-func NewRelayWrapper(relay *tunnel.PersistentRelay) RelayStatus {
+func NewRelayWrapper(relay *tunnel.PersistentRelay) *RelayWrapper {
 	if relay == nil {
 		return nil
 	}
@@ -330,6 +366,13 @@ func NewRelayWrapper(relay *tunnel.PersistentRelay) RelayStatus {
 
 func (w *RelayWrapper) IsConnected() bool {
 	return w.relay != nil && w.relay.IsConnected()
+}
+
+func (w *RelayWrapper) GetLastRTT() time.Duration {
+	if w.relay == nil {
+		return 0
+	}
+	return w.relay.GetLastRTT()
 }
 
 // TrackReconnect is called by the connection observer when a reconnect happens.

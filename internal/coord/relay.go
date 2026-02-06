@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -528,9 +529,15 @@ func (s *Server) handlePersistentRelay(w http.ResponseWriter, r *http.Request) {
 
 	// Register the connection (starts writer goroutine with ping ticker)
 	pc := s.relay.RegisterPersistent(peerName, conn)
+	if s.coordMetrics != nil {
+		s.coordMetrics.OnlinePeers.Inc()
+	}
 	defer func() {
 		s.relay.UnregisterPersistent(peerName)
 		s.relay.ClearWGConcentrator(peerName) // Clear if this was the concentrator
+		if s.coordMetrics != nil {
+			s.coordMetrics.OnlinePeers.Dec()
+		}
 		pc.Close()
 		log.Info().Str("peer", peerName).Msg("persistent relay connection closed")
 	}()
@@ -622,15 +629,53 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 			if s.cfg.Locations && stats.Location != nil && stats.Location.IsSet() {
 				peer.peer.Location = stats.Location
 			}
+			// Store reported latency metrics (only update if peer reported a value)
+			if stats.CoordinatorRTTMs > 0 {
+				peer.coordinatorRTT = stats.CoordinatorRTTMs
+				log.Debug().Str("peer", sourcePeer).Int64("rtt_ms", stats.CoordinatorRTTMs).Msg("updated peer coordinator RTT")
+			}
+			if stats.PeerLatencies != nil {
+				peer.peerLatencies = stats.PeerLatencies
+			}
 		}
 		atomic.AddUint64(&s.serverStats.totalHeartbeats, 1)
 		s.peersMu.Unlock()
 
+		// Update Prometheus metrics
+		if s.coordMetrics != nil {
+			s.coordMetrics.TotalHeartbeats.Inc()
+			if stats.CoordinatorRTTMs > 0 {
+				// Convert milliseconds to seconds for Prometheus
+				s.coordMetrics.PeerRTTSeconds.WithLabelValues(sourcePeer).Set(float64(stats.CoordinatorRTTMs) / 1000.0)
+			}
+			if len(stats.PeerLatencies) > 0 {
+				log.Debug().
+					Str("source", sourcePeer).
+					Int("latency_count", len(stats.PeerLatencies)).
+					Msg("received peer latencies in heartbeat")
+			}
+			for targetPeer, latencyUs := range stats.PeerLatencies {
+				// Convert microseconds to seconds for Prometheus
+				s.coordMetrics.PeerLatencySeconds.WithLabelValues(sourcePeer, targetPeer).Set(float64(latencyUs) / 1e6)
+			}
+		}
+
 		// Send ack via the persistent connection
+		// Extended format if HeartbeatSentAt is set: [MsgTypeHeartbeatAck][timestamp:8]
 		if pc, ok := s.relay.GetPersistent(sourcePeer); ok {
+			var ackMsg []byte
+			if stats.HeartbeatSentAt != 0 {
+				// Echo the timestamp for RTT measurement
+				ackMsg = make([]byte, 9)
+				ackMsg[0] = MsgTypeHeartbeatAck
+				binary.BigEndian.PutUint64(ackMsg[1:], uint64(stats.HeartbeatSentAt))
+			} else {
+				// Old client without timestamp - send simple 1-byte ack
+				ackMsg = []byte{MsgTypeHeartbeatAck}
+			}
 			select {
-			case pc.writeChan <- []byte{MsgTypeHeartbeatAck}:
-				log.Debug().Str("peer", sourcePeer).Msg("sent heartbeat ack")
+			case pc.writeChan <- ackMsg:
+				log.Debug().Str("peer", sourcePeer).Int("ack_len", len(ackMsg)).Msg("sent heartbeat ack")
 			default:
 				log.Debug().Str("peer", sourcePeer).Msg("failed to send heartbeat ack: channel full")
 			}

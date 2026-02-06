@@ -342,6 +342,10 @@ func runServeFromService(ctx context.Context, configPath string) error {
 
 		// Callback to start admin HTTPS server after joining mesh
 		onJoined := func(meshIP string, tlsMgr *peer.TLSManager) {
+			// Initialize coordinator metrics on the peer metrics registry
+			// so they're exposed on the /metrics endpoint
+			srv.SetMetricsRegistry(metrics.Registry)
+
 			// Set coordinator's mesh IP for "this.tunnelmesh" resolution
 			srv.SetCoordMeshIP(meshIP)
 
@@ -474,6 +478,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
+	// Apply configured log level from config file
+	if config.ApplyLogLevel(cfg.LogLevel) {
+		log.Info().Str("level", cfg.LogLevel).Msg("log level configured")
+	}
+
 	srv, err := coord.NewServer(cfg)
 	if err != nil {
 		return fmt.Errorf("create server: %w", err)
@@ -523,6 +532,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 		// Callback to start admin HTTPS server after joining mesh
 		onJoined := func(meshIP string, tlsMgr *peer.TLSManager) {
+			// Initialize coordinator metrics on the peer metrics registry
+			// so they're exposed on the /metrics endpoint
+			srv.SetMetricsRegistry(metrics.Registry)
+
 			// Set coordinator's mesh IP for "this.tunnelmesh" resolution
 			srv.SetCoordMeshIP(meshIP)
 
@@ -664,6 +677,11 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, onJoined OnJoinedFunc) error {
 	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
 		return fmt.Errorf("server, token, and name are required")
+	}
+
+	// Apply configured log level from config file
+	if config.ApplyLogLevel(cfg.LogLevel) {
+		log.Info().Str("level", cfg.LogLevel).Msg("log level configured")
 	}
 
 	// Tune GC for lower latency in packet forwarding
@@ -1018,6 +1036,11 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 							}
 						}
 					}()
+
+					// Create and start latency prober for peer latency measurement
+					node.LatencyProber = peer.NewLatencyProber(udpTransport)
+					go node.LatencyProber.Start(ctx)
+					log.Info().Msg("latency prober started for peer RTT measurement")
 				}
 			}
 		}
@@ -1282,15 +1305,18 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	}
 
 	// Create metrics collector
+	relayWrapper := metrics.NewRelayWrapper(node.PersistentRelay)
 	metricsCollector := metrics.NewCollector(peerMetrics, metrics.CollectorConfig{
-		Forwarder:      forwarder,
-		TunnelMgr:      node.TunnelMgr(),
-		Connections:    node.Connections,
-		Relay:          metrics.NewRelayWrapper(node.PersistentRelay),
-		Identity:       identity,
-		AllowsExit:     cfg.AllowExitTraffic,
-		WGEnabled:      cfg.WireGuard.Enabled,
-		WGConcentrator: wgWrapper,
+		Forwarder:           forwarder,
+		TunnelMgr:           node.TunnelMgr(),
+		Connections:         node.Connections,
+		Relay:               relayWrapper,
+		RTTProvider:         relayWrapper, // Also provides RTT for latency metrics
+		PeerLatencyProvider: node.LatencyProber,
+		Identity:            identity,
+		AllowsExit:          cfg.AllowExitTraffic,
+		WGEnabled:           cfg.WireGuard.Enabled,
+		WGConcentrator:      wgWrapper,
 	})
 
 	// Register reconnect observer for metrics

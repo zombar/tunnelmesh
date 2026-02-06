@@ -53,6 +53,10 @@ type PeerMetrics struct {
 
 	// Peer info (constant labels exposed as a gauge)
 	PeerInfo *prometheus.GaugeVec // labels: mesh_ip, version
+
+	// Latency metrics
+	CoordinatorRTTSeconds prometheus.Gauge     // RTT to coordinator in seconds
+	PeerLatencySeconds    *prometheus.GaugeVec // Latency to other peers (seconds), labels: target_peer
 }
 
 func init() {
@@ -213,6 +217,18 @@ func InitMetrics(peerName, meshIP, version string) *PeerMetrics {
 			Name: "tunnelmesh_peer_info",
 			Help: "Peer information (value is always 1)",
 		}, []string{"peer", "mesh_ip", "version"}),
+
+		// Latency metrics
+		CoordinatorRTTSeconds: promauto.With(Registry).NewGauge(prometheus.GaugeOpts{
+			Name:        "tunnelmesh_peer_coordinator_rtt_seconds",
+			Help:        "Round-trip time to coordinator in seconds",
+			ConstLabels: constLabels,
+		}),
+		PeerLatencySeconds: promauto.With(Registry).NewGaugeVec(prometheus.GaugeOpts{
+			Name:        "tunnelmesh_peer_udp_latency_seconds",
+			Help:        "UDP tunnel RTT to other peers in seconds (only available for direct UDP connections)",
+			ConstLabels: constLabels,
+		}, []string{"target_peer"}),
 	}
 
 	// Set peer info

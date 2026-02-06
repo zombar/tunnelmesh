@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -304,3 +305,169 @@ func parsePeerList(data []byte, count int) []string {
 
 // Ensure sync.WaitGroup is used (for compiler)
 var _ = sync.WaitGroup{}
+
+// --- RTT and latency tests ---
+
+func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "10.99.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+		Relay:        config.RelayConfig{Enabled: true},
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	peerName := "test-peer"
+	jwtToken := registerPeerAndGetToken(t, ts.URL, peerName, cfg.AuthToken)
+
+	conn := connectRelay(t, ts.URL, peerName, jwtToken)
+	defer func() { _ = conn.Close() }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Send heartbeat with HeartbeatSentAt timestamp
+	sentAt := time.Now().UnixNano()
+	stats := &proto.PeerStats{
+		PacketsSent:     100,
+		ActiveTunnels:   2,
+		HeartbeatSentAt: sentAt,
+	}
+	statsJSON, _ := json.Marshal(stats)
+
+	msg := make([]byte, 1+2+len(statsJSON))
+	msg[0] = MsgTypeHeartbeat
+	msg[1] = byte(len(statsJSON) >> 8)
+	msg[2] = byte(len(statsJSON))
+	copy(msg[3:], statsJSON)
+
+	err = conn.WriteMessage(websocket.BinaryMessage, msg)
+	require.NoError(t, err)
+
+	// Read heartbeat ack
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, ackData, err := conn.ReadMessage()
+	require.NoError(t, err)
+
+	// Ack should be 9 bytes: [MsgTypeHeartbeatAck][timestamp:8]
+	assert.Equal(t, MsgTypeHeartbeatAck, ackData[0], "should receive heartbeat ack")
+	require.Len(t, ackData, 9, "ack should include echoed timestamp")
+
+	// Parse echoed timestamp
+	echoedTimestamp := int64(binary.BigEndian.Uint64(ackData[1:9]))
+	assert.Equal(t, sentAt, echoedTimestamp, "echoed timestamp should match sent timestamp")
+}
+
+func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "10.99.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+		Relay:        config.RelayConfig{Enabled: true},
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	peerName := "test-peer"
+	jwtToken := registerPeerAndGetToken(t, ts.URL, peerName, cfg.AuthToken)
+
+	conn := connectRelay(t, ts.URL, peerName, jwtToken)
+	defer func() { _ = conn.Close() }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Send heartbeat WITHOUT HeartbeatSentAt (simulating old client)
+	stats := &proto.PeerStats{
+		PacketsSent:   100,
+		ActiveTunnels: 2,
+		// HeartbeatSentAt is 0 (not set)
+	}
+	statsJSON, _ := json.Marshal(stats)
+
+	msg := make([]byte, 1+2+len(statsJSON))
+	msg[0] = MsgTypeHeartbeat
+	msg[1] = byte(len(statsJSON) >> 8)
+	msg[2] = byte(len(statsJSON))
+	copy(msg[3:], statsJSON)
+
+	err = conn.WriteMessage(websocket.BinaryMessage, msg)
+	require.NoError(t, err)
+
+	// Read heartbeat ack
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, ackData, err := conn.ReadMessage()
+	require.NoError(t, err)
+
+	// Ack should be 1 byte for backwards compatibility
+	assert.Equal(t, MsgTypeHeartbeatAck, ackData[0], "should receive heartbeat ack")
+	assert.Len(t, ackData, 1, "ack should be 1 byte for old clients without timestamp")
+}
+
+func TestRelayManager_StoresReportedLatency(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "10.99.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+		Relay:        config.RelayConfig{Enabled: true},
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	peerName := "test-peer"
+	jwtToken := registerPeerAndGetToken(t, ts.URL, peerName, cfg.AuthToken)
+
+	conn := connectRelay(t, ts.URL, peerName, jwtToken)
+	defer func() { _ = conn.Close() }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Send heartbeat with RTT and peer latencies
+	stats := &proto.PeerStats{
+		PacketsSent:      100,
+		ActiveTunnels:    2,
+		HeartbeatSentAt:  time.Now().UnixNano(),
+		CoordinatorRTTMs: 42,
+		PeerLatencies: map[string]int64{
+			"peer-a": 15,
+			"peer-b": 28,
+		},
+	}
+	statsJSON, _ := json.Marshal(stats)
+
+	msg := make([]byte, 1+2+len(statsJSON))
+	msg[0] = MsgTypeHeartbeat
+	msg[1] = byte(len(statsJSON) >> 8)
+	msg[2] = byte(len(statsJSON))
+	copy(msg[3:], statsJSON)
+
+	err = conn.WriteMessage(websocket.BinaryMessage, msg)
+	require.NoError(t, err)
+
+	// Read ack
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, _, err = conn.ReadMessage()
+	require.NoError(t, err)
+
+	// Verify peer info stores the latency data
+	srv.peersMu.RLock()
+	peer := srv.peers[peerName]
+	srv.peersMu.RUnlock()
+
+	require.NotNil(t, peer, "peer should exist")
+	assert.Equal(t, int64(42), peer.coordinatorRTT, "coordinator RTT should be stored")
+	require.NotNil(t, peer.peerLatencies, "peer latencies should be stored")
+	assert.Equal(t, int64(15), peer.peerLatencies["peer-a"])
+	assert.Equal(t, int64(28), peer.peerLatencies["peer-b"])
+}

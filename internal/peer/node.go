@@ -74,6 +74,9 @@ type MeshNode struct {
 
 	// Optional components
 	Resolver *dns.Resolver
+
+	// Latency measurement
+	LatencyProber *LatencyProber
 }
 
 // NewMeshNode creates a new MeshNode with the given identity and client.
@@ -239,6 +242,21 @@ func (m *MeshNode) CollectStats() *proto.PeerStats {
 		stats.DroppedNoRoute = fwdStats.DroppedNoRoute
 		stats.DroppedNoTunnel = fwdStats.DroppedNoTunnel
 		stats.Errors = fwdStats.Errors
+	}
+
+	// Include coordinator RTT from last heartbeat ack
+	if m.PersistentRelay != nil {
+		if rtt := m.PersistentRelay.GetLastRTT(); rtt > 0 {
+			stats.CoordinatorRTTMs = rtt.Milliseconds()
+		}
+	}
+
+	// Include peer latencies from latency prober
+	if m.LatencyProber != nil {
+		stats.PeerLatencies = m.LatencyProber.GetLatencies()
+		if len(stats.PeerLatencies) > 0 {
+			log.Debug().Int("count", len(stats.PeerLatencies)).Msg("collected peer latencies for heartbeat")
+		}
 	}
 
 	return stats

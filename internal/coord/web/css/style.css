@@ -748,6 +748,89 @@ td {
     margin-left: 0.25rem;
 }
 
+/* Alert icon badge - styled like EXIT but with primary text color */
+.status-badge.alert-icon {
+    background: transparent;
+    color: var(--color-text-primary);
+    border-color: transparent;
+    border-radius: 0;
+    padding: 0.1rem 0.2rem;
+    font-size: 0.7rem;
+    margin-left: 0.4rem;
+    vertical-align: middle;
+}
+
+/* Tunnel count after mesh IP */
+.tunnel-count {
+    color: var(--color-text-secondary);
+    font-size: 0.85em;
+}
+
+/* Visually obscured public IPs - stipple overlay effect */
+.obscured-ip {
+    position: relative;
+    user-select: text; /* Still copyable */
+}
+
+.obscured-ip::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    pointer-events: none; /* Allow text selection through overlay */
+    /* Solid stipple pattern - dots are fully opaque */
+    background-image:
+        radial-gradient(circle at 15% 25%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 45% 15%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 75% 35%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 25% 55%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 55% 45%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 85% 65%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 35% 85%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 65% 75%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 95% 95%, #161b22 1.5px, transparent 1.5px),
+        radial-gradient(circle at 5% 5%, #161b22 1.5px, transparent 1.5px);
+    background-size: 6px 6px, 7px 7px, 6px 8px, 8px 6px, 7px 7px, 6px 6px, 8px 7px, 7px 8px, 6px 7px, 7px 6px;
+    /* Use negative delay to start at random point in cycle, longer duration */
+    animation: stipple-drift 8s linear infinite;
+    animation-delay: calc(-1s * var(--stipple-seed, 0));
+}
+
+/* Vary animation start position per row using nth-child */
+tr:nth-child(1) .obscured-ip { --stipple-seed: 0; }
+tr:nth-child(2) .obscured-ip { --stipple-seed: 2.3; }
+tr:nth-child(3) .obscured-ip { --stipple-seed: 5.1; }
+tr:nth-child(4) .obscured-ip { --stipple-seed: 1.7; }
+tr:nth-child(5) .obscured-ip { --stipple-seed: 6.4; }
+tr:nth-child(6) .obscured-ip { --stipple-seed: 3.8; }
+tr:nth-child(7) .obscured-ip { --stipple-seed: 7.2; }
+tr:nth-child(8) .obscured-ip { --stipple-seed: 4.5; }
+tr:nth-child(9) .obscured-ip { --stipple-seed: 0.9; }
+tr:nth-child(10) .obscured-ip { --stipple-seed: 5.6; }
+
+@keyframes stipple-drift {
+    0%, 100% {
+        background-position: 0 0, 1px 1px, 0 2px, 2px 0, 1px 2px, 0 1px, 2px 1px, 1px 0, 0 0, 2px 2px;
+    }
+    25% {
+        background-position: 2px 1px, 0 2px, 1px 0, 0 1px, 2px 0, 1px 2px, 0 0, 2px 2px, 1px 1px, 0 0;
+    }
+    50% {
+        background-position: 1px 2px, 2px 0, 0 1px, 1px 1px, 0 0, 2px 2px, 1px 0, 0 2px, 2px 1px, 1px 0;
+    }
+    75% {
+        background-position: 0 1px, 1px 0, 2px 2px, 0 0, 1px 1px, 0 2px, 2px 0, 1px 2px, 0 0, 2px 1px;
+    }
+}
+
+/* Reveal on hover for usability */
+.obscured-ip:hover::after {
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
 .empty-state {
     text-align: center;
     padding: 3rem;
