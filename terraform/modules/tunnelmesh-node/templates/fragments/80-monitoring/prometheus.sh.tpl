@@ -192,9 +192,8 @@ cat > /etc/systemd/system/prometheus.service <<'PROMSERVICE'
 [Unit]
 Description=Prometheus Monitoring System
 Documentation=https://prometheus.io/docs/introduction/overview/
-After=network-online.target tunnelmesh-server.service
+After=network-online.target
 Wants=network-online.target
-Requires=tunnelmesh-server.service
 
 [Service]
 Type=simple
