@@ -737,7 +737,7 @@ func TestSessionStateTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create UDP conn: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	remoteAddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 
@@ -775,7 +775,7 @@ func TestSessionStateTransitions(t *testing.T) {
 	}
 
 	// Close
-	session.Close()
+	_ = session.Close()
 	if session.State() != SessionStateClosed {
 		t.Errorf("expected state Closed, got %d", session.State())
 	}
@@ -784,7 +784,7 @@ func TestSessionStateTransitions(t *testing.T) {
 func TestSessionSendBeforeEstablished(t *testing.T) {
 	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:0")
 	conn, _ := net.ListenUDP("udp", addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	remoteAddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 
@@ -804,7 +804,7 @@ func TestSessionSendBeforeEstablished(t *testing.T) {
 func TestSessionHandlePacketBeforeEstablished(t *testing.T) {
 	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:0")
 	conn, _ := net.ListenUDP("udp", addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	remoteAddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 
@@ -1138,7 +1138,7 @@ func TestSelectSocketForPeer_IPv4(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot create IPv4 socket: %v", err)
 	}
-	defer conn4.Close()
+	defer func() { _ = conn4.Close() }()
 	transport.conn = conn4
 
 	// Create mock IPv6 socket
@@ -1147,7 +1147,7 @@ func TestSelectSocketForPeer_IPv4(t *testing.T) {
 	if err != nil {
 		t.Logf("cannot create IPv6 socket (may be disabled): %v", err)
 	} else {
-		defer conn6.Close()
+		defer func() { _ = conn6.Close() }()
 		transport.conn6 = conn6
 	}
 
@@ -1172,7 +1172,7 @@ func TestSelectSocketForPeer_IPv6(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot create IPv4 socket: %v", err)
 	}
-	defer conn4.Close()
+	defer func() { _ = conn4.Close() }()
 	transport.conn = conn4
 
 	// Create mock IPv6 socket
@@ -1181,7 +1181,7 @@ func TestSelectSocketForPeer_IPv6(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot create IPv6 socket (may be disabled): %v", err)
 	}
-	defer conn6.Close()
+	defer func() { _ = conn6.Close() }()
 	transport.conn6 = conn6
 
 	// IPv6 peer should use IPv6 socket
@@ -1205,7 +1205,7 @@ func TestSelectSocketForPeer_NoIPv6Socket(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot create IPv4 socket: %v", err)
 	}
-	defer conn4.Close()
+	defer func() { _ = conn4.Close() }()
 	transport.conn = conn4
 	transport.conn6 = nil // No IPv6 socket
 
@@ -1234,7 +1234,7 @@ func TestTransportStart_DualStack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start transport: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	// At least one socket should be created
 	if transport.conn == nil && transport.conn6 == nil {
@@ -1309,7 +1309,7 @@ func TestWorkerPoolCreation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start transport: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	// Packet queue should be initialized
 	if transport.packetQueue == nil {
@@ -1334,7 +1334,7 @@ func TestWorkerPoolProcessesPackets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start transport: %v", err)
 	}
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	// Create a test packet and queue it
 	// The packet will be processed but since there's no session, it will be logged and dropped

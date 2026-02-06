@@ -81,7 +81,7 @@ func FetchClients(ctx context.Context, serverURL, authToken string) ([]Client, e
 	if err != nil {
 		return nil, fmt.Errorf("fetch clients: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return nil, errors.New("unauthorized: invalid token")
@@ -257,7 +257,7 @@ func (c *Concentrator) StartDevice(interfaceName, address string) error {
 
 	// Add all current clients as peers
 	if err := device.UpdatePeers(c.clients); err != nil {
-		device.Close()
+		_ = device.Close()
 		return fmt.Errorf("update peers: %w", err)
 	}
 

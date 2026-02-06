@@ -35,7 +35,7 @@ func TestUpdaterCheckLatest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/repos/testowner/testrepo/releases/latest" {
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{
+			_, _ = fmt.Fprintf(w, `{
 				"tag_name": "v1.2.3",
 				"name": "Release v1.2.3",
 				"published_at": "2024-01-15T10:00:00Z",
@@ -86,7 +86,7 @@ func TestUpdaterCheckVersion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/repos/testowner/testrepo/releases/tags/v1.0.0" {
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{
+			_, _ = fmt.Fprintf(w, `{
 				"tag_name": "v1.0.0",
 				"name": "Release v1.0.0",
 				"published_at": "2024-01-01T10:00:00Z",
@@ -123,7 +123,7 @@ func TestUpdaterCheckVersion(t *testing.T) {
 func TestUpdaterCheckVersionNotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, `{"message": "Not Found"}`)
+		_, _ = fmt.Fprintf(w, `{"message": "Not Found"}`)
 	}))
 	defer server.Close()
 
@@ -283,7 +283,7 @@ func TestUpdaterDownload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Download() error: %v", err)
 	}
-	defer os.Remove(downloadPath)
+	defer func() { _ = os.Remove(downloadPath) }()
 
 	// Verify content
 	content, err := os.ReadFile(downloadPath)
@@ -370,12 +370,12 @@ func TestVerifyChecksum(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp() error: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	if _, err := tmpFile.Write(content); err != nil {
 		t.Fatalf("Write() error: %v", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	// Calculate expected SHA256
 	hash := sha256.Sum256(content)
@@ -450,8 +450,8 @@ func TestUpdaterVerifyDownload(t *testing.T) {
 		t.Fatalf("CreateTemp() error: %v", err)
 	}
 	_, _ = tmpFile.Write(binaryContent)
-	tmpFile.Close()
-	defer os.Remove(tmpFile.Name())
+	_ = tmpFile.Close()
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	// Verify should pass
 	err = u.VerifyDownload(tmpFile.Name(), "tunnelmesh-linux-amd64", release)
@@ -462,8 +462,8 @@ func TestUpdaterVerifyDownload(t *testing.T) {
 	// Write wrong content and verify should fail
 	wrongFile, _ := os.CreateTemp("", "update-test-wrong-*")
 	_, _ = wrongFile.Write([]byte("wrong content"))
-	wrongFile.Close()
-	defer os.Remove(wrongFile.Name())
+	_ = wrongFile.Close()
+	defer func() { _ = os.Remove(wrongFile.Name()) }()
 
 	err = u.VerifyDownload(wrongFile.Name(), "tunnelmesh-linux-amd64", release)
 	if err == nil {

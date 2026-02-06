@@ -295,9 +295,9 @@ func TestPeerConnection_CloseIdempotent(t *testing.T) {
 	_ = pc.Connected(tunnel, "test", "connected")
 
 	// Close multiple times should not panic
-	pc.Close()
-	pc.Close()
-	pc.Close()
+	_ = pc.Close()
+	_ = pc.Close()
+	_ = pc.Close()
 
 	if pc.State() != StateClosed {
 		t.Errorf("State() = %v, want %v", pc.State(), StateClosed)
@@ -489,7 +489,7 @@ func (p *pipeRWC) Write(data []byte) (int, error) {
 }
 
 func (p *pipeRWC) Close() error {
-	p.reader.Close()
+	_ = p.reader.Close()
 	return p.writer.Close()
 }
 
@@ -602,7 +602,7 @@ func TestPeerConnection_TunnelDataFlow(t *testing.T) {
 
 	// Create a pipe-based tunnel
 	pipe := newPipeRWC()
-	defer pipe.Close()
+	defer func() { _ = pipe.Close() }()
 
 	pc.SetTunnel(pipe, "test")
 

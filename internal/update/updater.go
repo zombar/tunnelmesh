@@ -200,13 +200,13 @@ func (u *Updater) Download(asset *Asset, progressFn ProgressFunc) (string, error
 
 	// Copy to temp file
 	if _, err := io.Copy(tmpFile, reader); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
 		return "", fmt.Errorf("write temp file: %w", err)
 	}
 
 	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpFile.Name())
+		_ = os.Remove(tmpFile.Name())
 		return "", fmt.Errorf("close temp file: %w", err)
 	}
 
@@ -270,7 +270,7 @@ func CalculateChecksum(filePath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("open file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {

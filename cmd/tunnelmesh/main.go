@@ -1882,7 +1882,7 @@ func configureWindowsResolver(domain, dnsAddr string) error {
 		log.Warn().
 			Str("port", port).
 			Msg("Windows requires DNS on port 53; consider changing dns.listen to 127.0.0.1:53")
-		return fmt.Errorf("Windows requires DNS on port 53, got port %s", port)
+		return fmt.Errorf("windows requires DNS on port 53, got port %s", port)
 	}
 
 	cmd := exec.Command("powershell", "-Command", psCmd)

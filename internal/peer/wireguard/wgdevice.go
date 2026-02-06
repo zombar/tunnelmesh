@@ -49,7 +49,7 @@ func NewWGDevice(cfg *WGDeviceConfig) (*WGDevice, error) {
 	// Get the actual interface name (may differ on some platforms)
 	actualName, err := tunDev.Name()
 	if err != nil {
-		tunDev.Close()
+		_ = tunDev.Close()
 		return nil, fmt.Errorf("get tun name: %w", err)
 	}
 	log.Debug().Str("name", actualName).Msg("created tun device")
@@ -70,14 +70,14 @@ func NewWGDevice(cfg *WGDeviceConfig) (*WGDevice, error) {
 
 	if err := wgDev.IpcSet(uapiConfig); err != nil {
 		wgDev.Close()
-		tunDev.Close()
+		_ = tunDev.Close()
 		return nil, fmt.Errorf("configure device: %w", err)
 	}
 
 	// Bring up the device
 	if err := wgDev.Up(); err != nil {
 		wgDev.Close()
-		tunDev.Close()
+		_ = tunDev.Close()
 		return nil, fmt.Errorf("bring up device: %w", err)
 	}
 
@@ -224,7 +224,7 @@ func (d *WGDevice) Close() error {
 		d.wgDevice.Close()
 	}
 	if d.tunDevice != nil {
-		d.tunDevice.Close()
+		_ = d.tunDevice.Close()
 	}
 	return nil
 }
