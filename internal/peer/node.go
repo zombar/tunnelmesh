@@ -295,18 +295,26 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 		if pc := m.Connections.Get(sourcePeer); pc != nil {
 			if pc.HasTunnel() {
 				connectedSince := pc.ConnectedSince()
-				tunnelAge := time.Since(connectedSince)
-				if tunnelAge < asymmetricDetectionGracePeriod {
+				// If connectedSince is zero (state not Connected), skip invalidation
+				// to avoid false positives from time.Since(zero) returning huge duration
+				if connectedSince.IsZero() {
 					log.Debug().
 						Str("peer", sourcePeer).
-						Dur("tunnel_age", tunnelAge).
-						Msg("ignoring relay packet during grace period after tunnel establishment")
+						Msg("ignoring relay packet: connection state not Connected (connectedSince is zero)")
 				} else {
-					log.Info().
-						Str("peer", sourcePeer).
-						Dur("tunnel_age", tunnelAge).
-						Msg("received relay packet from peer with active tunnel, invalidating stale tunnel")
-					_ = pc.Disconnect("peer using relay (asymmetric tunnel failure)", nil)
+					tunnelAge := time.Since(connectedSince)
+					if tunnelAge < asymmetricDetectionGracePeriod {
+						log.Debug().
+							Str("peer", sourcePeer).
+							Dur("tunnel_age", tunnelAge).
+							Msg("ignoring relay packet during grace period after tunnel establishment")
+					} else {
+						log.Info().
+							Str("peer", sourcePeer).
+							Dur("tunnel_age", tunnelAge).
+							Msg("received relay packet from peer with active tunnel, invalidating stale tunnel")
+						_ = pc.Disconnect("peer using relay (asymmetric tunnel failure)", nil)
+					}
 				}
 			}
 		}
