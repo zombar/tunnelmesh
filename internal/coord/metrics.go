@@ -45,7 +45,7 @@ func InitCoordMetrics() *CoordMetrics {
 
 			PeerLatencyMs: promauto.NewGaugeVec(prometheus.GaugeOpts{
 				Name: "tunnelmesh_coordinator_peer_latency_ms",
-				Help: "Latency between peers reported to coordinator in milliseconds",
+				Help: "UDP tunnel RTT between peers in milliseconds (only available for direct UDP connections)",
 			}, []string{"source", "target"}),
 
 			OnlinePeers: promauto.NewGauge(prometheus.GaugeOpts{

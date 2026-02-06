@@ -1289,15 +1289,16 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Create metrics collector
 	relayWrapper := metrics.NewRelayWrapper(node.PersistentRelay)
 	metricsCollector := metrics.NewCollector(peerMetrics, metrics.CollectorConfig{
-		Forwarder:      forwarder,
-		TunnelMgr:      node.TunnelMgr(),
-		Connections:    node.Connections,
-		Relay:          relayWrapper,
-		RTTProvider:    relayWrapper, // Also provides RTT for latency metrics
-		Identity:       identity,
-		AllowsExit:     cfg.AllowExitTraffic,
-		WGEnabled:      cfg.WireGuard.Enabled,
-		WGConcentrator: wgWrapper,
+		Forwarder:           forwarder,
+		TunnelMgr:           node.TunnelMgr(),
+		Connections:         node.Connections,
+		Relay:               relayWrapper,
+		RTTProvider:         relayWrapper, // Also provides RTT for latency metrics
+		PeerLatencyProvider: node.LatencyProber,
+		Identity:            identity,
+		AllowsExit:          cfg.AllowExitTraffic,
+		WGEnabled:           cfg.WireGuard.Enabled,
+		WGConcentrator:      wgWrapper,
 	})
 
 	// Register reconnect observer for metrics

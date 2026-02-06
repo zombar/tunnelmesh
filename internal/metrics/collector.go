@@ -30,15 +30,16 @@ type Collector struct {
 	config  CollectorConfig
 
 	// References to collect from
-	forwarder      ForwarderStats
-	tunnelMgr      TunnelManager
-	connections    ConnectionManager
-	relay          RelayStatus
-	rttProvider    RTTProvider
-	identity       *peer.PeerIdentity
-	allowsExit     bool
-	wgEnabled      bool
-	wgConcentrator WGConcentrator
+	forwarder           ForwarderStats
+	tunnelMgr           TunnelManager
+	connections         ConnectionManager
+	relay               RelayStatus
+	rttProvider         RTTProvider
+	peerLatencyProvider PeerLatencyProvider
+	identity            *peer.PeerIdentity
+	allowsExit          bool
+	wgEnabled           bool
+	wgConcentrator      WGConcentrator
 
 	// Last snapshot for delta calculation
 	lastForwarder ForwarderSnapshot
@@ -71,6 +72,11 @@ type RTTProvider interface {
 	GetLastRTT() time.Duration
 }
 
+// PeerLatencyProvider interface for getting peer-to-peer latency measurements.
+type PeerLatencyProvider interface {
+	GetLatencies() map[string]int64
+}
+
 // WGConcentrator interface for WireGuard concentrator.
 type WGConcentrator interface {
 	IsDeviceRunning() bool
@@ -79,31 +85,33 @@ type WGConcentrator interface {
 
 // CollectorConfig holds configuration for the collector.
 type CollectorConfig struct {
-	Forwarder      ForwarderStats
-	TunnelMgr      TunnelManager
-	Connections    ConnectionManager
-	Relay          RelayStatus
-	RTTProvider    RTTProvider
-	Identity       *peer.PeerIdentity
-	AllowsExit     bool
-	WGEnabled      bool
-	WGConcentrator WGConcentrator
+	Forwarder           ForwarderStats
+	TunnelMgr           TunnelManager
+	Connections         ConnectionManager
+	Relay               RelayStatus
+	RTTProvider         RTTProvider
+	PeerLatencyProvider PeerLatencyProvider
+	Identity            *peer.PeerIdentity
+	AllowsExit          bool
+	WGEnabled           bool
+	WGConcentrator      WGConcentrator
 }
 
 // NewCollector creates a new metrics collector.
 func NewCollector(m *PeerMetrics, cfg CollectorConfig) *Collector {
 	return &Collector{
-		metrics:        m,
-		config:         cfg,
-		forwarder:      cfg.Forwarder,
-		tunnelMgr:      cfg.TunnelMgr,
-		connections:    cfg.Connections,
-		relay:          cfg.Relay,
-		rttProvider:    cfg.RTTProvider,
-		identity:       cfg.Identity,
-		allowsExit:     cfg.AllowsExit,
-		wgEnabled:      cfg.WGEnabled,
-		wgConcentrator: cfg.WGConcentrator,
+		metrics:             m,
+		config:              cfg,
+		forwarder:           cfg.Forwarder,
+		tunnelMgr:           cfg.TunnelMgr,
+		connections:         cfg.Connections,
+		relay:               cfg.Relay,
+		rttProvider:         cfg.RTTProvider,
+		peerLatencyProvider: cfg.PeerLatencyProvider,
+		identity:            cfg.Identity,
+		allowsExit:          cfg.AllowsExit,
+		wgEnabled:           cfg.WGEnabled,
+		wgConcentrator:      cfg.WGConcentrator,
 	}
 }
 
@@ -213,13 +221,20 @@ func (c *Collector) collectRelayStats() {
 }
 
 func (c *Collector) collectLatencyStats() {
-	if c.rttProvider == nil {
-		return
+	// Coordinator RTT
+	if c.rttProvider != nil {
+		rtt := c.rttProvider.GetLastRTT()
+		if rtt > 0 {
+			c.metrics.CoordinatorRTTMs.Set(float64(rtt.Milliseconds()))
+		}
 	}
 
-	rtt := c.rttProvider.GetLastRTT()
-	if rtt > 0 {
-		c.metrics.CoordinatorRTTMs.Set(float64(rtt.Milliseconds()))
+	// Peer-to-peer latencies (UDP tunnel RTT)
+	if c.peerLatencyProvider != nil {
+		latencies := c.peerLatencyProvider.GetLatencies()
+		for peerName, latencyMs := range latencies {
+			c.metrics.PeerLatencyMs.WithLabelValues(peerName).Set(float64(latencyMs))
+		}
 	}
 }
 

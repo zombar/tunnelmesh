@@ -226,7 +226,7 @@ func InitMetrics(peerName, meshIP, version string) *PeerMetrics {
 		}),
 		PeerLatencyMs: promauto.With(Registry).NewGaugeVec(prometheus.GaugeOpts{
 			Name:        "tunnelmesh_peer_latency_ms",
-			Help:        "Latency to other peers in milliseconds",
+			Help:        "UDP tunnel RTT to other peers in milliseconds (only available for direct UDP connections)",
 			ConstLabels: constLabels,
 		}, []string{"target_peer"}),
 	}
