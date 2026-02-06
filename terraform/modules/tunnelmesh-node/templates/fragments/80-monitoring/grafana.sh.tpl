@@ -69,9 +69,15 @@ DASHBOARDS
 
 mkdir -p /var/lib/grafana/dashboards
 
-# Download TunnelMesh dashboard from repository
-curl -sL https://raw.githubusercontent.com/zombar/tunnelmesh/main/monitoring/grafana/dashboards/tunnelmesh.json \
-  -o /var/lib/grafana/dashboards/tunnelmesh.json
+# Download all dashboards from repository
+echo "Downloading Grafana dashboards..."
+curl -sL "https://api.github.com/repos/zombar/tunnelmesh/contents/monitoring/grafana/dashboards" | \
+  jq -r '.[] | select(.name | endswith(".json")) | .download_url' | \
+  while read -r url; do
+    filename=$(basename "$url")
+    echo "  Downloading $filename"
+    curl -sL "$url" -o "/var/lib/grafana/dashboards/$filename"
+  done
 
 chown -R grafana:grafana /var/lib/grafana/dashboards
 
