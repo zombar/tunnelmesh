@@ -15,8 +15,6 @@ curl -sLO "https://github.com/prometheus/prometheus/releases/download/v$PROM_VER
 tar xzf "prometheus-$PROM_VERSION.$PROM_ARCH.tar.gz"
 cp "prometheus-$PROM_VERSION.$PROM_ARCH/prometheus" /opt/monitoring/prometheus/
 cp "prometheus-$PROM_VERSION.$PROM_ARCH/promtool" /opt/monitoring/prometheus/
-cp -r "prometheus-$PROM_VERSION.$PROM_ARCH/console_libraries" /opt/monitoring/prometheus/
-cp -r "prometheus-$PROM_VERSION.$PROM_ARCH/consoles" /opt/monitoring/prometheus/
 rm -rf "prometheus-$PROM_VERSION.$PROM_ARCH"*
 
 # Create Prometheus config
@@ -205,8 +203,6 @@ Group=prometheus
 ExecStart=/opt/monitoring/prometheus/prometheus \
     --config.file=/etc/prometheus/prometheus.yml \
     --storage.tsdb.path=/var/lib/prometheus \
-    --web.console.libraries=/opt/monitoring/prometheus/console_libraries \
-    --web.console.templates=/opt/monitoring/prometheus/consoles \
     --web.listen-address=127.0.0.1:9090 \
     --web.external-url=/prometheus/ \
     --web.route-prefix=/prometheus/ \
