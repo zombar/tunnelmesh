@@ -124,6 +124,23 @@ services:
         restart: true
       prometheus:
         condition: service_started
+      loki:
+        condition: service_started
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:latest
+    container_name: tunnelmesh-loki
+    # Share server's network namespace to receive logs from mesh peers
+    network_mode: "service:server"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./monitoring/loki/config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    depends_on:
+      server:
+        condition: service_healthy
+        restart: true
     restart: unless-stopped
 
 networks:
@@ -140,3 +157,4 @@ volumes:
       - "com.tunnelmesh.description=Stats history for dashboard charts"
   prometheus-data:
   grafana-data:
+  loki-data:

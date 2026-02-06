@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tunnelmesh/tunnelmesh/internal/admin"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/internal/logging/loki"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
 	"github.com/tunnelmesh/tunnelmesh/internal/metrics"
@@ -1198,6 +1199,33 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 
 	// Initialize metrics
 	peerMetrics := metrics.InitMetrics(cfg.Name, resp.MeshIP, Version)
+
+	// Initialize Loki log shipping if enabled
+	if cfg.Loki.Enabled && cfg.Loki.URL != "" {
+		flushInterval, err := time.ParseDuration(cfg.Loki.FlushInterval)
+		if err != nil {
+			flushInterval = 5 * time.Second
+		}
+		lokiWriter := loki.NewWriter(loki.Config{
+			URL:           cfg.Loki.URL,
+			BatchSize:     cfg.Loki.BatchSize,
+			FlushInterval: flushInterval,
+			Labels: map[string]string{
+				"peer":    cfg.Name,
+				"mesh_ip": resp.MeshIP,
+				"version": Version,
+			},
+		})
+		lokiWriter.Start()
+		defer lokiWriter.Stop()
+
+		// Reconfigure logger to also write to Loki
+		log.Logger = log.Output(zerolog.MultiLevelWriter(
+			zerolog.ConsoleWriter{Out: os.Stderr},
+			lokiWriter,
+		))
+		log.Info().Str("url", cfg.Loki.URL).Msg("Loki log shipping enabled")
+	}
 
 	// Create WireGuard metrics wrapper if enabled
 	var wgWrapper metrics.WGConcentrator

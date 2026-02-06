@@ -77,8 +77,9 @@ type PeerConfig struct {
 	DNS               DNSConfig           `yaml:"dns"`
 	WireGuard         WireGuardPeerConfig `yaml:"wireguard"`
 	Geolocation       GeolocationConfig   `yaml:"geolocation"`       // Manual geolocation coordinates
-	ExitNode          string              `yaml:"exit_node"`         // Name of peer to route internet traffic through
+	ExitNode          string              `yaml:"exit_node"`          // Name of peer to route internet traffic through
 	AllowExitTraffic  bool                `yaml:"allow_exit_traffic"` // Allow this node to act as exit node for other peers
+	Loki              LokiConfig          `yaml:"loki"`               // Loki log shipping configuration
 }
 
 // TUNConfig holds configuration for the TUN interface.
@@ -100,6 +101,14 @@ type GeolocationConfig struct {
 	Latitude  float64 `yaml:"latitude"`  // Manual latitude (-90 to 90)
 	Longitude float64 `yaml:"longitude"` // Manual longitude (-180 to 180)
 	City      string  `yaml:"city"`      // Optional city name for display
+}
+
+// LokiConfig holds configuration for shipping logs to Loki.
+type LokiConfig struct {
+	Enabled       bool   `yaml:"enabled"`        // Enable Loki log shipping
+	URL           string `yaml:"url"`            // Loki push URL (e.g., "http://10.99.0.1:3100")
+	BatchSize     int    `yaml:"batch_size"`     // Max entries before flush (default: 100)
+	FlushInterval string `yaml:"flush_interval"` // Flush interval (default: "5s")
 }
 
 // Validate checks if the geolocation coordinates are within valid ranges.
@@ -192,6 +201,15 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 		if cfg.JoinMesh.MetricsPort == 0 {
 			cfg.JoinMesh.MetricsPort = 9443
 		}
+		// Loki defaults for JoinMesh
+		if cfg.JoinMesh.Loki.Enabled {
+			if cfg.JoinMesh.Loki.BatchSize == 0 {
+				cfg.JoinMesh.Loki.BatchSize = 100
+			}
+			if cfg.JoinMesh.Loki.FlushInterval == "" {
+				cfg.JoinMesh.Loki.FlushInterval = "5s"
+			}
+		}
 		// Expand home directory in private key path
 		if strings.HasPrefix(cfg.JoinMesh.PrivateKey, "~/") {
 			homeDir, err := os.UserHomeDir()
@@ -248,6 +266,16 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 		homeDir, err := os.UserHomeDir()
 		if err == nil {
 			cfg.PrivateKey = filepath.Join(homeDir, cfg.PrivateKey[2:])
+		}
+	}
+
+	// Loki defaults
+	if cfg.Loki.Enabled {
+		if cfg.Loki.BatchSize == 0 {
+			cfg.Loki.BatchSize = 100
+		}
+		if cfg.Loki.FlushInterval == "" {
+			cfg.Loki.FlushInterval = "5s"
 		}
 	}
 

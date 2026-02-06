@@ -23,3 +23,8 @@ join_mesh:
   name: "server-node"
   private_key: "/root/.tunnelmesh/id_ed25519"
   allow_exit_traffic: true
+  loki:
+    enabled: true
+    url: "http://localhost:3100"  # Loki runs in same network namespace
+    batch_size: 100
+    flush_interval: "5s"

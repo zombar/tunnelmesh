@@ -14,3 +14,8 @@ dns:
   listen: "127.0.0.53:53"
   aliases:
     - "alt.${NODE_NAME}"
+loki:
+  enabled: true
+  url: "http://server-node.tunnelmesh:3100"
+  batch_size: 100
+  flush_interval: "5s"
