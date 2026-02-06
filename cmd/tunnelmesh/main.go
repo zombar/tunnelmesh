@@ -295,11 +295,8 @@ func runServeFromService(ctx context.Context, configPath string) error {
 	}
 
 	// Apply configured log level
-	if cfg.LogLevel != "" {
-		if level, err := zerolog.ParseLevel(cfg.LogLevel); err == nil {
-			zerolog.SetGlobalLevel(level)
-			log.Info().Str("level", cfg.LogLevel).Msg("log level configured")
-		}
+	if config.ApplyLogLevel(cfg.LogLevel) {
+		log.Info().Str("level", cfg.LogLevel).Msg("log level configured")
 	}
 
 	srv, err := coord.NewServer(cfg)
@@ -389,11 +386,8 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 	}
 
 	// Apply configured log level
-	if cfg.LogLevel != "" {
-		if level, err := zerolog.ParseLevel(cfg.LogLevel); err == nil {
-			zerolog.SetGlobalLevel(level)
-			log.Info().Str("level", cfg.LogLevel).Msg("log level configured")
-		}
+	if config.ApplyLogLevel(cfg.LogLevel) {
+		log.Info().Str("level", cfg.LogLevel).Msg("log level configured")
 	}
 
 	log.Info().

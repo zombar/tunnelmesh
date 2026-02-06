@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tunnelmesh/tunnelmesh/testutil"
@@ -909,6 +910,74 @@ log_level: "` + level + `"
 			cfg, err := LoadPeerConfig(configPath)
 			require.NoError(t, err)
 			assert.Equal(t, level, cfg.LogLevel)
+		})
+	}
+}
+
+func TestApplyLogLevel(t *testing.T) {
+	// Save original level to restore after test
+	originalLevel := zerolog.GlobalLevel()
+	defer zerolog.SetGlobalLevel(originalLevel)
+
+	tests := []struct {
+		name          string
+		level         string
+		expectApplied bool
+		expectLevel   zerolog.Level
+	}{
+		{
+			name:          "empty level",
+			level:         "",
+			expectApplied: false,
+		},
+		{
+			name:          "trace level",
+			level:         "trace",
+			expectApplied: true,
+			expectLevel:   zerolog.TraceLevel,
+		},
+		{
+			name:          "debug level",
+			level:         "debug",
+			expectApplied: true,
+			expectLevel:   zerolog.DebugLevel,
+		},
+		{
+			name:          "info level",
+			level:         "info",
+			expectApplied: true,
+			expectLevel:   zerolog.InfoLevel,
+		},
+		{
+			name:          "warn level",
+			level:         "warn",
+			expectApplied: true,
+			expectLevel:   zerolog.WarnLevel,
+		},
+		{
+			name:          "error level",
+			level:         "error",
+			expectApplied: true,
+			expectLevel:   zerolog.ErrorLevel,
+		},
+		{
+			name:          "invalid level",
+			level:         "invalid",
+			expectApplied: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reset to known state before each test
+			zerolog.SetGlobalLevel(zerolog.InfoLevel)
+
+			applied := ApplyLogLevel(tt.level)
+			assert.Equal(t, tt.expectApplied, applied)
+
+			if tt.expectApplied {
+				assert.Equal(t, tt.expectLevel, zerolog.GlobalLevel())
+			}
 		})
 	}
 }

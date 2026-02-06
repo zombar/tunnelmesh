@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/rs/zerolog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -365,4 +366,19 @@ func validateDNSLabel(label string) error {
 
 func isAlphanumeric(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+}
+
+// ApplyLogLevel parses the log level string and sets zerolog's global level.
+// Returns true if the level was successfully applied, false if the level string
+// was empty or invalid.
+func ApplyLogLevel(level string) bool {
+	if level == "" {
+		return false
+	}
+	parsed, err := zerolog.ParseLevel(level)
+	if err != nil {
+		return false
+	}
+	zerolog.SetGlobalLevel(parsed)
+	return true
 }
