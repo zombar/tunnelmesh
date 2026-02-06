@@ -1244,8 +1244,8 @@ function updateAlertSparkline(svgEl, data) {
         const linePath = `M${points.join(' L')}`;
         const areaPath = `${linePath} L${width},${height} L0,${height} Z`;
         pathEl.setAttribute('d', areaPath);
-        pathEl.style.fill = 'currentColor';
-        pathEl.style.fillOpacity = '0.2';
+        pathEl.style.fill = '#58a6ff';  // Match visualizer connection color
+        pathEl.style.fillOpacity = '0.15';
     }
 }
 
