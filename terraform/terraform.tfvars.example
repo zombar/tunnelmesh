@@ -194,7 +194,7 @@ nodes = {
 # ssl_email = "admin@example.com"
 
 # Mesh network CIDR
-# mesh_cidr = "10.99.0.0/16"
+# mesh_cidr = "172.30.0.0/16"
 
 # Domain suffix for mesh hostnames
 # domain_suffix = ".tunnelmesh"

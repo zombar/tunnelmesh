@@ -32,7 +32,7 @@ For a complete step-by-step setup guide including downloading releases, configur
 ```
 ┌─────────────────┐                      ┌─────────────────┐
 │   Peer Node A   │                      │   Peer Node B   │
-│   (10.99.0.1)   │                      │   (10.99.0.2)   │
+│   (172.30.0.1)   │                      │   (172.30.0.2)   │
 │                 │  Encrypted Tunnel    │                 │
 │  ┌───────────┐  │◄────────────────────►│  ┌───────────┐  │
 │  │ TUN Device│  │  (SSH/UDP/Relay)     │  │ TUN Device│  │
@@ -149,7 +149,7 @@ listen: ":8080"
 auth_token: "your-secure-token"
 
 # Mesh network CIDR for IP allocation
-mesh_cidr: "10.99.0.0/16"
+mesh_cidr: "172.30.0.0/16"
 
 # Domain suffix for hostnames
 domain_suffix: ".tunnelmesh"
@@ -249,7 +249,7 @@ Route internet traffic through a designated peer while keeping mesh-to-mesh traf
 ```
 ┌─────────────────┐                      ┌─────────────────┐
 │   Client Peer   │                      │   Exit Node     │
-│   (10.99.0.1)   │                      │   (10.99.0.2)   │
+│   (172.30.0.1)   │                      │   (172.30.0.2)   │
 │                 │                      │                 │
 │  Internet ──────┼──── Tunnel ─────────►│──► Internet     │
 │  traffic        │  (encrypted)         │   (NAT)         │
@@ -521,7 +521,7 @@ Deploy the coordination server to DigitalOcean App Platform using Terraform.
 | `auth_token` | Mesh authentication token | (required) |
 | `github_owner` | GitHub owner for container image | `zombar` |
 | `image_tag` | Docker image tag | `latest` |
-| `mesh_cidr` | Mesh network CIDR | `10.99.0.0/16` |
+| `mesh_cidr` | Mesh network CIDR | `172.30.0.0/16` |
 | `region` | DO region | `ams` |
 | `locations_enabled` | Enable node location tracking | `false` |
 | `monitoring_enabled` | Enable monitoring stack (Prometheus, Grafana, Loki) | `false` |

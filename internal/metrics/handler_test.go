@@ -20,7 +20,7 @@ func TestHandler(t *testing.T) {
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	// Initialize metrics
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	// Set some values
 	m.PacketsSent.Add(100)
@@ -114,7 +114,7 @@ func TestHandler_OpenMetricsFormat(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	_ = InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	_ = InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	handler := Handler()
 
@@ -147,7 +147,7 @@ func TestHandler_LabeledMetrics(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	// Set labeled metrics
 	m.ConnectionState.WithLabelValues("peer-a", "ssh").Set(2)

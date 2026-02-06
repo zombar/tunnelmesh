@@ -39,7 +39,7 @@ func TestRelayManager_HandleHeartbeat(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Relay:        config.RelayConfig{Enabled: true},
 	}
@@ -104,7 +104,7 @@ func TestRelayManager_NotifyRelayRequest(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Relay:        config.RelayConfig{Enabled: true},
 	}
@@ -148,7 +148,7 @@ func TestRelayManager_NotifyHolePunch(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Relay:        config.RelayConfig{Enabled: true},
 	}
@@ -189,7 +189,7 @@ func TestRelayManager_NotifyPeerNotConnected(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Relay:        config.RelayConfig{Enabled: true},
 	}
@@ -206,7 +206,7 @@ func TestRelayManager_HeartbeatUpdatesStats(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Relay:        config.RelayConfig{Enabled: true},
 	}
@@ -312,7 +312,7 @@ func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Relay:        config.RelayConfig{Enabled: true},
 	}
@@ -366,7 +366,7 @@ func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Relay:        config.RelayConfig{Enabled: true},
 	}
@@ -415,7 +415,7 @@ func TestRelayManager_StoresReportedLatency(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Relay:        config.RelayConfig{Enabled: true},
 	}

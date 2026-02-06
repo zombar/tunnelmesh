@@ -12,7 +12,7 @@ func TestWGClientJSON(t *testing.T) {
 		ID:        "test-id-123",
 		Name:      "iPhone",
 		PublicKey: "abc123pubkey==",
-		MeshIP:    "10.99.100.1",
+		MeshIP:    "172.30.100.1",
 		DNSName:   "iphone",
 		Enabled:   true,
 		CreatedAt: now,
@@ -90,7 +90,7 @@ func TestCreateClientResponseJSON(t *testing.T) {
 		Client: Client{
 			ID:      "test-id",
 			Name:    "iPhone",
-			MeshIP:  "10.99.100.1",
+			MeshIP:  "172.30.100.1",
 			DNSName: "iphone",
 			Enabled: true,
 		},
@@ -156,8 +156,8 @@ func TestUpdateClientRequestValidation(t *testing.T) {
 func TestClientListResponseJSON(t *testing.T) {
 	resp := ClientListResponse{
 		Clients: []Client{
-			{ID: "1", Name: "iPhone", MeshIP: "10.99.100.1"},
-			{ID: "2", Name: "Android", MeshIP: "10.99.100.2"},
+			{ID: "1", Name: "iPhone", MeshIP: "172.30.100.1"},
+			{ID: "2", Name: "Android", MeshIP: "172.30.100.2"},
 		},
 		ConcentratorPublicKey: "concentratorkey==",
 	}

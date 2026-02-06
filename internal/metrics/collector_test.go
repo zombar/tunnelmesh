@@ -91,7 +91,7 @@ func TestCollector_CollectForwarderStats(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	fwd := &mockForwarder{
 		stats: routing.ForwarderStats{
@@ -167,7 +167,7 @@ func TestCollector_CollectTunnelStats(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	tunnelMgr := &mockTunnelMgr{
 		tunnels:      []string{"peer-a", "peer-b", "peer-c"},
@@ -205,7 +205,7 @@ func TestCollector_CollectConnectionStats(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	connMgr := &mockConnectionMgr{
 		infos: []connection.ConnectionInfo{
@@ -267,7 +267,7 @@ func TestCollector_CollectRelayStats(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	relay := &mockRelay{connected: true}
 
@@ -310,7 +310,7 @@ func TestCollector_CollectExitNodeStats(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	fwd := &mockForwarder{
 		exitNode: "exit-node-1",
@@ -360,7 +360,7 @@ func TestCollector_CollectWireGuardStats(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	wg := &mockWGConcentrator{
 		deviceRunning:  true,
@@ -401,11 +401,11 @@ func TestCollector_CollectGeolocationStats(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	identity := &peer.PeerIdentity{
 		Name:   "test-peer",
-		MeshIP: "10.99.0.1",
+		MeshIP: "172.30.0.1",
 		Location: &proto.GeoLocation{
 			Latitude:  37.7749,
 			Longitude: -122.4194,
@@ -456,7 +456,7 @@ func TestCollector_Run(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	fwd := &mockForwarder{
 		stats: routing.ForwarderStats{PacketsSent: 10},
@@ -508,7 +508,7 @@ func TestCollector_ReconnectObserver(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	c := NewCollector(m, CollectorConfig{})
 
@@ -574,7 +574,7 @@ func TestCollector_DeltaCalculation(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	fwd := &mockForwarder{
 		stats: routing.ForwarderStats{PacketsSent: 100},
@@ -625,7 +625,7 @@ func TestCollector_NilComponents(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	// Create collector with all nil components
 	c := NewCollector(m, CollectorConfig{})
@@ -666,7 +666,7 @@ func TestCollector_LatencyStats(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	rttProvider := &mockRTTProvider{rtt: 42 * time.Millisecond}
 
@@ -697,7 +697,7 @@ func TestCollector_LatencyStats_ZeroRTT(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
 
 	// Zero RTT (no measurement yet)
 	rttProvider := &mockRTTProvider{rtt: 0}

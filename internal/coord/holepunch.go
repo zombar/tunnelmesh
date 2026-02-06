@@ -276,13 +276,11 @@ func (s *Server) handleUDPRegister(w http.ResponseWriter, r *http.Request) {
 	// Discover external address from the request
 	externalIP := getClientIP(r)
 
-	// If the detected IP is localhost (peer is on same machine as server),
-	// try to use the peer's registered private IP instead
-	if externalIP == "127.0.0.1" || externalIP == "::1" {
+	// If the detected IP is localhost or a private IP (peer is on same machine
+	// or connecting via VPC/internal network), use the peer's registered public IP
+	if isLocalOrPrivateIP(externalIP) {
 		s.peersMu.RLock()
-		if info, ok := s.peers[req.PeerName]; ok && len(info.peer.PrivateIPs) > 0 {
-			externalIP = info.peer.PrivateIPs[0]
-		} else if info != nil && len(info.peer.PublicIPs) > 0 {
+		if info, ok := s.peers[req.PeerName]; ok && len(info.peer.PublicIPs) > 0 {
 			externalIP = info.peer.PublicIPs[0]
 		}
 		s.peersMu.RUnlock()
@@ -428,4 +426,20 @@ func getClientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// isLocalOrPrivateIP returns true if the IP is localhost or a private IP.
+// Used to detect when peer is connecting via internal/VPC network.
+func isLocalOrPrivateIP(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	if ip.IsPrivate() {
+		return true
+	}
+	return false
 }

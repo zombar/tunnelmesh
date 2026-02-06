@@ -35,7 +35,7 @@ func TestNewWriter_CustomConfig(t *testing.T) {
 		Timeout:       30 * time.Second,
 		Labels: map[string]string{
 			"peer":    "test-peer",
-			"mesh_ip": "10.99.0.1",
+			"mesh_ip": "172.30.0.1",
 		},
 	})
 
@@ -48,8 +48,8 @@ func TestNewWriter_CustomConfig(t *testing.T) {
 	if w.labels["peer"] != "test-peer" {
 		t.Errorf("expected peer label 'test-peer', got %q", w.labels["peer"])
 	}
-	if w.labels["mesh_ip"] != "10.99.0.1" {
-		t.Errorf("expected mesh_ip label '10.99.0.1', got %q", w.labels["mesh_ip"])
+	if w.labels["mesh_ip"] != "172.30.0.1" {
+		t.Errorf("expected mesh_ip label '172.30.0.1', got %q", w.labels["mesh_ip"])
 	}
 	// job label should still be set
 	if w.labels["job"] != "tunnelmesh" {
@@ -175,7 +175,7 @@ func TestWriter_Flush_SendsCorrectPayload(t *testing.T) {
 		BatchSize: 100,
 		Labels: map[string]string{
 			"peer":    "test-peer",
-			"mesh_ip": "10.99.0.5",
+			"mesh_ip": "172.30.0.5",
 		},
 	})
 
@@ -196,8 +196,8 @@ func TestWriter_Flush_SendsCorrectPayload(t *testing.T) {
 	if stream.Stream["peer"] != "test-peer" {
 		t.Errorf("expected peer label 'test-peer', got %q", stream.Stream["peer"])
 	}
-	if stream.Stream["mesh_ip"] != "10.99.0.5" {
-		t.Errorf("expected mesh_ip label '10.99.0.5', got %q", stream.Stream["mesh_ip"])
+	if stream.Stream["mesh_ip"] != "172.30.0.5" {
+		t.Errorf("expected mesh_ip label '172.30.0.5', got %q", stream.Stream["mesh_ip"])
 	}
 	if stream.Stream["job"] != "tunnelmesh" {
 		t.Errorf("expected job label 'tunnelmesh', got %q", stream.Stream["job"])
@@ -313,7 +313,7 @@ func TestWriter_SetLabels(t *testing.T) {
 	})
 
 	w.SetLabels(map[string]string{
-		"mesh_ip": "10.99.0.10",
+		"mesh_ip": "172.30.0.10",
 		"version": "1.0.0",
 	})
 
@@ -323,8 +323,8 @@ func TestWriter_SetLabels(t *testing.T) {
 	if w.labels["peer"] != "original" {
 		t.Errorf("expected peer label to remain 'original', got %q", w.labels["peer"])
 	}
-	if w.labels["mesh_ip"] != "10.99.0.10" {
-		t.Errorf("expected mesh_ip label '10.99.0.10', got %q", w.labels["mesh_ip"])
+	if w.labels["mesh_ip"] != "172.30.0.10" {
+		t.Errorf("expected mesh_ip label '172.30.0.10', got %q", w.labels["mesh_ip"])
 	}
 	if w.labels["version"] != "1.0.0" {
 		t.Errorf("expected version label '1.0.0', got %q", w.labels["version"])

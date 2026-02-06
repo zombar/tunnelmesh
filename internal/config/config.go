@@ -110,7 +110,7 @@ type GeolocationConfig struct {
 // LokiConfig holds configuration for shipping logs to Loki.
 type LokiConfig struct {
 	Enabled       bool   `yaml:"enabled"`        // Enable Loki log shipping
-	URL           string `yaml:"url"`            // Loki push URL (e.g., "http://10.99.0.1:3100")
+	URL           string `yaml:"url"`            // Loki push URL (e.g., "http://172.30.0.1:3100")
 	BatchSize     int    `yaml:"batch_size"`     // Max entries before flush (default: 100)
 	FlushInterval string `yaml:"flush_interval"` // Flush interval (default: "5s")
 }
@@ -145,7 +145,7 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 
 	// Apply defaults
 	if cfg.MeshCIDR == "" {
-		cfg.MeshCIDR = "10.99.0.0/16"
+		cfg.MeshCIDR = "172.30.0.0/16"
 	}
 	if cfg.DomainSuffix == "" {
 		cfg.DomainSuffix = ".tunnelmesh"

@@ -10,7 +10,7 @@ auth_token: "your-secure-token-here"
 
 # Mesh network CIDR - IP addresses assigned to peers
 # Default avoids conflict with Tailscale (100.x.x.x)
-mesh_cidr: "10.99.0.0/16"
+mesh_cidr: "172.30.0.0/16"
 
 # Domain suffix for mesh hostnames
 domain_suffix: ".tunnelmesh"

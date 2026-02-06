@@ -582,6 +582,8 @@ func (m *mockRelayServerWithRTT) handlePersistentRelayWithRTT(w http.ResponseWri
 			// Parse to get HeartbeatSentAt
 			var stats proto.PeerStats
 			if err := json.Unmarshal(statsJSON, &stats); err == nil && stats.HeartbeatSentAt != 0 {
+				// Small delay to ensure measurable RTT on Windows (15.6ms timer resolution)
+				time.Sleep(20 * time.Millisecond)
 				// Send extended ack with echoed timestamp: [MsgTypeHeartbeatAck][timestamp:8]
 				ack := make([]byte, 9)
 				ack[0] = MsgTypeHeartbeatAck

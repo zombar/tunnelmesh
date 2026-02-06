@@ -1153,7 +1153,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 				// Start the WireGuard device if TUN is available
 				if tunDev != nil {
 					// Calculate concentrator's WG interface address
-					// Use .1 in the first WG client subnet (e.g., 10.99.100.1/16)
+					// Use .1 in the first WG client subnet (e.g., 172.30.100.1/16)
 					_, meshNet, _ := net.ParseCIDR(resp.MeshCIDR)
 					baseIP := meshNet.IP.To4()
 					wgAddr := fmt.Sprintf("%d.%d.100.1/16", baseIP[0], baseIP[1])

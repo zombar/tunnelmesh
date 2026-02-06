@@ -17,8 +17,8 @@ func TestNewMeshNode(t *testing.T) {
 		Name:          "test-node",
 		PubKeyEncoded: "test-key",
 		SSHPort:       2222,
-		MeshCIDR:      "10.99.0.0/16",
-		MeshIP:        "10.99.0.1",
+		MeshCIDR:      "172.30.0.0/16",
+		MeshIP:        "172.30.0.1",
 		Config: &config.PeerConfig{
 			Name:    "test-node",
 			SSHPort: 2222,

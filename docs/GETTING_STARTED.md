@@ -83,7 +83,7 @@ listen: ":8080"
 auth_token: "change-me-to-a-secure-token"
 
 # IP range for mesh network (peers get IPs from this range)
-mesh_cidr: "10.99.0.0/16"
+mesh_cidr: "172.30.0.0/16"
 
 # Domain suffix for mesh DNS resolution
 domain_suffix: ".tunnelmesh"
@@ -110,7 +110,7 @@ listen: ":8080"
 auth_token: "change-me-to-a-secure-token"
 
 # IP range for mesh network
-mesh_cidr: "10.99.0.0/16"
+mesh_cidr: "172.30.0.0/16"
 
 # Domain suffix for mesh DNS resolution
 domain_suffix: ".tunnelmesh"

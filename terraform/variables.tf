@@ -112,7 +112,7 @@ variable "external_api_port" {
 variable "mesh_cidr" {
   description = "CIDR block for mesh network IP allocation"
   type        = string
-  default     = "10.99.0.0/16"
+  default     = "172.30.0.0/16"
 }
 
 variable "domain_suffix" {

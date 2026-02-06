@@ -94,7 +94,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Locations:    true, // Enable location tracking for this test
 		Admin: config.AdminConfig{
@@ -145,7 +145,7 @@ func TestAdminOverview_ExitNodeInfo(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Admin: config.AdminConfig{
 			Enabled: true,
@@ -206,7 +206,7 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Admin: config.AdminConfig{
 			Enabled: true,
@@ -268,7 +268,7 @@ func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Admin: config.AdminConfig{
 			Enabled: true,

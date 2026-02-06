@@ -79,7 +79,7 @@ func TestWGDeviceConfigStruct(t *testing.T) {
 		PrivateKey:    "cGFzc3dvcmQ=", // base64 "password"
 		ListenPort:    51820,
 		MTU:           1420,
-		Address:       "10.99.100.1/16",
+		Address:       "172.30.100.1/16",
 	}
 
 	if cfg.InterfaceName != "wg-test" {
@@ -91,8 +91,8 @@ func TestWGDeviceConfigStruct(t *testing.T) {
 	if cfg.MTU != 1420 {
 		t.Errorf("MTU = %d, want 1420", cfg.MTU)
 	}
-	if cfg.Address != "10.99.100.1/16" {
-		t.Errorf("Address = %s, want 10.99.100.1/16", cfg.Address)
+	if cfg.Address != "172.30.100.1/16" {
+		t.Errorf("Address = %s, want 172.30.100.1/16", cfg.Address)
 	}
 }
 

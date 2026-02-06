@@ -20,21 +20,21 @@ func TestParseIPConfig(t *testing.T) {
 	}{
 		{
 			name:     "valid config",
-			ip:       "10.99.0.1",
-			cidr:     "10.99.0.0/16",
-			wantIP:   net.ParseIP("10.99.0.1").To4(),
+			ip:       "172.30.0.1",
+			cidr:     "172.30.0.0/16",
+			wantIP:   net.ParseIP("172.30.0.1").To4(),
 			wantMask: net.CIDRMask(16, 32),
 			wantErr:  false,
 		},
 		{
 			name:    "invalid IP",
 			ip:      "invalid",
-			cidr:    "10.99.0.0/16",
+			cidr:    "172.30.0.0/16",
 			wantErr: true,
 		},
 		{
 			name:    "invalid CIDR",
-			ip:      "10.99.0.1",
+			ip:      "172.30.0.1",
 			cidr:    "invalid",
 			wantErr: true,
 		},
@@ -65,7 +65,7 @@ func TestConfig_Validate(t *testing.T) {
 			cfg: Config{
 				Name:    "tun-mesh0",
 				MTU:     1400,
-				Address: "10.99.0.1/16",
+				Address: "172.30.0.1/16",
 			},
 			wantErr: false,
 		},
@@ -73,7 +73,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "missing name",
 			cfg: Config{
 				MTU:     1400,
-				Address: "10.99.0.1/16",
+				Address: "172.30.0.1/16",
 			},
 			wantErr: true,
 		},
@@ -82,7 +82,7 @@ func TestConfig_Validate(t *testing.T) {
 			cfg: Config{
 				Name:    "tun-mesh0",
 				MTU:     100,
-				Address: "10.99.0.1/16",
+				Address: "172.30.0.1/16",
 			},
 			wantErr: true,
 		},
@@ -123,7 +123,7 @@ func TestDevice_Create(t *testing.T) {
 	cfg := Config{
 		Name:    "tuntest0",
 		MTU:     1400,
-		Address: "10.99.99.1/24",
+		Address: "172.30.99.1/24",
 	}
 
 	dev, err := Create(cfg)
@@ -150,7 +150,7 @@ func TestExitRouteConfig_Validate(t *testing.T) {
 			name: "valid exit client config",
 			cfg: ExitRouteConfig{
 				InterfaceName: "utun5",
-				MeshCIDR:      "10.99.0.0/16",
+				MeshCIDR:      "172.30.0.0/16",
 				IsExitNode:    false,
 			},
 			wantErr: false,
@@ -159,7 +159,7 @@ func TestExitRouteConfig_Validate(t *testing.T) {
 			name: "valid exit node config",
 			cfg: ExitRouteConfig{
 				InterfaceName: "utun5",
-				MeshCIDR:      "10.99.0.0/16",
+				MeshCIDR:      "172.30.0.0/16",
 				IsExitNode:    true,
 			},
 			wantErr: false,
@@ -167,7 +167,7 @@ func TestExitRouteConfig_Validate(t *testing.T) {
 		{
 			name: "missing interface name",
 			cfg: ExitRouteConfig{
-				MeshCIDR: "10.99.0.0/16",
+				MeshCIDR: "172.30.0.0/16",
 			},
 			wantErr: true,
 		},
@@ -203,7 +203,7 @@ func TestExitRouteConfig_Validate(t *testing.T) {
 func TestBuildDefaultRouteCommands_Darwin(t *testing.T) {
 	cfg := ExitRouteConfig{
 		InterfaceName: "utun5",
-		MeshCIDR:      "10.99.0.0/16",
+		MeshCIDR:      "172.30.0.0/16",
 	}
 
 	addCmds, removeCmds := buildDefaultRouteCommands(cfg, "darwin")
@@ -225,7 +225,7 @@ func TestBuildDefaultRouteCommands_Darwin(t *testing.T) {
 func TestBuildDefaultRouteCommands_Linux(t *testing.T) {
 	cfg := ExitRouteConfig{
 		InterfaceName: "tun0",
-		MeshCIDR:      "10.99.0.0/16",
+		MeshCIDR:      "172.30.0.0/16",
 	}
 
 	addCmds, removeCmds := buildDefaultRouteCommands(cfg, "linux")
@@ -243,7 +243,7 @@ func TestBuildDefaultRouteCommands_Linux(t *testing.T) {
 func TestBuildExitNATCommands_Linux(t *testing.T) {
 	cfg := ExitRouteConfig{
 		InterfaceName: "tun0",
-		MeshCIDR:      "10.99.0.0/16",
+		MeshCIDR:      "172.30.0.0/16",
 		IsExitNode:    true,
 	}
 
@@ -276,7 +276,7 @@ func TestBuildExitNATCommands_Linux(t *testing.T) {
 func TestBuildExitNATCommands_Darwin(t *testing.T) {
 	cfg := ExitRouteConfig{
 		InterfaceName: "utun5",
-		MeshCIDR:      "10.99.0.0/16",
+		MeshCIDR:      "172.30.0.0/16",
 		IsExitNode:    true,
 	}
 

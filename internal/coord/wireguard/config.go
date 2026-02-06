@@ -62,7 +62,7 @@ func GenerateClientConfig(params ClientConfigParams) string {
 
 	allowedIPs := params.MeshCIDR
 	if allowedIPs == "" {
-		allowedIPs = "10.99.0.0/16" // Default mesh CIDR
+		allowedIPs = "172.30.0.0/16" // Default mesh CIDR
 	}
 	sb.WriteString(fmt.Sprintf("AllowedIPs = %s\n", allowedIPs))
 

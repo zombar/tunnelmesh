@@ -105,7 +105,7 @@ func TestSSEHub_BroadcastFullBuffer(t *testing.T) {
 
 func TestHandleSSE(t *testing.T) {
 	cfg := &config.ServerConfig{
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".test",
 		AuthToken:    "test-token",
 	}
@@ -162,7 +162,7 @@ func TestHandleSSE(t *testing.T) {
 
 func TestNotifyHeartbeat_NoClients(t *testing.T) {
 	cfg := &config.ServerConfig{
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".test",
 		AuthToken:    "test-token",
 	}
@@ -186,7 +186,7 @@ func TestSSEEventFormat(t *testing.T) {
 
 	// Create a server just for notification
 	cfg := &config.ServerConfig{
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".test",
 		AuthToken:    "test-token",
 	}

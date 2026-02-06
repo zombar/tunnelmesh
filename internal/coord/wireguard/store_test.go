@@ -6,7 +6,7 @@ import (
 )
 
 func TestStoreCreate(t *testing.T) {
-	store := NewStore("10.99.0.0/16")
+	store := NewStore("172.30.0.0/16")
 
 	client, err := store.Create("iPhone")
 	if err != nil {
@@ -37,7 +37,7 @@ func TestStoreCreate(t *testing.T) {
 }
 
 func TestStoreCreatePrivateKey(t *testing.T) {
-	store := NewStore("10.99.0.0/16")
+	store := NewStore("172.30.0.0/16")
 
 	client, privateKey, err := store.CreateWithPrivateKey("iPhone")
 	if err != nil {
@@ -55,7 +55,7 @@ func TestStoreCreatePrivateKey(t *testing.T) {
 }
 
 func TestStoreGet(t *testing.T) {
-	store := NewStore("10.99.0.0/16")
+	store := NewStore("172.30.0.0/16")
 
 	client, _ := store.Create("iPhone")
 
@@ -76,7 +76,7 @@ func TestStoreGet(t *testing.T) {
 }
 
 func TestStoreList(t *testing.T) {
-	store := NewStore("10.99.0.0/16")
+	store := NewStore("172.30.0.0/16")
 
 	// Empty list
 	clients := store.List()
@@ -96,7 +96,7 @@ func TestStoreList(t *testing.T) {
 }
 
 func TestStoreUpdate(t *testing.T) {
-	store := NewStore("10.99.0.0/16")
+	store := NewStore("172.30.0.0/16")
 
 	client, _ := store.Create("iPhone")
 	if !client.Enabled {
@@ -127,7 +127,7 @@ func TestStoreUpdate(t *testing.T) {
 }
 
 func TestStoreDelete(t *testing.T) {
-	store := NewStore("10.99.0.0/16")
+	store := NewStore("172.30.0.0/16")
 
 	client, _ := store.Create("iPhone")
 
@@ -151,7 +151,7 @@ func TestStoreDelete(t *testing.T) {
 }
 
 func TestStoreIPAllocation(t *testing.T) {
-	store := NewStore("10.99.0.0/16")
+	store := NewStore("172.30.0.0/16")
 
 	ips := make(map[string]bool)
 	for i := 0; i < 10; i++ {
@@ -162,16 +162,16 @@ func TestStoreIPAllocation(t *testing.T) {
 		ips[client.MeshIP] = true
 	}
 
-	// All IPs should be in the WG client range (10.99.100.x - 10.99.199.x)
+	// All IPs should be in the WG client range (172.30.100.x - 172.30.199.x)
 	for ip := range ips {
 		if !isInWGClientRange(ip) {
-			t.Errorf("IP %s is not in WG client range (10.99.100.0 - 10.99.199.255)", ip)
+			t.Errorf("IP %s is not in WG client range (172.30.100.0 - 172.30.199.255)", ip)
 		}
 	}
 }
 
 func TestStoreDNSNameGeneration(t *testing.T) {
-	store := NewStore("10.99.0.0/16")
+	store := NewStore("172.30.0.0/16")
 
 	tests := []struct {
 		name     string
@@ -195,7 +195,7 @@ func TestStoreDNSNameGeneration(t *testing.T) {
 }
 
 func TestStoreUpdateLastSeen(t *testing.T) {
-	store := NewStore("10.99.0.0/16")
+	store := NewStore("172.30.0.0/16")
 
 	client, _ := store.Create("iPhone")
 	initialLastSeen := client.LastSeen
@@ -217,7 +217,7 @@ func TestStoreUpdateLastSeen(t *testing.T) {
 }
 
 func TestStoreConcurrency(t *testing.T) {
-	store := NewStore("10.99.0.0/16")
+	store := NewStore("172.30.0.0/16")
 
 	// Create clients concurrently
 	done := make(chan bool)
@@ -242,13 +242,13 @@ func TestStoreConcurrency(t *testing.T) {
 
 // isInWGClientRange checks if an IP is in the WireGuard client range
 func isInWGClientRange(ip string) bool {
-	// WG clients use 10.99.100.0 - 10.99.199.255
+	// WG clients use 172.30.100.0 - 172.30.199.255
 	var a, b, c, d int
 	n, _ := parseIP(ip, &a, &b, &c, &d)
 	if n != 4 {
 		return false
 	}
-	return a == 10 && b == 99 && c >= 100 && c <= 199
+	return a == 172 && b == 30 && c >= 100 && c <= 199
 }
 
 func parseIP(ip string, a, b, c, d *int) (int, error) {

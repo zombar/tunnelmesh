@@ -13,12 +13,12 @@ func TestServer_GenerateAndValidateToken(t *testing.T) {
 	srv, err := NewServer(&config.ServerConfig{
 		Listen:    ":8080",
 		AuthToken: "test-secret-key-12345",
-		MeshCIDR:  "10.99.0.0/16",
+		MeshCIDR:  "172.30.0.0/16",
 	})
 	require.NoError(t, err)
 
 	// Generate token
-	token, err := srv.GenerateToken("peer1", "10.99.0.1")
+	token, err := srv.GenerateToken("peer1", "172.30.0.1")
 	require.NoError(t, err)
 	assert.NotEmpty(t, token)
 
@@ -26,7 +26,7 @@ func TestServer_GenerateAndValidateToken(t *testing.T) {
 	claims, err := srv.ValidateToken(token)
 	require.NoError(t, err)
 	assert.Equal(t, "peer1", claims.PeerName)
-	assert.Equal(t, "10.99.0.1", claims.MeshIP)
+	assert.Equal(t, "172.30.0.1", claims.MeshIP)
 	assert.Equal(t, "tunnelmesh", claims.Issuer)
 }
 
@@ -34,19 +34,19 @@ func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
 	srv1, err := NewServer(&config.ServerConfig{
 		Listen:    ":8080",
 		AuthToken: "secret-key-1",
-		MeshCIDR:  "10.99.0.0/16",
+		MeshCIDR:  "172.30.0.0/16",
 	})
 	require.NoError(t, err)
 
 	srv2, err := NewServer(&config.ServerConfig{
 		Listen:    ":8080",
 		AuthToken: "secret-key-2", // Different key
-		MeshCIDR:  "10.99.0.0/16",
+		MeshCIDR:  "172.30.0.0/16",
 	})
 	require.NoError(t, err)
 
 	// Generate token with one server
-	token, err := srv1.GenerateToken("peer1", "10.99.0.1")
+	token, err := srv1.GenerateToken("peer1", "172.30.0.1")
 	require.NoError(t, err)
 
 	// Try to validate with different server (different signing key)
@@ -58,7 +58,7 @@ func TestServer_ValidateToken_InvalidToken(t *testing.T) {
 	srv, err := NewServer(&config.ServerConfig{
 		Listen:    ":8080",
 		AuthToken: "test-secret-key",
-		MeshCIDR:  "10.99.0.0/16",
+		MeshCIDR:  "172.30.0.0/16",
 	})
 	require.NoError(t, err)
 

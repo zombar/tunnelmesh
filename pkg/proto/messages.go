@@ -51,7 +51,7 @@ type Peer struct {
 	PrivateIPs        []string     `json:"private_ips"`                   // Internal network IPs
 	SSHPort           int          `json:"ssh_port"`                      // SSH server port
 	UDPPort           int          `json:"udp_port,omitempty"`            // UDP transport port
-	MeshIP            string       `json:"mesh_ip"`                       // Assigned mesh network IP (10.99.x.x)
+	MeshIP            string       `json:"mesh_ip"`                       // Assigned mesh network IP (172.30.x.x)
 	LastSeen          time.Time    `json:"last_seen"`                     // Last heartbeat time
 	Connectable       bool         `json:"connectable"`                   // Can accept incoming connections
 	BehindNAT         bool         `json:"behind_nat"`                    // Public IP was fetched externally (behind NAT)

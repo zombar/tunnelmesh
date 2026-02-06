@@ -237,7 +237,7 @@ func (s *ClientStore) UpdateLastSeen(id string, t time.Time) error {
 }
 
 // allocateIP allocates the next available IP in the WireGuard client range.
-// WG clients use 10.99.100.0 - 10.99.199.255 (third octet 100-199).
+// WG clients use 172.30.100.0 - 172.30.199.255 (third octet 100-199).
 // Must be called with lock held.
 func (s *ClientStore) allocateIP() (string, error) {
 	// Parse mesh CIDR to get base network
@@ -246,7 +246,7 @@ func (s *ClientStore) allocateIP() (string, error) {
 		return "", fmt.Errorf("invalid mesh CIDR: %w", err)
 	}
 
-	// Get base IP (e.g., 10.99.0.0)
+	// Get base IP (e.g., 172.30.0.0)
 	baseIP := ipNet.IP.To4()
 	if baseIP == nil {
 		return "", errors.New("only IPv4 supported")

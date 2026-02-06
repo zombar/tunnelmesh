@@ -28,14 +28,14 @@ func TestPeersToTargets(t *testing.T) {
 		{
 			name: "single online peer",
 			peers: []Peer{
-				{Name: "peer1", MeshIP: "10.99.0.1", LastSeen: now.Add(-30 * time.Second)},
+				{Name: "peer1", MeshIP: "172.30.0.1", LastSeen: now.Add(-30 * time.Second)},
 			},
 			expected: 1,
 		},
 		{
 			name: "single offline peer",
 			peers: []Peer{
-				{Name: "peer1", MeshIP: "10.99.0.1", LastSeen: now.Add(-5 * time.Minute)},
+				{Name: "peer1", MeshIP: "172.30.0.1", LastSeen: now.Add(-5 * time.Minute)},
 			},
 			expected: 0,
 		},
@@ -49,9 +49,9 @@ func TestPeersToTargets(t *testing.T) {
 		{
 			name: "mixed peers",
 			peers: []Peer{
-				{Name: "online1", MeshIP: "10.99.0.1", LastSeen: now.Add(-30 * time.Second)},
-				{Name: "offline1", MeshIP: "10.99.0.2", LastSeen: now.Add(-5 * time.Minute)},
-				{Name: "online2", MeshIP: "10.99.0.3", LastSeen: now.Add(-1 * time.Minute)},
+				{Name: "online1", MeshIP: "172.30.0.1", LastSeen: now.Add(-30 * time.Second)},
+				{Name: "offline1", MeshIP: "172.30.0.2", LastSeen: now.Add(-5 * time.Minute)},
+				{Name: "online2", MeshIP: "172.30.0.3", LastSeen: now.Add(-1 * time.Minute)},
 				{Name: "no-ip", MeshIP: "", LastSeen: now.Add(-30 * time.Second)},
 			},
 			expected: 2,
@@ -59,14 +59,14 @@ func TestPeersToTargets(t *testing.T) {
 		{
 			name: "peer exactly at threshold",
 			peers: []Peer{
-				{Name: "peer1", MeshIP: "10.99.0.1", LastSeen: now.Add(-threshold)},
+				{Name: "peer1", MeshIP: "172.30.0.1", LastSeen: now.Add(-threshold)},
 			},
 			expected: 0, // >= threshold means offline
 		},
 		{
 			name: "peer just before threshold",
 			peers: []Peer{
-				{Name: "peer1", MeshIP: "10.99.0.1", LastSeen: now.Add(-threshold + time.Second)},
+				{Name: "peer1", MeshIP: "172.30.0.1", LastSeen: now.Add(-threshold + time.Second)},
 			},
 			expected: 1,
 		},
@@ -85,7 +85,7 @@ func TestPeersToTargets(t *testing.T) {
 func TestPeersToTargets_TargetFormat(t *testing.T) {
 	now := time.Now()
 	peers := []Peer{
-		{Name: "test-peer", MeshIP: "10.99.0.42", LastSeen: now},
+		{Name: "test-peer", MeshIP: "172.30.0.42", LastSeen: now},
 	}
 
 	targets := PeersToTargets(peers, "9443", 2*time.Minute, now)
@@ -100,8 +100,8 @@ func TestPeersToTargets_TargetFormat(t *testing.T) {
 	if len(target.Targets) != 1 {
 		t.Errorf("expected 1 target address, got %d", len(target.Targets))
 	}
-	if target.Targets[0] != "10.99.0.42:9443" {
-		t.Errorf("expected target address '10.99.0.42:9443', got '%s'", target.Targets[0])
+	if target.Targets[0] != "172.30.0.42:9443" {
+		t.Errorf("expected target address '172.30.0.42:9443', got '%s'", target.Targets[0])
 	}
 
 	// Check labels
@@ -116,11 +116,11 @@ func TestWriteTargets(t *testing.T) {
 
 	targets := []Target{
 		{
-			Targets: []string{"10.99.0.1:9443"},
+			Targets: []string{"172.30.0.1:9443"},
 			Labels:  map[string]string{"peer": "peer1"},
 		},
 		{
-			Targets: []string{"10.99.0.2:9443"},
+			Targets: []string{"172.30.0.2:9443"},
 			Labels:  map[string]string{"peer": "peer2"},
 		},
 	}
@@ -211,8 +211,8 @@ func TestGenerator_Generate(t *testing.T) {
 	now := time.Now()
 	g.SetFetcher(&mockFetcher{
 		peers: []Peer{
-			{Name: "peer1", MeshIP: "10.99.0.1", LastSeen: now},
-			{Name: "peer2", MeshIP: "10.99.0.2", LastSeen: now.Add(-5 * time.Minute)}, // offline
+			{Name: "peer1", MeshIP: "172.30.0.1", LastSeen: now},
+			{Name: "peer2", MeshIP: "172.30.0.2", LastSeen: now.Add(-5 * time.Minute)}, // offline
 		},
 	})
 
@@ -328,7 +328,7 @@ func TestGenerator_Generate_WriteError(t *testing.T) {
 	g := NewGenerator(cfg)
 	g.SetFetcher(&mockFetcher{
 		peers: []Peer{
-			{Name: "peer1", MeshIP: "10.99.0.1", LastSeen: time.Now()},
+			{Name: "peer1", MeshIP: "172.30.0.1", LastSeen: time.Now()},
 		},
 	})
 
@@ -342,8 +342,8 @@ func TestHTTPFetcher_Success(t *testing.T) {
 	now := time.Now()
 	response := PeersResponse{
 		Peers: []Peer{
-			{Name: "peer1", MeshIP: "10.99.0.1", LastSeen: now},
-			{Name: "peer2", MeshIP: "10.99.0.2", LastSeen: now},
+			{Name: "peer1", MeshIP: "172.30.0.1", LastSeen: now},
+			{Name: "peer2", MeshIP: "172.30.0.2", LastSeen: now},
 		},
 	}
 

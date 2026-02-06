@@ -61,7 +61,7 @@ func TestDeviceConfigGeneration(t *testing.T) {
 		Peers: []PeerConfig{
 			{
 				PublicKey:  "xTIBA5rboUvnH4htodjb60Y7YAf21J7YQMlNGC8HQ14=",
-				AllowedIPs: []string{"10.99.100.1/32"},
+				AllowedIPs: []string{"172.30.100.1/32"},
 			},
 		},
 	}
@@ -83,7 +83,7 @@ func TestDeviceConfigGeneration(t *testing.T) {
 		t.Error("UAPI should contain public_key for peer")
 	}
 
-	if !containsLine(uapi, "allowed_ip=10.99.100.1/32") {
+	if !containsLine(uapi, "allowed_ip=172.30.100.1/32") {
 		t.Error("UAPI should contain allowed_ip for peer")
 	}
 }
@@ -116,14 +116,14 @@ func TestPeerConfigValidation(t *testing.T) {
 			name: "valid peer",
 			peer: PeerConfig{
 				PublicKey:  "xTIBA5rboUvnH4htodjb60Y7YAf21J7YQMlNGC8HQ14=",
-				AllowedIPs: []string{"10.99.100.1/32"},
+				AllowedIPs: []string{"172.30.100.1/32"},
 			},
 			wantErr: false,
 		},
 		{
 			name: "missing public key",
 			peer: PeerConfig{
-				AllowedIPs: []string{"10.99.100.1/32"},
+				AllowedIPs: []string{"172.30.100.1/32"},
 			},
 			wantErr: true,
 		},

@@ -18,7 +18,7 @@ func newTestServer(t *testing.T) *Server {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Admin:        config.AdminConfig{Enabled: true},
 	}
@@ -65,7 +65,7 @@ func TestServer_Register_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, resp.MeshIP)
-	assert.Equal(t, "10.99.0.0/16", resp.MeshCIDR)
+	assert.Equal(t, "172.30.0.0/16", resp.MeshCIDR)
 	assert.Equal(t, ".tunnelmesh", resp.Domain)
 	assert.NotEmpty(t, resp.Token, "should return JWT token for relay auth")
 
@@ -253,7 +253,7 @@ func TestServer_IPAllocation(t *testing.T) {
 		ips[resp.MeshIP] = true
 
 		// Verify IP is in mesh range
-		assert.Contains(t, resp.MeshIP, "10.99.")
+		assert.Contains(t, resp.MeshIP, "172.30.")
 	}
 }
 
@@ -273,7 +273,7 @@ func TestServer_AdminOverview_NoPeers(t *testing.T) {
 
 	assert.Equal(t, 0, resp.TotalPeers)
 	assert.Equal(t, 0, resp.OnlinePeers)
-	assert.Equal(t, "10.99.0.0/16", resp.MeshCIDR)
+	assert.Equal(t, "172.30.0.0/16", resp.MeshCIDR)
 	assert.Empty(t, resp.Peers)
 }
 
@@ -533,7 +533,7 @@ func newTestServerWithWireGuard(t *testing.T) *Server {
 	cfg := &config.ServerConfig{
 		Listen:       ":0",
 		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
+		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Admin:        config.AdminConfig{Enabled: true},
 		WireGuard: config.WireGuardServerConfig{

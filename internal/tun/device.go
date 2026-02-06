@@ -17,7 +17,7 @@ import (
 type Config struct {
 	Name    string // Interface name (e.g., "tun-mesh0")
 	MTU     int    // Maximum transmission unit
-	Address string // IP address with CIDR (e.g., "10.99.0.1/16")
+	Address string // IP address with CIDR (e.g., "172.30.0.1/16")
 }
 
 // Validate checks if the configuration is valid.

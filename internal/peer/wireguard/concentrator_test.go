@@ -119,7 +119,7 @@ func TestClientSyncParsing(t *testing.T) {
 					ID:        "id1",
 					Name:      "iPhone",
 					PublicKey: "xTIBA5rboUvnH4htodjb60Y7YAf21J7YQMlNGC8HQ14=",
-					MeshIP:    "10.99.100.1",
+					MeshIP:    "172.30.100.1",
 					DNSName:   "iphone",
 					Enabled:   true,
 				},
@@ -127,7 +127,7 @@ func TestClientSyncParsing(t *testing.T) {
 					ID:        "id2",
 					Name:      "Android",
 					PublicKey: "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykI=",
-					MeshIP:    "10.99.100.2",
+					MeshIP:    "172.30.100.2",
 					DNSName:   "android",
 					Enabled:   true,
 				},
@@ -151,8 +151,8 @@ func TestClientSyncParsing(t *testing.T) {
 	if clients[0].Name != "iPhone" {
 		t.Errorf("expected first client to be iPhone, got %s", clients[0].Name)
 	}
-	if clients[0].MeshIP != "10.99.100.1" {
-		t.Errorf("expected mesh IP 10.99.100.1, got %s", clients[0].MeshIP)
+	if clients[0].MeshIP != "172.30.100.1" {
+		t.Errorf("expected mesh IP 172.30.100.1, got %s", clients[0].MeshIP)
 	}
 }
 
@@ -189,7 +189,7 @@ func TestClientToPeerConfig(t *testing.T) {
 		ID:        "id1",
 		Name:      "iPhone",
 		PublicKey: "xTIBA5rboUvnH4htodjb60Y7YAf21J7YQMlNGC8HQ14=",
-		MeshIP:    "10.99.100.1",
+		MeshIP:    "172.30.100.1",
 		DNSName:   "iphone",
 		Enabled:   true,
 	}
@@ -202,19 +202,19 @@ func TestClientToPeerConfig(t *testing.T) {
 	if len(peerCfg.AllowedIPs) != 1 {
 		t.Errorf("expected 1 allowed IP, got %d", len(peerCfg.AllowedIPs))
 	}
-	if peerCfg.AllowedIPs[0] != "10.99.100.1/32" {
-		t.Errorf("expected allowed IP 10.99.100.1/32, got %s", peerCfg.AllowedIPs[0])
+	if peerCfg.AllowedIPs[0] != "172.30.100.1/32" {
+		t.Errorf("expected allowed IP 172.30.100.1/32, got %s", peerCfg.AllowedIPs[0])
 	}
 }
 
 func TestClientsDiff(t *testing.T) {
 	old := []Client{
-		{ID: "1", PublicKey: "key1", MeshIP: "10.99.100.1"},
-		{ID: "2", PublicKey: "key2", MeshIP: "10.99.100.2"},
+		{ID: "1", PublicKey: "key1", MeshIP: "172.30.100.1"},
+		{ID: "2", PublicKey: "key2", MeshIP: "172.30.100.2"},
 	}
 	new := []Client{
-		{ID: "2", PublicKey: "key2", MeshIP: "10.99.100.2"},
-		{ID: "3", PublicKey: "key3", MeshIP: "10.99.100.3"},
+		{ID: "2", PublicKey: "key2", MeshIP: "172.30.100.2"},
+		{ID: "3", PublicKey: "key3", MeshIP: "172.30.100.3"},
 	}
 
 	added, removed := DiffClients(old, new)
@@ -324,8 +324,8 @@ func TestConcentratorUpdateClientsWithoutDevice(t *testing.T) {
 	})
 
 	clients := []Client{
-		{ID: "1", Name: "iPhone", PublicKey: "key1", MeshIP: "10.99.100.1", Enabled: true},
-		{ID: "2", Name: "Android", PublicKey: "key2", MeshIP: "10.99.100.2", Enabled: true},
+		{ID: "1", Name: "iPhone", PublicKey: "key1", MeshIP: "172.30.100.1", Enabled: true},
+		{ID: "2", Name: "Android", PublicKey: "key2", MeshIP: "172.30.100.2", Enabled: true},
 	}
 
 	// UpdateClients should work even without device (just updates internal list)

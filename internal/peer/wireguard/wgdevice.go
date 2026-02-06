@@ -31,7 +31,7 @@ type WGDeviceConfig struct {
 	PrivateKey    string
 	ListenPort    int
 	MTU           int
-	Address       string // IP address for the interface (e.g., "10.99.100.1/16")
+	Address       string // IP address for the interface (e.g., "172.30.100.1/16")
 }
 
 // NewWGDevice creates a new userspace WireGuard device.
