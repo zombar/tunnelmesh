@@ -127,16 +127,14 @@
             </div>
         </section>
 
-        <section id="logs-section" style="display: none;">
-            <a id="logs-link" class="logs-card" href="/grafana/explore" target="_blank">
-                <div class="logs-header">
-                    <h2>Peer Logs</h2>
-                </div>
-                <div class="logs-container" id="logs-container">
+        <section id="logs-section" class="logs-card" style="display: none;">
+            <h2 class="section-toggle" onclick="toggleSection(this)">Peer Logs</h2>
+            <div class="collapsible-content">
+                <a id="logs-link" class="logs-container" href="/grafana/explore" target="_blank">
                     <div id="logs-content"></div>
                     <div id="no-logs" class="empty-state">No logs available</div>
-                </div>
-            </a>
+                </a>
+            </div>
         </section>
 
         <section id="wireguard-section" style="display: none;">

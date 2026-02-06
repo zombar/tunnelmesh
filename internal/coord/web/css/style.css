@@ -1142,45 +1142,55 @@ a.alert-tile:hover {
 }
 
 /* Logs section */
-#logs-section {
+#logs-section.logs-card {
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border-primary);
     margin-bottom: 1.5rem;
 }
 
-.logs-card {
-    display: block;
-    background: var(--color-bg-primary);
-    border: 1px solid var(--color-border-primary);
-    text-decoration: none;
-    transition: background 0.15s ease, border-color 0.15s ease;
-    cursor: pointer;
-}
-
-.logs-card:hover {
-    background: var(--color-card-hover-bg);
-    border-color: var(--color-card-hover-border);
-    border-width: 2px;
-}
-
-.logs-header {
+#logs-section h2 {
+    font-size: 1rem;
+    font-weight: 600;
     padding: 1rem;
+    margin: 0;
+    color: var(--color-text-primary);
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border-primary);
 }
 
-.logs-header h2 {
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--color-text-primary);
-    margin: 0;
-}
-
 .logs-container {
+    display: block;
     max-height: 300px;
     overflow-y: auto;
     overflow-x: hidden;
     font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
     font-size: 0.75rem;
     line-height: 1.4;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.logs-container:hover {
+    background: var(--color-card-hover-bg);
+}
+
+/* Discreet scrollbar for logs */
+.logs-container::-webkit-scrollbar {
+    width: 6px;
+}
+
+.logs-container::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.logs-container::-webkit-scrollbar-thumb {
+    background: var(--color-border-primary);
+    border-radius: 3px;
+}
+
+.logs-container::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-secondary);
 }
 
 #logs-content {
