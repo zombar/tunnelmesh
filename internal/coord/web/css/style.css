@@ -69,7 +69,7 @@ header .logo {
 
 header h1 {
     font-size: 1.25rem;
-    font-weight: 600;
+    font-weight: 400;
     color: var(--color-text-primary);
 }
 
@@ -134,21 +134,9 @@ header h1 {
 .chart-wrapper {
     background: var(--color-bg-secondary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
     padding: 1rem;
     position: relative;
     min-width: 0;
-    transition: background 0.15s ease, border-color 0.15s ease;
-}
-
-.chart-wrapper.clickable {
-    cursor: pointer;
-}
-
-.chart-wrapper.clickable:hover {
-    background: var(--color-card-hover-bg);
-    border-color: var(--color-card-hover-border);
-    border-width: 2px;
 }
 
 .chart-wrapper h3 {
@@ -1038,15 +1026,17 @@ footer {
     gap: 1rem;
 }
 
-/* Reusable card hover effect (matches network topology nodes) */
-.card-hover {
-    transition: background 0.15s ease, border-color 0.15s ease;
+/* Reusable clickable card hover effect (matches network topology nodes) */
+.clickable-card {
+    cursor: pointer;
+    transition: background 0.15s ease, outline-color 0.15s ease;
+    outline: 2px solid transparent;
+    outline-offset: -2px;
 }
 
-.card-hover:hover {
+.clickable-card:hover {
     background: var(--color-card-hover-bg);
-    border-color: var(--color-card-hover-border);
-    border-width: 2px;
+    outline-color: var(--color-card-hover-border);
 }
 
 a.alert-tile {
@@ -1056,16 +1046,8 @@ a.alert-tile {
     border: 1px solid var(--color-border-primary);
     background: var(--color-bg-secondary);
     min-height: 80px;
-    cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease;
     text-decoration: none;
     display: flex;
-}
-
-a.alert-tile:hover {
-    background: var(--color-card-hover-bg);
-    border-color: var(--color-card-hover-border);
-    border-width: 2px;
 }
 
 .alert-content {
@@ -1142,7 +1124,7 @@ a.alert-tile:hover {
 }
 
 /* Logs section */
-#logs-section.logs-card {
+#logs-section {
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
     margin-bottom: 1.5rem;
@@ -1158,7 +1140,7 @@ a.alert-tile:hover {
     border-bottom: 1px solid var(--color-border-primary);
 }
 
-.logs-container {
+a.logs-container {
     display: block;
     max-height: 300px;
     overflow-y: auto;
@@ -1167,12 +1149,7 @@ a.alert-tile:hover {
     font-size: 0.75rem;
     line-height: 1.4;
     text-decoration: none;
-    cursor: pointer;
-    transition: background 0.15s ease;
-}
-
-.logs-container:hover {
-    background: var(--color-card-hover-bg);
+    color: inherit;
 }
 
 /* Discreet scrollbar for logs */

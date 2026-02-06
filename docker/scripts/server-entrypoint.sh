@@ -12,4 +12,4 @@ fi
 
 # Start the server (which will also join the mesh as a client)
 echo "Starting mesh server..."
-exec tunnelmesh serve --config /etc/tunnelmesh/server.yaml --log-level debug
+exec tunnelmesh serve --config /etc/tunnelmesh/server.yaml --log-level info

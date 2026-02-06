@@ -121,6 +121,22 @@ tunnelmesh trust-ca --server https://your-coordinator:8443
 
 This installs the TunnelMesh CA in your system trust store, allowing HTTPS connections to mesh services without browser warnings. After trusting the CA, access the admin panel at `https://this.tunnelmesh/` from any mesh peer.
 
+#### Admin Security Model
+
+The admin interface has **no built-in authentication** - access control is based on network exposure:
+
+| Configuration | Exposure | Security |
+|--------------|----------|----------|
+| Default (no `join_mesh`) | HTTP on `127.0.0.1:8080` | Safe - localhost only |
+| With `join_mesh` (default) | HTTPS on mesh IP only | Safe - only mesh peers can reach it |
+| With `join_mesh` + `mesh_only_admin: false` | HTTP on `bind_address` | **Exposed** - use authenticated proxy |
+| `bind_address: "0.0.0.0"` without `join_mesh` | HTTP on all interfaces | **Exposed** - use authenticated proxy |
+
+**Recommendations:**
+- For production, use `join_mesh` to serve admin via HTTPS on mesh IP only (the default)
+- If external access is needed, place behind an authenticated reverse proxy (nginx, Caddy, etc.)
+- Never set `bind_address: "0.0.0.0"` without additional access controls
+
 ## Configuration
 
 ### Server Configuration

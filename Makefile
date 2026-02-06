@@ -136,7 +136,7 @@ docker-up: docker-build
 	@open http://localhost:8880/admin/
 
 docker-down:
-	$(DOCKER_COMPOSE) down -v
+	$(DOCKER_COMPOSE) down
 
 docker-logs:
 	$(DOCKER_COMPOSE) logs -f

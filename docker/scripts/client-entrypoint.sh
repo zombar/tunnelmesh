@@ -73,7 +73,7 @@ cat /etc/tunnelmesh/peer.yaml
 
 # Start the mesh client in background
 echo "Starting mesh daemon..."
-tunnelmesh join --config /etc/tunnelmesh/peer.yaml --log-level debug --latitude "$LATITUDE" --longitude "$LONGITUDE" --city "$CITY_NAME" &
+tunnelmesh join --config /etc/tunnelmesh/peer.yaml --log-level info --latitude "$LATITUDE" --longitude "$LONGITUDE" --city "$CITY_NAME" &
 MESH_PID=$!
 
 # Wait for TUN device to be created

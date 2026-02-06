@@ -17,7 +17,7 @@
     <div id="toast-container" class="toast-container"></div>
     <header>
         <div class="brand">
-            <h1>TunnelMesh Admin</h1>
+            <h1>TunnelMesh</h1>
         </div>
         <div id="server-info">
             <span class="stat">
@@ -33,19 +33,19 @@
 
     <section id="alerts-section" style="display: none;">
         <div class="alert-tiles">
-            <a class="alert-tile warning" id="alert-tile-warning" href="/prometheus/alerts" target="_blank">
+            <a class="alert-tile warning clickable-card" id="alert-tile-warning" href="/prometheus/alerts" target="_blank">
                 <div class="alert-content">
                     <span class="alert-count" id="alert-count-warning">0</span>
                     <span class="alert-label">Warning</span>
                 </div>
             </a>
-            <a class="alert-tile critical" id="alert-tile-critical" href="/prometheus/alerts" target="_blank">
+            <a class="alert-tile critical clickable-card" id="alert-tile-critical" href="/prometheus/alerts" target="_blank">
                 <div class="alert-content">
                     <span class="alert-count" id="alert-count-critical">0</span>
                     <span class="alert-label">Critical</span>
                 </div>
             </a>
-            <a class="alert-tile page" id="alert-tile-page" href="/prometheus/alerts" target="_blank">
+            <a class="alert-tile page clickable-card" id="alert-tile-page" href="/prometheus/alerts" target="_blank">
                 <div class="alert-content">
                     <span class="alert-count" id="alert-count-page">0</span>
                     <span class="alert-label">Page</span>
@@ -130,7 +130,7 @@
         <section id="logs-section" class="logs-card" style="display: none;">
             <h2 class="section-toggle" onclick="toggleSection(this)">Peer Logs</h2>
             <div class="collapsible-content">
-                <a id="logs-link" class="logs-container" href="/grafana/explore" target="_blank">
+                <a id="logs-link" class="logs-container clickable-card" href="/grafana/explore" target="_blank">
                     <div id="logs-content"></div>
                     <div id="no-logs" class="empty-state">No logs available</div>
                 </a>

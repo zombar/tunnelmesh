@@ -1168,7 +1168,7 @@ function enableChartLinks() {
 
     [throughputWrapper, packetsWrapper].forEach(wrapper => {
         if (wrapper) {
-            wrapper.classList.add('clickable');
+            wrapper.classList.add('clickable-card');
             wrapper.addEventListener('click', () => {
                 window.open(grafanaUrl, '_blank');
             });
