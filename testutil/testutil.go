@@ -23,7 +23,7 @@ func TempDir(t *testing.T) (string, func()) {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 	return dir, func() {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 	}
 }
 
@@ -99,7 +99,7 @@ func FreePort(t *testing.T) int {
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	return l.Addr().(*net.TCPAddr).Port
 }

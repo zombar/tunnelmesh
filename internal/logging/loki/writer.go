@@ -227,7 +227,7 @@ func (w *Writer) flush() {
 		}
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Check response status and log errors
 	if resp.StatusCode >= 400 {

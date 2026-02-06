@@ -81,7 +81,7 @@ func (m *mockRelayServer) handlePersistentRelay(w http.ResponseWriter, r *http.R
 		m.mu.Lock()
 		delete(m.connections, peerName)
 		m.mu.Unlock()
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	// Read and route messages
@@ -220,7 +220,7 @@ func TestPersistentRelay_Connect(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, relay.IsConnected())
 
-	relay.Close()
+	_ = relay.Close()
 	assert.False(t, relay.IsConnected())
 }
 
@@ -235,7 +235,7 @@ func TestPersistentRelay_SendTo(t *testing.T) {
 
 	err := relay.Connect(ctx)
 	require.NoError(t, err)
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 
 	// Send a packet
 	testData := []byte("hello world")
@@ -266,11 +266,11 @@ func TestPersistentRelay_ReceivePacket(t *testing.T) {
 
 	err := relay1.Connect(ctx)
 	require.NoError(t, err)
-	defer relay1.Close()
+	defer func() { _ = relay1.Close() }()
 
 	err = relay2.Connect(ctx)
 	require.NoError(t, err)
-	defer relay2.Close()
+	defer func() { _ = relay2.Close() }()
 
 	// Set up packet handler on peer2
 	received := make(chan []byte, 1)
@@ -317,11 +317,11 @@ func TestPeerTunnel_ReadWrite(t *testing.T) {
 
 	err := relay1.Connect(ctx)
 	require.NoError(t, err)
-	defer relay1.Close()
+	defer func() { _ = relay1.Close() }()
 
 	err = relay2.Connect(ctx)
 	require.NoError(t, err)
-	defer relay2.Close()
+	defer func() { _ = relay2.Close() }()
 
 	// Give time for connections
 	time.Sleep(100 * time.Millisecond)
@@ -372,7 +372,7 @@ func TestPersistentRelay_SendHeartbeat(t *testing.T) {
 
 	err := relay.Connect(ctx)
 	require.NoError(t, err)
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 
 	// Send a heartbeat with stats
 	stats := &proto.PeerStats{
@@ -416,7 +416,7 @@ func TestPersistentRelay_ReceiveRelayNotify(t *testing.T) {
 
 	err := relay.Connect(ctx)
 	require.NoError(t, err)
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 
 	// Set up callback
 	received := make(chan []string, 1)
@@ -451,7 +451,7 @@ func TestPersistentRelay_ReceiveHolePunchNotify(t *testing.T) {
 
 	err := relay.Connect(ctx)
 	require.NoError(t, err)
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 
 	// Set up callback
 	received := make(chan []string, 1)
@@ -486,7 +486,7 @@ func TestPersistentRelay_ReceiveRelayNotify_NoHandler(t *testing.T) {
 
 	err := relay.Connect(ctx)
 	require.NoError(t, err)
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 
 	// No handler set - should not panic
 	time.Sleep(100 * time.Millisecond)

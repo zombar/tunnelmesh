@@ -675,7 +675,7 @@ func (t *Transport) handleRekeyRequired(data []byte, remoteAddr *net.UDPAddr) {
 		Msg("session invalidated by peer, re-handshake needed")
 
 	// Close the old session
-	session.Close()
+	_ = session.Close()
 
 	// Only notify upper layer if there's no new session already established
 	// If a new session exists, don't trigger reconnection - we're already connected
@@ -949,7 +949,7 @@ func (t *Transport) sendKeepalives() {
 		t.mu.Unlock()
 
 		// Close the session
-		s.Close()
+		_ = s.Close()
 
 		log.Info().
 			Str("peer", peerName).
@@ -1272,7 +1272,7 @@ func (t *Transport) holePunch(ctx context.Context, peerName string, peerAddr *ne
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Parse hole-punch response
 	var hpResp struct {
@@ -1336,16 +1336,16 @@ func (t *Transport) getPeerEndpoint(ctx context.Context, peerName string) (strin
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("failed to get endpoint: %s", resp.Status)
 	}
 
 	var endpoint struct {
-		ExternalAddr  string `json:"external_addr"`   // Legacy field
-		ExternalAddr4 string `json:"external_addr4"`  // IPv4 address
-		ExternalAddr6 string `json:"external_addr6"`  // IPv6 address
+		ExternalAddr  string `json:"external_addr"`  // Legacy field
+		ExternalAddr4 string `json:"external_addr4"` // IPv4 address
+		ExternalAddr6 string `json:"external_addr6"` // IPv6 address
 		LocalAddr     string `json:"local_addr"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&endpoint); err != nil {
@@ -1453,17 +1453,17 @@ func (t *Transport) Close() error {
 
 	t.mu.Lock()
 	for _, s := range t.sessions {
-		s.Close()
+		_ = s.Close()
 	}
 	t.sessions = make(map[uint32]*Session)
 	t.peerSessions = make(map[string]*Session)
 	t.mu.Unlock()
 
 	if t.conn != nil {
-		t.conn.Close()
+		_ = t.conn.Close()
 	}
 	if t.conn6 != nil {
-		t.conn6.Close()
+		_ = t.conn6.Close()
 	}
 
 	return nil
@@ -1529,7 +1529,7 @@ func (t *Transport) registerSession(session *Session) bool {
 	if discardNew {
 		t.mu.Unlock()
 		// Close the new session since we're keeping the old one
-		session.Close()
+		_ = session.Close()
 		return false
 	}
 
@@ -1544,7 +1544,7 @@ func (t *Transport) registerSession(session *Session) bool {
 			Uint32("old_index", oldSession.LocalIndex()).
 			Uint32("new_index", session.LocalIndex()).
 			Msg("replacing existing session for peer")
-		oldSession.Close()
+		_ = oldSession.Close()
 	}
 
 	return true
@@ -1796,7 +1796,7 @@ func (t *Transport) registerEndpointVia(ctx context.Context, peerName, localAddr
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

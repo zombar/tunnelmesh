@@ -226,4 +226,3 @@ func (n *Negotiator) SelectBest(results []ProbeResult, order []TransportType) Tr
 
 	return TransportRelay // Fallback to relay
 }
-

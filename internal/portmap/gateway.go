@@ -18,7 +18,7 @@ func DetectGateway() (gateway net.IP, localIP net.IP, err error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("detect local IP: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	localIP = localAddr.IP.To4()

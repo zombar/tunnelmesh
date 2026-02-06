@@ -39,14 +39,14 @@ type Session struct {
 	recvWindow *ReplayWindow
 
 	// State
-	state        SessionState
-	established  time.Time
-	lastSend     time.Time
-	lastRecv     time.Time
-	bytesIn      atomic.Uint64
-	bytesOut     atomic.Uint64
-	packetsIn    atomic.Uint64
-	packetsOut   atomic.Uint64
+	state       SessionState
+	established time.Time
+	lastSend    time.Time
+	lastRecv    time.Time
+	bytesIn     atomic.Uint64
+	bytesOut    atomic.Uint64
+	packetsIn   atomic.Uint64
+	packetsOut  atomic.Uint64
 
 	// Channels
 	recvChan chan []byte // Decrypted data packets
@@ -77,15 +77,15 @@ func NewSession(cfg SessionConfig) *Session {
 	}
 
 	return &Session{
-		localIndex:  cfg.LocalIndex,
-		peerName:    cfg.PeerName,
-		peerPublic:  cfg.PeerPublic,
-		remoteAddr:  cfg.RemoteAddr,
-		conn:        cfg.Conn,
-		recvWindow:  NewReplayWindow(cfg.WindowSize),
-		state:       SessionStateNew,
-		recvChan:    make(chan []byte, cfg.RecvBufSize),
-		closeCh:     make(chan struct{}),
+		localIndex: cfg.LocalIndex,
+		peerName:   cfg.PeerName,
+		peerPublic: cfg.PeerPublic,
+		remoteAddr: cfg.RemoteAddr,
+		conn:       cfg.Conn,
+		recvWindow: NewReplayWindow(cfg.WindowSize),
+		state:      SessionStateNew,
+		recvChan:   make(chan []byte, cfg.RecvBufSize),
+		closeCh:    make(chan struct{}),
 	}
 }
 

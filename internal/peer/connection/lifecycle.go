@@ -109,7 +109,7 @@ func (lm *LifecycleManager) Remove(peerName string) {
 
 	// Close first (this triggers observers while connection is still in map)
 	if pc != nil {
-		pc.Close()
+		_ = pc.Close()
 	}
 
 	// Then remove from map
@@ -126,7 +126,7 @@ func (lm *LifecycleManager) Close(peerName string) {
 	lm.mu.RUnlock()
 
 	if pc != nil {
-		pc.Close()
+		_ = pc.Close()
 	}
 }
 
@@ -143,7 +143,7 @@ func (lm *LifecycleManager) CloseAll() {
 
 	// Close all connections first (triggers observers while still in map)
 	for _, pc := range connections {
-		pc.Close()
+		_ = pc.Close()
 	}
 
 	// Then clear the map

@@ -37,7 +37,7 @@ func TestSSHServer_Accept(t *testing.T) {
 	srv := NewSSHServer(serverKey, authorizedKeys)
 	listener, err := net.Listen("tcp", addr)
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	// Accept connections in background
 	connChan := make(chan *SSHConnection, 1)
@@ -64,7 +64,7 @@ func TestSSHServer_Accept(t *testing.T) {
 
 	clientConn, err := ssh.Dial("tcp", addr, clientConfig)
 	require.NoError(t, err)
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	// Wait for server to accept
 	select {
@@ -99,7 +99,7 @@ func TestSSHClient_Connect(t *testing.T) {
 	srv := NewSSHServer(serverKey, []ssh.PublicKey{clientPub})
 	listener, err := net.Listen("tcp", addr)
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	go func() {
 		conn, _ := listener.Accept()
@@ -112,7 +112,7 @@ func TestSSHClient_Connect(t *testing.T) {
 	client := NewSSHClient(clientKey, serverPub)
 	sshClient, err := client.Connect(addr)
 	require.NoError(t, err)
-	defer sshClient.Close()
+	defer func() { _ = sshClient.Close() }()
 
 	assert.NotNil(t, sshClient)
 }
@@ -134,7 +134,7 @@ func TestDataChannel(t *testing.T) {
 	srv := NewSSHServer(serverKey, []ssh.PublicKey{clientPub})
 	listener, err := net.Listen("tcp", addr)
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	serverDataChan := make(chan ssh.Channel, 1)
 	go func() {
@@ -169,7 +169,7 @@ func TestDataChannel(t *testing.T) {
 
 	sshClient, err := ssh.Dial("tcp", addr, config)
 	require.NoError(t, err)
-	defer sshClient.Close()
+	defer func() { _ = sshClient.Close() }()
 
 	// Open data channel
 	clientChan, _, err := sshClient.OpenChannel("tunnelmesh-data", nil)

@@ -20,20 +20,20 @@ const (
 	pmpOpMapTCP        = 2
 	pmpOpReply         = 0x80
 
-	pmpResultSuccess                 = 0
-	pmpResultUnsupportedVersion      = 1
-	pmpResultNotAuthorized           = 2
-	pmpResultNetworkFailure          = 3
-	pmpResultOutOfResources          = 4
-	pmpResultUnsupportedOpcode       = 5
+	pmpResultSuccess            = 0
+	pmpResultUnsupportedVersion = 1
+	pmpResultNotAuthorized      = 2
+	pmpResultNetworkFailure     = 3
+	pmpResultOutOfResources     = 4
+	pmpResultUnsupportedOpcode  = 5
 )
 
 // NATMPClient implements the Client interface using NAT-PMP (RFC 6886).
 type NATMPClient struct {
-	gateway  net.IP
-	port     uint16
-	epoch    uint32
-	pubIP    net.IP
+	gateway net.IP
+	port    uint16
+	epoch   uint32
+	pubIP   net.IP
 }
 
 // NewNATMPClient creates a new NAT-PMP client.
@@ -58,7 +58,7 @@ func (c *NATMPClient) Probe(ctx context.Context) (net.IP, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
@@ -111,7 +111,7 @@ func (c *NATMPClient) RequestMapping(ctx context.Context, protocol Protocol, int
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
@@ -158,7 +158,7 @@ func (c *NATMPClient) RefreshMapping(ctx context.Context, existing *Mapping) (*M
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
@@ -203,7 +203,7 @@ func (c *NATMPClient) DeleteMapping(ctx context.Context, mapping *Mapping) error
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {

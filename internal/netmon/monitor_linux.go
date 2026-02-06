@@ -30,7 +30,7 @@ func newPlatformMonitor(cfg Config) (Monitor, error) {
 		Groups: unix.RTMGRP_LINK | unix.RTMGRP_IPV4_IFADDR,
 	}
 	if err := unix.Bind(fd, addr); err != nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return nil, err
 	}
 

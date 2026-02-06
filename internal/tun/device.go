@@ -83,7 +83,7 @@ func Create(cfg Config) (*Device, error) {
 
 	// Configure the interface
 	if err := dev.configure(); err != nil {
-		iface.Close()
+		_ = iface.Close()
 		return nil, fmt.Errorf("configure interface: %w", err)
 	}
 

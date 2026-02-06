@@ -15,7 +15,7 @@ func TestDiscoveryClient_Probe_PCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewDiscoveryClient(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -43,7 +43,7 @@ func TestDiscoveryClient_Probe_NATPMP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewDiscoveryClient(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -73,7 +73,7 @@ func TestDiscoveryClient_Probe_PreferPCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewDiscoveryClient(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -97,7 +97,7 @@ func TestDiscoveryClient_Probe_NoProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewDiscoveryClient(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -120,7 +120,7 @@ func TestDiscoveryClient_RequestMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewDiscoveryClient(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -165,7 +165,7 @@ func TestDiscoveryClient_RefreshMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewDiscoveryClient(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -199,7 +199,7 @@ func TestDiscoveryClient_DeleteMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewDiscoveryClient(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), igd.PxPPort())
 

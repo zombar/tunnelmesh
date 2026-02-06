@@ -98,7 +98,7 @@ func (u *Updater) fetchRelease(url string) (*ReleaseInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch release: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("release not found")
@@ -168,7 +168,7 @@ func (u *Updater) Download(asset *Asset, progressFn ProgressFunc) (string, error
 	if err != nil {
 		return "", fmt.Errorf("download: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download failed: status %d", resp.StatusCode)
@@ -200,13 +200,13 @@ func (u *Updater) Download(asset *Asset, progressFn ProgressFunc) (string, error
 
 	// Copy to temp file
 	if _, err := io.Copy(tmpFile, reader); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
 		return "", fmt.Errorf("write temp file: %w", err)
 	}
 
 	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpFile.Name())
+		_ = os.Remove(tmpFile.Name())
 		return "", fmt.Errorf("close temp file: %w", err)
 	}
 
@@ -270,7 +270,7 @@ func CalculateChecksum(filePath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("open file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
@@ -313,7 +313,7 @@ func (u *Updater) VerifyDownload(filePath, assetName string, release *ReleaseInf
 	if err != nil {
 		return fmt.Errorf("download checksums: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download checksums failed: status %d", resp.StatusCode)
@@ -357,7 +357,7 @@ func (u *Updater) DownloadChecksums(release *ReleaseInfo) (map[string]string, er
 	if err != nil {
 		return nil, fmt.Errorf("download: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("download failed: status %d", resp.StatusCode)

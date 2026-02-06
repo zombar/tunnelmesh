@@ -23,9 +23,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tunnelmesh/tunnelmesh/internal/admin"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
-	"github.com/tunnelmesh/tunnelmesh/internal/logging/loki"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
+	"github.com/tunnelmesh/tunnelmesh/internal/logging/loki"
 	"github.com/tunnelmesh/tunnelmesh/internal/metrics"
 	"github.com/tunnelmesh/tunnelmesh/internal/netmon"
 	"github.com/tunnelmesh/tunnelmesh/internal/peer"
@@ -738,7 +738,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		log.Error().Err(err).Msg("failed to create TUN device (requires root)")
 		// Continue without TUN for now
 	} else {
-		defer tunDev.Close()
+		defer func() { _ = tunDev.Close() }()
 		log.Info().
 			Str("name", tunDev.Name()).
 			Str("ip", resp.MeshIP).
@@ -1200,9 +1200,9 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		networkChanges, err := netMonitor.Start(ctx)
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to start network monitor")
-			netMonitor.Close()
+			_ = netMonitor.Close()
 		} else {
-			defer netMonitor.Close()
+			defer func() { _ = netMonitor.Close() }()
 			go node.RunNetworkMonitor(ctx, networkChanges)
 		}
 	}
@@ -1882,7 +1882,7 @@ func configureWindowsResolver(domain, dnsAddr string) error {
 		log.Warn().
 			Str("port", port).
 			Msg("Windows requires DNS on port 53; consider changing dns.listen to 127.0.0.1:53")
-		return fmt.Errorf("Windows requires DNS on port 53, got port %s", port)
+		return fmt.Errorf("windows requires DNS on port 53, got port %s", port)
 	}
 
 	cmd := exec.Command("powershell", "-Command", psCmd)

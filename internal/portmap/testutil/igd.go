@@ -207,7 +207,7 @@ func NewTestIGD(opts TestIGDOptions) (*TestIGD, error) {
 	// Create UPnP discovery listener
 	igd.upnpConn, err = net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
-		igd.pxpConn.Close()
+		_ = igd.pxpConn.Close()
 		return nil, err
 	}
 
@@ -239,8 +239,8 @@ func (igd *TestIGD) HTTPAddr() string {
 // Close shuts down the mock IGD.
 func (igd *TestIGD) Close() error {
 	igd.closed.Store(true)
-	igd.pxpConn.Close()
-	igd.upnpConn.Close()
+	_ = igd.pxpConn.Close()
+	_ = igd.upnpConn.Close()
 	igd.httpSrv.Close()
 	return nil
 }

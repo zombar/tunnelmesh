@@ -1,0 +1,21 @@
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.go"
+      run: gofmt -l {staged_files} | xargs -r false
+      fail_text: "Run 'gofmt -w .' to fix formatting"
+    tidy:
+      run: go mod tidy && git diff --exit-code go.mod go.sum
+      fail_text: "Run 'go mod tidy' and stage the changes"
+    lint:
+      glob: "*.go"
+      run: golangci-lint run --new-from-rev=HEAD
+      fail_text: "Fix linting errors before committing"
+
+pre-push:
+  parallel: true
+  commands:
+    test:
+      run: go test -race ./...
+      fail_text: "Tests failed"

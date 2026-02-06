@@ -55,7 +55,7 @@ func TestRelayManager_HandleHeartbeat(t *testing.T) {
 
 	// Connect to persistent relay
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Give server time to register the connection
 	time.Sleep(50 * time.Millisecond)
@@ -119,7 +119,7 @@ func TestRelayManager_NotifyRelayRequest(t *testing.T) {
 
 	// Connect to persistent relay
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Give server time to register the connection
 	time.Sleep(50 * time.Millisecond)
@@ -163,7 +163,7 @@ func TestRelayManager_NotifyHolePunch(t *testing.T) {
 
 	// Connect to persistent relay
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -219,7 +219,7 @@ func TestRelayManager_HeartbeatUpdatesStats(t *testing.T) {
 	jwtToken := registerPeerAndGetToken(t, ts.URL, peerName, cfg.AuthToken)
 
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -274,7 +274,7 @@ func registerPeerAndGetToken(t *testing.T, serverURL, peerName, authToken string
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 

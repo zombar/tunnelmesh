@@ -332,7 +332,7 @@ func TestServer_AdminStaticFiles(t *testing.T) {
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "TunnelMesh Admin")
+	assert.Contains(t, w.Body.String(), "<title>TunnelMesh</title>")
 
 	// Test CSS
 	req = httptest.NewRequest(http.MethodGet, "/admin/css/style.css", nil)

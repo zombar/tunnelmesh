@@ -11,7 +11,7 @@ func TestTestIGD_Create(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	if igd.PxPPort() == 0 {
 		t.Error("PxPPort should not be 0")
@@ -29,14 +29,14 @@ func TestTestIGD_PMPPublicAddr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	// Send PMP public addr request
 	conn, err := net.ListenPacket("udp4", ":0")
 	if err != nil {
 		t.Fatalf("failed to create UDP socket: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// PMP public address request: version=0, opcode=0
 	req := []byte{0, 0}
@@ -86,13 +86,13 @@ func TestTestIGD_PMPMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	conn, err := net.ListenPacket("udp4", ":0")
 	if err != nil {
 		t.Fatalf("failed to create UDP socket: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// PMP UDP mapping request
 	req := make([]byte, 12)
@@ -146,13 +146,13 @@ func TestTestIGD_PCPAnnounce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	conn, err := net.ListenPacket("udp4", ":0")
 	if err != nil {
 		t.Fatalf("failed to create UDP socket: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// PCP announce request
 	req := make([]byte, 24)
@@ -207,19 +207,19 @@ func TestTestIGD_PCPMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	conn, err := net.ListenPacket("udp4", ":0")
 	if err != nil {
 		t.Fatalf("failed to create UDP socket: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// PCP MAP request
 	req := make([]byte, 60)
-	req[0] = 2  // version
-	req[1] = 1  // opcode = map
-	req[4] = 0  // lifetime 7200 (0x1C20)
+	req[0] = 2 // version
+	req[1] = 1 // opcode = map
+	req[4] = 0 // lifetime 7200 (0x1C20)
 	req[5] = 0
 	req[6] = 0x1C
 	req[7] = 0x20
@@ -283,7 +283,7 @@ func TestTestIGD_FailProbe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	igd.SetFailProbe(true)
 
@@ -291,7 +291,7 @@ func TestTestIGD_FailProbe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create UDP socket: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// PMP public address request
 	req := []byte{0, 0}
@@ -323,13 +323,13 @@ func TestTestIGD_Disabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	conn, err := net.ListenPacket("udp4", ":0")
 	if err != nil {
 		t.Fatalf("failed to create UDP socket: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// PMP public address request - should not get response
 	req := []byte{0, 0}

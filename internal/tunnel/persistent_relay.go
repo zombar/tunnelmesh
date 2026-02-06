@@ -86,11 +86,11 @@ type PersistentRelay struct {
 
 	// Callbacks (protected by mu)
 	onPacket          func(sourcePeer string, data []byte)
-	onPeerReconnected func(peerName string)                         // Called when server notifies a peer reconnected
+	onPeerReconnected func(peerName string)                          // Called when server notifies a peer reconnected
 	onAPIRequest      func(reqID uint32, method string, body []byte) // Called when server sends API request
-	onRelayNotify     func(waitingPeers []string)                   // Called when server notifies of relay requests
-	onHolePunchNotify func(requestingPeers []string)                // Called when server notifies of hole-punch requests
-	onReconnectError  func(err error)                               // Called when reconnection fails (for re-registration)
+	onRelayNotify     func(waitingPeers []string)                    // Called when server notifies of relay requests
+	onHolePunchNotify func(requestingPeers []string)                 // Called when server notifies of hole-punch requests
+	onReconnectError  func(err error)                                // Called when reconnection fails (for re-registration)
 
 	// Reconnection control
 	reconnecting bool // Prevents concurrent autoReconnect goroutines
@@ -232,7 +232,7 @@ func (p *PersistentRelay) readLoop() {
 		p.mu.Lock()
 		p.connected = false
 		if p.conn != nil {
-			p.conn.Close()
+			_ = p.conn.Close()
 			p.conn = nil
 		}
 		// Close write channel to stop write loop

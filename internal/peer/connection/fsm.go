@@ -281,7 +281,7 @@ func (pc *PeerConnection) Disconnect(reason string, err error) error {
 
 	// Close the tunnel if present
 	if tunnel != nil {
-		tunnel.Close()
+		_ = tunnel.Close()
 	}
 
 	// Transition to disconnected (if valid)

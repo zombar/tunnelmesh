@@ -14,7 +14,7 @@ func TestPCPClient_Probe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewPCPClient(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -41,7 +41,7 @@ func TestPCPClient_ProbeTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	igd.SetFailProbe(true)
 
@@ -61,7 +61,7 @@ func TestPCPClient_RequestMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewPCPClient(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -100,7 +100,7 @@ func TestPCPClient_RequestMappingTCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewPCPClient(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -125,7 +125,7 @@ func TestPCPClient_RefreshMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewPCPClient(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -162,7 +162,7 @@ func TestPCPClient_DeleteMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	client := NewPCPClient(net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), igd.PxPPort())
 
@@ -187,7 +187,7 @@ func TestPCPClient_MappingFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	igd.SetFailMapping(true)
 
@@ -207,7 +207,7 @@ func TestPCPClient_CustomExternalPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TestIGD: %v", err)
 	}
-	defer igd.Close()
+	defer func() { _ = igd.Close() }()
 
 	// Configure IGD to assign a specific external port
 	igd.SetMappedPort(12345)

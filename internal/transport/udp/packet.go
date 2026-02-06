@@ -17,11 +17,11 @@ const (
 
 // Packet sizes
 const (
-	HeaderSize       = 16 // type(1) + reserved(3) + receiver(4) + counter(8)
-	AuthTagSize      = 16 // Poly1305 tag
-	MaxPayloadSize   = 1500 - 20 - 8 - HeaderSize - AuthTagSize // MTU - IP - UDP - header - tag
-	MinPacketSize    = HeaderSize + AuthTagSize
-	HandshakeSize    = 148 // Noise IK handshake message size
+	HeaderSize     = 16                                       // type(1) + reserved(3) + receiver(4) + counter(8)
+	AuthTagSize    = 16                                       // Poly1305 tag
+	MaxPayloadSize = 1500 - 20 - 8 - HeaderSize - AuthTagSize // MTU - IP - UDP - header - tag
+	MinPacketSize  = HeaderSize + AuthTagSize
+	HandshakeSize  = 148 // Noise IK handshake message size
 )
 
 // PacketHeader is the unencrypted header of every UDP packet.

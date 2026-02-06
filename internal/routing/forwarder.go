@@ -82,20 +82,20 @@ type Forwarder struct {
 	router             *Router
 	tunnels            TunnelProvider
 	tun                TUNDevice
-	relay              RelayPacketSender   // Optional persistent relay for fallback
-	wgHandler          WGPacketHandler     // Optional WireGuard handler for local WG clients
+	relay              RelayPacketSender // Optional persistent relay for fallback
+	wgHandler          WGPacketHandler   // Optional WireGuard handler for local WG clients
 	bufPool            *PacketBufferPool
 	zeroCopyPool       *ZeroCopyBufferPool // Pool for zero-copy buffers
 	framePool          *sync.Pool          // Pool for frame buffers (header + MTU)
 	stats              ForwarderStats
-	statsEnabled       uint32              // Atomic: 1 = enabled (default), 0 = disabled for high-performance mode
+	statsEnabled       uint32 // Atomic: 1 = enabled (default), 0 = disabled for high-performance mode
 	tunMu              sync.RWMutex
 	relayMu            sync.RWMutex
 	wgMu               sync.RWMutex
 	localIP            net.IP
 	localIPMu          sync.RWMutex
 	onDeadTunnel       func(peerName string) // Callback when tunnel write fails
-	deadTunnelDebounce sync.Map             // peerName → time.Time for debouncing
+	deadTunnelDebounce sync.Map              // peerName → time.Time for debouncing
 	// Exit node fields
 	meshCIDR   *net.IPNet // Mesh network CIDR for split-tunnel detection
 	meshCIDRMu sync.RWMutex

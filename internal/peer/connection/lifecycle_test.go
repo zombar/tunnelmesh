@@ -278,7 +278,7 @@ func TestLifecycleManager_CloseRemovesTunnel(t *testing.T) {
 	_ = pc.Connected(tunnel, "test", "test")
 
 	// Close - tunnel should be removed
-	pc.Close()
+	_ = pc.Close()
 
 	if tunnels.Has("peer1") {
 		t.Error("Tunnel should be removed after Close()")

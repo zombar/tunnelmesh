@@ -22,4 +22,3 @@ func (m *MeshNode) HandleIncomingSSH(ctx context.Context, listener transport.Lis
 		go m.handleIncomingConnection(ctx, conn, "SSH")
 	}
 }
-

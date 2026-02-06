@@ -7,13 +7,13 @@ import (
 
 func TestGenerateClientConfig(t *testing.T) {
 	params := ClientConfigParams{
-		ClientPrivateKey:      "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
-		ClientMeshIP:          "10.99.100.1",
-		ServerPublicKey:       "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykI=",
-		ServerEndpoint:        "wg.example.com:51820",
-		DNSServer:             "10.99.0.1",
-		MeshCIDR:              "10.99.0.0/16",
-		MTU:                   1420,
+		ClientPrivateKey: "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
+		ClientMeshIP:     "10.99.100.1",
+		ServerPublicKey:  "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykI=",
+		ServerEndpoint:   "wg.example.com:51820",
+		DNSServer:        "10.99.0.1",
+		MeshCIDR:         "10.99.0.0/16",
+		MTU:              1420,
 	}
 
 	config := GenerateClientConfig(params)

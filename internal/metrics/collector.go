@@ -30,14 +30,14 @@ type Collector struct {
 	config  CollectorConfig
 
 	// References to collect from
-	forwarder       ForwarderStats
-	tunnelMgr       TunnelManager
-	connections     ConnectionManager
-	relay           RelayStatus
-	identity        *peer.PeerIdentity
-	allowsExit      bool
-	wgEnabled       bool
-	wgConcentrator  WGConcentrator
+	forwarder      ForwarderStats
+	tunnelMgr      TunnelManager
+	connections    ConnectionManager
+	relay          RelayStatus
+	identity       *peer.PeerIdentity
+	allowsExit     bool
+	wgEnabled      bool
+	wgConcentrator WGConcentrator
 
 	// Last snapshot for delta calculation
 	lastForwarder ForwarderSnapshot

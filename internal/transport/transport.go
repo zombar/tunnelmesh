@@ -76,12 +76,12 @@ type Listener interface {
 
 // DialOptions contains options for dialing a peer.
 type DialOptions struct {
-	LocalName  string        // Our own identity name (sent to peer during handshake)
-	PeerName   string        // Name of the peer we're connecting to
-	PeerInfo   *PeerInfo
-	Timeout    time.Duration
-	ServerURL  string // Coordination server URL (for relay)
-	JWTToken   string // Auth token (for relay)
+	LocalName string // Our own identity name (sent to peer during handshake)
+	PeerName  string // Name of the peer we're connecting to
+	PeerInfo  *PeerInfo
+	Timeout   time.Duration
+	ServerURL string // Coordination server URL (for relay)
+	JWTToken  string // Auth token (for relay)
 }
 
 // ListenOptions contains options for listening for connections.

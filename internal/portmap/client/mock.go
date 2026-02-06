@@ -12,7 +12,7 @@ type MockClient struct {
 	mu sync.Mutex
 
 	// ProbeFunc is called by Probe. If nil, returns ProbeGateway and ProbeErr.
-	ProbeFunc func(ctx context.Context) (net.IP, error)
+	ProbeFunc    func(ctx context.Context) (net.IP, error)
 	ProbeGateway net.IP
 	ProbeErr     error
 
@@ -36,11 +36,11 @@ type MockClient struct {
 	DeleteMappingErr  error
 
 	// Tracking for assertions
-	ProbeCalls           int
-	RequestMappingCalls  int
-	RefreshMappingCalls  int
-	DeleteMappingCalls   int
-	CloseCalls           int
+	ProbeCalls          int
+	RequestMappingCalls int
+	RefreshMappingCalls int
+	DeleteMappingCalls  int
+	CloseCalls          int
 
 	closed bool
 }

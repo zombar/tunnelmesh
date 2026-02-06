@@ -9,11 +9,11 @@ import (
 // DiscoveryClient tries multiple port mapping protocols in order of preference.
 // It probes PCP first, then falls back to NAT-PMP if PCP is unavailable.
 type DiscoveryClient struct {
-	gateway   net.IP
-	localIP   net.IP
-	pxpPort   uint16 // Port for PCP/NAT-PMP (default 5351)
-	active    Client
-	clients   []Client
+	gateway net.IP
+	localIP net.IP
+	pxpPort uint16 // Port for PCP/NAT-PMP (default 5351)
+	active  Client
+	clients []Client
 }
 
 // NewDiscoveryClient creates a new discovery client that will try PCP and NAT-PMP.

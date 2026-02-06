@@ -18,8 +18,8 @@ const (
 	pcpOpMap      = 1
 	pcpOpReply    = 0x80
 
-	pcpCodeOK            = 0
-	pcpCodeNotAuthorized = 2
+	pcpCodeOK              = 0
+	pcpCodeNotAuthorized   = 2
 	pcpCodeAddressMismatch = 12
 
 	pcpUDPProtocol = 17
@@ -28,11 +28,11 @@ const (
 
 // PCPClient implements the Client interface using PCP (RFC 6887).
 type PCPClient struct {
-	gateway    net.IP
-	localIP    net.IP
-	port       uint16
-	epoch      uint32
-	lastNonce  [12]byte
+	gateway   net.IP
+	localIP   net.IP
+	port      uint16
+	epoch     uint32
+	lastNonce [12]byte
 }
 
 // NewPCPClient creates a new PCP client.
@@ -58,7 +58,7 @@ func (c *PCPClient) Probe(ctx context.Context) (net.IP, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Set deadline from context
 	if deadline, ok := ctx.Deadline(); ok {
@@ -113,7 +113,7 @@ func (c *PCPClient) RequestMapping(ctx context.Context, protocol Protocol, inter
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
@@ -159,7 +159,7 @@ func (c *PCPClient) RefreshMapping(ctx context.Context, existing *Mapping) (*Map
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
@@ -208,7 +208,7 @@ func (c *PCPClient) DeleteMapping(ctx context.Context, mapping *Mapping) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {

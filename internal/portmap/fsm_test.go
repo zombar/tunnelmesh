@@ -15,10 +15,10 @@ import (
 
 // testObserver records all observer calls for verification.
 type testObserver struct {
-	mu              sync.Mutex
-	stateChanges    []stateChange
+	mu               sync.Mutex
+	stateChanges     []stateChange
 	mappingsAcquired []*Mapping
-	mappingsLost    []error
+	mappingsLost     []error
 }
 
 type stateChange struct {

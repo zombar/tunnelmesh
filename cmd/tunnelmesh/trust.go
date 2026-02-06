@@ -67,7 +67,7 @@ func InstallCAFromServer(serverURL string) error {
 	if err != nil {
 		return fmt.Errorf("fetch CA cert: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("server returned status %d", resp.StatusCode)
@@ -94,13 +94,13 @@ func InstallCAFromServer(serverURL string) error {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	if _, err := tmpFile.Write(caPEM); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return fmt.Errorf("write temp file: %w", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	return installCAWithName(tmpPath, caName)
 }

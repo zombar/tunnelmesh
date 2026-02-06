@@ -220,7 +220,7 @@ func (m *MeshNode) establishTunnelWithOptions(ctx context.Context, peer proto.Pe
 	// Check if a tunnel was established while we were negotiating (by the other peer)
 	if _, exists := m.tunnelMgr.Get(peer.Name); exists {
 		log.Debug().Str("peer", peer.Name).Msg("tunnel already established by peer, closing our connection")
-		result.Connection.Close()
+		_ = result.Connection.Close()
 		return
 	}
 
@@ -231,12 +231,12 @@ func (m *MeshNode) establishTunnelWithOptions(ctx context.Context, peer proto.Pe
 	pc := m.Connections.Get(peer.Name)
 	if pc == nil {
 		log.Warn().Str("peer", peer.Name).Msg("peer connection not found after negotiation")
-		tun.Close()
+		_ = tun.Close()
 		return
 	}
 	if err := pc.Connected(tun, string(result.Transport), "transport negotiated: "+string(result.Transport)); err != nil {
 		log.Warn().Err(err).Str("peer", peer.Name).Msg("failed to transition to connected state")
-		tun.Close()
+		_ = tun.Close()
 		return
 	}
 

@@ -56,10 +56,10 @@ type ServerConfig struct {
 	AuthToken         string                `yaml:"auth_token"`
 	MeshCIDR          string                `yaml:"mesh_cidr"`
 	DomainSuffix      string                `yaml:"domain_suffix"`
-	DataDir           string                `yaml:"data_dir"`            // Data directory for persistence (default: /var/lib/tunnelmesh)
-	HeartbeatInterval string                `yaml:"heartbeat_interval"`  // Heartbeat interval (default: 10s)
-	Locations         bool                  `yaml:"locations"`           // Enable node location tracking (requires external IP geolocation API)
-	LogLevel          string                `yaml:"log_level"`           // trace, debug, info, warn, error (default: info)
+	DataDir           string                `yaml:"data_dir"`           // Data directory for persistence (default: /var/lib/tunnelmesh)
+	HeartbeatInterval string                `yaml:"heartbeat_interval"` // Heartbeat interval (default: 10s)
+	Locations         bool                  `yaml:"locations"`          // Enable node location tracking (requires external IP geolocation API)
+	LogLevel          string                `yaml:"log_level"`          // trace, debug, info, warn, error (default: info)
 	Admin             AdminConfig           `yaml:"admin"`
 	Relay             RelayConfig           `yaml:"relay"`
 	WireGuard         WireGuardServerConfig `yaml:"wireguard"`

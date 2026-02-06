@@ -82,7 +82,7 @@ func LoadAuthorizedKeys(path string) ([]ssh.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open authorized_keys: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var keys []ssh.PublicKey
 	scanner := bufio.NewScanner(file)
