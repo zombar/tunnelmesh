@@ -32,6 +32,7 @@ import (
 	peerwg "github.com/tunnelmesh/tunnelmesh/internal/peer/wireguard"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/svc"
+	"github.com/tunnelmesh/tunnelmesh/internal/tracing"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	sshtransport "github.com/tunnelmesh/tunnelmesh/internal/transport/ssh"
 	udptransport "github.com/tunnelmesh/tunnelmesh/internal/transport/udp"
@@ -95,6 +96,9 @@ var (
 	// Server feature flags
 	locationsEnabled bool
 
+	// Tracing flag
+	enableTracing bool
+
 	// Service mode flags (hidden, used when running as a service)
 	serviceRun     bool
 	serviceRunMode string
@@ -137,6 +141,7 @@ It does not route traffic - peers connect directly to each other.`,
 		RunE: runServe,
 	}
 	serveCmd.Flags().BoolVar(&locationsEnabled, "locations", false, "enable node location tracking (uses external IP geolocation API)")
+	serveCmd.Flags().BoolVar(&enableTracing, "enable-tracing", false, "enable runtime tracing (exposes /debug/trace endpoint)")
 	rootCmd.AddCommand(serveCmd)
 
 	// Join command
@@ -156,6 +161,7 @@ It does not route traffic - peers connect directly to each other.`,
 	joinCmd.Flags().StringVar(&exitNodeFlag, "exit-node", "", "name of peer to route internet traffic through")
 	joinCmd.Flags().BoolVar(&allowExitTraffic, "allow-exit-traffic", false, "allow this node to act as exit node for other peers")
 	joinCmd.Flags().BoolVar(&trustCA, "trust-ca", false, "install mesh CA certificate in system trust store (requires sudo)")
+	joinCmd.Flags().BoolVar(&enableTracing, "enable-tracing", false, "enable runtime tracing (exposes /debug/trace endpoint)")
 	rootCmd.AddCommand(joinCmd)
 
 	// Status command
@@ -424,6 +430,16 @@ func runServe(cmd *cobra.Command, args []string) error {
 	setupLogging()
 	logStartupBanner()
 
+	// Initialize tracing if enabled
+	if enableTracing {
+		if err := tracing.Init(true, tracing.DefaultBufferSize); err != nil {
+			log.Warn().Err(err).Msg("failed to initialize tracing")
+		} else {
+			log.Info().Msg("runtime tracing enabled")
+			defer tracing.Stop()
+		}
+	}
+
 	var cfg *config.ServerConfig
 	var err error
 
@@ -574,6 +590,16 @@ func runInit(cmd *cobra.Command, args []string) error {
 func runJoin(cmd *cobra.Command, args []string) error {
 	setupLogging()
 	logStartupBanner()
+
+	// Initialize tracing if enabled
+	if enableTracing {
+		if err := tracing.Init(true, tracing.DefaultBufferSize); err != nil {
+			log.Warn().Err(err).Msg("failed to initialize tracing")
+		} else {
+			log.Info().Msg("runtime tracing enabled")
+			defer tracing.Stop()
+		}
+	}
 
 	cfg, err := loadConfig()
 	if err != nil {

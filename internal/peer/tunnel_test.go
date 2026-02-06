@@ -195,31 +195,27 @@ func TestTunnelAdapter_ConcurrentAccess(t *testing.T) {
 
 	// Concurrent adds
 	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		i := i
+		wg.Go(func() {
 			name := string(rune('a' + i%26))
 			adapter.Add(name, newMockTunnel())
-		}(i)
+		})
 	}
 
 	// Concurrent reads
 	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		i := i
+		wg.Go(func() {
 			name := string(rune('a' + i%26))
 			adapter.Get(name)
-		}(i)
+		})
 	}
 
 	// Concurrent lists
 	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			adapter.List()
-		}()
+		})
 	}
 
 	wg.Wait()

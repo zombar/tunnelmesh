@@ -141,15 +141,13 @@ func TestStatsHistory_ConcurrentAccess(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func(peerNum int) {
-			defer wg.Done()
+		wg.Go(func() {
 			peerID := "peer"
 			for j := 0; j < 100; j++ {
 				sh.RecordStats(peerID, StatsDataPoint{BytesSentRate: float64(j)})
 				sh.GetHistory(peerID, 10)
 			}
-		}(i)
+		})
 	}
 	wg.Wait()
 
@@ -556,9 +554,8 @@ func TestStatsHistory_ConcurrentRecordAndSave(t *testing.T) {
 	// Concurrent recording of stats
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func(n int) {
-			defer wg.Done()
+		n := i
+		wg.Go(func() {
 			peerName := "peer" + string(rune('A'+n))
 			for j := 0; j < 100; j++ {
 				sh.RecordStats(peerName, StatsDataPoint{
@@ -566,7 +563,7 @@ func TestStatsHistory_ConcurrentRecordAndSave(t *testing.T) {
 					BytesSentRate: float64(n*1000 + j),
 				})
 			}
-		}(i)
+		})
 	}
 	wg.Wait()
 

@@ -394,12 +394,10 @@ func TestPeerConnection_ConcurrentTransitions(t *testing.T) {
 	// Run many concurrent transitions
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = pc.StartConnecting("concurrent test")
 			_ = pc.Disconnect("concurrent test", nil)
-		}()
+		})
 	}
 
 	wg.Wait()

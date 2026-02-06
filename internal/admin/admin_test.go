@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/metrics"
+	"github.com/tunnelmesh/tunnelmesh/internal/tracing"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -261,4 +262,94 @@ func generateTestCert() (*tls.Certificate, error) {
 	}
 
 	return &cert, nil
+}
+
+func TestAdminServer_TraceEndpoint_Disabled(t *testing.T) {
+	// Ensure tracing is disabled
+	tracing.Stop()
+
+	server := NewAdminServer()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to find free port: %v", err)
+	}
+	addr := listener.Addr().String()
+	_ = listener.Close()
+
+	if err := server.StartInsecure(addr); err != nil {
+		t.Fatalf("Failed to start server: %v", err)
+	}
+	defer func() { _ = server.Stop() }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	resp, err := http.Get("http://" + addr + "/debug/trace")
+	if err != nil {
+		t.Fatalf("Failed to get /debug/trace: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// Should return 503 when tracing is disabled
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("Expected status 503, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "tracing not enabled") {
+		t.Errorf("Expected error message about tracing, got: %s", body)
+	}
+}
+
+func TestAdminServer_TraceEndpoint_Enabled(t *testing.T) {
+	// Enable tracing
+	tracing.Stop() // Clean state
+	if err := tracing.Init(true, tracing.DefaultBufferSize); err != nil {
+		t.Fatalf("Failed to init tracing: %v", err)
+	}
+	defer tracing.Stop()
+
+	server := NewAdminServer()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to find free port: %v", err)
+	}
+	addr := listener.Addr().String()
+	_ = listener.Close()
+
+	if err := server.StartInsecure(addr); err != nil {
+		t.Fatalf("Failed to start server: %v", err)
+	}
+	defer func() { _ = server.Stop() }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	resp, err := http.Get("http://" + addr + "/debug/trace")
+	if err != nil {
+		t.Fatalf("Failed to get /debug/trace: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+	}
+
+	// Check content type
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "application/octet-stream" {
+		t.Errorf("Expected Content-Type application/octet-stream, got %s", contentType)
+	}
+
+	// Check content disposition
+	contentDisp := resp.Header.Get("Content-Disposition")
+	if !strings.Contains(contentDisp, "trace.out") {
+		t.Errorf("Expected Content-Disposition with trace.out, got %s", contentDisp)
+	}
+
+	// Should have written something
+	body, _ := io.ReadAll(resp.Body)
+	if len(body) == 0 {
+		t.Error("Expected non-empty trace data")
+	}
 }
