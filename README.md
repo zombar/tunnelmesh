@@ -30,6 +30,8 @@ For a complete step-by-step setup guide including downloading releases, configur
 ## Documentation
 
 - **[Getting Started Guide](docs/GETTING_STARTED.md)** - Installation, configuration, and running as a service
+- **[Docker Deployment](docs/DOCKER.md)** - Running TunnelMesh in containers for development and production
+- **[Cloud Deployment](docs/CLOUD_DEPLOYMENT.md)** - Deploy to DigitalOcean App Platform with Terraform
 - **[Benchmarking & Stress Testing](docs/BENCHMARKING.md)** - Measure throughput, latency, and test mesh resilience with chaos testing
 
 ## Architecture
@@ -435,154 +437,24 @@ sudo tunnelmesh service restart
 
 ## Docker Deployment
 
-### Build the Image
+Run TunnelMesh in containers for development, testing, or production. See the **[Docker Deployment Guide](docs/DOCKER.md)** for complete documentation.
 
 ```bash
-make docker-build
+cd docker
+docker compose up -d        # Start the full mesh stack
+docker compose logs -f      # View logs
+make docker-test            # Run connectivity tests
 ```
 
-### Run with Docker Compose
+## Cloud Deployment
 
-The included `docker-compose.yml` sets up a server with multiple client replicas:
+Deploy to DigitalOcean App Platform with Terraform. See the **[Cloud Deployment Guide](docs/CLOUD_DEPLOYMENT.md)** for complete documentation.
 
 ```bash
-# Start the mesh
-docker compose -f docker/docker-compose.yml up -d
-
-# View logs
-docker compose -f docker/docker-compose.yml logs -f
-
-# Run connectivity tests
-make docker-test
-
-# Stop
-docker compose -f docker/docker-compose.yml down
-```
-
-### Docker Requirements
-
-Containers need `NET_ADMIN` capability for TUN interface creation:
-
-```yaml
-cap_add:
-  - NET_ADMIN
-devices:
-  - /dev/net/tun
-```
-
-## Cloud Deployment (Terraform)
-
-Deploy the coordination server to DigitalOcean App Platform using Terraform.
-
-### Prerequisites
-
-- [Terraform](https://developer.hashicorp.com/terraform/install) installed
-- DigitalOcean account with API token
-- Domain managed in DigitalOcean DNS
-
-### Setup
-
-1. **Push to GitHub** to trigger the Docker image build (GitHub Actions will push to ghcr.io):
-   ```bash
-   git push origin main
-   ```
-
-2. **Configure Terraform variables:**
-   ```bash
-   cd terraform
-   cp terraform.tfvars.example terraform.tfvars
-   ```
-
-   Set your DigitalOcean API token:
-   ```bash
-   export TF_VAR_do_token="dop_v1_xxx"
-   ```
-
-   Generate a secure auth token:
-   ```bash
-   openssl rand -hex 32
-   ```
-
-   Edit `terraform.tfvars`:
-   ```hcl
-   domain     = "example.com"           # Your domain
-   auth_token = "your-generated-token"  # From openssl command above
-   ```
-
-3. **Deploy:**
-   ```bash
-   terraform init
-   terraform plan
-   terraform apply
-   ```
-
-### Terraform Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `do_token` | DigitalOcean API token (use `TF_VAR_do_token` env) | (required) |
-| `domain` | Base domain name | (required) |
-| `subdomain` | Subdomain for coord server | `tunnelmesh` |
-| `auth_token` | Mesh authentication token | (required) |
-| `github_owner` | GitHub owner for container image | `zombar` |
-| `image_tag` | Docker image tag | `latest` |
-| `mesh_cidr` | Mesh network CIDR | `172.30.0.0/16` |
-| `region` | DO region | `ams` |
-| `locations_enabled` | Enable node location tracking | `false` |
-| `monitoring_enabled` | Enable monitoring stack (Prometheus, Grafana, Loki) | `false` |
-| `prometheus_retention_days` | Prometheus data retention in days | `3` |
-| `loki_retention_days` | Loki log retention in days | `3` |
-| `auto_update_enabled` | Enable automatic binary updates | `true` |
-| `auto_update_schedule` | Update schedule (hourly, daily, weekly) | `hourly` |
-
-### Monitoring Stack
-
-When `monitoring_enabled = true` is set in terraform.tfvars, the coordinator node is deployed with a full monitoring stack:
-
-- **Prometheus** - Metrics collection and alerting (scrapes peer metrics via mesh network)
-- **Grafana** - Dashboards and visualization (accessible at `/grafana/`)
-- **Loki** - Log aggregation (localhost:3100)
-- **SD Generator** - Automatic peer discovery for Prometheus targets
-
-All monitoring services listen on localhost only and are accessed through the nginx reverse proxy within the mesh network.
-
-The monitoring stack includes pre-configured alert rules for:
-- Peer disconnections and connectivity issues
-- Packet drops and error rates
-- WireGuard and relay status
-
-Access Grafana at `https://this.tunnelmesh/grafana/` from within the mesh network.
-
-### Node Location Tracking
-
-The `--locations` flag (or `locations: true` in config) enables geographic visualization of mesh nodes on a map in the admin dashboard. **This feature is disabled by default** because it:
-
-1. **Uses external services**: The coordinator queries [ip-api.com](http://ip-api.com) to geolocate nodes by their public IP addresses
-2. **Sends IP data externally**: Public IP addresses of your mesh nodes are sent to the geolocation API
-3. **Requires internet access**: The coordinator must be able to reach external APIs
-
-To enable:
-- **CLI**: `tunnelmesh serve --locations`
-- **Config**: Add `locations: true` to server.yaml
-- **Terraform**: Set `locations_enabled = true` in terraform.tfvars
-
-When enabled, nodes can also provide manual coordinates via `--latitude` and `--longitude` flags, which takes precedence over IP-based geolocation.
-
-### Outputs
-
-After deployment, Terraform outputs:
-- `app_url` - Default App Platform URL
-- `coord_url` - Custom domain URL (https://tunnelmesh.example.com)
-- `admin_url` - Admin dashboard URL (https://tunnelmesh.example.com/admin/)
-- `peer_config_example` - Example peer configuration snippet
-
-### Connecting Peers
-
-Once deployed, configure peers to connect:
-
-```yaml
-server: "https://tunnelmesh.example.com"
-auth_token: "your-secure-token"
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+export TF_VAR_do_token="dop_v1_xxx"
+terraform init && terraform apply
 ```
 
 ## Development
