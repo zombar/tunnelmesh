@@ -626,6 +626,13 @@
           "color": {
             "mode": "palette-classic"
           },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "hidden"
+          },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
