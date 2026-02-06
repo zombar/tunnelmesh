@@ -14,6 +14,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	sshtransport "github.com/tunnelmesh/tunnelmesh/internal/transport/ssh"
+	udptransport "github.com/tunnelmesh/tunnelmesh/internal/transport/udp"
 	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -41,6 +42,7 @@ type MeshNode struct {
 	TransportRegistry   *transport.Registry
 	TransportNegotiator *transport.Negotiator
 	SSHTransport        *sshtransport.Transport // For incoming SSH and key management
+	UDPTransport        *udptransport.Transport // For crossing handshake pre-registration
 
 	// Persistent relay for DERP-like instant connectivity
 	PersistentRelay *tunnel.PersistentRelay
@@ -66,9 +68,9 @@ type MeshNode struct {
 	lastBehindNAT     bool
 	heartbeatIPsIsSet bool
 
-	// Peer cache for routing (mesh IP lookup when coord server unreachable)
+	// Peer cache for use when coord server unreachable (e.g., during network transitions)
 	peerCacheMu sync.RWMutex
-	peerCache   map[string]string // peer name -> mesh IP
+	peerCache   map[string]proto.Peer // peer name -> full peer info
 
 	// Optional components
 	Resolver *dns.Resolver
@@ -85,7 +87,7 @@ func NewMeshNode(identity *PeerIdentity, client *coord.Client) *MeshNode {
 		tunnelMgr:        tunnelMgr,
 		router:           router,
 		triggerDiscovery: make(chan struct{}, 1),
-		peerCache:        make(map[string]string),
+		peerCache:        make(map[string]proto.Peer),
 	}
 
 	// Initialize connection lifecycle manager with tunnel integration
@@ -179,19 +181,28 @@ func (m *MeshNode) SetHeartbeatIPs(publicIPs, privateIPs []string, behindNAT boo
 	m.heartbeatIPsIsSet = true
 }
 
-// CachePeerMeshIP caches the mesh IP for a peer.
-func (m *MeshNode) CachePeerMeshIP(peerName, meshIP string) {
+// CachePeer caches the full peer info for use when coord server is unreachable.
+func (m *MeshNode) CachePeer(peer proto.Peer) {
 	m.peerCacheMu.Lock()
 	defer m.peerCacheMu.Unlock()
-	m.peerCache[peerName] = meshIP
+	m.peerCache[peer.Name] = peer
 }
 
-// GetCachedPeerMeshIP returns the cached mesh IP for a peer.
-func (m *MeshNode) GetCachedPeerMeshIP(peerName string) (string, bool) {
+// GetCachedPeer returns the cached peer info.
+func (m *MeshNode) GetCachedPeer(peerName string) (proto.Peer, bool) {
 	m.peerCacheMu.RLock()
 	defer m.peerCacheMu.RUnlock()
-	meshIP, ok := m.peerCache[peerName]
-	return meshIP, ok
+	peer, ok := m.peerCache[peerName]
+	return peer, ok
+}
+
+// ClearPeerCache clears all cached peer info.
+// Called on network change to prevent using stale IPs/endpoints.
+func (m *MeshNode) ClearPeerCache() {
+	m.peerCacheMu.Lock()
+	defer m.peerCacheMu.Unlock()
+	m.peerCache = make(map[string]proto.Peer)
+	log.Debug().Msg("cleared peer cache due to network change")
 }
 
 // IPsChanged returns true if the provided IPs differ from the last known IPs.
@@ -215,6 +226,8 @@ func (m *MeshNode) IPsChanged(publicIPs, privateIPs []string, behindNAT bool) bo
 func (m *MeshNode) CollectStats() *proto.PeerStats {
 	stats := &proto.PeerStats{
 		ActiveTunnels: m.tunnelMgr.CountHealthy(),
+		Location:      m.identity.Location, // Include location in every heartbeat
+		Connections:   m.getConnectionTypes(),
 	}
 
 	if m.Forwarder != nil {
@@ -229,6 +242,25 @@ func (m *MeshNode) CollectStats() *proto.PeerStats {
 	}
 
 	return stats
+}
+
+// getConnectionTypes returns a map of peer name to transport type for all connected peers.
+func (m *MeshNode) getConnectionTypes() map[string]string {
+	if m.Connections == nil {
+		return nil
+	}
+
+	connections := make(map[string]string)
+	for _, info := range m.Connections.AllInfo() {
+		if info.State == connection.StateConnected && info.TransportType != "" {
+			connections[info.PeerName] = info.TransportType
+		}
+	}
+
+	if len(connections) == 0 {
+		return nil
+	}
+	return connections
 }
 
 // slicesEqual compares two string slices for equality.
@@ -260,18 +292,8 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 		// Our direct tunnel to them is also likely broken (asymmetric path failure).
 		// However, we apply a grace period after tunnel establishment to avoid
 		// tearing down freshly established tunnels due to stale relay packets.
-		// Also, if our tunnel to this peer is itself a relay tunnel, receiving
-		// relay packets is expected behavior - don't invalidate.
 		if pc := m.Connections.Get(sourcePeer); pc != nil {
 			if pc.HasTunnel() {
-				// If our tunnel to this peer is also a relay tunnel, receiving relay packets
-				// is expected behavior - don't invalidate our relay tunnel
-				if pc.IsRelayTunnel() {
-					log.Debug().
-						Str("peer", sourcePeer).
-						Msg("receiving relay packet on relay tunnel - expected behavior")
-					return
-				}
 				connectedSince := pc.ConnectedSince()
 				tunnelAge := time.Since(connectedSince)
 				if tunnelAge < asymmetricDetectionGracePeriod {
@@ -290,29 +312,82 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 		}
 	})
 
-	// Set up handler for peer reconnection notifications
-	// NOTE: We no longer invalidate direct tunnels when a peer reconnects to relay.
-	// The peer maintains a persistent relay connection for fallback - reconnecting to it
-	// doesn't mean our direct tunnel is broken. We only rely on actual relay packet
-	// reception to detect asymmetric situations (handled in SetPacketHandler above).
+	// Set up handler for peer reconnection notifications.
+	// When a peer reconnects to the relay, they may have changed networks (new IPs).
+	// We fetch their fresh info from the server and compare IPs - if changed,
+	// our direct tunnel is likely broken and needs to be reconnected.
 	relay.SetPeerReconnectedHandler(func(peerName string) {
-		if pc := m.Connections.Get(peerName); pc != nil {
-			if !pc.HasTunnel() {
-				// No tunnel yet (e.g., still connecting) - ignore notification
+		// Get our cached info for this peer (if any)
+		oldPeer, hadCached := m.GetCachedPeer(peerName)
+
+		// Fetch fresh peer info from coordination server
+		peers, err := m.client.ListPeers()
+		if err != nil {
+			log.Debug().Err(err).Str("peer", peerName).Msg("failed to fetch peers after reconnect notification")
+			return
+		}
+
+		// Find the peer that reconnected and update our cache
+		var newPeer *proto.Peer
+		for _, p := range peers {
+			m.CachePeer(p) // Update cache for all peers
+			if p.Name == peerName {
+				newPeer = &p
+			}
+		}
+
+		if newPeer == nil {
+			log.Debug().Str("peer", peerName).Msg("peer not found on server after reconnect notification")
+			return
+		}
+
+		// Check if IPs changed (only if we had cached info to compare)
+		if hadCached {
+			oldPublicIPs := make(map[string]bool)
+			for _, ip := range oldPeer.PublicIPs {
+				oldPublicIPs[ip] = true
+			}
+			ipsChanged := false
+			for _, ip := range newPeer.PublicIPs {
+				if !oldPublicIPs[ip] {
+					ipsChanged = true
+					break
+				}
+			}
+			if len(oldPeer.PublicIPs) != len(newPeer.PublicIPs) {
+				ipsChanged = true
+			}
+
+			if !ipsChanged {
 				log.Debug().
 					Str("peer", peerName).
-					Msg("ignoring peer reconnect notification - no tunnel to invalidate")
+					Msg("peer reconnected but IPs unchanged - no action needed")
 				return
 			}
-			// Don't invalidate direct tunnels (UDP/SSH) when peer reconnects to relay.
-			// Peer reconnecting to relay doesn't mean our direct path is broken -
-			// they may just be refreshing their persistent relay connection.
-			// We rely on actual relay packet reception to detect asymmetric situations.
+
+			log.Info().
+				Str("peer", peerName).
+				Strs("old_ips", oldPeer.PublicIPs).
+				Strs("new_ips", newPeer.PublicIPs).
+				Msg("peer IPs changed after reconnect notification")
+		} else {
 			log.Debug().
 				Str("peer", peerName).
-				Str("transport", pc.TransportType()).
-				Msg("ignoring peer reconnect notification - relying on packet-based detection")
+				Msg("peer reconnected (no cached info to compare)")
 		}
+
+		// If we have a direct tunnel to this peer, disconnect it
+		// (the peer's IPs changed, so our direct tunnel is broken)
+		if pc := m.Connections.Get(peerName); pc != nil && pc.HasTunnel() {
+			log.Info().
+				Str("peer", peerName).
+				Str("transport", pc.TransportType()).
+				Msg("disconnecting tunnel due to peer IP change")
+			_ = pc.Disconnect("peer IP changed", nil)
+		}
+
+		// Trigger discovery to reconnect with new IPs
+		m.TriggerDiscovery()
 	})
 
 	// Set up handler for reconnection errors to detect when we need to re-register
@@ -322,7 +397,8 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 			publicIPs, privateIPs, behindNAT := m.identity.GetLocalIPs()
 			if _, regErr := m.client.Register(
 				m.identity.Name, m.identity.PubKeyEncoded,
-				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version,
+				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version, nil,
+				m.identity.Config.ExitNode, m.identity.Config.AllowExitTraffic, m.identity.Config.DNS.Aliases,
 			); regErr != nil {
 				log.Error().Err(regErr).Msg("failed to re-register after peer not found")
 			} else {

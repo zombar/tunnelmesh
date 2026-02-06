@@ -47,9 +47,15 @@ variable "wireguard_enabled" {
 # --- Coordinator Settings ---
 
 variable "coordinator_port" {
-  description = "HTTP port for the coordination server"
+  description = "HTTP port for the coordination server (internal)"
   type        = number
   default     = 8080
+}
+
+variable "external_api_port" {
+  description = "HTTPS port for external API (nginx). Port 443 is reserved for mesh-internal admin."
+  type        = number
+  default     = 8443
 }
 
 variable "mesh_cidr" {
@@ -77,6 +83,12 @@ variable "admin_token" {
   default     = ""
 }
 
+variable "locations_enabled" {
+  description = "Enable node location tracking (uses external IP geolocation API)"
+  type        = bool
+  default     = false
+}
+
 # --- Peer Settings ---
 
 variable "peer_server_url" {
@@ -89,6 +101,46 @@ variable "ssh_tunnel_port" {
   description = "SSH tunnel port for mesh connections"
   type        = number
   default     = 2222
+}
+
+# --- Exit Node Settings ---
+
+variable "exit_node" {
+  description = "Name of peer to route internet traffic through (split-tunnel VPN)"
+  type        = string
+  default     = ""
+}
+
+variable "allow_exit_traffic" {
+  description = "Allow this node to act as an exit node for other peers"
+  type        = bool
+  default     = false
+}
+
+# --- Location Settings ---
+
+variable "location_latitude" {
+  description = "Manual GPS latitude for this node (overrides IP geolocation)"
+  type        = number
+  default     = null
+}
+
+variable "location_longitude" {
+  description = "Manual GPS longitude for this node (overrides IP geolocation)"
+  type        = number
+  default     = null
+}
+
+variable "location_city" {
+  description = "City name for this node location"
+  type        = string
+  default     = ""
+}
+
+variable "location_country" {
+  description = "Country name for this node location"
+  type        = string
+  default     = ""
 }
 
 # --- WireGuard Settings ---

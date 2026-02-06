@@ -24,6 +24,7 @@ type UDPEndpoint struct {
 	LastSeen4      time.Time `json:"last_seen4"`        // Last time IPv4 was updated
 	LastSeen6      time.Time `json:"last_seen6"`        // Last time IPv6 was updated
 	NATType        string    `json:"nat_type,omitempty"` // "none", "full_cone", "restricted", "symmetric"
+	PCPMapped      bool      `json:"pcp_mapped"`        // Whether endpoint has PCP/NAT-PMP mapping
 }
 
 // HolePunchRequest is sent by a peer to initiate hole-punching.
@@ -48,6 +49,7 @@ type RegisterUDPRequest struct {
 	PeerName  string `json:"peer_name"`
 	LocalAddr string `json:"local_addr"` // Local UDP listen address
 	UDPPort   int    `json:"udp_port"`
+	PCPMapped bool   `json:"pcp_mapped,omitempty"` // Whether endpoint has PCP/NAT-PMP mapping
 }
 
 // RegisterUDPResponse contains the discovered external address.
@@ -73,7 +75,7 @@ func newHolePunchManager() *holePunchManager {
 
 // RegisterEndpoint registers or updates a peer's UDP endpoint.
 // The external address is stored in the appropriate field based on address family.
-func (m *holePunchManager) RegisterEndpoint(peerName, localAddr, externalAddr string) {
+func (m *holePunchManager) RegisterEndpoint(peerName, localAddr, externalAddr string, pcpMapped bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -91,6 +93,7 @@ func (m *holePunchManager) RegisterEndpoint(peerName, localAddr, externalAddr st
 	ep.LocalAddr = localAddr
 	ep.ExternalAddr = externalAddr // Keep for backwards compatibility
 	ep.LastSeen = now
+	ep.PCPMapped = pcpMapped
 
 	// Parse the external address to determine if it's IPv4 or IPv6
 	host, _, err := net.SplitHostPort(externalAddr)
@@ -108,6 +111,7 @@ func (m *holePunchManager) RegisterEndpoint(peerName, localAddr, externalAddr st
 			log.Debug().
 				Str("peer", peerName).
 				Str("external_ipv4", externalAddr).
+				Bool("pcp_mapped", pcpMapped).
 				Msg("UDP IPv4 endpoint registered")
 		} else {
 			// IPv6 address
@@ -116,12 +120,14 @@ func (m *holePunchManager) RegisterEndpoint(peerName, localAddr, externalAddr st
 			log.Debug().
 				Str("peer", peerName).
 				Str("external_ipv6", externalAddr).
+				Bool("pcp_mapped", pcpMapped).
 				Msg("UDP IPv6 endpoint registered")
 		}
 	} else {
 		log.Debug().
 			Str("peer", peerName).
 			Str("external", externalAddr).
+			Bool("pcp_mapped", pcpMapped).
 			Msg("UDP endpoint registered (unknown address family)")
 	}
 }
@@ -290,12 +296,13 @@ func (s *Server) handleUDPRegister(w http.ResponseWriter, r *http.Request) {
 		externalAddr = net.JoinHostPort(externalIP, strconv.Itoa(req.UDPPort))
 	}
 
-	s.holePunch.RegisterEndpoint(req.PeerName, req.LocalAddr, externalAddr)
+	s.holePunch.RegisterEndpoint(req.PeerName, req.LocalAddr, externalAddr, req.PCPMapped)
 
-	// Also update the peer info with UDP port
+	// Also update the peer info with UDP port and PCP status
 	s.peersMu.Lock()
 	if info, ok := s.peers[req.PeerName]; ok {
 		info.peer.UDPPort = req.UDPPort
+		info.peer.PCPMapped = req.PCPMapped
 	}
 	s.peersMu.Unlock()
 
@@ -303,6 +310,7 @@ func (s *Server) handleUDPRegister(w http.ResponseWriter, r *http.Request) {
 		Str("peer", req.PeerName).
 		Str("external_ip", externalIP).
 		Int("udp_port", req.UDPPort).
+		Bool("pcp_mapped", req.PCPMapped).
 		Msg("UDP endpoint registered")
 
 	resp := RegisterUDPResponse{
@@ -333,7 +341,8 @@ func (s *Server) handleHolePunch(w http.ResponseWriter, r *http.Request) {
 	if req.ExternalAddr == "" {
 		req.ExternalAddr = externalIP
 	}
-	s.holePunch.RegisterEndpoint(req.FromPeer, req.LocalAddr, req.ExternalAddr)
+	// Note: HolePunch requests don't update PCPMapped status (keep existing)
+	s.holePunch.RegisterEndpoint(req.FromPeer, req.LocalAddr, req.ExternalAddr, false)
 
 	// Record this request so the target peer can be notified to hole-punch back
 	if req.FromPeer != "" && req.ToPeer != "" {

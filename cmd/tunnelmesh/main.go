@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -29,7 +30,6 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/svc"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
-	relaytransport "github.com/tunnelmesh/tunnelmesh/internal/transport/relay"
 	sshtransport "github.com/tunnelmesh/tunnelmesh/internal/transport/ssh"
 	udptransport "github.com/tunnelmesh/tunnelmesh/internal/transport/udp"
 	"github.com/tunnelmesh/tunnelmesh/internal/tun"
@@ -77,6 +77,21 @@ var (
 	// WireGuard concentrator flag
 	wireguardEnabled bool
 
+	// Geolocation flags
+	latitude  float64
+	longitude float64
+	city      string
+
+	// Exit node flags
+	exitNodeFlag     string
+	allowExitTraffic bool
+
+	// CA trust flag
+	trustCA bool
+
+	// Server feature flags
+	locationsEnabled bool
+
 	// Service mode flags (hidden, used when running as a service)
 	serviceRun     bool
 	serviceRunMode string
@@ -118,6 +133,7 @@ The server manages peer registration, discovery, and DNS records.
 It does not route traffic - peers connect directly to each other.`,
 		RunE: runServe,
 	}
+	serveCmd.Flags().BoolVar(&locationsEnabled, "locations", false, "enable node location tracking (uses external IP geolocation API)")
 	rootCmd.AddCommand(serveCmd)
 
 	// Join command
@@ -131,6 +147,12 @@ It does not route traffic - peers connect directly to each other.`,
 	joinCmd.Flags().StringVarP(&authToken, "token", "t", "", "authentication token")
 	joinCmd.Flags().StringVarP(&nodeName, "name", "n", "", "node name")
 	joinCmd.Flags().BoolVar(&wireguardEnabled, "wireguard", false, "enable WireGuard concentrator mode")
+	joinCmd.Flags().Float64Var(&latitude, "latitude", 0, "manual geolocation latitude (-90 to 90)")
+	joinCmd.Flags().Float64Var(&longitude, "longitude", 0, "manual geolocation longitude (-180 to 180)")
+	joinCmd.Flags().StringVar(&city, "city", "", "city name for manual geolocation (shown in admin UI)")
+	joinCmd.Flags().StringVar(&exitNodeFlag, "exit-node", "", "name of peer to route internet traffic through")
+	joinCmd.Flags().BoolVar(&allowExitTraffic, "allow-exit-traffic", false, "allow this node to act as exit node for other peers")
+	joinCmd.Flags().BoolVar(&trustCA, "trust-ca", false, "install mesh CA certificate in system trust store (requires sudo)")
 	rootCmd.AddCommand(joinCmd)
 
 	// Status command
@@ -191,6 +213,9 @@ It does not route traffic - peers connect directly to each other.`,
 
 	// Update command - self-update
 	rootCmd.AddCommand(newUpdateCmd())
+
+	// Trust CA command - install mesh CA cert in system trust store
+	rootCmd.AddCommand(newTrustCACmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -279,7 +304,11 @@ func runServeFromService(ctx context.Context, configPath string) error {
 		Str("listen", cfg.Listen).
 		Str("mesh_cidr", cfg.MeshCIDR).
 		Str("domain", cfg.DomainSuffix).
+		Str("data_dir", cfg.DataDir).
 		Msg("starting coordination server")
+
+	// Start periodic stats history saving
+	srv.StartPeriodicSave(ctx)
 
 	// Start HTTP server in goroutine
 	go func() {
@@ -297,9 +326,28 @@ func runServeFromService(ctx context.Context, configPath string) error {
 			Str("name", cfg.JoinMesh.Name).
 			Msg("joining mesh as client")
 
+		// Callback to start admin HTTPS server after joining mesh
+		onJoined := func(meshIP string, tlsMgr *peer.TLSManager) {
+			// Set coordinator's mesh IP for "this.tunnelmesh" resolution
+			srv.SetCoordMeshIP(meshIP)
+
+			if cfg.Admin.Enabled && tlsMgr != nil {
+				// Load TLS cert for admin HTTPS
+				tlsCert, err := tlsMgr.LoadCert()
+				if err != nil {
+					log.Error().Err(err).Msg("failed to load TLS cert for admin")
+					return
+				}
+				adminAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", cfg.Admin.Port))
+				if err := srv.StartAdminServer(adminAddr, tlsCert); err != nil {
+					log.Error().Err(err).Msg("failed to start admin server")
+				}
+			}
+		}
+
 		go func() {
 			time.Sleep(500 * time.Millisecond)
-			if err := runJoinWithConfig(ctx, cfg.JoinMesh); err != nil {
+			if err := runJoinWithConfigAndCallback(ctx, cfg.JoinMesh, onJoined); err != nil {
 				log.Error().Err(err).Msg("failed to join mesh as client")
 			}
 		}()
@@ -307,6 +355,12 @@ func runServeFromService(ctx context.Context, configPath string) error {
 
 	// Wait for context cancellation (service stop)
 	<-ctx.Done()
+
+	// Save stats history before exit
+	if err := srv.Shutdown(); err != nil {
+		log.Error().Err(err).Msg("error during shutdown")
+	}
+
 	return nil
 }
 
@@ -382,6 +436,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Apply command-line flag overrides
+	if locationsEnabled {
+		cfg.Locations = true
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
@@ -410,7 +469,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Str("listen", cfg.Listen).
 		Str("mesh_cidr", cfg.MeshCIDR).
 		Str("domain", cfg.DomainSuffix).
+		Str("data_dir", cfg.DataDir).
 		Msg("starting coordination server")
+
+	// Start periodic stats history saving
+	srv.StartPeriodicSave(ctx)
 
 	// Start HTTP server in goroutine
 	go func() {
@@ -429,11 +492,30 @@ func runServe(cmd *cobra.Command, args []string) error {
 			Str("name", cfg.JoinMesh.Name).
 			Msg("joining mesh as client")
 
+		// Callback to start admin HTTPS server after joining mesh
+		onJoined := func(meshIP string, tlsMgr *peer.TLSManager) {
+			// Set coordinator's mesh IP for "this.tunnelmesh" resolution
+			srv.SetCoordMeshIP(meshIP)
+
+			if cfg.Admin.Enabled && tlsMgr != nil {
+				// Load TLS cert for admin HTTPS
+				tlsCert, err := tlsMgr.LoadCert()
+				if err != nil {
+					log.Error().Err(err).Msg("failed to load TLS cert for admin")
+					return
+				}
+				adminAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", cfg.Admin.Port))
+				if err := srv.StartAdminServer(adminAddr, tlsCert); err != nil {
+					log.Error().Err(err).Msg("failed to start admin server")
+				}
+			}
+		}
+
 		// Run join in a goroutine so we can handle shutdown
 		go func() {
 			// Small delay to ensure server is ready
 			time.Sleep(500 * time.Millisecond)
-			if err := runJoinWithConfig(ctx, cfg.JoinMesh); err != nil {
+			if err := runJoinWithConfigAndCallback(ctx, cfg.JoinMesh, onJoined); err != nil {
 				log.Error().Err(err).Msg("failed to join mesh as client")
 			}
 		}()
@@ -441,6 +523,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Wait for shutdown
 	<-ctx.Done()
+
+	// Save stats history before exit
+	if err := srv.Shutdown(); err != nil {
+		log.Error().Err(err).Msg("error during shutdown")
+	}
+
 	return nil
 }
 
@@ -492,6 +580,19 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	if wireguardEnabled {
 		cfg.WireGuard.Enabled = true
 	}
+	if latitude != 0 || longitude != 0 {
+		cfg.Geolocation.Latitude = latitude
+		cfg.Geolocation.Longitude = longitude
+	}
+	if city != "" {
+		cfg.Geolocation.City = city
+	}
+	if exitNodeFlag != "" {
+		cfg.ExitNode = exitNodeFlag
+	}
+	if allowExitTraffic {
+		cfg.AllowExitTraffic = true
+	}
 
 	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
 		return fmt.Errorf("server, token, and name are required")
@@ -513,7 +614,15 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	return runJoinWithConfig(ctx, cfg)
 }
 
+// OnJoinedFunc is called after successfully joining the mesh.
+// It receives the mesh IP and TLS manager (if TLS cert was provided).
+type OnJoinedFunc func(meshIP string, tlsMgr *peer.TLSManager)
+
 func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
+	return runJoinWithConfigAndCallback(ctx, cfg, nil)
+}
+
+func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, onJoined OnJoinedFunc) error {
 	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
 		return fmt.Errorf("server, token, and name are required")
 	}
@@ -545,8 +654,24 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	// UDP port is SSH port + 1
 	udpPort := cfg.SSHPort + 1
 
+	// Build location from config if set
+	var location *proto.GeoLocation
+	if cfg.Geolocation.IsSet() {
+		location = &proto.GeoLocation{
+			Latitude:  cfg.Geolocation.Latitude,
+			Longitude: cfg.Geolocation.Longitude,
+			City:      cfg.Geolocation.City,
+			Source:    "manual",
+		}
+		log.Info().
+			Float64("latitude", location.Latitude).
+			Float64("longitude", location.Longitude).
+			Str("city", location.City).
+			Msg("geolocation configured")
+	}
+
 	// Register with retry and exponential backoff
-	resp, err := client.RegisterWithRetry(ctx, cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version, coord.DefaultRetryConfig())
+	resp, err := client.RegisterWithRetry(ctx, cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version, location, cfg.ExitNode, cfg.AllowExitTraffic, cfg.DNS.Aliases, coord.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}
@@ -556,6 +681,31 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		Str("mesh_cidr", resp.MeshCIDR).
 		Str("domain", resp.Domain).
 		Msg("joined mesh network")
+
+	// Store TLS certificate if provided
+	var tlsMgr *peer.TLSManager
+	if resp.TLSCert != "" && resp.TLSKey != "" {
+		// Use the directory of the private key for TLS storage
+		tlsDataDir := filepath.Dir(cfg.PrivateKey)
+		tlsMgr = peer.NewTLSManager(tlsDataDir)
+		if err := tlsMgr.StoreCert([]byte(resp.TLSCert), []byte(resp.TLSKey)); err != nil {
+			log.Warn().Err(err).Msg("failed to store TLS certificate")
+		} else {
+			log.Info().
+				Str("cert", tlsMgr.CertPath()).
+				Str("key", tlsMgr.KeyPath()).
+				Msg("TLS certificate stored")
+		}
+
+		// Install CA certificate if --trust-ca flag is set
+		if trustCA {
+			if err := InstallCAFromServer(cfg.Server); err != nil {
+				log.Warn().Err(err).Msg("failed to install CA certificate (you may need sudo)")
+				log.Info().Str("command", fmt.Sprintf("sudo tunnelmesh trust-ca --server %s", cfg.Server)).
+					Msg("run manually with sudo to install CA")
+			}
+		}
+	}
 
 	// Create TUN device
 	tunCfg := tun.Config{
@@ -582,8 +732,15 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 			Msg("TUN device created")
 	}
 
+	// Notify callback if provided (used by server to start admin HTTPS on mesh IP)
+	// Must be after TUN device creation so the mesh IP is assigned to an interface
+	if onJoined != nil {
+		onJoined(resp.MeshIP, tlsMgr)
+	}
+
 	// Create peer identity and mesh node
 	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, udpPort, Version, resp)
+	identity.Location = location // Set location for heartbeat reporting
 	node := peer.NewMeshNode(identity, client)
 
 	// Set up forwarder with node's tunnel manager and router
@@ -594,6 +751,51 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	}
 	node.Forwarder = forwarder
 
+	// Configure exit node settings
+	if tunDev != nil {
+		// Parse mesh CIDR for split-tunnel detection
+		_, meshNet, err := net.ParseCIDR(resp.MeshCIDR)
+		if err != nil {
+			log.Warn().Err(err).Str("cidr", resp.MeshCIDR).Msg("failed to parse mesh CIDR, exit routing disabled")
+		} else {
+			forwarder.SetMeshCIDR(meshNet)
+
+			exitCfg := tun.ExitRouteConfig{
+				InterfaceName: tunDev.Name(),
+				MeshCIDR:      resp.MeshCIDR,
+			}
+
+			// Configure exit node routing (client side)
+			if cfg.ExitNode != "" {
+				// Strip domain suffix if present (allow both "peer" and "peer.tunnelmesh")
+				exitNodeName := cfg.ExitNode
+				if resp.Domain != "" && strings.HasSuffix(exitNodeName, resp.Domain) {
+					exitNodeName = strings.TrimSuffix(exitNodeName, resp.Domain)
+				}
+				forwarder.SetExitNode(exitNodeName)
+				log.Info().Str("exit_node", exitNodeName).Msg("exit node configured, internet traffic will route through peer")
+
+				if err := tun.ConfigureExitRoutes(exitCfg); err != nil {
+					log.Warn().Err(err).Msg("failed to configure exit routes, manual setup may be required")
+				} else {
+					log.Info().Msg("exit routes configured (0.0.0.0/1, 128.0.0.0/1 via TUN)")
+				}
+			}
+
+			// Configure NAT for exit node (server side)
+			if cfg.AllowExitTraffic {
+				log.Info().Msg("this node allows exit traffic from other peers")
+				exitCfg.IsExitNode = true
+
+				if err := tun.ConfigureExitNAT(exitCfg); err != nil {
+					log.Warn().Err(err).Msg("failed to configure exit NAT, manual setup may be required")
+				} else {
+					log.Info().Msg("exit NAT configured (IP forwarding + masquerade)")
+				}
+			}
+		}
+	}
+
 	// When forwarder detects a dead tunnel (write fails), disconnect the peer
 	// This removes the tunnel and triggers discovery for reconnection
 	forwarder.SetOnDeadTunnel(func(peerName string) {
@@ -603,14 +805,14 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		}
 	})
 
-	// Create transport registry with default order: UDP -> SSH -> Relay
+	// Create transport registry with default order: UDP -> SSH
 	// UDP is first for better performance (lower latency, no head-of-line blocking)
 	// Falls back to SSH when UDP hole-punching fails or times out
+	// Relay traffic is handled by PersistentRelay separately (DERP-like architecture)
 	transportRegistry := transport.NewRegistry(transport.RegistryConfig{
 		DefaultOrder: []transport.TransportType{
 			transport.TransportUDP,
 			transport.TransportSSH,
-			transport.TransportRelay,
 		},
 	})
 	node.TransportRegistry = transportRegistry
@@ -661,13 +863,13 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 				Bool("match", string(x25519Pub) == string(x25519FromEd)).
 				Msg("X25519 key derivation check")
 
-			// Create peer resolver for incoming UDP connections
-			peerResolver := func(x25519PubKey [32]byte) string {
-				peers, err := client.ListPeers()
-				if err != nil {
-					log.Debug().Err(err).Msg("failed to list peers for resolver")
-					return ""
-				}
+			// Cache for peer X25519 keys -> peer names
+			// This allows handshakes to succeed even during network transitions
+			// when API calls might fail temporarily
+			var peerKeyCache sync.Map // [32]byte -> string
+
+			// Helper to update cache from peers list
+			updatePeerKeyCache := func(peers []proto.Peer) {
 				for _, p := range peers {
 					if p.PublicKey == "" {
 						continue
@@ -677,7 +879,6 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 					if err != nil {
 						continue
 					}
-					// Extract the crypto.PublicKey from the SSH public key
 					cryptoPubKey, ok := sshPubKey.(ssh.CryptoPublicKey)
 					if !ok {
 						continue
@@ -693,10 +894,32 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 					if len(peerX25519) == 32 {
 						var peerKey [32]byte
 						copy(peerKey[:], peerX25519)
-						if peerKey == x25519PubKey {
-							return p.Name
-						}
+						peerKeyCache.Store(peerKey, p.Name)
 					}
+				}
+			}
+
+			// Create peer resolver for incoming UDP connections
+			peerResolver := func(x25519PubKey [32]byte) string {
+				// Try to fetch fresh peer list
+				peers, err := client.ListPeers()
+				if err != nil {
+					// API call failed (likely during network transition)
+					// Fall back to cached data
+					log.Debug().Err(err).Msg("failed to list peers for resolver, using cache")
+					if name, ok := peerKeyCache.Load(x25519PubKey); ok {
+						log.Debug().Str("peer", name.(string)).Msg("resolved peer from cache")
+						return name.(string)
+					}
+					return ""
+				}
+
+				// Update cache with fresh data
+				updatePeerKeyCache(peers)
+
+				// Look up the peer
+				if name, ok := peerKeyCache.Load(x25519PubKey); ok {
+					return name.(string)
 				}
 				return ""
 			}
@@ -761,20 +984,8 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 		}
 	}
 
-	// Create and register relay transport
-	relayTransport, err := relaytransport.New(relaytransport.Config{
-		ServerURL: cfg.Server,
-		JWTToken:  client.JWTToken(), // Will be updated after registration
-	})
-	if err != nil {
-		return fmt.Errorf("create relay transport: %w", err)
-	}
-	if err := transportRegistry.Register(relayTransport); err != nil {
-		return fmt.Errorf("register relay transport: %w", err)
-	}
-	log.Info().Msg("relay transport registered")
-
 	// Create transport negotiator
+	// Note: Relay traffic is handled by PersistentRelay separately (DERP-like architecture)
 	transportNegotiator := transport.NewNegotiator(transportRegistry, transport.NegotiatorConfig{
 		ProbeTimeout:      5 * time.Second,
 		ConnectionTimeout: 30 * time.Second,
@@ -926,6 +1137,10 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	var dnsConfigured bool
 	if cfg.DNS.Enabled {
 		resolver := meshdns.NewResolver(resp.Domain, cfg.DNS.CacheTTL)
+		// Set coordinator's mesh IP for "this.tunnelmesh" resolution
+		if resp.CoordMeshIP != "" {
+			resolver.SetCoordMeshIP(resp.CoordMeshIP)
+		}
 		node.Resolver = resolver
 
 		// Initial DNS sync

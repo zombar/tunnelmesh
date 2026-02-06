@@ -42,6 +42,25 @@ func (m *MeshNode) HandleUDPSessionInvalidated(peerName string) {
 
 // SetupUDPSessionInvalidCallback wires up the UDP transport's session invalid callback
 // to handle remote session invalidation (rekey-required messages).
+// Also stores the UDP transport reference for crossing handshake pre-registration.
 func (m *MeshNode) SetupUDPSessionInvalidCallback(udpTransport *udptransport.Transport) {
+	m.UDPTransport = udpTransport
 	udpTransport.SetSessionInvalidCallback(m.HandleUDPSessionInvalidated)
+}
+
+// PreRegisterUDPOutbound pre-registers intent to connect to a peer via UDP.
+// This should be called BEFORE spawning the connection goroutine to ensure
+// crossing handshake detection works correctly during hole-punching.
+func (m *MeshNode) PreRegisterUDPOutbound(peerName string) {
+	if m.UDPTransport != nil {
+		m.UDPTransport.RegisterPendingOutbound(peerName)
+	}
+}
+
+// ClearUDPOutbound clears the pre-registration for a peer.
+// Called when the connection attempt completes (success or failure).
+func (m *MeshNode) ClearUDPOutbound(peerName string) {
+	if m.UDPTransport != nil {
+		m.UDPTransport.ClearPendingOutbound(peerName)
+	}
 }

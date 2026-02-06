@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/tunnelmesh/tunnelmesh/internal/tunnel"
 )
 
 // RunHeartbeat starts the heartbeat loop that maintains presence with the coordination server.
@@ -13,8 +12,16 @@ import (
 // Note: Push notification handlers (relay/hole-punch) are set in setupRelayHandlers to ensure
 // they're re-registered after relay reconnection.
 func (m *MeshNode) RunHeartbeat(ctx context.Context) {
-	// Send heartbeats every 30 seconds (no fast phase needed - notifications are pushed instantly)
-	ticker := time.NewTicker(30 * time.Second)
+	// Parse heartbeat interval from config (default: 10s)
+	interval := 10 * time.Second
+	if m.identity.Config != nil && m.identity.Config.HeartbeatInterval != "" {
+		if parsed, err := time.ParseDuration(m.identity.Config.HeartbeatInterval); err == nil {
+			interval = parsed
+		}
+	}
+
+	log.Debug().Dur("interval", interval).Msg("starting heartbeat loop")
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	// Perform initial heartbeat immediately
@@ -48,10 +55,11 @@ func (m *MeshNode) PerformHeartbeat(ctx context.Context) {
 
 			m.HandleIPChange(publicIPs, privateIPs, behindNAT)
 
-			// Re-register with server
+			// Re-register with server (pass nil location to retain existing)
 			if _, err := m.client.Register(
 				m.identity.Name, m.identity.PubKeyEncoded,
-				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version,
+				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version, nil,
+				m.identity.Config.ExitNode, m.identity.Config.AllowExitTraffic, m.identity.Config.DNS.Aliases,
 			); err != nil {
 				log.Error().Err(err).Msg("failed to re-register after IP change")
 			} else {
@@ -88,6 +96,9 @@ func (m *MeshNode) HandleIPChange(publicIPs, privateIPs []string, behindNAT bool
 	// Close stale HTTP connections
 	m.client.CloseIdleConnections()
 
+	// Clear peer cache to prevent using stale IPs/endpoints for reconnection
+	m.ClearPeerCache()
+
 	// Disconnect all peers (tunnels may be using stale IPs)
 	// Use DisconnectAll to properly transition FSM states and trigger observers
 	m.Connections.DisconnectAll("IP change")
@@ -98,6 +109,12 @@ func (m *MeshNode) HandleIPChange(publicIPs, privateIPs []string, behindNAT bool
 	// Update stored IPs
 	m.SetHeartbeatIPs(publicIPs, privateIPs, behindNAT)
 
+	// Re-register UDP endpoint with new external address (non-blocking)
+	// This ensures peers can reach us at our new address before discovery completes
+	if m.TransportRegistry != nil {
+		go m.TransportRegistry.RefreshEndpoints(context.Background(), m.identity.Name)
+	}
+
 	// Reconnect persistent relay (non-blocking)
 	if m.PersistentRelay != nil {
 		go m.ReconnectPersistentRelay(context.Background())
@@ -107,74 +124,25 @@ func (m *MeshNode) HandleIPChange(publicIPs, privateIPs []string, behindNAT bool
 	m.TriggerDiscovery()
 }
 
-// HandleRelayRequests connects to relay for peers that are waiting for us.
+// HandleRelayRequests handles notifications that peers want to communicate via relay.
+// The PersistentRelay already handles packet routing - this just cancels any direct
+// connection attempts since the peer can only reach us via relay.
 func (m *MeshNode) HandleRelayRequests(ctx context.Context, relayRequests []string) {
 	if len(relayRequests) == 0 {
 		return
 	}
 
-	existingTunnels := m.tunnelMgr.List()
-	existingSet := make(map[string]bool)
-	for _, t := range existingTunnels {
-		existingSet[t] = true
-	}
-
 	for _, peerName := range relayRequests {
-		// Skip if we already have a tunnel to this peer
-		if existingSet[peerName] {
-			continue
+		log.Info().Str("peer", peerName).Msg("peer wants to communicate via relay")
+
+		// Cancel any outbound connection attempt to this peer since they can only reach us via relay
+		m.Connections.CancelOutbound(peerName)
+
+		// Ensure route exists for this peer so forwarder can route packets via relay
+		if peer, ok := m.GetCachedPeer(peerName); ok && peer.MeshIP != "" {
+			m.router.AddRoute(peer.MeshIP, peerName)
 		}
-
-		log.Info().Str("peer", peerName).Msg("peer is waiting on relay for us, connecting...")
-
-		jwtToken := m.client.JWTToken()
-		if jwtToken == "" {
-			log.Warn().Str("peer", peerName).Msg("no JWT token available for relay")
-			continue
-		}
-
-		// Connect to relay in a goroutine to not block
-		go m.connectRelay(ctx, peerName, jwtToken)
 	}
-}
-
-// connectRelay connects to a relay for the given peer.
-func (m *MeshNode) connectRelay(ctx context.Context, peerName, jwtToken string) {
-	// Cancel any outbound connection attempt to this peer (relay is server-mediated inbound)
-	m.Connections.CancelOutbound(peerName)
-
-	relayTunnel, err := tunnel.NewRelayTunnel(ctx, m.client.BaseURL(), peerName, jwtToken)
-	if err != nil {
-		log.Warn().Err(err).Str("peer", peerName).Msg("relay connection failed")
-		return
-	}
-
-	// Get mesh IP for this peer from cache (relay connections may not have coord server access)
-	meshIP, _ := m.GetCachedPeerMeshIP(peerName)
-
-	// Add route immediately for bidirectional traffic
-	// Discovery will refresh/validate routes on next cycle
-	if meshIP != "" {
-		m.router.AddRoute(meshIP, peerName)
-	}
-
-	// Transition to Connected state (this adds tunnel via LifecycleManager observer)
-	pc := m.Connections.GetOrCreate(peerName, meshIP)
-	if err := pc.Connected(relayTunnel, "relay", "relay notification"); err != nil {
-		log.Warn().Err(err).Str("peer", peerName).Msg("failed to transition to connected state")
-		relayTunnel.Close()
-		return
-	}
-
-	log.Info().Str("peer", peerName).Msg("relay tunnel established via notification")
-
-	// Handle incoming packets from this tunnel
-	if m.Forwarder != nil {
-		m.Forwarder.HandleTunnel(ctx, peerName, relayTunnel)
-	}
-
-	// Disconnect when tunnel handler exits (removes tunnel via LifecycleManager observer)
-	_ = pc.Disconnect("relay tunnel handler exited", nil)
 }
 
 // syncDNS syncs DNS records from the coordination server.
@@ -235,6 +203,11 @@ func (m *MeshNode) HandleHolePunchRequests(ctx context.Context, holePunchRequest
 		}
 
 		log.Info().Str("peer", peerName).Msg("peer wants to hole-punch with us, initiating connection")
+
+		// Pre-register outbound intent BEFORE spawning the goroutine.
+		// This ensures crossing handshake detection works correctly even if
+		// the other peer's init arrives before our goroutine starts.
+		m.PreRegisterUDPOutbound(peerName)
 
 		// Get the peer info and start a connection attempt
 		// This will use the negotiator which will try UDP hole-punching

@@ -2,7 +2,6 @@ package coord
 
 import (
 	"bytes"
-	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -19,44 +18,56 @@ import (
 
 // AdminOverview is the response for the admin overview endpoint.
 type AdminOverview struct {
-	ServerUptime    string          `json:"server_uptime"`
-	ServerVersion   string          `json:"server_version"`
-	TotalPeers      int             `json:"total_peers"`
-	OnlinePeers     int             `json:"online_peers"`
-	TotalHeartbeats uint64          `json:"total_heartbeats"`
-	MeshCIDR        string          `json:"mesh_cidr"`
-	DomainSuffix    string          `json:"domain_suffix"`
-	Peers           []AdminPeerInfo `json:"peers"`
+	ServerUptime     string          `json:"server_uptime"`
+	ServerVersion    string          `json:"server_version"`
+	TotalPeers       int             `json:"total_peers"`
+	OnlinePeers      int             `json:"online_peers"`
+	TotalHeartbeats  uint64          `json:"total_heartbeats"`
+	MeshCIDR         string          `json:"mesh_cidr"`
+	DomainSuffix     string          `json:"domain_suffix"`
+	LocationsEnabled bool            `json:"locations_enabled"` // Whether node location tracking is enabled
+	Peers            []AdminPeerInfo `json:"peers"`
 }
 
 // AdminPeerInfo contains peer information for the admin UI.
 type AdminPeerInfo struct {
-	Name                string           `json:"name"`
-	MeshIP              string           `json:"mesh_ip"`
-	PublicIPs           []string         `json:"public_ips"`
-	PrivateIPs          []string         `json:"private_ips"`
-	SSHPort             int              `json:"ssh_port"`
-	UDPPort             int              `json:"udp_port"`
-	UDPExternalAddr4    string           `json:"udp_external_addr4,omitempty"`
-	UDPExternalAddr6    string           `json:"udp_external_addr6,omitempty"`
-	LastSeen            time.Time        `json:"last_seen"`
-	Online              bool             `json:"online"`
-	Connectable         bool             `json:"connectable"`
-	BehindNAT           bool             `json:"behind_nat"`
-	RegisteredAt        time.Time        `json:"registered_at"`
-	HeartbeatCount      uint64           `json:"heartbeat_count"`
-	Stats               *proto.PeerStats `json:"stats,omitempty"`
-	BytesSentRate       float64          `json:"bytes_sent_rate"`
-	BytesReceivedRate   float64          `json:"bytes_received_rate"`
-	PacketsSentRate     float64          `json:"packets_sent_rate"`
-	PacketsReceivedRate float64          `json:"packets_received_rate"`
-	Version             string           `json:"version,omitempty"`
-	History             []StatsDataPoint `json:"history,omitempty"`
+	Name                string              `json:"name"`
+	MeshIP              string              `json:"mesh_ip"`
+	PublicIPs           []string            `json:"public_ips"`
+	PrivateIPs          []string            `json:"private_ips"`
+	SSHPort             int                 `json:"ssh_port"`
+	UDPPort             int                 `json:"udp_port"`
+	UDPExternalAddr4    string              `json:"udp_external_addr4,omitempty"`
+	UDPExternalAddr6    string              `json:"udp_external_addr6,omitempty"`
+	LastSeen            time.Time           `json:"last_seen"`
+	Online              bool                `json:"online"`
+	Connectable         bool                `json:"connectable"`
+	BehindNAT           bool                `json:"behind_nat"`
+	RegisteredAt        time.Time           `json:"registered_at"`
+	HeartbeatCount      uint64              `json:"heartbeat_count"`
+	Stats               *proto.PeerStats    `json:"stats,omitempty"`
+	BytesSentRate       float64             `json:"bytes_sent_rate"`
+	BytesReceivedRate   float64             `json:"bytes_received_rate"`
+	PacketsSentRate     float64             `json:"packets_sent_rate"`
+	PacketsReceivedRate float64             `json:"packets_received_rate"`
+	Version             string              `json:"version,omitempty"`
+	Location            *proto.GeoLocation  `json:"location,omitempty"`
+	History             []StatsDataPoint    `json:"history,omitempty"`
+	// Exit node info
+	AllowsExitTraffic bool              `json:"allows_exit_traffic,omitempty"`
+	ExitNode          string            `json:"exit_node,omitempty"`
+	ExitClients       []string          `json:"exit_clients,omitempty"`
+	// Connection info (peer -> transport type)
+	Connections map[string]string `json:"connections,omitempty"`
+	// DNS aliases for this peer
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 // handleAdminOverview returns the admin overview data.
 // Query params:
 //   - history=N: include last N stats data points per peer (default: 0)
+//   - since=<RFC3339>: include stats data points since this timestamp
+//   - maxPoints=N: downsample history to at most N points (for chart display)
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -71,6 +82,22 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Parse since query param (RFC3339 timestamp)
+	var sinceTime time.Time
+	if since := r.URL.Query().Get("since"); since != "" {
+		if t, err := time.Parse(time.RFC3339, since); err == nil {
+			sinceTime = t
+		}
+	}
+
+	// Parse maxPoints query param for downsampling
+	maxPoints := 0
+	if mp := r.URL.Query().Get("maxPoints"); mp != "" {
+		if n, err := strconv.Atoi(mp); err == nil && n > 0 {
+			maxPoints = n
+		}
+	}
+
 	s.peersMu.RLock()
 	defer s.peersMu.RUnlock()
 
@@ -78,13 +105,22 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	onlineThreshold := 2 * time.Minute
 
 	overview := AdminOverview{
-		ServerUptime:    time.Since(s.serverStats.startTime).Round(time.Second).String(),
-		ServerVersion:   s.version,
-		TotalPeers:      len(s.peers),
-		TotalHeartbeats: s.serverStats.totalHeartbeats,
-		MeshCIDR:        s.cfg.MeshCIDR,
-		DomainSuffix:    s.cfg.DomainSuffix,
-		Peers:           make([]AdminPeerInfo, 0, len(s.peers)),
+		ServerUptime:     time.Since(s.serverStats.startTime).Round(time.Second).String(),
+		ServerVersion:    s.version,
+		TotalPeers:       len(s.peers),
+		TotalHeartbeats:  s.serverStats.totalHeartbeats,
+		MeshCIDR:         s.cfg.MeshCIDR,
+		DomainSuffix:     s.cfg.DomainSuffix,
+		LocationsEnabled: s.cfg.Locations,
+		Peers:            make([]AdminPeerInfo, 0, len(s.peers)),
+	}
+
+	// Build exit client map (which clients use which exit node)
+	exitClients := make(map[string][]string) // exitNodeName -> [clientNames]
+	for _, info := range s.peers {
+		if info.peer.ExitNode != "" {
+			exitClients[info.peer.ExitNode] = append(exitClients[info.peer.ExitNode], info.peer.Name)
+		}
 	}
 
 	for _, info := range s.peers {
@@ -94,20 +130,38 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		}
 
 		peerInfo := AdminPeerInfo{
-			Name:           info.peer.Name,
-			MeshIP:         info.peer.MeshIP,
-			PublicIPs:      info.peer.PublicIPs,
-			PrivateIPs:     info.peer.PrivateIPs,
-			SSHPort:        info.peer.SSHPort,
-			UDPPort:        info.peer.UDPPort,
-			LastSeen:       info.peer.LastSeen,
-			Online:         online,
-			Connectable:    info.peer.Connectable,
-			BehindNAT:      info.peer.BehindNAT,
-			RegisteredAt:   info.registeredAt,
-			HeartbeatCount: info.heartbeatCount,
-			Stats:          info.stats,
-			Version:        info.peer.Version,
+			Name:              info.peer.Name,
+			MeshIP:            info.peer.MeshIP,
+			PublicIPs:         info.peer.PublicIPs,
+			PrivateIPs:        info.peer.PrivateIPs,
+			SSHPort:           info.peer.SSHPort,
+			UDPPort:           info.peer.UDPPort,
+			LastSeen:          info.peer.LastSeen,
+			Online:            online,
+			Connectable:       info.peer.Connectable,
+			BehindNAT:         info.peer.BehindNAT,
+			RegisteredAt:      info.registeredAt,
+			HeartbeatCount:    info.heartbeatCount,
+			Stats:             info.stats,
+			Version:           info.peer.Version,
+			AllowsExitTraffic: info.peer.AllowsExitTraffic,
+			ExitNode:          info.peer.ExitNode,
+			Aliases:           info.aliases,
+		}
+
+		// Include exit clients if this peer allows exit traffic
+		if info.peer.AllowsExitTraffic {
+			peerInfo.ExitClients = exitClients[info.peer.Name]
+		}
+
+		// Include connection types from stats (peer -> transport type)
+		if info.stats != nil && len(info.stats.Connections) > 0 {
+			peerInfo.Connections = info.stats.Connections
+		}
+
+		// Only include location if the feature is enabled
+		if s.cfg.Locations {
+			peerInfo.Location = info.peer.Location
 		}
 
 		// Get UDP endpoint addresses if available
@@ -120,15 +174,26 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 
 		// Calculate rates if we have previous stats
 		if info.prevStats != nil && info.stats != nil && !info.lastStatsTime.IsZero() {
-			// Rate is calculated as delta over 30 seconds (heartbeat interval)
-			peerInfo.BytesSentRate = float64(info.stats.BytesSent-info.prevStats.BytesSent) / 30.0
-			peerInfo.BytesReceivedRate = float64(info.stats.BytesReceived-info.prevStats.BytesReceived) / 30.0
-			peerInfo.PacketsSentRate = float64(info.stats.PacketsSent-info.prevStats.PacketsSent) / 30.0
-			peerInfo.PacketsReceivedRate = float64(info.stats.PacketsReceived-info.prevStats.PacketsReceived) / 30.0
+			// Use actual time delta for rate calculation (more accurate than fixed interval)
+			delta := info.lastStatsTime.Sub(info.prevStatsTime).Seconds()
+			if delta > 0 {
+				peerInfo.BytesSentRate = float64(info.stats.BytesSent-info.prevStats.BytesSent) / delta
+				peerInfo.BytesReceivedRate = float64(info.stats.BytesReceived-info.prevStats.BytesReceived) / delta
+				peerInfo.PacketsSentRate = float64(info.stats.PacketsSent-info.prevStats.PacketsSent) / delta
+				peerInfo.PacketsReceivedRate = float64(info.stats.PacketsReceived-info.prevStats.PacketsReceived) / delta
+			}
 		}
 
 		// Include history if requested
-		if historyLimit > 0 {
+		if !sinceTime.IsZero() {
+			// Time-based history query (for charts)
+			peerInfo.History = s.statsHistory.GetHistorySince(info.peer.Name, sinceTime)
+			// Downsample if needed
+			if maxPoints > 0 && len(peerInfo.History) > maxPoints {
+				peerInfo.History = downsampleHistory(peerInfo.History, maxPoints)
+			}
+		} else if historyLimit > 0 {
+			// Count-based history query (legacy)
 			peerInfo.History = s.statsHistory.GetHistory(info.peer.Name, historyLimit)
 		}
 
@@ -149,72 +214,50 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(overview)
 }
 
-// withAdminAuth wraps a handler with admin authentication using HTTP Basic Auth.
-// If no admin token is configured, requests are allowed without authentication.
-func (s *Server) withAdminAuth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.checkAdminAuth(w, r) {
-			return
-		}
-		next(w, r)
-	}
-}
-
-// withAdminAuthHandler wraps an http.Handler with admin authentication.
-func (s *Server) withAdminAuthHandler(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.checkAdminAuth(w, r) {
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// checkAdminAuth verifies admin credentials and returns false if auth failed (response already sent).
-func (s *Server) checkAdminAuth(w http.ResponseWriter, r *http.Request) bool {
-	// If no admin token configured, allow access without auth
-	if s.cfg.Admin.Token == "" {
-		return true
-	}
-
-	// Check for Basic Auth credentials
-	_, password, ok := r.BasicAuth()
-	if !ok {
-		w.Header().Set("WWW-Authenticate", `Basic realm="TunnelMesh Admin"`)
-		s.jsonError(w, "authentication required", http.StatusUnauthorized)
-		return false
-	}
-
-	// Constant-time comparison to prevent timing attacks
-	if subtle.ConstantTimeCompare([]byte(password), []byte(s.cfg.Admin.Token)) != 1 {
-		w.Header().Set("WWW-Authenticate", `Basic realm="TunnelMesh Admin"`)
-		s.jsonError(w, "invalid credentials", http.StatusUnauthorized)
-		return false
-	}
-
-	return true
-}
-
 // setupAdminRoutes registers the admin API routes and static file server.
+// Note: Admin routes have no authentication - access is controlled by bind address.
+// With join_mesh + mesh_only_admin=true (default): HTTPS on mesh IP at root (https://this.tunnelmesh/)
+// With join_mesh + mesh_only_admin=false: HTTP on bind_address at /admin/
+// Without join_mesh: HTTP on bind_address at /admin/
 func (s *Server) setupAdminRoutes() {
-	// API endpoints (protected by admin auth)
-	s.mux.HandleFunc("/admin/api/overview", s.withAdminAuth(s.handleAdminOverview))
-
-	// WireGuard client management endpoints (if enabled)
-	if s.cfg.WireGuard.Enabled {
-		s.mux.HandleFunc("/admin/api/wireguard/clients", s.withAdminAuth(s.handleWGClients))
-		s.mux.HandleFunc("/admin/api/wireguard/clients/", s.withAdminAuth(s.handleWGClientByID))
-	}
-
-	// Serve embedded static files (also protected by admin auth)
+	// Serve embedded static files
 	staticFS, _ := fs.Sub(web.Assets, ".")
 	fileServer := http.FileServer(http.FS(staticFS))
 
-	// Serve index.html at /admin/ and /admin
-	s.mux.HandleFunc("/admin", s.withAdminAuth(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
-	}))
-	s.mux.Handle("/admin/", s.withAdminAuthHandler(http.StripPrefix("/admin/", fileServer)))
+	// Determine if we should use mesh-only admin (HTTPS on mesh IP)
+	// Default to true when join_mesh is configured
+	meshOnlyAdmin := s.cfg.JoinMesh != nil && (s.cfg.Admin.MeshOnlyAdmin == nil || *s.cfg.Admin.MeshOnlyAdmin)
+
+	if meshOnlyAdmin {
+		// Mesh-only: create separate adminMux for HTTPS server on mesh IP
+		// Serve at root - dedicated server doesn't need /admin/ prefix
+		s.adminMux = http.NewServeMux()
+
+		s.adminMux.HandleFunc("/api/overview", s.handleAdminOverview)
+		s.adminMux.HandleFunc("/api/events", s.handleSSE)
+
+		if s.cfg.WireGuard.Enabled {
+			s.adminMux.HandleFunc("/api/wireguard/clients", s.handleWGClients)
+			s.adminMux.HandleFunc("/api/wireguard/clients/", s.handleWGClientByID)
+		}
+
+		s.adminMux.Handle("/", fileServer)
+	} else {
+		// External: register on main mux with /admin/ prefix
+		// (shares mux with coordination API, needs prefix to avoid conflicts)
+		s.mux.HandleFunc("/admin/api/overview", s.handleAdminOverview)
+		s.mux.HandleFunc("/admin/api/events", s.handleSSE)
+
+		if s.cfg.WireGuard.Enabled {
+			s.mux.HandleFunc("/admin/api/wireguard/clients", s.handleWGClients)
+			s.mux.HandleFunc("/admin/api/wireguard/clients/", s.handleWGClientByID)
+		}
+
+		s.mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
+		})
+		s.mux.Handle("/admin/", http.StripPrefix("/admin/", fileServer))
+	}
 }
 
 // handleWGClients handles GET (list) and POST (create) for WireGuard clients.
@@ -358,4 +401,26 @@ func (s *Server) handleWGClientByID(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(apiResp.StatusCode)
 	}
 	_, _ = w.Write(apiResp.Body)
+}
+
+// downsampleHistory reduces the number of data points using uniform sampling.
+// This preserves the general shape of the data while reducing payload size for charts.
+func downsampleHistory(data []StatsDataPoint, targetPoints int) []StatsDataPoint {
+	if len(data) <= targetPoints || targetPoints <= 0 {
+		return data
+	}
+
+	// Use uniform sampling - pick evenly spaced points
+	step := float64(len(data)-1) / float64(targetPoints-1)
+	result := make([]StatsDataPoint, targetPoints)
+
+	for i := 0; i < targetPoints; i++ {
+		idx := int(float64(i) * step)
+		if idx >= len(data) {
+			idx = len(data) - 1
+		}
+		result[i] = data[idx]
+	}
+
+	return result
 }

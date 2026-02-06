@@ -16,6 +16,32 @@ const (
 	ChannelType = "tunnelmesh-data"
 )
 
+// handleSSHRequests handles out-of-band SSH requests, responding to keepalives.
+// This replaces ssh.DiscardRequests to properly handle keepalive requests
+// which expect a response to maintain the connection.
+func handleSSHRequests(reqs <-chan *ssh.Request) {
+	for req := range reqs {
+		if req == nil {
+			return
+		}
+
+		// Log non-keepalive requests for debugging
+		if req.Type != "keepalive@openssh.com" {
+			log.Debug().
+				Str("type", req.Type).
+				Bool("want_reply", req.WantReply).
+				Msg("received SSH request")
+		}
+
+		// Respond to requests that want a reply (like keepalive)
+		if req.WantReply {
+			if err := req.Reply(true, nil); err != nil {
+				log.Debug().Err(err).Str("type", req.Type).Msg("failed to reply to SSH request")
+			}
+		}
+	}
+}
+
 // TunnelConnection represents a bidirectional tunnel connection.
 // Both SSH tunnels and relay tunnels implement this interface.
 type TunnelConnection interface {
@@ -100,7 +126,8 @@ func (s *SSHServer) Accept(conn net.Conn) (*SSHConnection, error) {
 	}
 
 	// Handle out-of-band requests (keepalive, etc.)
-	go ssh.DiscardRequests(reqs)
+	// Respond to keepalive requests instead of discarding them
+	go handleSSHRequests(reqs)
 
 	log.Info().
 		Str("remote", conn.RemoteAddr().String()).

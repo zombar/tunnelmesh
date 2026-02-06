@@ -331,6 +331,215 @@ func IsInNetwork(ip net.IP, network *net.IPNet) bool {
 	return network.Contains(ip)
 }
 
+// ExitRouteConfig holds configuration for exit node routing.
+type ExitRouteConfig struct {
+	InterfaceName string // TUN interface name
+	MeshCIDR      string // Mesh network CIDR (for NAT exclusion)
+	IsExitNode    bool   // True if this node accepts exit traffic
+}
+
+// Validate checks if the exit route configuration is valid.
+func (c *ExitRouteConfig) Validate() error {
+	if c.InterfaceName == "" {
+		return fmt.Errorf("interface name is required")
+	}
+	if c.MeshCIDR == "" {
+		return fmt.Errorf("mesh CIDR is required")
+	}
+	_, _, err := net.ParseCIDR(c.MeshCIDR)
+	if err != nil {
+		return fmt.Errorf("invalid mesh CIDR: %w", err)
+	}
+	return nil
+}
+
+// buildDefaultRouteCommands builds OS-specific commands for adding/removing default routes.
+// Returns (addCommands, removeCommands).
+func buildDefaultRouteCommands(cfg ExitRouteConfig, goos string) ([][]string, [][]string) {
+	var addCmds, removeCmds [][]string
+
+	switch goos {
+	case "darwin":
+		// macOS: route add -net <cidr> -interface <iface>
+		addCmds = [][]string{
+			{"route", "add", "-net", "0.0.0.0/1", "-interface", cfg.InterfaceName},
+			{"route", "add", "-net", "128.0.0.0/1", "-interface", cfg.InterfaceName},
+		}
+		removeCmds = [][]string{
+			{"route", "delete", "-net", "0.0.0.0/1"},
+			{"route", "delete", "-net", "128.0.0.0/1"},
+		}
+	case "linux":
+		// Linux: ip route add <cidr> dev <iface>
+		addCmds = [][]string{
+			{"ip", "route", "add", "0.0.0.0/1", "dev", cfg.InterfaceName},
+			{"ip", "route", "add", "128.0.0.0/1", "dev", cfg.InterfaceName},
+		}
+		removeCmds = [][]string{
+			{"ip", "route", "delete", "0.0.0.0/1", "dev", cfg.InterfaceName},
+			{"ip", "route", "delete", "128.0.0.0/1", "dev", cfg.InterfaceName},
+		}
+	case "windows":
+		// Windows: route add <net> mask <mask> <gateway>
+		// For exit routing, we route through the TUN gateway
+		addCmds = [][]string{
+			{"route", "add", "0.0.0.0", "mask", "128.0.0.0", "0.0.0.0", "if", cfg.InterfaceName},
+			{"route", "add", "128.0.0.0", "mask", "128.0.0.0", "0.0.0.0", "if", cfg.InterfaceName},
+		}
+		removeCmds = [][]string{
+			{"route", "delete", "0.0.0.0", "mask", "128.0.0.0"},
+			{"route", "delete", "128.0.0.0", "mask", "128.0.0.0"},
+		}
+	}
+
+	return addCmds, removeCmds
+}
+
+// buildExitNATCommands builds OS-specific commands for configuring NAT on exit nodes.
+// Returns (addCommands, removeCommands).
+func buildExitNATCommands(cfg ExitRouteConfig, goos string) ([][]string, [][]string) {
+	var addCmds, removeCmds [][]string
+
+	switch goos {
+	case "darwin":
+		// macOS: Enable IP forwarding and configure pf NAT
+		addCmds = [][]string{
+			{"sysctl", "-w", "net.inet.ip.forwarding=1"},
+			// pf configuration would typically go through pfctl
+			// For now, we'll enable forwarding - full pf NAT requires anchor setup
+		}
+		removeCmds = [][]string{
+			// Don't disable forwarding on removal as other services may need it
+		}
+	case "linux":
+		// Linux: Enable IP forwarding and add iptables MASQUERADE rule
+		addCmds = [][]string{
+			{"sysctl", "-w", "net.ipv4.ip_forward=1"},
+			{"iptables", "-t", "nat", "-A", "POSTROUTING", "-s", cfg.MeshCIDR, "!", "-d", cfg.MeshCIDR, "-j", "MASQUERADE"},
+		}
+		removeCmds = [][]string{
+			{"iptables", "-t", "nat", "-D", "POSTROUTING", "-s", cfg.MeshCIDR, "!", "-d", cfg.MeshCIDR, "-j", "MASQUERADE"},
+		}
+	case "windows":
+		// Windows: Enable routing through registry
+		addCmds = [][]string{
+			{"netsh", "interface", "ipv4", "set", "interface", cfg.InterfaceName, "forwarding=enabled"},
+		}
+		removeCmds = [][]string{
+			{"netsh", "interface", "ipv4", "set", "interface", cfg.InterfaceName, "forwarding=disabled"},
+		}
+	}
+
+	return addCmds, removeCmds
+}
+
+// ConfigureExitRoutes sets up default routes for exit node clients.
+// This routes all internet traffic (0.0.0.0/1 and 128.0.0.0/1) through the TUN interface.
+func ConfigureExitRoutes(cfg ExitRouteConfig) error {
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	addCmds, _ := buildDefaultRouteCommands(cfg, runtime.GOOS)
+
+	for _, cmdArgs := range addCmds {
+		cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Warn().
+				Str("cmd", strings.Join(cmdArgs, " ")).
+				Str("output", string(out)).
+				Msg("failed to add exit route")
+			// Continue trying other routes
+		} else {
+			log.Info().Str("cmd", strings.Join(cmdArgs, " ")).Msg("exit route added")
+		}
+	}
+
+	return nil
+}
+
+// RemoveExitRoutes removes the default routes for exit node clients.
+func RemoveExitRoutes(cfg ExitRouteConfig) error {
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	_, removeCmds := buildDefaultRouteCommands(cfg, runtime.GOOS)
+
+	for _, cmdArgs := range removeCmds {
+		cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Debug().
+				Str("cmd", strings.Join(cmdArgs, " ")).
+				Str("output", string(out)).
+				Msg("failed to remove exit route (may not exist)")
+		} else {
+			log.Info().Str("cmd", strings.Join(cmdArgs, " ")).Msg("exit route removed")
+		}
+	}
+
+	return nil
+}
+
+// ConfigureExitNAT sets up NAT for exit node traffic forwarding.
+func ConfigureExitNAT(cfg ExitRouteConfig) error {
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	if !cfg.IsExitNode {
+		return nil // Nothing to do
+	}
+
+	addCmds, _ := buildExitNATCommands(cfg, runtime.GOOS)
+
+	for _, cmdArgs := range addCmds {
+		cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Warn().
+				Str("cmd", strings.Join(cmdArgs, " ")).
+				Str("output", string(out)).
+				Msg("failed to configure exit NAT")
+			// Continue trying other commands
+		} else {
+			log.Info().Str("cmd", strings.Join(cmdArgs, " ")).Msg("exit NAT configured")
+		}
+	}
+
+	return nil
+}
+
+// RemoveExitNAT removes NAT configuration for exit node traffic.
+func RemoveExitNAT(cfg ExitRouteConfig) error {
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	if !cfg.IsExitNode {
+		return nil // Nothing to do
+	}
+
+	_, removeCmds := buildExitNATCommands(cfg, runtime.GOOS)
+
+	for _, cmdArgs := range removeCmds {
+		cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Debug().
+				Str("cmd", strings.Join(cmdArgs, " ")).
+				Str("output", string(out)).
+				Msg("failed to remove exit NAT (may not exist)")
+		} else {
+			log.Info().Str("cmd", strings.Join(cmdArgs, " ")).Msg("exit NAT removed")
+		}
+	}
+
+	return nil
+}
+
 // AddRoute adds a route to the system routing table.
 func AddRoute(dest *net.IPNet, gateway net.IP, iface string) error {
 	switch runtime.GOOS {

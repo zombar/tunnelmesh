@@ -5,8 +5,49 @@ set -e
 NODE_NAME="node-$(hostname)"
 export NODE_NAME
 
+# European cities with coordinates (lat,lon,name)
+LOCATIONS=(
+    "51.5074,-0.1278,London"
+    "48.8566,2.3522,Paris"
+    "52.5200,13.4050,Berlin"
+    "41.9028,12.4964,Rome"
+    "40.4168,-3.7038,Madrid"
+    "52.3676,4.9041,Amsterdam"
+    "50.8503,4.3517,Brussels"
+    "59.3293,18.0686,Stockholm"
+    "55.6761,12.5683,Copenhagen"
+    "60.1699,24.9384,Helsinki"
+    "59.9139,10.7522,Oslo"
+    "53.3498,-6.2603,Dublin"
+    "48.2082,16.3738,Vienna"
+    "50.0755,14.4378,Prague"
+    "47.4979,19.0402,Budapest"
+    "52.2297,21.0122,Warsaw"
+    "44.4268,26.1025,Bucharest"
+    "42.6977,23.3219,Sofia"
+    "37.9838,23.7275,Athens"
+    "38.7223,-9.1393,Lisbon"
+    "46.2044,6.1432,Geneva"
+    "45.4642,9.1900,Milan"
+    "41.3851,2.1734,Barcelona"
+    "53.5511,9.9937,Hamburg"
+    "48.1351,11.5820,Munich"
+)
+
+# Get node index from hostname (e.g., "abc123def" -> hash to index)
+# Use checksum of hostname to get a deterministic but distributed index
+HOSTNAME_HASH=$(echo -n "$(hostname)" | cksum | cut -d' ' -f1)
+LOCATION_INDEX=$((HOSTNAME_HASH % ${#LOCATIONS[@]}))
+LOCATION="${LOCATIONS[$LOCATION_INDEX]}"
+
+# Parse location
+LATITUDE=$(echo "$LOCATION" | cut -d',' -f1)
+LONGITUDE=$(echo "$LOCATION" | cut -d',' -f2)
+CITY_NAME=$(echo "$LOCATION" | cut -d',' -f3)
+
 echo "=== TunnelMesh Client Starting ==="
 echo "Node Name: $NODE_NAME"
+echo "Location: $CITY_NAME ($LATITUDE, $LONGITUDE)"
 echo "Server URL: $SERVER_URL"
 
 # Wait for server to be available
@@ -32,7 +73,7 @@ cat /etc/tunnelmesh/peer.yaml
 
 # Start the mesh client in background
 echo "Starting mesh daemon..."
-tunnelmesh join --config /etc/tunnelmesh/peer.yaml --log-level debug &
+tunnelmesh join --config /etc/tunnelmesh/peer.yaml --log-level debug --latitude "$LATITUDE" --longitude "$LONGITUDE" --city "$CITY_NAME" &
 MESH_PID=$!
 
 # Wait for TUN device to be created
@@ -45,6 +86,16 @@ for i in $(seq 1 30); do
     fi
     sleep 1
 done
+
+# Configure DNS to use TunnelMesh resolver for .tunnelmesh domains
+echo "Configuring DNS resolver..."
+# Backup original resolv.conf and add TunnelMesh DNS as primary
+cp /etc/resolv.conf /etc/resolv.conf.backup
+echo "nameserver 127.0.0.53" > /etc/resolv.conf
+echo "search tunnelmesh" >> /etc/resolv.conf
+cat /etc/resolv.conf.backup >> /etc/resolv.conf
+echo "DNS configured:"
+cat /etc/resolv.conf
 
 # Give time for initial peer discovery (Go code handles jitter and fast retries)
 echo "Waiting for initial peer discovery..."
@@ -76,7 +127,7 @@ while true; do
         fi
     fi
 
-    # Pick a random peer and ping it
+    # Pick a random peer and ping it (alternating between IP and DNS alias)
     if [ -n "$PEER_IPS" ]; then
         # Convert to array and pick random
         readarray -t PEER_ARRAY <<< "$PEER_IPS"
@@ -87,11 +138,31 @@ while true; do
             TARGET_IP="${PEER_ARRAY[$RANDOM_INDEX]}"
             TARGET_NAME=$(echo "$PEERS_JSON" | jq -r ".peers[] | select(.mesh_ip == \"$TARGET_IP\") | .name" 2>/dev/null || echo "unknown")
 
-            echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME ($TARGET_IP) via mesh..."
-            if ping -c 1 -W 2 "$TARGET_IP" > /dev/null 2>&1; then
-                echo "  SUCCESS: $TARGET_NAME is reachable!"
+            # Randomly choose to ping by IP or by DNS alias
+            if [ $((RANDOM % 2)) -eq 0 ]; then
+                # Ping by IP
+                echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME ($TARGET_IP) via mesh IP..."
+                if ping -c 1 -W 2 "$TARGET_IP" > /dev/null 2>&1; then
+                    echo "  SUCCESS: $TARGET_NAME is reachable via IP!"
+                else
+                    echo "  FAILED: Cannot reach $TARGET_NAME via IP"
+                fi
             else
-                echo "  FAILED: Cannot reach $TARGET_NAME"
+                # Ping by DNS alias (alt.node-xxx.tunnelmesh)
+                # Use getent to resolve (musl's ping doesn't use custom resolvers properly)
+                TARGET_DNS="alt.${TARGET_NAME}.tunnelmesh"
+                RESOLVED_IP=$(getent hosts "$TARGET_DNS" 2>/dev/null | awk '{print $1}')
+                if [ -n "$RESOLVED_IP" ]; then
+                    echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME via DNS alias ($TARGET_DNS -> $RESOLVED_IP)..."
+                    if ping -c 1 -W 2 "$RESOLVED_IP" > /dev/null 2>&1; then
+                        echo "  SUCCESS: $TARGET_NAME is reachable via DNS alias!"
+                    else
+                        echo "  FAILED: Cannot reach $TARGET_NAME via DNS alias (ping failed)"
+                    fi
+                else
+                    echo "[$(date '+%H:%M:%S')] Pinging $TARGET_NAME via DNS alias ($TARGET_DNS)..."
+                    echo "  FAILED: Cannot resolve DNS alias $TARGET_DNS"
+                fi
             fi
         fi
     fi

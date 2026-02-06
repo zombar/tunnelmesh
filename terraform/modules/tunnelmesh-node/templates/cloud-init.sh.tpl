@@ -56,11 +56,16 @@ domain_suffix: "${domain_suffix}"
 
 admin:
   enabled: true
-  token: "${admin_token}"
+%{ if peer_enabled ~}
+  port: 443  # Mesh-internal admin on port 443 (nginx uses 8443 for external API)
+%{ endif ~}
+  # Admin accessible at https://this.tunnelmesh/ from mesh peers
 
 relay:
   enabled: ${relay_enabled}
   pair_timeout: "90s"
+
+locations: ${locations_enabled}
 
 %{ if wireguard_enabled ~}
 wireguard:
@@ -74,6 +79,23 @@ join_mesh:
   name: "${node_name}"
   ssh_port: ${ssh_tunnel_port}
   private_key: /etc/tunnelmesh/peer.key
+%{ if exit_node != "" ~}
+  exit_node: "${exit_node}"
+%{ endif ~}
+%{ if allow_exit_traffic ~}
+  allow_exit_traffic: true
+%{ endif ~}
+%{ if location_latitude != null && location_longitude != null ~}
+  location:
+    latitude: ${location_latitude}
+    longitude: ${location_longitude}
+%{ if location_city != "" ~}
+    city: "${location_city}"
+%{ endif ~}
+%{ if location_country != "" ~}
+    country: "${location_country}"
+%{ endif ~}
+%{ endif ~}
   tun:
     name: tun-mesh
     mtu: 1400
@@ -105,12 +127,12 @@ server {
     }
 
     location / {
-        return 301 https://$host$request_uri;
+        return 301 https://$host:${external_api_port}$request_uri;
     }
 }
 
 server {
-    listen 443 ssl http2;
+    listen ${external_api_port} ssl http2;
     server_name ${node_name}.${domain};
 
     # SSL certificates (will be configured by certbot)
@@ -122,6 +144,7 @@ server {
     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
     ssl_prefer_server_ciphers off;
 
+    # External coordination API - admin is mesh-internal at https://this.tunnelmesh/
     location / {
         proxy_pass http://127.0.0.1:${coordinator_port};
         proxy_http_version 1.1;
@@ -173,6 +196,23 @@ server: "${peer_server}"
 auth_token: "${auth_token}"
 ssh_port: ${ssh_tunnel_port}
 private_key: /etc/tunnelmesh/peer.key
+%{ if exit_node != "" ~}
+exit_node: "${exit_node}"
+%{ endif ~}
+%{ if allow_exit_traffic ~}
+allow_exit_traffic: true
+%{ endif ~}
+%{ if location_latitude != null && location_longitude != null ~}
+location:
+  latitude: ${location_latitude}
+  longitude: ${location_longitude}
+%{ if location_city != "" ~}
+  city: "${location_city}"
+%{ endif ~}
+%{ if location_country != "" ~}
+  country: "${location_country}"
+%{ endif ~}
+%{ endif ~}
 
 tun:
   name: tun-mesh
@@ -205,7 +245,10 @@ ufw allow ${ssh_tunnel_port + 1}/udp comment 'TunnelMesh UDP'
 
 %{ if coordinator_enabled ~}
 ufw allow 80/tcp comment 'HTTP'
-ufw allow 443/tcp comment 'HTTPS'
+ufw allow ${external_api_port}/tcp comment 'HTTPS API'
+%{ if peer_enabled ~}
+ufw allow in on tun-mesh to any port 443 proto tcp comment 'Mesh Admin HTTPS'
+%{ endif ~}
 %{ endif ~}
 
 %{ if wireguard_enabled && peer_enabled ~}

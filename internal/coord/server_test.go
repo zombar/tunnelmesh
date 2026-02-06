@@ -621,74 +621,345 @@ func TestServer_WireGuardDNSIntegration(t *testing.T) {
 	assert.False(t, found, "WireGuard client should be removed from DNS records after deletion")
 }
 
-// newTestServerWithAdminToken creates a test server with admin authentication enabled.
-func newTestServerWithAdminToken(t *testing.T) *Server {
-	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "10.99.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Admin:        config.AdminConfig{Enabled: true, Token: "admin-secret"},
+// DNS Alias Tests
+
+func TestServer_Register_WithAliases(t *testing.T) {
+	srv := newTestServer(t)
+
+	regReq := proto.RegisterRequest{
+		Name:       "testnode",
+		PublicKey:  "SHA256:abc123",
+		PublicIPs:  []string{"1.2.3.4"},
+		PrivateIPs: []string{"192.168.1.100"},
+		SSHPort:    2222,
+		Aliases:    []string{"webserver", "api"},
 	}
-	srv, err := NewServer(cfg)
-	require.NoError(t, err)
-	return srv
-}
+	body, _ := json.Marshal(regReq)
 
-func TestServer_AdminAuth_Required(t *testing.T) {
-	srv := newTestServerWithAdminToken(t)
-
-	// Request without auth should return 401
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
-	assert.Contains(t, w.Header().Get("WWW-Authenticate"), "Basic")
-}
-
-func TestServer_AdminAuth_InvalidPassword(t *testing.T) {
-	srv := newTestServerWithAdminToken(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
-	req.SetBasicAuth("admin", "wrong-password")
-	w := httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
-}
-
-func TestServer_AdminAuth_ValidPassword(t *testing.T) {
-	srv := newTestServerWithAdminToken(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
-	req.SetBasicAuth("admin", "admin-secret") // Username is ignored, only password matters
-	w := httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var resp AdminOverview
+	var resp proto.RegisterResponse
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
-	assert.Equal(t, 0, resp.TotalPeers)
-}
 
-func TestServer_AdminAuth_StaticFilesProtected(t *testing.T) {
-	srv := newTestServerWithAdminToken(t)
-
-	// Static files should also require auth
-	req := httptest.NewRequest(http.MethodGet, "/admin/", nil)
-	w := httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
-
-	// With auth should work
-	req = httptest.NewRequest(http.MethodGet, "/admin/", nil)
-	req.SetBasicAuth("", "admin-secret")
+	// Verify aliases are in DNS cache
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/dns", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	var dnsResp proto.DNSUpdateNotification
+	err = json.Unmarshal(w.Body.Bytes(), &dnsResp)
+	require.NoError(t, err)
+
+	// Should have testnode + 2 aliases = 3 records
+	assert.Len(t, dnsResp.Records, 3)
+
+	// Check all records point to same IP
+	foundMain := false
+	foundWebserver := false
+	foundAPI := false
+	for _, record := range dnsResp.Records {
+		assert.Equal(t, resp.MeshIP, record.MeshIP)
+		switch record.Hostname {
+		case "testnode":
+			foundMain = true
+		case "webserver":
+			foundWebserver = true
+		case "api":
+			foundAPI = true
+		}
+	}
+	assert.True(t, foundMain, "main hostname should be in DNS")
+	assert.True(t, foundWebserver, "webserver alias should be in DNS")
+	assert.True(t, foundAPI, "api alias should be in DNS")
+}
+
+func TestServer_Register_AliasConflictWithPeerName(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Register first peer
+	regReq := proto.RegisterRequest{
+		Name:      "existingpeer",
+		PublicKey: "SHA256:abc123",
+		SSHPort:   2222,
+	}
+	body, _ := json.Marshal(regReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Try to register second peer with alias that matches first peer's name
+	regReq = proto.RegisterRequest{
+		Name:      "newpeer",
+		PublicKey: "SHA256:def456",
+		SSHPort:   2222,
+		Aliases:   []string{"existingpeer"}, // Conflicts with existing peer name
+	}
+	body, _ = json.Marshal(regReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "existingpeer")
+}
+
+func TestServer_Register_AliasConflictWithOtherAlias(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Register first peer with an alias
+	regReq := proto.RegisterRequest{
+		Name:      "peer1",
+		PublicKey: "SHA256:abc123",
+		SSHPort:   2222,
+		Aliases:   []string{"shared-name"},
+	}
+	body, _ := json.Marshal(regReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Try to register second peer with same alias
+	regReq = proto.RegisterRequest{
+		Name:      "peer2",
+		PublicKey: "SHA256:def456",
+		SSHPort:   2222,
+		Aliases:   []string{"shared-name"}, // Already used by peer1
+	}
+	body, _ = json.Marshal(regReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "shared-name")
+	assert.Contains(t, w.Body.String(), "peer1")
+}
+
+func TestServer_Register_ReregistrationUpdatesAliases(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Initial registration with aliases
+	regReq := proto.RegisterRequest{
+		Name:      "testnode",
+		PublicKey: "SHA256:abc123",
+		SSHPort:   2222,
+		Aliases:   []string{"old-alias1", "old-alias2"},
+	}
+	body, _ := json.Marshal(regReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Re-registration with new aliases
+	regReq = proto.RegisterRequest{
+		Name:      "testnode",
+		PublicKey: "SHA256:abc123",
+		SSHPort:   2222,
+		Aliases:   []string{"new-alias"},
+	}
+	body, _ = json.Marshal(regReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Check DNS - should have testnode + new-alias, NOT old aliases
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/dns", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	var dnsResp proto.DNSUpdateNotification
+	err := json.Unmarshal(w.Body.Bytes(), &dnsResp)
+	require.NoError(t, err)
+
+	assert.Len(t, dnsResp.Records, 2) // testnode + new-alias
+
+	hostnames := make(map[string]bool)
+	for _, record := range dnsResp.Records {
+		hostnames[record.Hostname] = true
+	}
+	assert.True(t, hostnames["testnode"])
+	assert.True(t, hostnames["new-alias"])
+	assert.False(t, hostnames["old-alias1"], "old aliases should be removed")
+	assert.False(t, hostnames["old-alias2"], "old aliases should be removed")
+}
+
+func TestServer_Register_SamePeerCanReclaimOwnAliases(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Initial registration
+	regReq := proto.RegisterRequest{
+		Name:      "testnode",
+		PublicKey: "SHA256:abc123",
+		SSHPort:   2222,
+		Aliases:   []string{"myalias"},
+	}
+	body, _ := json.Marshal(regReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Re-registration with same alias - should succeed
+	body, _ = json.Marshal(regReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code, "same peer should be able to reclaim own aliases")
+}
+
+func TestServer_Deregister_CleansUpAliases(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Register peer with aliases
+	regReq := proto.RegisterRequest{
+		Name:      "testnode",
+		PublicKey: "SHA256:abc123",
+		SSHPort:   2222,
+		Aliases:   []string{"alias1", "alias2"},
+	}
+	body, _ := json.Marshal(regReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Deregister
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/peers/testnode", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Verify DNS is empty
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/dns", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	var dnsResp proto.DNSUpdateNotification
+	err := json.Unmarshal(w.Body.Bytes(), &dnsResp)
+	require.NoError(t, err)
+
+	assert.Len(t, dnsResp.Records, 0, "all DNS records including aliases should be removed")
+
+	// Verify aliases are free for other peers
+	regReq = proto.RegisterRequest{
+		Name:      "newpeer",
+		PublicKey: "SHA256:def456",
+		SSHPort:   2222,
+		Aliases:   []string{"alias1"}, // Should be available now
+	}
+	body, _ = json.Marshal(regReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code, "aliases should be available after peer deregistration")
+}
+
+func TestServer_ValidateAliases(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Register a peer
+	regReq := proto.RegisterRequest{
+		Name:      "existingpeer",
+		PublicKey: "SHA256:abc123",
+		SSHPort:   2222,
+		Aliases:   []string{"taken-alias"},
+	}
+	body, _ := json.Marshal(regReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Test validateAliases directly
+	tests := []struct {
+		name           string
+		aliases        []string
+		requestingPeer string
+		wantErr        bool
+	}{
+		{
+			name:           "valid aliases",
+			aliases:        []string{"new-alias"},
+			requestingPeer: "newpeer",
+			wantErr:        false,
+		},
+		{
+			name:           "conflict with peer name",
+			aliases:        []string{"existingpeer"},
+			requestingPeer: "newpeer",
+			wantErr:        true,
+		},
+		{
+			name:           "conflict with other peer's alias",
+			aliases:        []string{"taken-alias"},
+			requestingPeer: "newpeer",
+			wantErr:        true,
+		},
+		{
+			name:           "same peer can use own alias",
+			aliases:        []string{"taken-alias"},
+			requestingPeer: "existingpeer",
+			wantErr:        false,
+		},
+		{
+			name:           "empty aliases",
+			aliases:        []string{},
+			requestingPeer: "newpeer",
+			wantErr:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv.peersMu.Lock()
+			err := srv.validateAliases(tt.aliases, tt.requestingPeer)
+			srv.peersMu.Unlock()
+
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

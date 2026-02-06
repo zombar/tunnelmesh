@@ -1,5 +1,8 @@
 # TunnelMesh
 
+[![CI](https://github.com/zombar/tunnelmesh/actions/workflows/ci.yml/badge.svg)](https://github.com/zombar/tunnelmesh/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/zombar/tunnelmesh/branch/main/graph/badge.svg)](https://codecov.io/gh/zombar/tunnelmesh)
+
 A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes. TunnelMesh enables direct, secure communication between peers in a distributed topology without requiring a traditional VPN or centralized traffic routing.
 
 ## Features
@@ -7,16 +10,18 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 - **P2P Encrypted Tunnels** - Direct connections between peers using pluggable transports
 - **Pluggable Transport Layer** - Supports SSH, UDP (WireGuard-like), and WebSocket relay transports with automatic fallback
 - **Coordination Server** - Central hub for peer discovery, IP allocation, and NAT traversal coordination (not a traffic router)
+- **Exit Nodes** - Split-tunnel VPN routing: route internet traffic through designated peers while keeping mesh traffic direct
 - **TUN Interface** - Virtual network interface for transparent IP routing
 - **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh`)
 - **Network Monitoring** - Automatic detection of network changes with re-connection
 - **NAT Traversal** - UDP hole-punching with STUN-like endpoint discovery, plus relay fallback
 - **Multi-Platform** - Linux, macOS, and Windows support
 - **Admin Dashboard** - Web interface showing mesh status, peers, traffic statistics, and per-peer transport controls
+- **Node Location Map** - Optional geographic visualization of mesh nodes (requires `--locations` flag)
 - **Server-as-Client** - Coordination server can also participate as a mesh node
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
 
-![Admin Dashboard](docs/images/admin-dashboard.png)
+![Admin Dashboard](docs/images/admin-dashboard.webp)
 
 ## Getting Started
 
@@ -103,6 +108,19 @@ Standard WireGuard clients on mobile devices can connect to the mesh via a WireG
 - Clients get mesh DNS names (e.g., `iphone.tunnelmesh`)
 - Managed via coordination server admin panel
 
+### Admin Interface
+
+When the coordination server runs with `join_mesh` configured, the admin interface is accessible only from within the mesh network at `https://this.tunnelmesh/`. This provides secure access without exposing the admin panel to the internet.
+
+**First-time setup - trust the CA certificate:**
+
+```bash
+# Install the mesh CA certificate (requires sudo)
+tunnelmesh trust-ca --server https://your-coordinator:8443
+```
+
+This installs the TunnelMesh CA in your system trust store, allowing HTTPS connections to mesh services without browser warnings. After trusting the CA, access the admin panel at `https://this.tunnelmesh/` from any mesh peer.
+
 ## Configuration
 
 ### Server Configuration
@@ -120,6 +138,10 @@ mesh_cidr: "10.99.0.0/16"
 # Domain suffix for hostnames
 domain_suffix: ".tunnelmesh"
 
+# Enable node location tracking (optional, disabled by default)
+# WARNING: Uses external IP geolocation API (ip-api.com)
+locations: false
+
 # Admin web interface
 admin:
   enabled: true
@@ -128,6 +150,7 @@ admin:
 join_mesh:
   name: "server-node"
   private_key: "~/.tunnelmesh/id_ed25519"
+  allow_exit_traffic: true  # Allow clients to route internet through this node
   tun:
     name: "tun-mesh0"
     mtu: 1400
@@ -135,6 +158,8 @@ join_mesh:
     enabled: true
     listen: "127.0.0.53:5353"
     cache_ttl: 300
+    aliases:
+      - "coordinator"       # coordinator.tunnelmesh -> this node's IP
 ```
 
 ### Peer Configuration
@@ -155,6 +180,15 @@ ssh_port: 2222
 # Path to SSH private key
 private_key: "~/.tunnelmesh/id_ed25519"
 
+# Exit node settings (optional)
+exit_node: "server-node"      # Route internet traffic through this peer
+allow_exit_traffic: false     # Set true to allow others to use this node as exit
+
+# Manual location (optional, overrides IP geolocation)
+location:
+  latitude: 52.3676
+  longitude: 4.9041
+
 # TUN interface settings
 tun:
   name: "tun-mesh0"
@@ -165,6 +199,10 @@ dns:
   enabled: true
   listen: "127.0.0.53:5353"
   cache_ttl: 300
+  # Custom DNS aliases for this node (resolved mesh-wide)
+  aliases:
+    - "webserver"           # webserver.tunnelmesh -> this node's IP
+    - "api.mynode"          # api.mynode.tunnelmesh -> this node's IP
 ```
 
 ### Transport Layer
@@ -184,6 +222,51 @@ The default transport order is: UDP → SSH → Relay. The system automatically 
 - Per-peer preferences: Configure different transports for specific peers via admin UI
 - NAT traversal: Built-in STUN-like endpoint discovery and UDP hole-punching
 - Zero-copy forwarding: Optimized packet path for high throughput
+
+### Exit Nodes (Split-Tunnel VPN)
+
+Route internet traffic through a designated peer while keeping mesh-to-mesh traffic direct. This is useful for:
+- Accessing geo-restricted content through a peer in another region
+- Privacy: route external traffic through a trusted exit point
+- Compliance: ensure internet traffic egresses from a specific location
+
+```
+┌─────────────────┐                      ┌─────────────────┐
+│   Client Peer   │                      │   Exit Node     │
+│   (10.99.0.1)   │                      │   (10.99.0.2)   │
+│                 │                      │                 │
+│  Internet ──────┼──── Tunnel ─────────►│──► Internet     │
+│  traffic        │  (encrypted)         │   (NAT)         │
+│                 │                      │                 │
+│  Mesh traffic ──┼──── Direct ─────────►│  Other peers    │
+└─────────────────┘                      └─────────────────┘
+```
+
+**On the exit node** (the peer that will forward internet traffic):
+```bash
+tunnelmesh join --allow-exit-traffic
+```
+
+Or in config:
+```yaml
+allow_exit_traffic: true
+```
+
+**On the client** (the peer that wants to route through the exit):
+```bash
+tunnelmesh join --exit-node exit-peer-name
+```
+
+Or in config:
+```yaml
+exit_node: "exit-peer-name"
+```
+
+TunnelMesh automatically configures:
+- **Exit node**: IP forwarding and NAT/masquerade rules
+- **Client**: Default routes (0.0.0.0/1 and 128.0.0.0/1) through the TUN interface
+
+This works on Linux and macOS. On Windows, manual route configuration may be required.
 
 ### Config File Locations
 
@@ -210,6 +293,8 @@ The tool searches for config files in the following order:
 | `tunnelmesh service start/stop` | Control the service |
 | `tunnelmesh service status` | Show service status |
 | `tunnelmesh service logs` | View service logs |
+| `tunnelmesh trust-ca` | Install mesh CA certificate in system trust store |
+| `tunnelmesh update` | Update to latest version |
 
 ### Global Flags
 
@@ -220,6 +305,15 @@ The tool searches for config files in the following order:
 | `-s, --server` | Coordination server URL |
 | `-t, --token` | Authentication token |
 | `-n, --name` | Node name |
+
+### Join Flags
+
+| Flag | Description |
+|------|-------------|
+| `--exit-node` | Route internet traffic through specified peer |
+| `--allow-exit-traffic` | Allow this node to act as an exit node |
+| `--latitude` | Manual latitude for location (overrides IP geolocation) |
+| `--longitude` | Manual longitude for location |
 
 ## Running as a System Service
 
@@ -413,6 +507,22 @@ Deploy the coordination server to DigitalOcean App Platform using Terraform.
 | `image_tag` | Docker image tag | `latest` |
 | `mesh_cidr` | Mesh network CIDR | `10.99.0.0/16` |
 | `region` | DO region | `ams` |
+| `locations_enabled` | Enable node location tracking | `false` |
+
+### Node Location Tracking
+
+The `--locations` flag (or `locations: true` in config) enables geographic visualization of mesh nodes on a map in the admin dashboard. **This feature is disabled by default** because it:
+
+1. **Uses external services**: The coordinator queries [ip-api.com](http://ip-api.com) to geolocate nodes by their public IP addresses
+2. **Sends IP data externally**: Public IP addresses of your mesh nodes are sent to the geolocation API
+3. **Requires internet access**: The coordinator must be able to reach external APIs
+
+To enable:
+- **CLI**: `tunnelmesh serve --locations`
+- **Config**: Add `locations: true` to server.yaml
+- **Terraform**: Set `locations_enabled = true` in terraform.tfvars
+
+When enabled, nodes can also provide manual coordinates via `--latitude` and `--longitude` flags, which takes precedence over IP-based geolocation.
 
 ### Outputs
 

@@ -591,23 +591,37 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 		// Update peer info and record stats history
 		s.peersMu.Lock()
 		if peer, exists := s.peers[sourcePeer]; exists {
+			now := time.Now()
 			// Calculate rates if we have previous stats
-			if peer.stats != nil {
-				dp := StatsDataPoint{
-					Timestamp:           time.Now(),
-					BytesSentRate:       float64(stats.BytesSent-peer.stats.BytesSent) / 30.0,
-					BytesReceivedRate:   float64(stats.BytesReceived-peer.stats.BytesReceived) / 30.0,
-					PacketsSentRate:     float64(stats.PacketsSent-peer.stats.PacketsSent) / 30.0,
-					PacketsReceivedRate: float64(stats.PacketsReceived-peer.stats.PacketsReceived) / 30.0,
+			if peer.stats != nil && !peer.lastStatsTime.IsZero() {
+				// Use actual time delta for accurate rate calculation
+				delta := now.Sub(peer.lastStatsTime).Seconds()
+				// Skip if delta is too large (server/peer restart) or too small
+				// Also skip if counters decreased (peer restart with counter reset)
+				if delta > 0 && delta < 60 &&
+					stats.BytesSent >= peer.stats.BytesSent &&
+					stats.BytesReceived >= peer.stats.BytesReceived {
+					dp := StatsDataPoint{
+						Timestamp:           now,
+						BytesSentRate:       float64(stats.BytesSent-peer.stats.BytesSent) / delta,
+						BytesReceivedRate:   float64(stats.BytesReceived-peer.stats.BytesReceived) / delta,
+						PacketsSentRate:     float64(stats.PacketsSent-peer.stats.PacketsSent) / delta,
+						PacketsReceivedRate: float64(stats.PacketsReceived-peer.stats.PacketsReceived) / delta,
+					}
+					s.statsHistory.RecordStats(sourcePeer, dp)
 				}
-				s.statsHistory.RecordStats(sourcePeer, dp)
 			}
 
-			peer.peer.LastSeen = time.Now()
+			peer.peer.LastSeen = now
 			peer.prevStats = peer.stats // Save current as previous BEFORE updating
+			peer.prevStatsTime = peer.lastStatsTime
 			peer.stats = &stats
-			peer.lastStatsTime = time.Now()
+			peer.lastStatsTime = now
 			peer.heartbeatCount++
+			// Update location from heartbeat (keeps map positions after coordinator restart)
+			if s.cfg.Locations && stats.Location != nil && stats.Location.IsSet() {
+				peer.peer.Location = stats.Location
+			}
 		}
 		atomic.AddUint64(&s.serverStats.totalHeartbeats, 1)
 		s.peersMu.Unlock()
@@ -621,6 +635,9 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 				log.Debug().Str("peer", sourcePeer).Msg("failed to send heartbeat ack: channel full")
 			}
 		}
+
+		// Notify SSE clients of heartbeat
+		s.notifyHeartbeat(sourcePeer)
 
 	case MsgTypeSendPacket:
 		// Format: [MsgTypeSendPacket][target name len][target name][packet data]

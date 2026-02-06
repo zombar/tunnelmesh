@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -15,6 +16,23 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
+
+// httpToWSURL converts an HTTP(S) URL to a WebSocket URL.
+func httpToWSURL(httpURL string) (string, error) {
+	u, err := url.Parse(httpURL)
+	if err != nil {
+		return "", err
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	default:
+		return "", fmt.Errorf("unsupported scheme: %s", u.Scheme)
+	}
+	return u.String(), nil
+}
 
 // ErrNotConnected is returned when an operation requires a relay connection but none exists.
 var ErrNotConnected = errors.New("not connected to relay")
@@ -297,6 +315,16 @@ func (p *PersistentRelay) autoReconnect() {
 
 		if err == nil {
 			log.Info().Int("attempt", attempt).Msg("relay reconnected successfully")
+
+			// Re-announce as WG concentrator if we were one before
+			p.mu.RLock()
+			wasConcentrator := p.isWGConcentrator
+			p.mu.RUnlock()
+			if wasConcentrator {
+				if err := p.AnnounceWGConcentrator(); err != nil {
+					log.Error().Err(err).Msg("failed to re-announce as WireGuard concentrator after reconnect")
+				}
+			}
 			return
 		}
 

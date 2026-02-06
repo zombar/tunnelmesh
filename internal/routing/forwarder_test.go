@@ -755,3 +755,180 @@ func TestForwarder_SetWGHandler(t *testing.T) {
 
 	// Should not panic
 }
+
+// Exit Node Feature Tests
+
+func TestForwarder_IsExternalTraffic(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// Set mesh CIDR for split-tunnel detection
+	_, meshNet, _ := net.ParseCIDR("10.99.0.0/16")
+	fwd.SetMeshCIDR(meshNet)
+
+	tests := []struct {
+		name     string
+		ip       string
+		external bool
+	}{
+		{"mesh IP", "10.99.0.1", false},
+		{"mesh IP 2", "10.99.255.255", false},
+		{"external IP google DNS", "8.8.8.8", true},
+		{"external IP cloudflare", "1.1.1.1", true},
+		{"external IP private 192.168", "192.168.1.1", true}, // Not in mesh, so external
+		{"external IP private 172.16", "172.16.0.1", true},   // Not in mesh, so external
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip := net.ParseIP(tt.ip)
+			assert.Equal(t, tt.external, fwd.IsExternalTraffic(ip), "IP %s", tt.ip)
+		})
+	}
+}
+
+func TestForwarder_IsExternalTraffic_NoMeshCIDR(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// No mesh CIDR set - all traffic treated as mesh (not external)
+	ip := net.ParseIP("8.8.8.8")
+	assert.False(t, fwd.IsExternalTraffic(ip), "without mesh CIDR, nothing is external")
+}
+
+func TestForwarder_SetExitNode(t *testing.T) {
+	router := NewRouter()
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// Initially empty
+	assert.Equal(t, "", fwd.ExitNode())
+
+	// Set exit node
+	fwd.SetExitNode("exit-server")
+	assert.Equal(t, "exit-server", fwd.ExitNode())
+
+	// Clear exit node
+	fwd.SetExitNode("")
+	assert.Equal(t, "", fwd.ExitNode())
+}
+
+func TestForwarder_ExitNode_ForwardExternalTraffic(t *testing.T) {
+	router := NewRouter()
+	// Only add route for exit node, not for 8.8.8.8
+	router.AddRoute("10.99.0.5", "exit-server")
+
+	tunnelMgr := NewMockTunnelManager()
+	exitTunnel := newMockTunnel()
+	tunnelMgr.Add("exit-server", exitTunnel)
+
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// Configure for exit node routing
+	_, meshNet, _ := net.ParseCIDR("10.99.0.0/16")
+	fwd.SetMeshCIDR(meshNet)
+	fwd.SetExitNode("exit-server")
+
+	// Create a packet to external IP (8.8.8.8)
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("8.8.8.8").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("to google DNS"))
+
+	// Forward the packet - should go to exit node
+	err := fwd.ForwardPacket(packet)
+	require.NoError(t, err)
+
+	// Verify packet was sent to exit node tunnel
+	exitTunnelData := exitTunnel.GetData()
+	assert.NotEmpty(t, exitTunnelData, "packet should be forwarded to exit node tunnel")
+}
+
+func TestForwarder_ExitNode_MeshTrafficStaysDirect(t *testing.T) {
+	router := NewRouter()
+	router.AddRoute("10.99.0.2", "peer1")
+	router.AddRoute("10.99.0.5", "exit-server")
+
+	tunnelMgr := NewMockTunnelManager()
+	peerTunnel := newMockTunnel()
+	exitTunnel := newMockTunnel()
+	tunnelMgr.Add("peer1", peerTunnel)
+	tunnelMgr.Add("exit-server", exitTunnel)
+
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// Configure for exit node routing
+	_, meshNet, _ := net.ParseCIDR("10.99.0.0/16")
+	fwd.SetMeshCIDR(meshNet)
+	fwd.SetExitNode("exit-server")
+
+	// Create a packet to mesh peer (10.99.0.2)
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("10.99.0.2").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("to mesh peer"))
+
+	// Forward the packet - should go to peer1, not exit node
+	err := fwd.ForwardPacket(packet)
+	require.NoError(t, err)
+
+	// Verify packet was sent to peer1 tunnel, NOT exit tunnel
+	peerTunnelData := peerTunnel.GetData()
+	exitTunnelData := exitTunnel.GetData()
+	assert.NotEmpty(t, peerTunnelData, "mesh traffic should go to direct peer")
+	assert.Empty(t, exitTunnelData, "mesh traffic should NOT go to exit node")
+}
+
+func TestForwarder_ExitNode_NoExitNodeConfigured(t *testing.T) {
+	router := NewRouter()
+	// No route for 8.8.8.8
+
+	tunnelMgr := NewMockTunnelManager()
+	fwd := NewForwarder(router, tunnelMgr)
+
+	// Set mesh CIDR but no exit node
+	_, meshNet, _ := net.ParseCIDR("10.99.0.0/16")
+	fwd.SetMeshCIDR(meshNet)
+	// No exit node configured
+
+	// Create a packet to external IP
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("8.8.8.8").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("to external"))
+
+	// Forward the packet - should fail with no route
+	err := fwd.ForwardPacket(packet)
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNoRoute), "without exit node, external traffic should have no route")
+}
+
+func TestForwarder_ExitNode_FallbackToRelay(t *testing.T) {
+	router := NewRouter()
+
+	tunnelMgr := NewMockTunnelManager()
+	// No direct tunnel to exit node
+
+	relay := newMockRelay()
+
+	fwd := NewForwarder(router, tunnelMgr)
+	fwd.SetRelay(relay)
+
+	// Configure for exit node routing
+	_, meshNet, _ := net.ParseCIDR("10.99.0.0/16")
+	fwd.SetMeshCIDR(meshNet)
+	fwd.SetExitNode("exit-server")
+
+	// Create a packet to external IP
+	srcIP := net.ParseIP("10.99.0.1").To4()
+	dstIP := net.ParseIP("8.8.8.8").To4()
+	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("to external via relay"))
+
+	// Forward the packet - should use relay since no direct tunnel
+	err := fwd.ForwardPacket(packet)
+	require.NoError(t, err)
+
+	// Verify packet was sent via relay to exit node
+	relayPackets := relay.GetPackets()
+	require.Len(t, relayPackets, 1)
+	assert.Equal(t, "exit-server", relayPackets[0].target)
+}

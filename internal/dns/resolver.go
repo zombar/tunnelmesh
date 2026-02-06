@@ -12,12 +12,13 @@ import (
 
 // Resolver is a local DNS server that resolves mesh hostnames.
 type Resolver struct {
-	suffix   string            // Domain suffix (e.g., ".mesh")
-	ttl      uint32            // TTL for DNS responses
-	records  map[string]string // hostname (without suffix) -> IP
-	mu       sync.RWMutex
-	server   *dns.Server
-	shutdown chan struct{}
+	suffix      string            // Domain suffix (e.g., ".mesh")
+	ttl         uint32            // TTL for DNS responses
+	records     map[string]string // hostname (without suffix) -> IP
+	coordMeshIP string            // Coordinator's mesh IP for "this.tunnelmesh" resolution
+	mu          sync.RWMutex
+	server      *dns.Server
+	shutdown    chan struct{}
 }
 
 // NewResolver creates a new DNS resolver.
@@ -78,12 +79,29 @@ func (r *Resolver) UpdateRecords(records map[string]string) {
 		Msg("DNS records updated")
 }
 
+// SetCoordMeshIP sets the coordinator's mesh IP for "this.tunnelmesh" resolution.
+func (r *Resolver) SetCoordMeshIP(ip string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.coordMeshIP = ip
+	log.Debug().Str("ip", ip).Msg("coordinator mesh IP set for 'this' DNS entry")
+}
+
 // Resolve looks up a hostname and returns its IP.
 func (r *Resolver) Resolve(hostname string) (string, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	hostname = r.stripSuffix(hostname)
+
+	// Special case: "this" resolves to coordinator's mesh IP (admin access)
+	if hostname == "this" {
+		if r.coordMeshIP != "" {
+			return r.coordMeshIP, true
+		}
+		return "", false
+	}
+
 	ip, ok := r.records[hostname]
 	return ip, ok
 }

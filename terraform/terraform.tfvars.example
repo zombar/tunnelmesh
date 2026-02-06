@@ -35,25 +35,41 @@ admin_token = ""
 #   wg_port     = 51820       # Override WireGuard port
 #   ssh_port    = 2222        # Override SSH tunnel port
 #   tags        = ["custom"]  # Additional tags
+#
+# Exit node options (split-tunnel VPN):
+#   allow_exit_traffic = true/false  # Allow this node to be an exit node
+#   exit_node          = "node-name"  # Route internet through specified peer
+#
+# Location options (manual GPS - overrides IP geolocation):
+#   location = { latitude = 51.5, longitude = -0.12, city = "London", country = "UK" }
+#
+# DNS alias options (custom hostnames pointing to this node):
+#   dns_aliases = ["webserver", "api.mynode"]  # Additional DNS names for this peer
 
 # --- Example 1: All-in-One (recommended for getting started) ---
 # Single $4/month droplet with everything
 nodes = {
   "tunnelmesh" = {
-    coordinator = true
-    peer        = true
-    wireguard   = true
+    coordinator        = true
+    peer               = true
+    wireguard          = true
+    allow_exit_traffic = true  # Allow clients to route internet through this node
+    # dns_aliases = ["coordinator", "main"]  # Additional DNS names for this node
+    # location = { latitude = 52.37, longitude = 4.90, city = "Amsterdam", country = "NL" }
   }
 }
 
-# --- Example 2: Coordinator + Separate WireGuard Peer ---
+# --- Example 2: Coordinator Peer (Exit Node) + Separate WireGuard Peer ---
 # nodes = {
 #   "tunnelmesh" = {
-#     coordinator = true
+#     coordinator        = true
+#     peer               = true
+#     allow_exit_traffic = true
 #   }
 #   "tm-wg" = {
 #     peer      = true
 #     wireguard = true
+#     exit_node = "tunnelmesh"  # Route internet through coordinator
 #   }
 # }
 
@@ -78,7 +94,38 @@ nodes = {
 #   }
 # }
 
-# --- Example 4: High Availability Setup ---
+# --- Example 4: Exit Node Setup (Split-Tunnel VPN) ---
+# Route internet traffic through a designated exit node while keeping
+# mesh traffic direct. Great for privacy or geo-unblocking.
+# nodes = {
+#   "tunnelmesh" = {
+#     coordinator = true
+#     peer        = true
+#     wireguard   = true
+#     region      = "ams3"
+#   }
+#   # This node allows other peers to route their internet through it
+#   "tm-exit-sgp" = {
+#     peer               = true
+#     region             = "sgp1"
+#     allow_exit_traffic = true  # <-- Enable as exit node
+#     # Manual location (optional - overrides IP geolocation)
+#     location = {
+#       latitude  = 1.3521
+#       longitude = 103.8198
+#       city      = "Singapore"
+#       country   = "Singapore"
+#     }
+#   }
+#   # This peer routes its internet traffic through the Singapore exit
+#   "tm-client" = {
+#     peer      = true
+#     region    = "lon1"
+#     exit_node = "tm-exit-sgp"  # <-- Route internet through Singapore
+#   }
+# }
+
+# --- Example 5: High Availability Setup ---
 # Larger coordinator, multiple WireGuard entry points
 # nodes = {
 #   "tunnelmesh" = {
@@ -97,14 +144,9 @@ nodes = {
 #     wireguard = true
 #     region    = "sfo3"
 #   }
-#   "tm-exit-asia" = {
-#     peer   = true
-#     region = "sgp1"
-#     tags   = ["exit-node"]
-#   }
 # }
 
-# --- Example 5: Peers Only (external coordinator) ---
+# --- Example 6: Peers Only (external coordinator) ---
 # For connecting to an existing coordinator
 # external_coordinator_url = "https://tunnelmesh.example.com"
 # nodes = {
@@ -134,6 +176,9 @@ nodes = {
 # SSH tunnel port for mesh connections
 # default_ssh_port = 2222
 
+# External API HTTPS port (peers connect here, port 443 reserved for mesh admin)
+# external_api_port = 8443
+
 # ============================================================================
 # GLOBAL SETTINGS
 # ============================================================================
@@ -149,6 +194,11 @@ nodes = {
 
 # Domain suffix for mesh hostnames
 # domain_suffix = ".tunnelmesh"
+
+# Enable node location tracking (requires external IP geolocation API)
+# WARNING: When enabled, the coordinator will query ip-api.com to geolocate nodes
+# by their public IP addresses. This is disabled by default for privacy.
+# locations_enabled = false
 
 # GitHub owner for binary downloads
 # github_owner = "zombar"

@@ -615,6 +615,32 @@ func TestRekeyRequiredPacketTooShort(t *testing.T) {
 	}
 }
 
+// TestRekeyRequiredPacketSizeVsMinPacketSize verifies that RekeyRequired packets
+// (5 bytes) are smaller than MinPacketSize (32 bytes) and the receive loop
+// must not use MinPacketSize as the minimum check (regression test for bug
+// where rekey-required packets were silently dropped).
+func TestRekeyRequiredPacketSizeVsMinPacketSize(t *testing.T) {
+	// This test documents the size relationship and ensures we don't
+	// accidentally break rekey-required handling by changing size checks
+	if RekeyRequiredSize >= MinPacketSize {
+		t.Errorf("RekeyRequiredSize (%d) should be less than MinPacketSize (%d) - if this changed, verify receive loop handles small packets",
+			RekeyRequiredSize, MinPacketSize)
+	}
+
+	// Verify the actual packet sizes
+	pkt := NewRekeyRequiredPacket(0x12345678)
+	data := pkt.Marshal()
+	if len(data) != RekeyRequiredSize {
+		t.Errorf("rekey packet should be %d bytes, got %d", RekeyRequiredSize, len(data))
+	}
+
+	// MinPacketSize is for data/keepalive packets with header + auth tag
+	if MinPacketSize != HeaderSize+AuthTagSize {
+		t.Errorf("MinPacketSize should be HeaderSize+AuthTagSize (%d), got %d",
+			HeaderSize+AuthTagSize, MinPacketSize)
+	}
+}
+
 // =============================================================================
 // Replay Window Edge Case Tests
 // =============================================================================

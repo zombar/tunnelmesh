@@ -2,11 +2,15 @@
 package coord
 
 import (
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +29,8 @@ type peerInfo struct {
 	heartbeatCount uint64
 	registeredAt   time.Time
 	lastStatsTime  time.Time
+	prevStatsTime  time.Time
+	aliases        []string // DNS aliases registered by this peer
 }
 
 // serverStats tracks server-level statistics.
@@ -37,16 +43,23 @@ type serverStats struct {
 type Server struct {
 	cfg          *config.ServerConfig
 	mux          *http.ServeMux
+	adminMux     *http.ServeMux  // Separate mux for admin routes (used with join_mesh)
+	adminServer  *http.Server    // Separate admin HTTP server (HTTPS on mesh IP)
 	peers        map[string]*peerInfo
 	peersMu      sync.RWMutex
 	ipAlloc      *ipAllocator
 	dnsCache     map[string]string // hostname -> mesh IP
+	aliasOwner   map[string]string // alias -> peer name (reverse lookup for ownership)
 	serverStats  serverStats
 	statsHistory *StatsHistory // Per-peer stats time series
 	relay        *relayManager
 	holePunch    *holePunchManager
-	wgStore      *wireguard.Store // WireGuard client storage
-	version      string           // Server version for admin display
+	wgStore      *wireguard.Store      // WireGuard client storage
+	ca           *CertificateAuthority // Internal CA for mesh TLS certs
+	version      string                // Server version for admin display
+	sseHub       *sseHub               // SSE hub for real-time dashboard updates
+	ipGeoCache   *IPGeoCache           // IP geolocation cache for location fallback
+	coordMeshIP  string                // Coordinator's mesh IP for "this.tunnelmesh" resolution
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -149,10 +162,18 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		peers:        make(map[string]*peerInfo),
 		ipAlloc:      ipAlloc,
 		dnsCache:     make(map[string]string),
+		aliasOwner:   make(map[string]string),
 		statsHistory: NewStatsHistory(),
 		serverStats: serverStats{
 			startTime: time.Now(),
 		},
+		sseHub: newSSEHub(),
+	}
+
+	// Initialize IP geolocation cache if locations feature is enabled
+	if cfg.Locations {
+		srv.ipGeoCache = NewIPGeoCache("") // Use default ip-api.com URL
+		log.Info().Msg("node location tracking enabled (uses external IP geolocation API)")
 	}
 
 	// Initialize WireGuard client store if enabled
@@ -161,8 +182,79 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		log.Info().Msg("WireGuard client management enabled")
 	}
 
+	// Initialize Certificate Authority for mesh TLS
+	ca, err := NewCertificateAuthority(cfg.DataDir, cfg.DomainSuffix)
+	if err != nil {
+		return nil, fmt.Errorf("initialize CA: %w", err)
+	}
+	srv.ca = ca
+
+	// Load persisted stats history
+	if err := srv.LoadStatsHistory(); err != nil {
+		log.Warn().Err(err).Msg("failed to load stats history, starting fresh")
+	}
+
 	srv.setupRoutes()
 	return srv, nil
+}
+
+// statsHistoryPath returns the file path for stats history persistence.
+func (s *Server) statsHistoryPath() string {
+	return filepath.Join(s.cfg.DataDir, "stats_history.json")
+}
+
+// LoadStatsHistory loads stats history from disk.
+func (s *Server) LoadStatsHistory() error {
+	// Ensure data directory exists
+	if err := os.MkdirAll(s.cfg.DataDir, 0755); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+
+	path := s.statsHistoryPath()
+	if err := s.statsHistory.Load(path); err != nil {
+		return err
+	}
+
+	peerCount := s.statsHistory.PeerCount()
+	if peerCount > 0 {
+		log.Info().Int("peers", peerCount).Str("path", path).Msg("loaded stats history")
+	}
+	return nil
+}
+
+// SaveStatsHistory persists stats history to disk.
+func (s *Server) SaveStatsHistory() error {
+	path := s.statsHistoryPath()
+	if err := s.statsHistory.Save(path); err != nil {
+		return fmt.Errorf("save stats history: %w", err)
+	}
+	log.Debug().Str("path", path).Msg("saved stats history")
+	return nil
+}
+
+// Shutdown gracefully shuts down the server, persisting state.
+func (s *Server) Shutdown() error {
+	log.Info().Msg("saving stats history before shutdown")
+	return s.SaveStatsHistory()
+}
+
+// StartPeriodicSave starts a goroutine that periodically saves stats history.
+// The goroutine stops when the context is cancelled.
+func (s *Server) StartPeriodicSave(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := s.SaveStatsHistory(); err != nil {
+					log.Warn().Err(err).Msg("failed to save stats history")
+				}
+			}
+		}
+	}()
 }
 
 // SetVersion sets the server version for admin display.
@@ -172,6 +264,7 @@ func (s *Server) SetVersion(version string) {
 
 func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/health", s.handleHealth)
+	s.mux.HandleFunc("/ca.crt", s.handleCACert) // CA cert for mesh TLS (no auth)
 	s.mux.HandleFunc("/api/v1/register", s.withAuth(s.handleRegister))
 	s.mux.HandleFunc("/api/v1/peers", s.withAuth(s.handlePeers))
 	s.mux.HandleFunc("/api/v1/peers/", s.withAuth(s.handlePeerByName))
@@ -231,6 +324,23 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// validateAliases checks if all aliases are valid and available for the requesting peer.
+// Returns an error if any alias conflicts. Must be called with peersMu held.
+func (s *Server) validateAliases(aliases []string, requestingPeer string) error {
+	for _, alias := range aliases {
+		// Can't use another peer's name
+		if _, exists := s.peers[alias]; exists && alias != requestingPeer {
+			return fmt.Errorf("alias %q conflicts with existing peer name", alias)
+		}
+
+		// Can't use another peer's alias
+		if owner, exists := s.aliasOwner[alias]; exists && owner != requestingPeer {
+			return fmt.Errorf("alias %q is already registered by peer %q", alias, owner)
+		}
+	}
+	return nil
+}
+
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -246,6 +356,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.peersMu.Lock()
 	defer s.peersMu.Unlock()
 
+	// Validate aliases first (before any state changes)
+	if len(req.Aliases) > 0 {
+		if err := s.validateAliases(req.Aliases, req.Name); err != nil {
+			s.jsonError(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
+
 	// Allocate IP deterministically based on peer name
 	// This ensures the same peer always gets the same IP
 	meshIP, err := s.ipAlloc.allocateForPeer(req.Name)
@@ -254,23 +372,82 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Preserve existing location if re-registering without new location
+	// Only process locations if the feature is enabled
+	var location *proto.GeoLocation
+	var needsGeoLookup bool
+	var geoLookupIP string
+
+	existing, isExisting := s.peers[req.Name]
+
+	if s.cfg.Locations {
+		if req.Location != nil {
+			// Manual location provided - use it
+			location = req.Location
+		} else if isExisting && existing.peer.Location != nil {
+			// Existing peer has location - check if we should keep it
+			existingLoc := existing.peer.Location
+			if existingLoc.Source == "manual" {
+				// Always preserve manual locations
+				location = existingLoc
+			} else if existingLoc.Source == "ip" && len(req.PublicIPs) > 0 && len(existing.peer.PublicIPs) > 0 {
+				// IP-based location - keep if IP hasn't changed
+				if req.PublicIPs[0] == existing.peer.PublicIPs[0] {
+					location = existingLoc
+				} else {
+					// IP changed - need new lookup
+					needsGeoLookup = true
+					geoLookupIP = req.PublicIPs[0]
+				}
+			} else {
+				// Keep existing location as fallback
+				location = existingLoc
+			}
+		} else if len(req.PublicIPs) > 0 {
+			// New peer with public IPs - need geolocation lookup
+			needsGeoLookup = true
+			geoLookupIP = req.PublicIPs[0]
+		}
+	}
+
 	peer := &proto.Peer{
-		Name:        req.Name,
-		PublicKey:   req.PublicKey,
-		PublicIPs:   req.PublicIPs,
-		PrivateIPs:  req.PrivateIPs,
-		SSHPort:     req.SSHPort,
-		UDPPort:     req.UDPPort,
-		MeshIP:      meshIP,
-		LastSeen:    time.Now(),
-		Connectable: len(req.PublicIPs) > 0 && !req.BehindNAT,
-		BehindNAT:   req.BehindNAT,
-		Version:     req.Version,
+		Name:              req.Name,
+		PublicKey:         req.PublicKey,
+		PublicIPs:         req.PublicIPs,
+		PrivateIPs:        req.PrivateIPs,
+		SSHPort:           req.SSHPort,
+		UDPPort:           req.UDPPort,
+		MeshIP:            meshIP,
+		LastSeen:          time.Now(),
+		Connectable:       len(req.PublicIPs) > 0 && !req.BehindNAT,
+		BehindNAT:         req.BehindNAT,
+		Version:           req.Version,
+		Location:          location,
+		AllowsExitTraffic: req.AllowsExitTraffic,
+		ExitNode:          req.ExitNode,
+	}
+
+	// Preserve registeredAt for existing peers
+	registeredAt := time.Now()
+	if isExisting {
+		registeredAt = existing.registeredAt
+		// Clean up old aliases before registering new ones
+		for _, oldAlias := range existing.aliases {
+			delete(s.aliasOwner, oldAlias)
+			delete(s.dnsCache, oldAlias)
+		}
+	}
+
+	// Register new aliases
+	for _, alias := range req.Aliases {
+		s.aliasOwner[alias] = req.Name
+		s.dnsCache[alias] = meshIP
 	}
 
 	s.peers[req.Name] = &peerInfo{
 		peer:         peer,
-		registeredAt: time.Now(),
+		registeredAt: registeredAt,
+		aliases:      req.Aliases,
 	}
 	s.dnsCache[req.Name] = meshIP
 
@@ -281,16 +458,36 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info().
+	logEvent := log.Info().
 		Str("name", req.Name).
-		Str("mesh_ip", meshIP).
-		Msg("peer registered")
+		Str("mesh_ip", meshIP)
+	if len(req.Aliases) > 0 {
+		logEvent = logEvent.Strs("aliases", req.Aliases)
+	}
+	logEvent.Msg("peer registered")
+
+	// Trigger IP geolocation only for new peers or when IP has changed (if locations enabled)
+	if needsGeoLookup && s.cfg.Locations && s.ipGeoCache != nil {
+		go s.lookupPeerLocation(req.Name, geoLookupIP)
+	}
 
 	resp := proto.RegisterResponse{
-		MeshIP:   meshIP,
-		MeshCIDR: s.cfg.MeshCIDR,
-		Domain:   s.cfg.DomainSuffix,
-		Token:    token,
+		MeshIP:      meshIP,
+		MeshCIDR:    s.cfg.MeshCIDR,
+		Domain:      s.cfg.DomainSuffix,
+		Token:       token,
+		CoordMeshIP: s.coordMeshIP, // For "this.tunnelmesh" resolution
+	}
+
+	// Generate TLS certificate for the peer
+	if s.ca != nil {
+		certPEM, keyPEM, err := s.ca.GeneratePeerCert(req.Name, s.cfg.DomainSuffix, meshIP)
+		if err != nil {
+			log.Warn().Err(err).Str("peer", req.Name).Msg("failed to generate TLS cert")
+		} else {
+			resp.TLSCert = string(certPEM)
+			resp.TLSKey = string(keyPEM)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -343,6 +540,11 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 		info, exists := s.peers[name]
 		if exists {
 			s.ipAlloc.release(info.peer.MeshIP)
+			// Clean up aliases
+			for _, alias := range info.aliases {
+				delete(s.aliasOwner, alias)
+				delete(s.dnsCache, alias)
+			}
 			delete(s.peers, name)
 			delete(s.dnsCache, name)
 		}
@@ -399,10 +601,99 @@ func (s *Server) jsonError(w http.ResponseWriter, message string, code int) {
 	})
 }
 
+// lookupPeerLocation performs IP geolocation lookup for a peer and updates their location.
+// This is called in a background goroutine to avoid blocking registration.
+func (s *Server) lookupPeerLocation(peerName, ip string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	location, err := s.ipGeoCache.Lookup(ctx, ip)
+	if err != nil {
+		log.Debug().Err(err).Str("peer", peerName).Str("ip", ip).Msg("IP geolocation lookup failed")
+		return
+	}
+
+	if location == nil {
+		// IP could not be geolocated (e.g., private IP)
+		return
+	}
+
+	// Update peer's location
+	s.peersMu.Lock()
+	if info, ok := s.peers[peerName]; ok && info.peer.Location == nil {
+		info.peer.Location = location
+		log.Info().
+			Str("peer", peerName).
+			Str("city", location.City).
+			Str("country", location.Country).
+			Msg("peer location updated via IP geolocation")
+	}
+	s.peersMu.Unlock()
+}
+
 // ListenAndServe starts the coordination server.
 func (s *Server) ListenAndServe() error {
 	log.Info().Str("listen", s.cfg.Listen).Msg("starting coordination server")
 	return http.ListenAndServe(s.cfg.Listen, s)
+}
+
+// SetCoordMeshIP sets the coordinator's mesh IP for "this.tunnelmesh" resolution.
+// This is called after join_mesh completes so other peers can resolve "this" to the coordinator.
+func (s *Server) SetCoordMeshIP(ip string) {
+	s.coordMeshIP = ip
+	log.Info().Str("ip", ip).Msg("coordinator mesh IP set for 'this.tunnelmesh' resolution")
+}
+
+// StartAdminServer starts the admin interface on the specified address.
+// If tlsCert is provided, the server uses HTTPS; otherwise HTTP.
+// This is called after join_mesh completes to bind admin to the mesh IP.
+// Uses SO_REUSEADDR to allow binding to mesh IP even when main server uses wildcard.
+func (s *Server) StartAdminServer(addr string, tlsCert *tls.Certificate) error {
+	if s.adminMux == nil {
+		return fmt.Errorf("admin routes not initialized")
+	}
+
+	// Create listener with SO_REUSEADDR to allow binding to specific IP
+	// even when main server is bound to 0.0.0.0 on the same port
+	lc := net.ListenConfig{
+		Control: setReuseAddr,
+	}
+
+	ln, err := lc.Listen(context.Background(), "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", addr, err)
+	}
+
+	s.adminServer = &http.Server{
+		Handler: s.adminMux,
+	}
+
+	if tlsCert != nil {
+		s.adminServer.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{*tlsCert},
+			MinVersion:   tls.VersionTLS12,
+		}
+		log.Info().Str("addr", addr).Msg("starting admin server (HTTPS)")
+		go func() {
+			if err := s.adminServer.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("admin server error")
+			}
+		}()
+	} else {
+		log.Info().Str("addr", addr).Msg("starting admin server (HTTP)")
+		go func() {
+			if err := s.adminServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("admin server error")
+			}
+		}()
+	}
+
+	return nil
+}
+
+// GetCA returns the server's certificate authority.
+func (s *Server) GetCA() *CertificateAuthority {
+	return s.ca
 }
 
 // setupWireGuardRoutes registers the WireGuard API routes for concentrator sync.

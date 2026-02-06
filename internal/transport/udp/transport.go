@@ -17,6 +17,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/internal/portmap"
+	"github.com/tunnelmesh/tunnelmesh/internal/portmap/client"
 	"github.com/tunnelmesh/tunnelmesh/internal/transport"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -58,6 +60,12 @@ type Transport struct {
 	externalAddr  string // IPv4 external address
 	externalAddr6 string // IPv6 external address
 
+	// Timestamp of last network change (for invalidating stale sessions)
+	lastNetworkChange time.Time
+
+	// Port mapper for PCP/NAT-PMP/UPnP
+	portMapper *portmap.PortMapper
+
 	// Sessions (indexed by local index)
 	sessions map[uint32]*Session
 
@@ -82,6 +90,9 @@ type Transport struct {
 	// State
 	running atomic.Bool
 	closeCh chan struct{}
+
+	// HTTP client for coordination server requests
+	httpClient *http.Client
 }
 
 // Config holds UDP transport configuration.
@@ -119,12 +130,28 @@ type Config struct {
 	// HolePunchTimeout for NAT traversal
 	HolePunchTimeout time.Duration
 
+	// SessionTimeout is the duration after which a session is considered dead
+	// if no packets have been received. This handles stale sessions where the
+	// peer has restarted and our rekey-required messages don't reach us (NAT timeout).
+	// Default: 75 seconds (~3 keepalive intervals worth of missed packets)
+	SessionTimeout time.Duration
+
 	// PeerResolver looks up peer name from their X25519 public key
 	// Returns empty string if peer is unknown
 	PeerResolver func(pubKey [32]byte) string
 
 	// HolePunchRetries is the number of hole-punch attempts
 	HolePunchRetries int
+
+	// EnablePortMapping enables PCP/NAT-PMP/UPnP port mapping.
+	// When enabled, the transport will attempt to create a port mapping
+	// on the gateway for better NAT traversal. Default: true (opportunistic)
+	EnablePortMapping *bool
+
+	// HTTPClient is the HTTP client to use for coordination server requests.
+	// If nil, a new client with sensible defaults will be created.
+	// Providing a managed client allows proper cleanup during network changes.
+	HTTPClient *http.Client
 }
 
 // DefaultConfig returns sensible defaults.
@@ -134,6 +161,7 @@ func DefaultConfig() Config {
 		KeepaliveInterval: 25 * time.Second,
 		HandshakeTimeout:  10 * time.Second,
 		HolePunchTimeout:  10 * time.Second,
+		SessionTimeout:    75 * time.Second,
 		HolePunchRetries:  5,
 	}
 }
@@ -152,6 +180,17 @@ func New(cfg Config) (*Transport, error) {
 	if cfg.HolePunchRetries == 0 {
 		cfg.HolePunchRetries = 5
 	}
+	if cfg.SessionTimeout == 0 {
+		cfg.SessionTimeout = 75 * time.Second
+	}
+
+	// Use provided HTTP client or create a new one with sensible defaults
+	httpClient := cfg.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{
+			Timeout: 30 * time.Second,
+		}
+	}
 
 	t := &Transport{
 		config:               cfg,
@@ -163,6 +202,7 @@ func New(cfg Config) (*Transport, error) {
 		pendingOutboundPeers: make(map[string]uint32),
 		rekeyRateLimit:       make(map[string]time.Time),
 		closeCh:              make(chan struct{}),
+		httpClient:           httpClient,
 	}
 
 	return t, nil
@@ -171,6 +211,56 @@ func New(cfg Config) (*Transport, error) {
 // Type returns the transport type.
 func (t *Transport) Type() transport.TransportType {
 	return transport.TransportUDP
+}
+
+// Implement portmap.Observer interface
+
+// OnPortMapStateChanged is called when the port mapper transitions between states.
+func (t *Transport) OnPortMapStateChanged(pm *portmap.PortMapper, oldState, newState portmap.State) {
+	log.Debug().
+		Str("old", oldState.String()).
+		Str("new", newState.String()).
+		Msg("UDP portmap state changed")
+}
+
+// OnMappingAcquired is called when a port mapping is successfully acquired or refreshed.
+func (t *Transport) OnMappingAcquired(pm *portmap.PortMapper, mapping *portmap.Mapping) {
+	t.mu.Lock()
+	// Store the PCP-mapped external address
+	// This will be used during registration with the coord server
+	t.externalAddr = mapping.ExternalAddr()
+	t.mu.Unlock()
+
+	log.Info().
+		Str("external", mapping.ExternalAddr()).
+		Str("client", mapping.ClientType).
+		Dur("lifetime", mapping.Lifetime).
+		Msg("UDP PCP/NAT-PMP mapping acquired")
+}
+
+// OnMappingLost is called when a previously active mapping is lost.
+func (t *Transport) OnMappingLost(pm *portmap.PortMapper, reason error) {
+	t.mu.Lock()
+	// Clear the PCP-mapped address, will fall back to STUN discovery
+	t.externalAddr = ""
+	t.mu.Unlock()
+
+	log.Warn().
+		Err(reason).
+		Msg("UDP PCP/NAT-PMP mapping lost, falling back to STUN discovery")
+}
+
+// HasPCPMapping returns true if we have an active PCP/NAT-PMP port mapping.
+func (t *Transport) HasPCPMapping() bool {
+	return t.portMapper != nil && t.portMapper.IsActive()
+}
+
+// PCPMapping returns the current PCP/NAT-PMP mapping, or nil if not active.
+func (t *Transport) PCPMapping() *portmap.Mapping {
+	if t.portMapper == nil {
+		return nil
+	}
+	return t.portMapper.Mapping()
 }
 
 // rekeyRateLimitInterval is the minimum time between rekey-required messages to the same source.
@@ -182,6 +272,29 @@ func (t *Transport) SetSessionInvalidCallback(cb func(peerName string)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.onSessionInvalid = cb
+}
+
+// RegisterPendingOutbound pre-registers intent to connect to a peer.
+// This should be called BEFORE spawning the connection goroutine to ensure
+// crossing handshake detection works correctly. The pendingOutboundPeers map
+// is checked in handleHandshakeInit to detect and handle simultaneous connections.
+// Call ClearPendingOutbound when the connection attempt completes (success or failure).
+func (t *Transport) RegisterPendingOutbound(peerName string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// Use 0 as placeholder - the real index will be set in initiateHandshake
+	t.pendingOutboundPeers[peerName] = 0
+	log.Debug().Str("peer", peerName).Msg("pre-registered pending outbound for crossing handshake detection")
+}
+
+// ClearPendingOutbound removes the pending outbound registration for a peer.
+// This should be called when the connection attempt completes or if the peer
+// won't actually be connected via UDP (e.g., if UDP transport is skipped).
+func (t *Transport) ClearPendingOutbound(peerName string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.pendingOutboundPeers, peerName)
+	log.Debug().Str("peer", peerName).Msg("cleared pending outbound registration")
 }
 
 // selectSocketForPeer returns the appropriate socket for communicating with the peer.
@@ -274,6 +387,47 @@ func (t *Transport) Start() error {
 		Strs("addrs", addrs).
 		Msg("UDP transport started")
 
+	// Start port mapper if enabled (default: enabled)
+	portMappingEnabled := t.config.EnablePortMapping == nil || *t.config.EnablePortMapping
+	if portMappingEnabled {
+		if err := t.startPortMapper(); err != nil {
+			// Port mapping is opportunistic - log but don't fail
+			log.Debug().Err(err).Msg("port mapping not available, using STUN fallback")
+		}
+	}
+
+	return nil
+}
+
+// startPortMapper initializes and starts the PCP/NAT-PMP/UPnP port mapper.
+func (t *Transport) startPortMapper() error {
+	// Detect gateway and local IP
+	gateway, localIP, err := portmap.DetectGateway()
+	if err != nil {
+		return fmt.Errorf("detect gateway: %w", err)
+	}
+
+	log.Debug().
+		Str("gateway", gateway.String()).
+		Str("local_ip", localIP.String()).
+		Msg("detected gateway for port mapping")
+
+	// Create discovery client that tries PCP, then NAT-PMP
+	pmClient := client.NewDiscoveryClient(gateway, localIP, 0)
+
+	// Create port mapper FSM
+	t.portMapper = portmap.New(portmap.Config{
+		Protocol:  portmap.ProtocolUDP,
+		LocalPort: t.config.Port,
+		Client:    pmClient,
+		Observers: []portmap.Observer{t},
+	})
+
+	// Start the FSM (runs in background)
+	if err := t.portMapper.Start(); err != nil {
+		return fmt.Errorf("start port mapper: %w", err)
+	}
+
 	return nil
 }
 
@@ -290,7 +444,10 @@ func (t *Transport) receiveLoop(conn *net.UDPConn) {
 			continue
 		}
 
-		if n < MinPacketSize {
+		// Minimum 1 byte needed to check packet type
+		// Individual handlers validate their specific size requirements
+		// Note: RekeyRequired packets are only 5 bytes, smaller than data packets
+		if n < 1 {
 			continue // Too short
 		}
 
@@ -596,14 +753,18 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 	// 2. Timeout and try again (at which point our session may be stale)
 	t.mu.RLock()
 	existingSession, hasExisting := t.peerSessions[peerName]
+	lastNetChange := t.lastNetworkChange
 	if hasExisting && existingSession.IsEstablished() {
 		// Check if the existing session is still active (received data recently)
 		lastRecv := existingSession.LastReceive()
 		sessionAge := time.Since(lastRecv)
 		t.mu.RUnlock()
 
-		// If we received data in the last 30 seconds, keep the existing session
-		if sessionAge < 30*time.Second {
+		// Session is active if:
+		// 1. We received data in the last 30 seconds, AND
+		// 2. The last receive was AFTER any network change (session uses current network)
+		sessionActive := sessionAge < 30*time.Second && lastRecv.After(lastNetChange)
+		if sessionActive {
 			log.Debug().
 				Str("peer", peerName).
 				Str("remote", remoteAddr.String()).
@@ -614,6 +775,7 @@ func (t *Transport) handleHandshakeInit(data []byte, remoteAddr *net.UDPAddr, co
 		log.Debug().
 			Str("peer", peerName).
 			Dur("session_age", sessionAge).
+			Bool("pre_network_change", lastRecv.Before(lastNetChange)).
 			Msg("replacing stale session with new handshake")
 	} else {
 		t.mu.RUnlock()
@@ -736,7 +898,7 @@ func (t *Transport) keepaliveLoop() {
 	}
 }
 
-// sendKeepalives sends keepalive packets to all active sessions.
+// sendKeepalives sends keepalive packets to all active sessions and checks for dead sessions.
 func (t *Transport) sendKeepalives() {
 	t.mu.RLock()
 	sessions := make([]*Session, 0, len(t.sessions))
@@ -745,14 +907,58 @@ func (t *Transport) sendKeepalives() {
 			sessions = append(sessions, s)
 		}
 	}
+	sessionTimeout := t.config.SessionTimeout
+	cb := t.onSessionInvalid
 	t.mu.RUnlock()
 
+	now := time.Now()
+	var deadSessions []*Session
+
 	for _, s := range sessions {
+		// Check if session has timed out (no packets received for too long)
+		lastRecv := s.LastReceive()
+		if !lastRecv.IsZero() && now.Sub(lastRecv) > sessionTimeout {
+			log.Warn().
+				Str("peer", s.PeerName()).
+				Dur("since_last_recv", now.Sub(lastRecv)).
+				Dur("timeout", sessionTimeout).
+				Msg("session timed out, no packets received")
+			deadSessions = append(deadSessions, s)
+			continue
+		}
+
 		if err := s.SendKeepalive(); err != nil {
 			log.Debug().
 				Err(err).
 				Str("peer", s.PeerName()).
 				Msg("keepalive failed")
+		}
+	}
+
+	// Clean up dead sessions
+	for _, s := range deadSessions {
+		peerName := s.PeerName()
+		localIndex := s.LocalIndex()
+
+		// Remove from transport's session maps
+		t.mu.Lock()
+		delete(t.sessions, localIndex)
+		if existing, ok := t.peerSessions[peerName]; ok && existing.LocalIndex() == localIndex {
+			delete(t.peerSessions, peerName)
+		}
+		t.mu.Unlock()
+
+		// Close the session
+		s.Close()
+
+		log.Info().
+			Str("peer", peerName).
+			Uint32("local_index", localIndex).
+			Msg("removed dead session due to receive timeout")
+
+		// Trigger reconnection
+		if cb != nil {
+			cb(peerName)
 		}
 	}
 }
@@ -771,39 +977,36 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 		}
 	}
 
+	// Get peer's current external endpoint from coordination server
+	// This is the authoritative source for where the peer currently is
+	peerEndpoint, err := t.getPeerEndpoint(ctx, opts.PeerName)
+	if err != nil {
+		return nil, fmt.Errorf("get peer endpoint: %w", err)
+	}
+
 	// Check if peer is on the same network (same public IP = same NAT)
 	// If so, use private IPs to avoid NAT hairpinning issues
-	// Use fresh IP detection to avoid stale cached addresses after network changes
-	var peerEndpoint string
+	// IMPORTANT: Use the fresh external address from coordination, not cached PeerInfo
 	if opts.PeerInfo != nil && len(opts.PeerInfo.PrivateIPs) > 0 && opts.PeerInfo.UDPPort > 0 {
-		// Get our current public IPs freshly to handle network changes
-		ourPublicIPs, _, _ := proto.GetLocalIPs()
-		for _, ourPublicIP := range ourPublicIPs {
-			for _, peerPublicIP := range opts.PeerInfo.PublicIPs {
-				if ourPublicIP == peerPublicIP {
+		// Extract peer's current public IP from external endpoint (host:port format)
+		peerExternalHost, _, _ := net.SplitHostPort(peerEndpoint)
+		if peerExternalHost != "" {
+			// Get our current public IPs freshly to handle network changes
+			ourPublicIPs, _, _ := proto.GetLocalIPs()
+			for _, ourPublicIP := range ourPublicIPs {
+				if ourPublicIP == peerExternalHost {
 					// Same public IP means same LAN - use private IP to avoid hairpinning
-					peerEndpoint = net.JoinHostPort(opts.PeerInfo.PrivateIPs[0], fmt.Sprint(opts.PeerInfo.UDPPort))
+					privateEndpoint := net.JoinHostPort(opts.PeerInfo.PrivateIPs[0], fmt.Sprint(opts.PeerInfo.UDPPort))
 					log.Debug().
 						Str("peer", opts.PeerName).
 						Str("our_public_ip", ourPublicIP).
-						Str("peer_public_ip", peerPublicIP).
-						Str("using_private_addr", peerEndpoint).
+						Str("peer_external_ip", peerExternalHost).
+						Str("using_private_addr", privateEndpoint).
 						Msg("detected same-network peer, using private IP to avoid NAT hairpinning")
+					peerEndpoint = privateEndpoint
 					break
 				}
 			}
-			if peerEndpoint != "" {
-				break
-			}
-		}
-	}
-
-	// If not same network, get peer's UDP endpoint via coordination server
-	if peerEndpoint == "" {
-		var err error
-		peerEndpoint, err = t.getPeerEndpoint(ctx, opts.PeerName)
-		if err != nil {
-			return nil, fmt.Errorf("get peer endpoint: %w", err)
 		}
 	}
 
@@ -861,9 +1064,21 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 		return nil, fmt.Errorf("peer public key not available")
 	}
 
-	// Attempt hole-punch if needed
-	if err := t.holePunch(ctx, opts.PeerName, peerAddr, conn); err != nil {
-		log.Debug().Err(err).Str("peer", opts.PeerName).Msg("hole-punch failed, trying direct")
+	// Check if we can skip hole-punching
+	// When both peers have PCP/NAT-PMP mappings, their external addresses
+	// are directly reachable without hole-punching
+	weHavePCP := t.HasPCPMapping()
+	peerHasPCP := opts.PeerInfo != nil && opts.PeerInfo.PCPMapped
+
+	if weHavePCP && peerHasPCP {
+		log.Debug().
+			Str("peer", opts.PeerName).
+			Msg("both peers have PCP mapping, skipping hole-punch")
+	} else {
+		// Attempt hole-punch if needed
+		if err := t.holePunch(ctx, opts.PeerName, peerAddr, conn); err != nil {
+			log.Debug().Err(err).Str("peer", opts.PeerName).Msg("hole-punch failed, trying direct")
+		}
 	}
 
 	// Perform handshake
@@ -881,14 +1096,29 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 
 // initiateHandshake performs the Noise IK handshake as initiator.
 func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peerPublic [32]byte, peerAddr *net.UDPAddr, conn *net.UDPConn) (*Session, error) {
+	// Register intent to connect BEFORE creating handshake state.
+	// This closes a race window where an incoming init could be processed
+	// before pendingOutboundPeers is set, bypassing the crossing handshake
+	// tie-breaker logic in handleHandshakeInit.
+	// We use 0 as a placeholder index until the real index is known.
+	t.mu.Lock()
+	t.pendingOutboundPeers[peerName] = 0
+	t.mu.Unlock()
+
 	hs, err := NewInitiatorHandshake(t.staticPrivate, t.staticPublic, peerPublic)
 	if err != nil {
+		t.mu.Lock()
+		delete(t.pendingOutboundPeers, peerName)
+		t.mu.Unlock()
 		return nil, err
 	}
 
 	// Create initiation message
 	initMsg, err := hs.CreateInitiation()
 	if err != nil {
+		t.mu.Lock()
+		delete(t.pendingOutboundPeers, peerName)
+		t.mu.Unlock()
 		return nil, err
 	}
 
@@ -898,7 +1128,7 @@ func (t *Transport) initiateHandshake(ctx context.Context, peerName string, peer
 
 	t.mu.Lock()
 	t.pendingHandshakes[localIndex] = respChan
-	t.pendingOutboundPeers[peerName] = localIndex
+	t.pendingOutboundPeers[peerName] = localIndex // Update with real index
 	t.mu.Unlock()
 
 	// Clean up pending handshake when done
@@ -1038,7 +1268,7 @@ func (t *Transport) holePunch(ctx context.Context, peerName string, peerAddr *ne
 		req.Header.Set("Authorization", "Bearer "+t.config.AuthToken)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -1102,7 +1332,7 @@ func (t *Transport) getPeerEndpoint(ctx context.Context, peerName string) (strin
 		req.Header.Set("Authorization", "Bearer "+t.config.AuthToken)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -1211,6 +1441,11 @@ func (t *Transport) Close() error {
 	t.running.Store(false)
 	close(t.closeCh)
 
+	// Stop port mapper if running
+	if t.portMapper != nil {
+		_ = t.portMapper.Stop()
+	}
+
 	// Close packet queue to signal workers to exit
 	if t.packetQueue != nil {
 		close(t.packetQueue)
@@ -1263,13 +1498,16 @@ func (t *Transport) registerSession(session *Session) bool {
 	// Check for existing session to this peer
 	var oldSession *Session
 	var discardNew bool
+	lastNetChange := t.lastNetworkChange
 	if existing, ok := t.peerSessions[peerName]; ok {
 		if existing.LocalIndex() != session.LocalIndex() {
 			// Check if existing session is active (received data recently)
 			if existing.IsEstablished() {
 				lastRecv := existing.LastReceive()
 				sessionAge := time.Since(lastRecv)
-				if sessionAge < 30*time.Second {
+				// Session is active if we received data recently AND after any network change
+				sessionActive := sessionAge < 30*time.Second && lastRecv.After(lastNetChange)
+				if sessionActive {
 					// Existing session is active - discard the new one
 					log.Debug().
 						Str("peer", peerName).
@@ -1314,10 +1552,9 @@ func (t *Transport) registerSession(session *Session) bool {
 
 // ClearNetworkState clears cached network state such as STUN-discovered external addresses.
 // This should be called after network changes to ensure fresh address discovery.
+// Also records the time of network change to invalidate stale sessions.
 func (t *Transport) ClearNetworkState() {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-
 	log.Debug().
 		Str("old_ipv4", t.externalAddr).
 		Str("old_ipv6", t.externalAddr6).
@@ -1325,6 +1562,16 @@ func (t *Transport) ClearNetworkState() {
 
 	t.externalAddr = ""
 	t.externalAddr6 = ""
+	t.lastNetworkChange = time.Now()
+	t.mu.Unlock()
+
+	// Close idle HTTP connections to force fresh connections on new network
+	t.httpClient.CloseIdleConnections()
+
+	// Signal network change to port mapper (will re-discover and re-map)
+	if t.portMapper != nil {
+		t.portMapper.NetworkChanged()
+	}
 }
 
 // RefreshEndpoint re-registers the UDP endpoint with the coordination server.
@@ -1518,6 +1765,7 @@ func (t *Transport) registerEndpointVia(ctx context.Context, peerName, localAddr
 		"peer_name":  peerName,
 		"local_addr": localAddr,
 		"udp_port":   port,
+		"pcp_mapped": t.HasPCPMapping(),
 	}
 
 	bodyBytes, _ := json.Marshal(reqBody)

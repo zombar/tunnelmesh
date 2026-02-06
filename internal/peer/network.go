@@ -48,10 +48,11 @@ func (m *MeshNode) HandleNetworkChange(event netmon.Event) {
 	// Close stale HTTP connections from the old network before re-registering
 	m.client.CloseIdleConnections()
 
-	// Re-register with coordination server
+	// Re-register with coordination server (pass nil location to retain existing)
 	resp, err := m.client.Register(
 		m.identity.Name, m.identity.PubKeyEncoded,
-		publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version,
+		publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version, nil,
+		m.identity.Config.ExitNode, m.identity.Config.AllowExitTraffic, m.identity.Config.DNS.Aliases,
 	)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to re-register after network change")

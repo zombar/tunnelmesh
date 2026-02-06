@@ -26,3 +26,26 @@ dns:
   enabled: true
   listen: "127.0.0.53:5353"  # Local DNS server address
   cache_ttl: 300              # DNS record cache TTL in seconds
+  # Custom DNS aliases for this node (resolved mesh-wide)
+  # aliases:
+  #   - "webserver"           # webserver.tunnelmesh -> this node's IP
+  #   - "api.mynode"          # api.mynode.tunnelmesh -> this node's IP
+
+# Exit node (split-tunnel VPN)
+# Route internet traffic through another peer while keeping mesh traffic direct.
+# exit_node: "exit-peer-name"       # Route internet through this peer
+# allow_exit_traffic: false          # Allow others to use this node as exit
+
+# Manual location (overrides IP geolocation when server has locations enabled)
+# location:
+#   latitude: 51.5074
+#   longitude: -0.1278
+#   city: "London"
+#   country: "UK"
+
+# WireGuard concentrator for mobile clients
+# wireguard:
+#   enabled: true
+#   listen_port: 51820
+#   data_dir: /var/lib/tunnelmesh/wireguard
+#   endpoint: "peer.example.com:51820"

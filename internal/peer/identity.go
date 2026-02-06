@@ -18,6 +18,7 @@ type PeerIdentity struct {
 	Domain        string
 	Version       string
 	Config        *config.PeerConfig
+	Location      *proto.GeoLocation // Geographic location (manual or IP-derived)
 }
 
 // NewPeerIdentity creates a PeerIdentity from config and registration response.

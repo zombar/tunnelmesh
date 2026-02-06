@@ -108,6 +108,7 @@ type PeerInfo struct {
 	PublicKey        string
 	PreferredType    TransportType
 	ExternalEndpoint string // STUN-discovered external address for UDP
+	PCPMapped        bool   // Whether peer has PCP/NAT-PMP port mapping
 }
 
 // TransportCapabilities describes transport features.

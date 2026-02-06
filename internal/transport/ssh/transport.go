@@ -110,13 +110,15 @@ func (t *Transport) Dial(ctx context.Context, opts transport.DialOptions) (trans
 		// Discard channel requests
 		go gossh.DiscardRequests(reqs)
 
-		return &Connection{
-			channel:   channel,
-			sshClient: r.client,
-			peerName:  opts.PeerName,
-			localAddr: r.client.LocalAddr(),
+		conn := &Connection{
+			channel:    channel,
+			sshClient:  r.client,
+			peerName:   opts.PeerName,
+			localAddr:  r.client.LocalAddr(),
 			remoteAddr: r.client.RemoteAddr(),
-		}, nil
+		}
+		conn.initActivity()
+		return conn, nil
 	}
 }
 
@@ -261,13 +263,15 @@ func (l *Listener) Accept(ctx context.Context) (transport.Connection, error) {
 				// Get peer name from channel extra data
 				peerName := string(newChannel.ExtraData())
 
-				return &Connection{
+				conn := &Connection{
 					channel:    channel,
 					sshServer:  sshConn.Conn, // Keep reference to prevent GC from closing connection
 					peerName:   peerName,
 					localAddr:  r.conn.LocalAddr(),
 					remoteAddr: r.conn.RemoteAddr(),
-				}, nil
+				}
+				conn.initActivity()
+				return conn, nil
 			}
 		}
 	}
@@ -293,11 +297,18 @@ type Connection struct {
 	remoteAddr net.Addr
 	mu         sync.Mutex
 	closed     bool
+
+	// Activity tracking for timeout detection
+	lastRecv atomic.Value // time.Time - last time data was received
 }
 
 // Read reads data from the connection.
 func (c *Connection) Read(p []byte) (int, error) {
-	return c.channel.Read(p)
+	n, err := c.channel.Read(p)
+	if n > 0 {
+		c.lastRecv.Store(time.Now())
+	}
+	return n, err
 }
 
 // Write writes data to the connection.
@@ -354,4 +365,19 @@ func (c *Connection) IsHealthy() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return !c.closed
+}
+
+// LastActivity returns the time of the last received data.
+// Used for activity timeout detection.
+func (c *Connection) LastActivity() time.Time {
+	if v := c.lastRecv.Load(); v != nil {
+		return v.(time.Time)
+	}
+	return time.Time{}
+}
+
+// initActivity initializes the last activity timestamp.
+// Should be called when the connection is established.
+func (c *Connection) initActivity() {
+	c.lastRecv.Store(time.Now())
 }

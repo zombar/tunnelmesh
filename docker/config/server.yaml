@@ -3,22 +3,20 @@ listen: ":8080"
 auth_token: "docker-test-token-123"
 mesh_cidr: "10.99.0.0/16"
 domain_suffix: ".tunnelmesh"
+locations: true  # Enable node location tracking (uses ip-api.com)
 
 admin:
   enabled: true
-  token: "admin"
+  bind_address: "0.0.0.0"    # External access at http://localhost:8880/admin/
+  mesh_only_admin: false     # Use HTTP externally instead of HTTPS on mesh
 
 # WireGuard client management (enables admin panel WireGuard section)
-wireguard:
-  enabled: true
-  endpoint: "your-public-ip:51820"  # Set to concentrator's public endpoint
+# wireguard:
+#   enabled: true
+#   endpoint: "your-public-ip:51820"  # Set to concentrator's public endpoint
 
-# Server joins the mesh as a client node
+# Server joins the mesh as a peer (enables exit node functionality)
 join_mesh:
   name: "server-node"
   private_key: "/root/.tunnelmesh/id_ed25519"
-  tun:
-    name: "tun-mesh0"
-    mtu: 1400
-  dns:
-    enabled: false
+  allow_exit_traffic: true

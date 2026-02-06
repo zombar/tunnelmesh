@@ -61,15 +61,27 @@ resource "digitalocean_droplet" "node" {
     domain_suffix = var.domain_suffix
 
     # Coordinator settings
-    coordinator_port = var.coordinator_port
-    mesh_cidr        = var.mesh_cidr
-    relay_enabled    = var.relay_enabled
-    auth_token       = var.auth_token
-    admin_token      = var.admin_token
+    coordinator_port  = var.coordinator_port
+    external_api_port = var.external_api_port
+    mesh_cidr         = var.mesh_cidr
+    relay_enabled     = var.relay_enabled
+    auth_token        = var.auth_token
+    admin_token       = var.admin_token
+    locations_enabled = var.locations_enabled
 
     # Peer settings
     peer_server     = local.peer_server
     ssh_tunnel_port = var.ssh_tunnel_port
+
+    # Exit node settings
+    exit_node          = var.exit_node
+    allow_exit_traffic = var.allow_exit_traffic
+
+    # Location settings (manual GPS override)
+    location_latitude  = var.location_latitude
+    location_longitude = var.location_longitude
+    location_city      = var.location_city
+    location_country   = var.location_country
 
     # WireGuard settings
     wg_listen_port = var.wg_listen_port
@@ -131,12 +143,12 @@ resource "digitalocean_firewall" "node" {
     }
   }
 
-  # HTTPS (coordinator API)
+  # HTTPS (external coordinator API)
   dynamic "inbound_rule" {
     for_each = var.coordinator_enabled ? [1] : []
     content {
       protocol         = "tcp"
-      port_range       = "443"
+      port_range       = tostring(var.external_api_port)
       source_addresses = ["0.0.0.0/0", "::/0"]
     }
   }

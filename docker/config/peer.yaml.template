@@ -5,8 +5,12 @@ server: "${SERVER_URL}"
 auth_token: "${AUTH_TOKEN}"
 ssh_port: 2222
 private_key: "/root/.tunnelmesh/id_ed25519"
+exit_node: "server-node"  # Route internet traffic through the server
 tun:
   name: "tun-mesh0"
   mtu: 1400
 dns:
-  enabled: false
+  enabled: true
+  listen: "127.0.0.53:53"
+  aliases:
+    - "alt.${NODE_NAME}"

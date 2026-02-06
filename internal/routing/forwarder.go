@@ -21,6 +21,8 @@ var (
 	ErrNoRoute = errors.New("no route")
 	// ErrNoTunnel is returned when no tunnel or relay is available for the peer.
 	ErrNoTunnel = errors.New("no tunnel or relay")
+	// ErrReadTimeout is returned when a tunnel read times out due to inactivity.
+	ErrReadTimeout = errors.New("tunnel read timeout")
 )
 
 const (
@@ -30,6 +32,9 @@ const (
 	DefaultMTU = 1400
 	// FrameHeaderSize is the size of the frame header.
 	FrameHeaderSize = 3
+	// TunnelReadTimeout is the maximum time to wait for data from a tunnel.
+	// After this timeout, the tunnel is considered dead and will be closed.
+	TunnelReadTimeout = 90 * time.Second
 )
 
 // TunnelProvider provides access to tunnels by peer name.
@@ -88,6 +93,11 @@ type Forwarder struct {
 	localIPMu          sync.RWMutex
 	onDeadTunnel       func(peerName string) // Callback when tunnel write fails
 	deadTunnelDebounce sync.Map             // peerName → time.Time for debouncing
+	// Exit node fields
+	meshCIDR   *net.IPNet // Mesh network CIDR for split-tunnel detection
+	meshCIDRMu sync.RWMutex
+	exitNode   string // Name of exit node peer for external traffic
+	exitNodeMu sync.RWMutex
 }
 
 // NewForwarder creates a new packet forwarder.
@@ -173,6 +183,50 @@ func (f *Forwarder) triggerDeadTunnel(peerName string) {
 	go f.onDeadTunnel(peerName)
 }
 
+// SetMeshCIDR sets the mesh network CIDR for split-tunnel detection.
+// When an exit node is configured, traffic destined outside this CIDR
+// is routed through the exit node.
+func (f *Forwarder) SetMeshCIDR(cidr *net.IPNet) {
+	f.meshCIDRMu.Lock()
+	defer f.meshCIDRMu.Unlock()
+	f.meshCIDR = cidr
+}
+
+// SetExitNode configures the exit node for external traffic routing.
+// When set, traffic destined outside the mesh CIDR is routed through this peer.
+func (f *Forwarder) SetExitNode(peerName string) {
+	f.exitNodeMu.Lock()
+	defer f.exitNodeMu.Unlock()
+	f.exitNode = peerName
+}
+
+// ExitNode returns the currently configured exit node, or empty string if none.
+func (f *Forwarder) ExitNode() string {
+	f.exitNodeMu.RLock()
+	defer f.exitNodeMu.RUnlock()
+	return f.exitNode
+}
+
+// IsExternalTraffic checks if the destination IP is outside the mesh network.
+// Returns false if no mesh CIDR is configured.
+func (f *Forwarder) IsExternalTraffic(dstIP net.IP) bool {
+	f.meshCIDRMu.RLock()
+	meshCIDR := f.meshCIDR
+	f.meshCIDRMu.RUnlock()
+
+	if meshCIDR == nil {
+		log.Trace().Str("dst", dstIP.String()).Msg("meshCIDR is nil, treating as internal")
+		return false // No mesh CIDR configured, treat all as mesh traffic
+	}
+	isExternal := !meshCIDR.Contains(dstIP)
+	log.Trace().
+		Str("dst", dstIP.String()).
+		Str("meshCIDR", meshCIDR.String()).
+		Bool("isExternal", isExternal).
+		Msg("checked if external traffic")
+	return isExternal
+}
+
 // HandleRelayPacket processes a packet received from the persistent relay.
 // The packet should be a framed IP packet (with length prefix and protocol byte).
 func (f *Forwarder) HandleRelayPacket(sourcePeer string, data []byte) {
@@ -253,6 +307,30 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 		return nil
 	}
 
+	// Check for exit node routing (split tunnel)
+	// If exit node is configured and destination is external (outside mesh CIDR),
+	// route through the exit node instead of normal mesh routing
+	f.exitNodeMu.RLock()
+	exitNode := f.exitNode
+	f.exitNodeMu.RUnlock()
+
+	isExternal := f.IsExternalTraffic(info.DstIP)
+	if exitNode != "" && isExternal {
+		log.Debug().
+			Str("dst", info.DstIP.String()).
+			Str("exit_node", exitNode).
+			Msg("routing external traffic to exit node")
+		return f.forwardToExitNode(packet, info, exitNode)
+	}
+
+	// Debug: log when external traffic cannot be routed
+	if isExternal && exitNode == "" {
+		log.Debug().
+			Str("dst", info.DstIP.String()).
+			Bool("meshCIDR_set", f.meshCIDR != nil).
+			Msg("external traffic but no exit node configured")
+	}
+
 	// Look up the route
 	peerName, ok := f.router.Lookup(info.DstIP)
 	if !ok {
@@ -331,6 +409,68 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 		Bool("relay_connected", relayConnected).
 		Msg("dropped packet: no tunnel or relay")
 	return fmt.Errorf("%w for peer %s", ErrNoTunnel, peerName)
+}
+
+// forwardToExitNode forwards external traffic to the configured exit node.
+// It first tries to send via direct tunnel, then falls back to relay.
+func (f *Forwarder) forwardToExitNode(packet []byte, info *PacketInfo, exitNodeName string) error {
+	// Try direct tunnel first
+	tunnel, ok := f.tunnels.Get(exitNodeName)
+	if ok {
+		if err := f.writeFrame(tunnel, packet); err != nil {
+			atomic.AddUint64(&f.stats.Errors, 1)
+			log.Warn().Err(err).Str("exit_node", exitNodeName).Msg("exit tunnel write failed, falling back to relay")
+			// Fall through to relay fallback
+			f.triggerDeadTunnel(exitNodeName)
+		} else {
+			atomic.AddUint64(&f.stats.PacketsSent, 1)
+			atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
+			log.Debug().
+				Str("dst", info.DstIP.String()).
+				Str("exit_node", exitNodeName).
+				Int("len", len(packet)).
+				Msg("forwarded exit packet via tunnel")
+			return nil
+		}
+	} else {
+		log.Debug().Str("exit_node", exitNodeName).Msg("no direct tunnel to exit node, trying relay")
+	}
+
+	// No direct tunnel or tunnel failed - try relay
+	f.relayMu.RLock()
+	relay := f.relay
+	f.relayMu.RUnlock()
+
+	if relay != nil && relay.IsConnected() {
+		// Build framed packet for relay
+		frame := make([]byte, FrameHeaderSize+len(packet))
+		binary.BigEndian.PutUint16(frame[0:2], uint16(len(packet)+1))
+		frame[2] = 0x01 // IP packet
+		copy(frame[FrameHeaderSize:], packet)
+
+		if err := relay.SendTo(exitNodeName, frame); err != nil {
+			atomic.AddUint64(&f.stats.Errors, 1)
+			log.Warn().Err(err).Str("exit_node", exitNodeName).Msg("exit relay send failed")
+			return fmt.Errorf("relay to exit node %s: %w", exitNodeName, err)
+		}
+
+		atomic.AddUint64(&f.stats.PacketsSent, 1)
+		atomic.AddUint64(&f.stats.BytesSent, uint64(len(packet)))
+		log.Trace().
+			Str("src", info.SrcIP.String()).
+			Str("dst", info.DstIP.String()).
+			Str("exit_node", exitNodeName).
+			Int("len", len(packet)).
+			Msg("forwarded external packet via exit node relay")
+		return nil
+	}
+
+	atomic.AddUint64(&f.stats.DroppedNoTunnel, 1)
+	log.Debug().
+		Str("exit_node", exitNodeName).
+		Str("dst", info.DstIP.String()).
+		Msg("dropped packet: no path to exit node")
+	return fmt.Errorf("%w for exit node %s", ErrNoTunnel, exitNodeName)
 }
 
 // ReceivePacket writes a received packet to the TUN device.
@@ -429,6 +569,19 @@ func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) 
 			Int("len", packetLen).
 			Msg("forwarded packet to WG client")
 		return nil
+	}
+
+	// Check for exit node routing (split tunnel)
+	f.exitNodeMu.RLock()
+	exitNode := f.exitNode
+	f.exitNodeMu.RUnlock()
+
+	if exitNode != "" && f.IsExternalTraffic(info.DstIP) {
+		log.Debug().
+			Str("dst", info.DstIP.String()).
+			Str("exit_node", exitNode).
+			Msg("routing external traffic to exit node")
+		return f.forwardToExitNode(packet, info, exitNode)
 	}
 
 	// Look up the route
@@ -610,6 +763,13 @@ func (f *Forwarder) HandleTunnel(ctx context.Context, peerName string, tunnel io
 	buf := f.bufPool.Get()
 	defer f.bufPool.Put(buf)
 
+	// Create a channel for read results to enable timeout detection
+	type readResult struct {
+		n   int
+		err error
+	}
+	resultCh := make(chan readResult, 1)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -617,23 +777,41 @@ func (f *Forwarder) HandleTunnel(ctx context.Context, peerName string, tunnel io
 		default:
 		}
 
-		// Read frame from tunnel into pooled buffer
-		n, err := f.readFrame(tunnel, buf.Data())
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if err == io.EOF {
-				log.Info().Str("peer", peerName).Msg("tunnel closed")
-				return
-			}
-			log.Error().Err(err).Str("peer", peerName).Msg("tunnel read error")
-			return
-		}
+		// Start a goroutine to do the blocking read
+		go func() {
+			n, err := f.readFrame(tunnel, buf.Data())
+			resultCh <- readResult{n, err}
+		}()
 
-		// Write to TUN (use slice of buffer, no copy needed)
-		if err := f.ReceivePacket(buf.Data()[:n]); err != nil {
-			log.Debug().Err(err).Msg("receive packet failed")
+		// Wait for read result with timeout
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-time.After(TunnelReadTimeout):
+			// No data received within timeout - tunnel is stale
+			log.Warn().Str("peer", peerName).Dur("timeout", TunnelReadTimeout).Msg("tunnel read timeout, closing")
+			f.triggerDeadTunnel(peerName)
+			return
+
+		case result := <-resultCh:
+			if result.err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				if result.err == io.EOF {
+					log.Info().Str("peer", peerName).Msg("tunnel closed")
+					return
+				}
+				log.Error().Err(result.err).Str("peer", peerName).Msg("tunnel read error")
+				f.triggerDeadTunnel(peerName)
+				return
+			}
+
+			// Write to TUN (use slice of buffer, no copy needed)
+			if err := f.ReceivePacket(buf.Data()[:result.n]); err != nil {
+				log.Debug().Err(err).Msg("receive packet failed")
+			}
 		}
 	}
 }

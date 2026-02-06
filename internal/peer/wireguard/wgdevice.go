@@ -151,10 +151,18 @@ func (d *WGDevice) ReadPackets() {
 	}
 }
 
+// virtioNetHdrLen is the size of the virtio network header required by Linux TUN devices
+// when IFF_VNET_HDR is set. Packets written to the TUN need this much headroom.
+const virtioNetHdrLen = 10
+
 // WritePacket writes a packet to the WireGuard tun device (to be sent to a WG peer).
 func (d *WGDevice) WritePacket(packet []byte) error {
-	bufs := [][]byte{packet}
-	_, err := d.tunDevice.Write(bufs, 0)
+	// Linux TUN devices with IFF_VNET_HDR require headroom for the virtio header.
+	// We allocate a buffer with the header space and copy the packet after it.
+	buf := make([]byte, virtioNetHdrLen+len(packet))
+	copy(buf[virtioNetHdrLen:], packet)
+	bufs := [][]byte{buf}
+	_, err := d.tunDevice.Write(bufs, virtioNetHdrLen)
 	return err
 }
 

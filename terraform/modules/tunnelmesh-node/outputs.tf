@@ -57,3 +57,14 @@ output "peer_name" {
   description = "The mesh peer name"
   value       = var.peer_enabled || var.coordinator_enabled ? var.name : null
 }
+
+# Exit node outputs
+output "is_exit_node" {
+  description = "Whether this node allows exit traffic"
+  value       = var.allow_exit_traffic
+}
+
+output "exit_node" {
+  description = "Name of the exit node this peer routes through (if configured)"
+  value       = var.exit_node != "" ? var.exit_node : null
+}
