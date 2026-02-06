@@ -70,7 +70,9 @@ const state = {
     wgVisibleCount: ROWS_PER_PAGE,
     currentPeers: [],  // Store current peers data for pagination
     // Alerts state
-    alertsEnabled: false
+    alertsEnabled: false,
+    // Loki logs state
+    lokiEnabled: false
 };
 
 // Green gradient for chart lines (dim to bright based on outlier status)
@@ -1174,6 +1176,142 @@ function enableChartLinks() {
     });
 }
 
+// Loki logs
+async function checkLokiAvailable() {
+    try {
+        // Query Loki through Grafana's datasource proxy
+        const resp = await fetch('/grafana/api/datasources/proxy/uid/loki/loki/api/v1/labels');
+        if (resp.ok) {
+            state.lokiEnabled = true;
+            document.getElementById('logs-section').style.display = 'block';
+            updateLokiExploreLink();
+            fetchLogs();
+            setInterval(fetchLogs, POLL_INTERVAL_MS);
+        }
+    } catch (err) {
+        console.debug('Loki not available:', err.message);
+        state.lokiEnabled = false;
+    }
+}
+
+function updateLokiExploreLink() {
+    const logsLink = document.getElementById('logs-link');
+    if (!logsLink) return;
+
+    // Build Grafana explore URL with Loki query
+    const now = Date.now();
+    const from = now - 3600000; // 1 hour ago
+    const query = encodeURIComponent('{job="tunnelmesh"}');
+    const exploreUrl = `/grafana/explore?orgId=1&left={"datasource":"loki","queries":[{"refId":"A","expr":"${query}","queryType":"range"}],"range":{"from":"${from}","to":"${now}"}}`;
+    logsLink.href = exploreUrl;
+}
+
+async function fetchLogs() {
+    if (!state.lokiEnabled) return;
+
+    try {
+        const peerCount = Math.max(state.currentPeers.length, 1);
+        const limit = 25 * peerCount;
+        const now = Date.now() * 1000000; // nanoseconds
+        const oneHourAgo = now - (3600 * 1000000000);
+
+        const query = encodeURIComponent('{job="tunnelmesh"}');
+        const url = `/grafana/api/datasources/proxy/uid/loki/loki/api/v1/query_range?query=${query}&start=${oneHourAgo}&end=${now}&limit=${limit}&direction=backward`;
+
+        const resp = await fetch(url);
+        if (!resp.ok) return;
+
+        const data = await resp.json();
+        displayLogs(data);
+    } catch (err) {
+        console.error('Failed to fetch logs:', err);
+    }
+}
+
+function displayLogs(data) {
+    const logsContent = document.getElementById('logs-content');
+    const noLogs = document.getElementById('no-logs');
+    if (!logsContent) return;
+
+    const streams = data.data?.result || [];
+    const allEntries = [];
+
+    // Collect all log entries from all streams
+    for (const stream of streams) {
+        const labels = stream.stream || {};
+        for (const [timestamp, line] of (stream.values || [])) {
+            allEntries.push({
+                timestamp: parseInt(timestamp) / 1000000, // Convert to milliseconds
+                line,
+                labels
+            });
+        }
+    }
+
+    // Sort by timestamp descending (newest first)
+    allEntries.sort((a, b) => b.timestamp - a.timestamp);
+
+    if (allEntries.length === 0) {
+        logsContent.innerHTML = '';
+        if (noLogs) noLogs.style.display = 'block';
+        return;
+    }
+
+    if (noLogs) noLogs.style.display = 'none';
+
+    const html = allEntries.map(entry => {
+        const date = new Date(entry.timestamp);
+        const timeStr = date.toISOString().replace('T', ' ').substring(0, 23);
+
+        // Parse the log line - try JSON first
+        let level = 'info';
+        let message = entry.line;
+
+        try {
+            const parsed = JSON.parse(entry.line);
+            level = (parsed.level || 'info').toLowerCase();
+            message = formatLogJson(parsed);
+        } catch {
+            // Not JSON, check for level prefix
+            const levelMatch = entry.line.match(/^(DEBUG|INFO|WARN|ERROR)/i);
+            if (levelMatch) {
+                level = levelMatch[1].toLowerCase();
+                message = escapeHtml(entry.line.substring(levelMatch[0].length).trim());
+            } else {
+                message = escapeHtml(entry.line);
+            }
+        }
+
+        return `<div class="log-entry">
+            <span class="log-timestamp">${timeStr}</span>
+            <span class="log-level ${level}">${level.toUpperCase()}</span>
+            <span class="log-message">${message}</span>
+        </div>`;
+    }).join('');
+
+    logsContent.innerHTML = html;
+}
+
+function formatLogJson(obj) {
+    const parts = [];
+    for (const [key, value] of Object.entries(obj)) {
+        if (key === 'level' || key === 'ts' || key === 'time') continue;
+        const valueStr = typeof value === 'string'
+            ? `<span class="log-string">"${escapeHtml(value)}"</span>`
+            : `<span class="log-value">${escapeHtml(String(value))}</span>`;
+        parts.push(`<span class="log-key">${escapeHtml(key)}</span>:${valueStr}`);
+    }
+    return '{' + parts.join(',') + '}';
+}
+
+function escapeHtml(str) {
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
 async function fetchAlerts() {
     if (!state.alertsEnabled) return;
 
@@ -1493,6 +1631,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Check if Prometheus is available for alerts
     checkPrometheusAvailable();
+
+    // Check if Loki is available for logs
+    checkLokiAvailable();
 
     // Add client button handler
     if (dom.addWgClientBtn) {

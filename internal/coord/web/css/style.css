@@ -1152,3 +1152,114 @@ a.alert-tile:hover {
         font-size: 1.5rem;
     }
 }
+
+/* Logs section */
+#logs-section {
+    margin-bottom: 1.5rem;
+}
+
+.logs-card {
+    display: block;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: 6px;
+    text-decoration: none;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    cursor: pointer;
+}
+
+.logs-card:hover {
+    background: var(--color-card-hover-bg);
+    border-color: var(--color-card-hover-border);
+    border-width: 2px;
+}
+
+.logs-header {
+    padding: 1rem;
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border-primary);
+    border-radius: 6px 6px 0 0;
+}
+
+.logs-header h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    margin: 0;
+}
+
+.logs-container {
+    max-height: 300px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.75rem;
+    line-height: 1.4;
+}
+
+#logs-content {
+    padding: 0.5rem;
+}
+
+.log-entry {
+    padding: 0.25rem 0.5rem;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--color-border-secondary);
+}
+
+.log-entry:last-child {
+    border-bottom: none;
+}
+
+.log-entry:hover {
+    background: var(--color-bg-secondary);
+}
+
+.log-timestamp {
+    color: var(--color-text-secondary);
+    margin-right: 0.5rem;
+}
+
+.log-level {
+    display: inline-block;
+    min-width: 45px;
+    margin-right: 0.5rem;
+    font-weight: 600;
+}
+
+.log-level.debug {
+    color: var(--color-accent-green);
+}
+
+.log-level.info {
+    color: var(--color-accent-blue);
+}
+
+.log-level.warn {
+    color: var(--color-accent-orange);
+}
+
+.log-level.error {
+    color: var(--color-accent-red);
+}
+
+.log-message {
+    color: var(--color-text-primary);
+}
+
+.log-message .log-key {
+    color: var(--color-text-secondary);
+}
+
+.log-message .log-value {
+    color: var(--color-accent-blue);
+}
+
+.log-message .log-string {
+    color: var(--color-accent-green);
+}
+
+#no-logs {
+    padding: 2rem;
+    text-align: center;
+}

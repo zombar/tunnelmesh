@@ -127,6 +127,18 @@
             </div>
         </section>
 
+        <section id="logs-section" style="display: none;">
+            <a id="logs-link" class="logs-card" href="/grafana/explore" target="_blank">
+                <div class="logs-header">
+                    <h2>Peer Logs</h2>
+                </div>
+                <div class="logs-container" id="logs-container">
+                    <div id="logs-content"></div>
+                    <div id="no-logs" class="empty-state">No logs available</div>
+                </div>
+            </a>
+        </section>
+
         <section id="wireguard-section" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>WireGuard Peers</h2>
