@@ -220,7 +220,7 @@ func InitMetrics(peerName, meshIP, version string) *PeerMetrics {
 
 		// Latency metrics
 		CoordinatorRTTMs: promauto.With(Registry).NewGauge(prometheus.GaugeOpts{
-			Name:        "tunnelmesh_coordinator_rtt_ms",
+			Name:        "tunnelmesh_peer_coordinator_rtt_ms",
 			Help:        "Round-trip time to coordinator in milliseconds",
 			ConstLabels: constLabels,
 		}),

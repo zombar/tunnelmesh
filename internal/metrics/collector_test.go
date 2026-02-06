@@ -682,13 +682,13 @@ func TestCollector_LatencyStats(t *testing.T) {
 
 	var found bool
 	for _, mf := range mfs {
-		if mf.GetName() == "tunnelmesh_coordinator_rtt_ms" {
+		if mf.GetName() == "tunnelmesh_peer_coordinator_rtt_ms" {
 			found = true
 			val := mf.GetMetric()[0].GetGauge().GetValue()
-			assert.Equal(t, float64(42), val, "Expected coordinator_rtt_ms=42")
+			assert.Equal(t, float64(42), val, "Expected peer_coordinator_rtt_ms=42")
 		}
 	}
-	assert.True(t, found, "Expected to find tunnelmesh_coordinator_rtt_ms metric")
+	assert.True(t, found, "Expected to find tunnelmesh_peer_coordinator_rtt_ms metric")
 }
 
 func TestCollector_LatencyStats_ZeroRTT(t *testing.T) {
@@ -713,10 +713,10 @@ func TestCollector_LatencyStats_ZeroRTT(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, mf := range mfs {
-		if mf.GetName() == "tunnelmesh_coordinator_rtt_ms" {
+		if mf.GetName() == "tunnelmesh_peer_coordinator_rtt_ms" {
 			val := mf.GetMetric()[0].GetGauge().GetValue()
 			// Gauge defaults to 0, so this just confirms we don't set it when RTT is 0
-			assert.Equal(t, float64(0), val, "Expected coordinator_rtt_ms=0 when no RTT measured")
+			assert.Equal(t, float64(0), val, "Expected peer_coordinator_rtt_ms=0 when no RTT measured")
 		}
 	}
 }

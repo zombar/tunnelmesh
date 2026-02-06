@@ -1097,7 +1097,7 @@
       },
       "targets": [
         {
-          "expr": "tunnelmesh_coordinator_rtt_ms",
+          "expr": "tunnelmesh_peer_coordinator_rtt_ms",
           "legendFormat": "{{peer}}",
           "refId": "A"
         }
@@ -1189,7 +1189,7 @@
       },
       "targets": [
         {
-          "expr": "tunnelmesh_coord_peer_rtt_ms",
+          "expr": "tunnelmesh_coordinator_peer_rtt_ms",
           "legendFormat": "{{peer}}",
           "refId": "A"
         }

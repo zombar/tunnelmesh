@@ -19,10 +19,10 @@ var coordMetricsInstance *CoordMetrics
 // exposed alongside peer metrics when running in join_mesh mode.
 type CoordMetrics struct {
 	// Peer RTT metrics
-	PeerRTTMs *prometheus.GaugeVec // tunnelmesh_coord_peer_rtt_ms{peer}
+	PeerRTTMs *prometheus.GaugeVec // tunnelmesh_coordinator_peer_rtt_ms{peer}
 
 	// Peer-to-peer latency
-	PeerLatencyMs *prometheus.GaugeVec // tunnelmesh_coord_peer_latency_ms{source,target}
+	PeerLatencyMs *prometheus.GaugeVec // tunnelmesh_coordinator_peer_latency_ms{source,target}
 
 	// Connection gauges
 	OnlinePeers prometheus.Gauge
@@ -39,22 +39,22 @@ func InitCoordMetrics() *CoordMetrics {
 	coordMetricsOnce.Do(func() {
 		coordMetricsInstance = &CoordMetrics{
 			PeerRTTMs: promauto.NewGaugeVec(prometheus.GaugeOpts{
-				Name: "tunnelmesh_coord_peer_rtt_ms",
+				Name: "tunnelmesh_coordinator_peer_rtt_ms",
 				Help: "RTT reported by peer to coordinator in milliseconds",
 			}, []string{"peer"}),
 
 			PeerLatencyMs: promauto.NewGaugeVec(prometheus.GaugeOpts{
-				Name: "tunnelmesh_coord_peer_latency_ms",
+				Name: "tunnelmesh_coordinator_peer_latency_ms",
 				Help: "Latency between peers reported to coordinator in milliseconds",
 			}, []string{"source", "target"}),
 
 			OnlinePeers: promauto.NewGauge(prometheus.GaugeOpts{
-				Name: "tunnelmesh_coord_online_peers",
+				Name: "tunnelmesh_coordinator_online_peers",
 				Help: "Number of currently online peers",
 			}),
 
 			TotalHeartbeats: promauto.NewCounter(prometheus.CounterOpts{
-				Name: "tunnelmesh_coord_heartbeats_total",
+				Name: "tunnelmesh_coordinator_heartbeats_total",
 				Help: "Total heartbeats received by coordinator",
 			}),
 		}
