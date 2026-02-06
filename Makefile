@@ -61,16 +61,18 @@ fmt:
 	goimports -w .
 
 # Git hooks with lefthook
+LEFTHOOK=$(shell $(GO) env GOPATH)/bin/lefthook
+
 hooks-install:
-	@if ! command -v lefthook &> /dev/null; then \
+	@if ! command -v lefthook &> /dev/null && [ ! -f "$(LEFTHOOK)" ]; then \
 		echo "Installing lefthook..."; \
 		$(GO) install github.com/evilmartians/lefthook@latest; \
 	fi
-	lefthook install
+	$(LEFTHOOK) install
 	@echo "Git hooks installed"
 
 hooks:
-	lefthook run pre-commit
+	$(LEFTHOOK) run pre-commit
 
 # Development helpers
 dev-server: build
