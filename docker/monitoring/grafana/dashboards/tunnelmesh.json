@@ -670,8 +670,9 @@
           "mode": "single",
           "sort": "none"
         },
+        "xTickLabelMaxLength": 50,
         "xTickLabelRotation": 0,
-        "xTickLabelSpacing": 0
+        "xTickLabelSpacing": 100
       },
       "pluginVersion": "10.0.0",
       "targets": [
