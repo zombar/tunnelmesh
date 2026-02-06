@@ -54,6 +54,7 @@ class VisualizerNode {
         this.connectable = peer.connectable;
         this.behindNAT = peer.behind_nat;
         this.activeTunnels = peer.stats?.active_tunnels ?? 0;
+        this.coordinatorRTTMs = peer.coordinator_rtt_ms ?? 0;
         this.version = peer.version || '';
         this.nodeType = nodeType;
 
@@ -104,6 +105,15 @@ function formatBytesCompact(bytes) {
     if (bytes < 1024) return Math.round(bytes) + 'B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'K';
     if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'M';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
+}
+
+// Format latency compactly
+function formatLatencyCompact(ms) {
+    if (ms === 0 || ms === undefined || ms === null) return '-';
+    if (ms < 1) return '<1ms';
+    if (ms < 1000) return Math.round(ms) + 'ms';
+    return (ms / 1000).toFixed(1) + 's';
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
 }
 
@@ -371,6 +381,7 @@ class NodeVisualizer {
                 node.connectable = peer.connectable;
                 node.behindNAT = peer.behind_nat;
                 node.activeTunnels = peer.stats?.active_tunnels ?? 0;
+                node.coordinatorRTTMs = peer.coordinator_rtt_ms ?? 0;
                 node.version = peer.version || '';
                 node.nodeType = nodeType;
                 node.bytesSentRate = peer.bytes_sent_rate || 0;
@@ -980,8 +991,8 @@ class NodeVisualizer {
         ctx.fillStyle = COLORS.textDim;
         ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
         ctx.textAlign = 'left';
-        const tunnelText = `${node.activeTunnels}t`;
-        ctx.fillText(tunnelText, contentX, contentY + lineHeight + 6);
+        const latencyText = formatLatencyCompact(node.coordinatorRTTMs);
+        ctx.fillText(latencyText, contentX, contentY + lineHeight + 6);
 
         // Throughput (right side of line 2)
         const throughputText = `↑${formatBytesCompact(node.bytesSentRate)} ↓${formatBytesCompact(node.bytesReceivedRate)}`;

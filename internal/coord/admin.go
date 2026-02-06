@@ -63,6 +63,9 @@ type AdminPeerInfo struct {
 	Connections map[string]string `json:"connections,omitempty"`
 	// DNS aliases for this peer
 	Aliases []string `json:"aliases,omitempty"`
+	// Latency metrics
+	CoordinatorRTTMs int64            `json:"coordinator_rtt_ms,omitempty"`
+	PeerLatencies    map[string]int64 `json:"peer_latencies,omitempty"`
 }
 
 // handleAdminOverview returns the admin overview data.
@@ -159,6 +162,12 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		// Include connection types from stats (peer -> transport type)
 		if info.stats != nil && len(info.stats.Connections) > 0 {
 			peerInfo.Connections = info.stats.Connections
+		}
+
+		// Include latency metrics
+		peerInfo.CoordinatorRTTMs = info.coordinatorRTT
+		if len(info.peerLatencies) > 0 {
+			peerInfo.PeerLatencies = info.peerLatencies
 		}
 
 		// Only include location if the feature is enabled

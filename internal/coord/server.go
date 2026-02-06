@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
@@ -32,6 +33,10 @@ type peerInfo struct {
 	lastStatsTime  time.Time
 	prevStatsTime  time.Time
 	aliases        []string // DNS aliases registered by this peer
+
+	// Latency metrics reported by peer
+	coordinatorRTT int64            // Peer's reported RTT to coordinator (ms)
+	peerLatencies  map[string]int64 // Peer's reported latencies to other peers (ms)
 }
 
 // serverStats tracks server-level statistics.
@@ -68,6 +73,7 @@ type Server struct {
 	sseHub       *sseHub               // SSE hub for real-time dashboard updates
 	ipGeoCache   *IPGeoCache           // IP geolocation cache for location fallback
 	coordMeshIP  string                // Coordinator's mesh IP for "this.tunnelmesh" resolution
+	coordMetrics *CoordMetrics         // Prometheus metrics for coordinator
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -175,7 +181,8 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		serverStats: serverStats{
 			startTime: time.Now(),
 		},
-		sseHub: newSSEHub(),
+		sseHub:       newSSEHub(),
+		coordMetrics: InitCoordMetrics(),
 	}
 
 	// Initialize IP geolocation cache if locations feature is enabled
@@ -274,6 +281,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/debug/trace", s.handleTrace)
 	s.mux.HandleFunc("/ca.crt", s.handleCACert) // CA cert for mesh TLS (no auth)
+	s.mux.Handle("/metrics", promhttp.HandlerFor(CoordRegistry, promhttp.HandlerOpts{}))
 	s.mux.HandleFunc("/api/v1/register", s.withAuth(s.handleRegister))
 	s.mux.HandleFunc("/api/v1/peers", s.withAuth(s.handlePeers))
 	s.mux.HandleFunc("/api/v1/peers/", s.withAuth(s.handlePeerByName))

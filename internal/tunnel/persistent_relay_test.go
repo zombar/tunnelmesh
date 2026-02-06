@@ -2,6 +2,8 @@ package tunnel
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -497,4 +499,255 @@ func TestPersistentRelay_ReceiveRelayNotify_NoHandler(t *testing.T) {
 	// Give time for message to be processed
 	time.Sleep(100 * time.Millisecond)
 	// Test passes if no panic
+}
+
+// --- Tests for RTT measurement ---
+
+// mockRelayServerWithRTT extends mockRelayServer to echo timestamps in heartbeat acks.
+type mockRelayServerWithRTT struct {
+	*mockRelayServer
+}
+
+func newMockRelayServerWithRTT(t *testing.T) *mockRelayServerWithRTT {
+	m := &mockRelayServerWithRTT{
+		mockRelayServer: &mockRelayServer{
+			t:           t,
+			connections: make(map[string]*websocket.Conn),
+			received:    make(chan relayMessage, 10),
+			heartbeats:  make(chan heartbeatMessage, 10),
+		},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/relay/persistent", m.handlePersistentRelayWithRTT)
+	m.server = httptest.NewServer(mux)
+
+	return m
+}
+
+func (m *mockRelayServerWithRTT) handlePersistentRelayWithRTT(w http.ResponseWriter, r *http.Request) {
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	peerName := strings.TrimPrefix(auth, "Bearer ")
+
+	conn, err := testUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		m.t.Logf("upgrade failed: %v", err)
+		return
+	}
+
+	m.mu.Lock()
+	m.connections[peerName] = conn
+	m.mu.Unlock()
+
+	defer func() {
+		m.mu.Lock()
+		delete(m.connections, peerName)
+		m.mu.Unlock()
+		_ = conn.Close()
+	}()
+
+	for {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+
+		if len(data) < 1 {
+			continue
+		}
+
+		msgType := data[0]
+		switch msgType {
+		case MsgTypeHeartbeat:
+			// Parse stats to extract HeartbeatSentAt
+			if len(data) < 3 {
+				continue
+			}
+			statsLen := int(data[1])<<8 | int(data[2])
+			if len(data) < 3+statsLen {
+				continue
+			}
+			statsJSON := data[3 : 3+statsLen]
+
+			// Record heartbeat
+			m.heartbeats <- heartbeatMessage{
+				peerName: peerName,
+				data:     statsJSON,
+			}
+
+			// Parse to get HeartbeatSentAt
+			var stats proto.PeerStats
+			if err := json.Unmarshal(statsJSON, &stats); err == nil && stats.HeartbeatSentAt != 0 {
+				// Send extended ack with echoed timestamp: [MsgTypeHeartbeatAck][timestamp:8]
+				ack := make([]byte, 9)
+				ack[0] = MsgTypeHeartbeatAck
+				binary.BigEndian.PutUint64(ack[1:], uint64(stats.HeartbeatSentAt))
+				_ = conn.WriteMessage(websocket.BinaryMessage, ack)
+			} else {
+				// Fallback to simple ack (backwards compatibility)
+				_ = conn.WriteMessage(websocket.BinaryMessage, []byte{MsgTypeHeartbeatAck})
+			}
+
+		case MsgTypeSendPacket:
+			// Handle same as base mock
+			if len(data) < 3 {
+				continue
+			}
+			targetLen := int(data[1])
+			if len(data) < 2+targetLen {
+				continue
+			}
+			targetPeer := string(data[2 : 2+targetLen])
+			packetData := data[2+targetLen:]
+
+			m.received <- relayMessage{
+				source: peerName,
+				target: targetPeer,
+				data:   packetData,
+			}
+
+			m.mu.Lock()
+			targetConn, ok := m.connections[targetPeer]
+			m.mu.Unlock()
+
+			if ok {
+				msg := make([]byte, 2+len(peerName)+len(packetData))
+				msg[0] = MsgTypeRecvPacket
+				msg[1] = byte(len(peerName))
+				copy(msg[2:], peerName)
+				copy(msg[2+len(peerName):], packetData)
+				_ = targetConn.WriteMessage(websocket.BinaryMessage, msg)
+			}
+		}
+	}
+}
+
+func TestPersistentRelay_GetLastRTT_Initial(t *testing.T) {
+	relay := NewPersistentRelay("http://localhost:9999", "peer1")
+
+	// Before any heartbeat, RTT should be 0
+	rtt := relay.GetLastRTT()
+	assert.Equal(t, time.Duration(0), rtt)
+}
+
+func TestPersistentRelay_RTTCalculation(t *testing.T) {
+	server := newMockRelayServerWithRTT(t)
+	defer server.Close()
+
+	relay := NewPersistentRelay(server.URL(), "peer1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := relay.Connect(ctx)
+	require.NoError(t, err)
+	defer func() { _ = relay.Close() }()
+
+	// Before heartbeat, RTT should be 0
+	assert.Equal(t, time.Duration(0), relay.GetLastRTT())
+
+	// Send a heartbeat - the mock server will echo the timestamp
+	stats := &proto.PeerStats{
+		PacketsSent:   100,
+		ActiveTunnels: 2,
+	}
+	err = relay.SendHeartbeat(stats)
+	require.NoError(t, err)
+
+	// Wait for heartbeat to be received by server
+	select {
+	case <-server.heartbeats:
+		// Good
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for heartbeat")
+	}
+
+	// Wait a bit for the ack to be processed
+	time.Sleep(200 * time.Millisecond)
+
+	// RTT should now be non-zero and reasonable (< 1 second for local test)
+	rtt := relay.GetLastRTT()
+	assert.Greater(t, rtt, time.Duration(0), "RTT should be positive after heartbeat")
+	assert.Less(t, rtt, time.Second, "RTT should be less than 1 second for local test")
+}
+
+func TestPersistentRelay_RTTBackwardsCompatibility(t *testing.T) {
+	// Use the original mock server that sends 1-byte ack (no timestamp)
+	server := newMockRelayServer(t)
+	defer server.Close()
+
+	relay := NewPersistentRelay(server.URL(), "peer1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := relay.Connect(ctx)
+	require.NoError(t, err)
+	defer func() { _ = relay.Close() }()
+
+	// Send a heartbeat
+	stats := &proto.PeerStats{
+		PacketsSent:   50,
+		ActiveTunnels: 1,
+	}
+	err = relay.SendHeartbeat(stats)
+	require.NoError(t, err)
+
+	// Wait for heartbeat
+	select {
+	case <-server.heartbeats:
+		// Good
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for heartbeat")
+	}
+
+	// Wait for ack processing
+	time.Sleep(200 * time.Millisecond)
+
+	// RTT should still be 0 because old server sends 1-byte ack without timestamp
+	rtt := relay.GetLastRTT()
+	assert.Equal(t, time.Duration(0), rtt, "RTT should be 0 when server doesn't echo timestamp")
+}
+
+func TestPersistentRelay_HeartbeatIncludesSentAt(t *testing.T) {
+	server := newMockRelayServerWithRTT(t)
+	defer server.Close()
+
+	relay := NewPersistentRelay(server.URL(), "peer1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := relay.Connect(ctx)
+	require.NoError(t, err)
+	defer func() { _ = relay.Close() }()
+
+	// Send a heartbeat
+	stats := &proto.PeerStats{
+		PacketsSent:   100,
+		ActiveTunnels: 2,
+	}
+	beforeSend := time.Now().UnixNano()
+	err = relay.SendHeartbeat(stats)
+	require.NoError(t, err)
+	afterSend := time.Now().UnixNano()
+
+	// Receive heartbeat and check HeartbeatSentAt is set
+	select {
+	case msg := <-server.heartbeats:
+		var receivedStats proto.PeerStats
+		err := json.Unmarshal(msg.data, &receivedStats)
+		require.NoError(t, err)
+
+		// HeartbeatSentAt should be set and within the send window
+		assert.NotZero(t, receivedStats.HeartbeatSentAt, "HeartbeatSentAt should be set")
+		assert.GreaterOrEqual(t, receivedStats.HeartbeatSentAt, beforeSend, "HeartbeatSentAt should be >= beforeSend")
+		assert.LessOrEqual(t, receivedStats.HeartbeatSentAt, afterSend, "HeartbeatSentAt should be <= afterSend")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for heartbeat")
+	}
 }

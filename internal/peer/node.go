@@ -241,6 +241,15 @@ func (m *MeshNode) CollectStats() *proto.PeerStats {
 		stats.Errors = fwdStats.Errors
 	}
 
+	// Include coordinator RTT from last heartbeat ack
+	if m.PersistentRelay != nil {
+		if rtt := m.PersistentRelay.GetLastRTT(); rtt > 0 {
+			stats.CoordinatorRTTMs = rtt.Milliseconds()
+		}
+	}
+
+	// Note: PeerLatencies will be added once tunnel latency probing is implemented
+
 	return stats
 }
 

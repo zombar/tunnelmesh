@@ -480,3 +480,115 @@ func TestRegisterRequest_UsingExitNode(t *testing.T) {
 	assert.Equal(t, "client", decoded.Name)
 	assert.Equal(t, "exit-node", decoded.ExitNode)
 }
+
+// Latency Metrics Tests
+
+func TestPeerStats_LatencyFieldsJSON(t *testing.T) {
+	stats := PeerStats{
+		PacketsSent:      100,
+		ActiveTunnels:    3,
+		HeartbeatSentAt:  1707235200000000000, // Unix nano timestamp
+		CoordinatorRTTMs: 42,
+		PeerLatencies: map[string]int64{
+			"peer-a": 15,
+			"peer-b": 28,
+			"peer-c": 105,
+		},
+	}
+
+	// Test marshaling
+	data, err := json.Marshal(stats)
+	require.NoError(t, err)
+
+	// Test unmarshaling
+	var decoded PeerStats
+	err = json.Unmarshal(data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, stats.PacketsSent, decoded.PacketsSent)
+	assert.Equal(t, stats.ActiveTunnels, decoded.ActiveTunnels)
+	assert.Equal(t, stats.HeartbeatSentAt, decoded.HeartbeatSentAt)
+	assert.Equal(t, stats.CoordinatorRTTMs, decoded.CoordinatorRTTMs)
+	require.NotNil(t, decoded.PeerLatencies)
+	assert.Len(t, decoded.PeerLatencies, 3)
+	assert.Equal(t, int64(15), decoded.PeerLatencies["peer-a"])
+	assert.Equal(t, int64(28), decoded.PeerLatencies["peer-b"])
+	assert.Equal(t, int64(105), decoded.PeerLatencies["peer-c"])
+}
+
+func TestPeerStats_LatencyFieldsOmitEmpty(t *testing.T) {
+	// Latency fields should be omitted when zero/nil
+	stats := PeerStats{
+		PacketsSent:   50,
+		ActiveTunnels: 1,
+	}
+
+	data, err := json.Marshal(stats)
+	require.NoError(t, err)
+
+	var m map[string]interface{}
+	err = json.Unmarshal(data, &m)
+	require.NoError(t, err)
+
+	_, hasHeartbeatSentAt := m["heartbeat_sent_at"]
+	_, hasCoordinatorRTT := m["coordinator_rtt_ms"]
+	_, hasPeerLatencies := m["peer_latencies"]
+	assert.False(t, hasHeartbeatSentAt, "heartbeat_sent_at should be omitted when zero")
+	assert.False(t, hasCoordinatorRTT, "coordinator_rtt_ms should be omitted when zero")
+	assert.False(t, hasPeerLatencies, "peer_latencies should be omitted when nil")
+}
+
+func TestPeerStats_BackwardsCompatibility(t *testing.T) {
+	// Simulate JSON from old client without latency fields
+	oldClientJSON := `{
+		"packets_sent": 100,
+		"packets_received": 50,
+		"bytes_sent": 1000,
+		"bytes_received": 500,
+		"dropped_no_route": 0,
+		"dropped_no_tunnel": 0,
+		"errors": 0,
+		"active_tunnels": 2
+	}`
+
+	var stats PeerStats
+	err := json.Unmarshal([]byte(oldClientJSON), &stats)
+	require.NoError(t, err)
+
+	// Old fields should be populated
+	assert.Equal(t, uint64(100), stats.PacketsSent)
+	assert.Equal(t, uint64(50), stats.PacketsReceived)
+	assert.Equal(t, 2, stats.ActiveTunnels)
+
+	// New latency fields should be zero/nil
+	assert.Equal(t, int64(0), stats.HeartbeatSentAt)
+	assert.Equal(t, int64(0), stats.CoordinatorRTTMs)
+	assert.Nil(t, stats.PeerLatencies)
+}
+
+func TestPeerStats_LatencyWithConnections(t *testing.T) {
+	// Test that latency fields work alongside existing connections field
+	stats := PeerStats{
+		PacketsSent:      200,
+		ActiveTunnels:    2,
+		CoordinatorRTTMs: 35,
+		PeerLatencies: map[string]int64{
+			"peer-a": 20,
+		},
+		Connections: map[string]string{
+			"peer-a": "udp",
+		},
+	}
+
+	data, err := json.Marshal(stats)
+	require.NoError(t, err)
+
+	var decoded PeerStats
+	err = json.Unmarshal(data, &decoded)
+	require.NoError(t, err)
+
+	// Verify both maps are correctly serialized
+	assert.Equal(t, int64(35), decoded.CoordinatorRTTMs)
+	assert.Equal(t, int64(20), decoded.PeerLatencies["peer-a"])
+	assert.Equal(t, "udp", decoded.Connections["peer-a"])
+}

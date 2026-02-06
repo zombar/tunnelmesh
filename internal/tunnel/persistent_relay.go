@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -97,6 +99,11 @@ type PersistentRelay struct {
 
 	// WireGuard concentrator state
 	isWGConcentrator bool
+
+	// RTT measurement
+	latencyMu       sync.RWMutex
+	lastRTT         time.Duration
+	heartbeatSentAt int64 // atomic - Unix nano when last heartbeat sent
 }
 
 // writeRequest represents a pending write to the relay connection.
@@ -452,7 +459,18 @@ func (p *PersistentRelay) handleMessage(data []byte) {
 
 	case MsgTypeHeartbeatAck:
 		// Server acknowledged our heartbeat - connection is alive
-		log.Debug().Msg("persistent relay received heartbeat ack")
+		// Extended format: [MsgTypeHeartbeatAck][timestamp:8] echoes our sent timestamp
+		if len(data) >= 9 {
+			sentAt := int64(binary.BigEndian.Uint64(data[1:9]))
+			rtt := time.Duration(time.Now().UnixNano() - sentAt)
+			p.latencyMu.Lock()
+			p.lastRTT = rtt
+			p.latencyMu.Unlock()
+			log.Debug().Dur("rtt", rtt).Msg("measured coordinator RTT")
+		} else {
+			// Old server sent 1-byte ack without timestamp - no RTT measurement
+			log.Debug().Msg("persistent relay received heartbeat ack (no timestamp)")
+		}
 
 	case MsgTypeRelayNotify:
 		// Format: [MsgTypeRelayNotify][count:1][name_len:1][name]...
@@ -660,6 +678,11 @@ func (p *PersistentRelay) SendHeartbeat(stats *proto.PeerStats) error {
 		return ErrNotConnected
 	}
 
+	// Set HeartbeatSentAt for RTT measurement
+	sentAt := time.Now().UnixNano()
+	atomic.StoreInt64(&p.heartbeatSentAt, sentAt)
+	stats.HeartbeatSentAt = sentAt
+
 	// Encode stats as JSON
 	statsJSON, err := json.Marshal(stats)
 	if err != nil {
@@ -681,6 +704,15 @@ func (p *PersistentRelay) SendHeartbeat(stats *proto.PeerStats) error {
 	default:
 		return fmt.Errorf("relay write channel full")
 	}
+}
+
+// GetLastRTT returns the last measured round-trip time to the coordinator.
+// Returns 0 if no RTT has been measured yet (e.g., before first heartbeat ack
+// or when connected to an old coordinator that doesn't echo timestamps).
+func (p *PersistentRelay) GetLastRTT() time.Duration {
+	p.latencyMu.RLock()
+	defer p.latencyMu.RUnlock()
+	return p.lastRTT
 }
 
 // AnnounceWGConcentrator announces this peer as the WireGuard concentrator.

@@ -480,7 +480,7 @@ function renderPeersTable() {
             <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
             <td class="ports-cell">${formatPorts(peer)}</td>
             <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
-            <td>${peer.stats?.active_tunnels ?? '-'}</td>
+            <td>${formatLatency(peer.coordinator_rtt_ms)}</td>
             <td class="sparkline-cell">
                 ${createSparklineSVG(history.throughputTx, history.throughputRx)}
                 <div class="rate-values">
@@ -589,6 +589,13 @@ function formatBytes(bytes) {
 function formatRate(rate) {
     if (rate === 0 || rate === undefined || rate === null) return '0';
     return rate.toFixed(1);
+}
+
+function formatLatency(ms) {
+    if (ms === 0 || ms === undefined || ms === null) return '-';
+    if (ms < 1) return '<1 ms';
+    if (ms < 1000) return Math.round(ms) + ' ms';
+    return (ms / 1000).toFixed(1) + ' s';
 }
 
 // Chart functions
