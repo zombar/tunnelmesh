@@ -22,6 +22,10 @@
 
     /* Focus ring */
     --color-focus-ring: rgba(88, 166, 255, 0.3);
+
+    /* Card hover state (matches network topology nodes) */
+    --color-card-hover-bg: #2d333b;
+    --color-card-hover-border: #58a6ff;
 }
 
 * {
@@ -1034,6 +1038,17 @@ footer {
     gap: 1rem;
 }
 
+/* Reusable card hover effect (matches network topology nodes) */
+.card-hover {
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.card-hover:hover {
+    background: var(--color-card-hover-bg);
+    border-color: var(--color-card-hover-border);
+    border-width: 2px;
+}
+
 .alert-tile {
     flex: 1;
     position: relative;
@@ -1042,6 +1057,14 @@ footer {
     border: 1px solid var(--color-border-primary);
     background: var(--color-bg-secondary);
     min-height: 80px;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.alert-tile:hover {
+    background: var(--color-card-hover-bg);
+    border-color: var(--color-card-hover-border);
+    border-width: 2px;
 }
 
 .alert-sparkline {
