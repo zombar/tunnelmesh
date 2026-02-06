@@ -104,7 +104,6 @@ header h1 {
 .charts-card {
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
 }
 
 .charts-header {
@@ -114,7 +113,6 @@ header h1 {
     padding: 1rem;
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border-primary);
-    border-radius: 6px 6px 0 0;
     flex-wrap: wrap;
     gap: 1rem;
 }
@@ -187,7 +185,6 @@ header h1 {
 .map-card {
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
 }
 
 .map-header {
@@ -197,7 +194,6 @@ header h1 {
     padding: 1rem;
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border-primary);
-    border-radius: 6px 6px 0 0;
 }
 
 .map-header h2 {
@@ -210,7 +206,6 @@ header h1 {
 .map-container {
     height: 350px;
     background: #1a1a2e;
-    border-radius: 0 0 6px 6px;
 }
 
 /* Leaflet map background (for areas without tiles) */
@@ -291,7 +286,6 @@ header h1 {
 .visualizer-card {
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
 }
 
 .visualizer-header {
@@ -301,7 +295,6 @@ header h1 {
     padding: 1rem;
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border-primary);
-    border-radius: 6px 6px 0 0;
 }
 
 .visualizer-header h2 {
@@ -315,7 +308,6 @@ header h1 {
     position: relative;
     height: 420px;
     background: var(--color-bg-primary);
-    border-radius: 0 0 6px 6px;
 }
 
 #visualizer-canvas {
@@ -392,7 +384,6 @@ main {
 
 #peers-section, #dns-section, #wireguard-section {
     background: var(--color-bg-primary);
-    border-radius: 6px;
     padding: 0;
     border: 1px solid var(--color-border-primary);
     margin-bottom: 1.5rem;
@@ -406,7 +397,6 @@ main {
     color: var(--color-text-primary);
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border-primary);
-    border-radius: 6px 6px 0 0;
 }
 
 .section-header {
@@ -416,7 +406,6 @@ main {
     padding: 1rem;
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border-primary);
-    border-radius: 6px 6px 0 0;
 }
 
 .section-header h2 {
@@ -1064,7 +1053,6 @@ a.alert-tile {
     flex: 1;
     position: relative;
     overflow: hidden;
-    border-radius: 6px;
     border: 1px solid var(--color-border-primary);
     background: var(--color-bg-secondary);
     min-height: 80px;
@@ -1162,7 +1150,6 @@ a.alert-tile:hover {
     display: block;
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
     text-decoration: none;
     transition: background 0.15s ease, border-color 0.15s ease;
     cursor: pointer;
@@ -1178,7 +1165,6 @@ a.alert-tile:hover {
     padding: 1rem;
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border-primary);
-    border-radius: 6px 6px 0 0;
 }
 
 .logs-header h2 {
