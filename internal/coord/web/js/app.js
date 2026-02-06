@@ -1141,7 +1141,7 @@ async function fetchWGClients() {
 }
 
 // Prometheus alerts polling
-const MAX_ALERT_HISTORY = 30;
+const MAX_ALERT_HISTORY = 90; // 15 minutes at 10-second intervals
 
 async function checkPrometheusAvailable() {
     try {
