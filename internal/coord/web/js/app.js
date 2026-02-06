@@ -1145,15 +1145,20 @@ const MAX_ALERT_HISTORY = 30;
 
 async function checkPrometheusAvailable() {
     try {
-        const resp = await fetch('prometheus/api/v1/status/config', { method: 'HEAD' });
-        if (resp.ok || resp.status === 405) {
+        // Use alerts endpoint directly - if it works, Prometheus is available
+        const resp = await fetch('/prometheus/api/v1/alerts');
+        if (resp.ok) {
             state.alertsEnabled = true;
             document.getElementById('alerts-section').style.display = 'block';
-            fetchAlerts();
+            // Process the initial response
+            const data = await resp.json();
+            processAlertData(data);
+            // Start polling
             setInterval(fetchAlerts, POLL_INTERVAL_MS);
         }
     } catch (err) {
         // Prometheus not available
+        console.debug('Prometheus not available:', err.message);
         state.alertsEnabled = false;
     }
 }
@@ -1162,35 +1167,39 @@ async function fetchAlerts() {
     if (!state.alertsEnabled) return;
 
     try {
-        const resp = await fetch('prometheus/api/v1/alerts');
+        const resp = await fetch('/prometheus/api/v1/alerts');
         if (!resp.ok) return;
 
         const data = await resp.json();
-        const alerts = data.data?.alerts || [];
-
-        // Count alerts by severity
-        const counts = { warning: 0, critical: 0, page: 0 };
-        for (const alert of alerts) {
-            if (alert.state === 'firing') {
-                const severity = alert.labels?.severity || 'warning';
-                if (counts.hasOwnProperty(severity)) {
-                    counts[severity]++;
-                }
-            }
-        }
-
-        // Update history for sparklines
-        for (const severity of ['warning', 'critical', 'page']) {
-            state.alertHistory[severity].push(counts[severity]);
-            if (state.alertHistory[severity].length > MAX_ALERT_HISTORY) {
-                state.alertHistory[severity].shift();
-            }
-        }
-
-        updateAlertTiles(counts);
+        processAlertData(data);
     } catch (err) {
         console.error('Failed to fetch alerts:', err);
     }
+}
+
+function processAlertData(data) {
+    const alerts = data.data?.alerts || [];
+
+    // Count alerts by severity
+    const counts = { warning: 0, critical: 0, page: 0 };
+    for (const alert of alerts) {
+        if (alert.state === 'firing') {
+            const severity = alert.labels?.severity || 'warning';
+            if (counts.hasOwnProperty(severity)) {
+                counts[severity]++;
+            }
+        }
+    }
+
+    // Update history for sparklines
+    for (const severity of ['warning', 'critical', 'page']) {
+        state.alertHistory[severity].push(counts[severity]);
+        if (state.alertHistory[severity].length > MAX_ALERT_HISTORY) {
+            state.alertHistory[severity].shift();
+        }
+    }
+
+    updateAlertTiles(counts);
 }
 
 function updateAlertTiles(counts) {
