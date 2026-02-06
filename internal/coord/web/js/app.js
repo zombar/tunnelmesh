@@ -1077,17 +1077,17 @@ function formatAdvertisedIPs(peer) {
 
     if (peer.public_ips && peer.public_ips.length > 0) {
         const natBadge = peer.behind_nat ? '<span class="nat-badge">NAT</span>' : '';
-        parts.push(`<span class="ip-label">Public:</span> ${peer.public_ips.map(ip => `<code>${ip}</code>`).join(', ')}${natBadge}`);
+        parts.push(`<span class="ip-label">Public:</span> ${peer.public_ips.map(ip => `<code class="obscured-ip">${ip}</code>`).join(', ')}${natBadge}`);
     }
     if (peer.private_ips && peer.private_ips.length > 0) {
         parts.push(`<span class="ip-label">Private:</span> ${peer.private_ips.map(ip => `<code>${ip}</code>`).join(', ')}`);
     }
-    // Show IPv6 external address if available
+    // Show IPv6 external address if available (visually obscured)
     if (peer.udp_external_addr6) {
         // Extract just the IP from [ip]:port format
         const ipv6Match = peer.udp_external_addr6.match(/^\[([^\]]+)\]/);
         const ipv6 = ipv6Match ? ipv6Match[1] : peer.udp_external_addr6;
-        parts.push(`<span class="ip-label">IPv6:</span> <code>${ipv6}</code>`);
+        parts.push(`<span class="ip-label">IPv6:</span> <code class="obscured-ip">${ipv6}</code>`);
     }
 
     return parts.length > 0 ? parts.join('<br>') : '<span class="no-ips">-</span>';

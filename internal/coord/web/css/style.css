@@ -766,6 +766,38 @@ td {
     font-size: 0.85em;
 }
 
+/* Visually obscured public IPs - stipple overlay effect */
+.obscured-ip {
+    position: relative;
+    user-select: text; /* Still copyable */
+}
+
+.obscured-ip::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    pointer-events: none; /* Allow text selection through overlay */
+    /* Noise/stipple pattern using multiple radial gradients */
+    background-image:
+        radial-gradient(circle at 20% 30%, var(--color-bg-primary) 1px, transparent 1px),
+        radial-gradient(circle at 60% 70%, var(--color-bg-primary) 1px, transparent 1px),
+        radial-gradient(circle at 80% 20%, var(--color-bg-primary) 1px, transparent 1px),
+        radial-gradient(circle at 40% 80%, var(--color-bg-primary) 1px, transparent 1px),
+        radial-gradient(circle at 10% 60%, var(--color-bg-primary) 1px, transparent 1px),
+        radial-gradient(circle at 90% 50%, var(--color-bg-primary) 1px, transparent 1px);
+    background-size: 8px 8px, 10px 10px, 7px 9px, 9px 7px, 11px 11px, 6px 8px;
+    opacity: 0.7;
+}
+
+/* Reveal on hover for usability */
+.obscured-ip:hover::after {
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
 .empty-state {
     text-align: center;
     padding: 3rem;

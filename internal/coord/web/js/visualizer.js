@@ -979,7 +979,10 @@ class NodeVisualizer {
         ctx.fillStyle = COLORS.text;
         ctx.font = '12px monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(node.meshIP, contentX, contentY + 4);
+        // Show mesh IP with tunnel count in brackets
+        const tunnelCount = node.connections ? Object.keys(node.connections).length : 0;
+        const ipText = tunnelCount > 0 ? `${node.meshIP} (${tunnelCount})` : node.meshIP;
+        ctx.fillText(ipText, contentX, contentY + 4);
 
         if (node.version) {
             ctx.fillStyle = COLORS.textDim;
