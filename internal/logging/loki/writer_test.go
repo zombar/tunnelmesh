@@ -289,7 +289,7 @@ func TestWriter_Stop_FinalFlush(t *testing.T) {
 
 	w := NewWriter(Config{
 		URL:           server.URL,
-		BatchSize:     1000,           // High batch size
+		BatchSize:     1000,          // High batch size
 		FlushInterval: 1 * time.Hour, // Long interval
 	})
 

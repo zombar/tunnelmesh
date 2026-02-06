@@ -20,20 +20,20 @@ const (
 	pmpOpMapTCP        = 2
 	pmpOpReply         = 0x80
 
-	pmpResultSuccess                 = 0
-	pmpResultUnsupportedVersion      = 1
-	pmpResultNotAuthorized           = 2
-	pmpResultNetworkFailure          = 3
-	pmpResultOutOfResources          = 4
-	pmpResultUnsupportedOpcode       = 5
+	pmpResultSuccess            = 0
+	pmpResultUnsupportedVersion = 1
+	pmpResultNotAuthorized      = 2
+	pmpResultNetworkFailure     = 3
+	pmpResultOutOfResources     = 4
+	pmpResultUnsupportedOpcode  = 5
 )
 
 // NATMPClient implements the Client interface using NAT-PMP (RFC 6886).
 type NATMPClient struct {
-	gateway  net.IP
-	port     uint16
-	epoch    uint32
-	pubIP    net.IP
+	gateway net.IP
+	port    uint16
+	epoch   uint32
+	pubIP   net.IP
 }
 
 // NewNATMPClient creates a new NAT-PMP client.

@@ -15,16 +15,16 @@ import (
 // UDPEndpoint represents a peer's UDP endpoint information.
 // Stores both IPv4 and IPv6 addresses separately for dual-stack support.
 type UDPEndpoint struct {
-	PeerName       string    `json:"peer_name"`
-	LocalAddr      string    `json:"local_addr"`        // Local UDP address (e.g., "0.0.0.0:51820")
-	ExternalAddr   string    `json:"external_addr"`     // Primary external address (for backwards compat)
-	ExternalAddr4  string    `json:"external_addr4"`    // IPv4 external address
-	ExternalAddr6  string    `json:"external_addr6"`    // IPv6 external address
-	LastSeen       time.Time `json:"last_seen"`
-	LastSeen4      time.Time `json:"last_seen4"`        // Last time IPv4 was updated
-	LastSeen6      time.Time `json:"last_seen6"`        // Last time IPv6 was updated
-	NATType        string    `json:"nat_type,omitempty"` // "none", "full_cone", "restricted", "symmetric"
-	PCPMapped      bool      `json:"pcp_mapped"`        // Whether endpoint has PCP/NAT-PMP mapping
+	PeerName      string    `json:"peer_name"`
+	LocalAddr     string    `json:"local_addr"`     // Local UDP address (e.g., "0.0.0.0:51820")
+	ExternalAddr  string    `json:"external_addr"`  // Primary external address (for backwards compat)
+	ExternalAddr4 string    `json:"external_addr4"` // IPv4 external address
+	ExternalAddr6 string    `json:"external_addr6"` // IPv6 external address
+	LastSeen      time.Time `json:"last_seen"`
+	LastSeen4     time.Time `json:"last_seen4"`         // Last time IPv4 was updated
+	LastSeen6     time.Time `json:"last_seen6"`         // Last time IPv6 was updated
+	NATType       string    `json:"nat_type,omitempty"` // "none", "full_cone", "restricted", "symmetric"
+	PCPMapped     bool      `json:"pcp_mapped"`         // Whether endpoint has PCP/NAT-PMP mapping
 }
 
 // HolePunchRequest is sent by a peer to initiate hole-punching.
@@ -37,11 +37,11 @@ type HolePunchRequest struct {
 
 // HolePunchResponse contains the target peer's endpoint information.
 type HolePunchResponse struct {
-	OK           bool   `json:"ok"`
-	PeerAddr     string `json:"peer_addr,omitempty"`     // Target peer's external address
+	OK            bool   `json:"ok"`
+	PeerAddr      string `json:"peer_addr,omitempty"`       // Target peer's external address
 	PeerLocalAddr string `json:"peer_local_addr,omitempty"` // Target peer's local address
-	Ready        bool   `json:"ready"`                   // Whether peer has registered
-	Message      string `json:"message,omitempty"`
+	Ready         bool   `json:"ready"`                     // Whether peer has registered
+	Message       string `json:"message,omitempty"`
 }
 
 // RegisterUDPRequest is sent by a peer to register its UDP endpoint.
@@ -61,14 +61,14 @@ type RegisterUDPResponse struct {
 
 // holePunchManager manages UDP endpoint registration and hole-punch coordination.
 type holePunchManager struct {
-	endpoints         map[string]*UDPEndpoint // peer name -> endpoint
+	endpoints          map[string]*UDPEndpoint         // peer name -> endpoint
 	pendingHolePunches map[string]map[string]time.Time // target peer -> (requesting peer -> request time)
-	mu                sync.RWMutex
+	mu                 sync.RWMutex
 }
 
 func newHolePunchManager() *holePunchManager {
 	return &holePunchManager{
-		endpoints:         make(map[string]*UDPEndpoint),
+		endpoints:          make(map[string]*UDPEndpoint),
 		pendingHolePunches: make(map[string]map[string]time.Time),
 	}
 }

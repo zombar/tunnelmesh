@@ -266,7 +266,9 @@ func sscanf(s, format string, args ...interface{}) (int, error) {
 	return n, err
 }
 
-func __import_fmt() interface{ Sscanf(string, string, ...interface{}) (int, error) } {
+func __import_fmt() interface {
+	Sscanf(string, string, ...interface{}) (int, error)
+} {
 	return __fmtImport{}
 }
 

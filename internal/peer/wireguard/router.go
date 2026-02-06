@@ -119,9 +119,9 @@ func (r *Router) IsWGClientIP(ipStr string) bool {
 type RouteDecision int
 
 const (
-	RouteToMesh      RouteDecision = iota // Forward to mesh via tunnel/relay
-	RouteToWGClient                       // Forward to WireGuard client
-	RouteDrop                             // Drop the packet
+	RouteToMesh     RouteDecision = iota // Forward to mesh via tunnel/relay
+	RouteToWGClient                      // Forward to WireGuard client
+	RouteDrop                            // Drop the packet
 )
 
 // RoutePacket determines where an incoming packet should be routed.

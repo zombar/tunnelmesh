@@ -36,14 +36,14 @@ type PeerMetrics struct {
 	RelayConnected prometheus.Gauge // 1 if connected, 0 if not
 
 	// Exit node info
-	ExitNodeConfigured  prometheus.Gauge    // 1 if using exit node
-	ExitNodeInfo        *prometheus.GaugeVec // labels: exit_node
-	AllowsExitTraffic   prometheus.Gauge    // 1 if this node is an exit node
+	ExitNodeConfigured prometheus.Gauge     // 1 if using exit node
+	ExitNodeInfo       *prometheus.GaugeVec // labels: exit_node
+	AllowsExitTraffic  prometheus.Gauge     // 1 if this node is an exit node
 
 	// WireGuard concentrator metrics
-	WireGuardEnabled       prometheus.Gauge
-	WireGuardDeviceRunning prometheus.Gauge
-	WireGuardClientsTotal  prometheus.Gauge
+	WireGuardEnabled        prometheus.Gauge
+	WireGuardDeviceRunning  prometheus.Gauge
+	WireGuardClientsTotal   prometheus.Gauge
 	WireGuardClientsEnabled prometheus.Gauge
 
 	// Geolocation metrics

@@ -63,8 +63,8 @@ type ClientListResponse struct {
 
 // HandshakeReport is sent by the concentrator to report client handshakes.
 type HandshakeReport struct {
-	ClientID     string    `json:"client_id"`
-	HandshakeAt  time.Time `json:"handshake_at"`
-	BytesSent    uint64    `json:"bytes_sent"`
-	BytesRecvd   uint64    `json:"bytes_received"`
+	ClientID    string    `json:"client_id"`
+	HandshakeAt time.Time `json:"handshake_at"`
+	BytesSent   uint64    `json:"bytes_sent"`
+	BytesRecvd  uint64    `json:"bytes_received"`
 }

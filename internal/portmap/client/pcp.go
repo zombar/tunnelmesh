@@ -18,8 +18,8 @@ const (
 	pcpOpMap      = 1
 	pcpOpReply    = 0x80
 
-	pcpCodeOK            = 0
-	pcpCodeNotAuthorized = 2
+	pcpCodeOK              = 0
+	pcpCodeNotAuthorized   = 2
 	pcpCodeAddressMismatch = 12
 
 	pcpUDPProtocol = 17
@@ -28,11 +28,11 @@ const (
 
 // PCPClient implements the Client interface using PCP (RFC 6887).
 type PCPClient struct {
-	gateway    net.IP
-	localIP    net.IP
-	port       uint16
-	epoch      uint32
-	lastNonce  [12]byte
+	gateway   net.IP
+	localIP   net.IP
+	port      uint16
+	epoch     uint32
+	lastNonce [12]byte
 }
 
 // NewPCPClient creates a new PCP client.

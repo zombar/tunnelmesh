@@ -43,8 +43,8 @@ type serverStats struct {
 type Server struct {
 	cfg          *config.ServerConfig
 	mux          *http.ServeMux
-	adminMux     *http.ServeMux  // Separate mux for admin routes (used with join_mesh)
-	adminServer  *http.Server    // Separate admin HTTP server (HTTPS on mesh IP)
+	adminMux     *http.ServeMux // Separate mux for admin routes (used with join_mesh)
+	adminServer  *http.Server   // Separate admin HTTP server (HTTPS on mesh IP)
 	peers        map[string]*peerInfo
 	peersMu      sync.RWMutex
 	ipAlloc      *ipAllocator
@@ -65,11 +65,11 @@ type Server struct {
 // ipAllocator manages IP address allocation from the mesh CIDR.
 // It uses deterministic allocation based on peer name hash for consistency.
 type ipAllocator struct {
-	network   *net.IPNet
-	used      map[string]bool
-	peerToIP  map[string]string // peer name -> allocated IP (for consistency)
-	next      uint32
-	mu        sync.Mutex
+	network  *net.IPNet
+	used     map[string]bool
+	peerToIP map[string]string // peer name -> allocated IP (for consistency)
+	next     uint32
+	mu       sync.Mutex
 }
 
 func newIPAllocator(cidr string) (*ipAllocator, error) {

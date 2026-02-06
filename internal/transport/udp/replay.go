@@ -5,10 +5,10 @@ import "sync"
 // ReplayWindow implements a sliding window for replay attack protection.
 // Based on RFC 6479 (IPsec Anti-Replay Algorithm without Bit Shifting).
 type ReplayWindow struct {
-	mu       sync.Mutex
-	bitmap   []uint64   // Bitmap for tracking received packets
-	top      uint64     // Highest sequence number received
-	size     int        // Window size in bits
+	mu     sync.Mutex
+	bitmap []uint64 // Bitmap for tracking received packets
+	top    uint64   // Highest sequence number received
+	size   int      // Window size in bits
 }
 
 const (

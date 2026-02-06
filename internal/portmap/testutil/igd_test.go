@@ -217,9 +217,9 @@ func TestTestIGD_PCPMap(t *testing.T) {
 
 	// PCP MAP request
 	req := make([]byte, 60)
-	req[0] = 2  // version
-	req[1] = 1  // opcode = map
-	req[4] = 0  // lifetime 7200 (0x1C20)
+	req[0] = 2 // version
+	req[1] = 1 // opcode = map
+	req[4] = 0 // lifetime 7200 (0x1C20)
 	req[5] = 0
 	req[6] = 0x1C
 	req[7] = 0x20

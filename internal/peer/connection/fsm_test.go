@@ -397,8 +397,8 @@ func TestPeerConnection_ConcurrentTransitions(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-	_ = pc.StartConnecting("concurrent test")
-	_ = pc.Disconnect("concurrent test", nil)
+			_ = pc.StartConnecting("concurrent test")
+			_ = pc.Disconnect("concurrent test", nil)
 		}()
 	}
 

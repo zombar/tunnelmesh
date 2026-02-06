@@ -250,9 +250,9 @@ func TestIsDevBuild(t *testing.T) {
 		{"v1.0.0", false},
 		{"v0.0.1", false},
 		{"v1.0.0-beta", false},
-		{"77bf625", false},                    // commit hash is production, not dev
-		{"abc1234-dirty", true},               // dirty suffix = dev
-		{"77bf625-3-gc2cfefa-dirty", true},    // dirty suffix = dev
+		{"77bf625", false},                 // commit hash is production, not dev
+		{"abc1234-dirty", true},            // dirty suffix = dev
+		{"77bf625-3-gc2cfefa-dirty", true}, // dirty suffix = dev
 	}
 
 	for _, tt := range tests {

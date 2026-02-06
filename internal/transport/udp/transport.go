@@ -1343,9 +1343,9 @@ func (t *Transport) getPeerEndpoint(ctx context.Context, peerName string) (strin
 	}
 
 	var endpoint struct {
-		ExternalAddr  string `json:"external_addr"`   // Legacy field
-		ExternalAddr4 string `json:"external_addr4"`  // IPv4 address
-		ExternalAddr6 string `json:"external_addr6"`  // IPv6 address
+		ExternalAddr  string `json:"external_addr"`  // Legacy field
+		ExternalAddr4 string `json:"external_addr4"` // IPv4 address
+		ExternalAddr6 string `json:"external_addr6"` // IPv6 address
 		LocalAddr     string `json:"local_addr"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&endpoint); err != nil {

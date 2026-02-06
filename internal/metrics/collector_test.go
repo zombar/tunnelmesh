@@ -39,8 +39,8 @@ func (m *mockForwarder) ExitNode() string {
 }
 
 type mockTunnelMgr struct {
-	tunnels       []string
-	healthyCount  int
+	tunnels      []string
+	healthyCount int
 }
 
 func (m *mockTunnelMgr) List() []string {
@@ -118,14 +118,14 @@ func TestCollector_CollectForwarderStats(t *testing.T) {
 	}
 
 	expected := map[string]float64{
-		"tunnelmesh_packets_sent_total":       100,
-		"tunnelmesh_packets_received_total":   80,
-		"tunnelmesh_bytes_sent_total":         10000,
-		"tunnelmesh_bytes_received_total":     8000,
-		"tunnelmesh_dropped_no_route_total":   5,
-		"tunnelmesh_dropped_no_tunnel_total":  3,
-		"tunnelmesh_dropped_non_ipv4_total":   2,
-		"tunnelmesh_forwarder_errors_total":   1,
+		"tunnelmesh_packets_sent_total":      100,
+		"tunnelmesh_packets_received_total":  80,
+		"tunnelmesh_bytes_sent_total":        10000,
+		"tunnelmesh_bytes_received_total":    8000,
+		"tunnelmesh_dropped_no_route_total":  5,
+		"tunnelmesh_dropped_no_tunnel_total": 3,
+		"tunnelmesh_dropped_non_ipv4_total":  2,
+		"tunnelmesh_forwarder_errors_total":  1,
 	}
 
 	for _, mf := range mfs {

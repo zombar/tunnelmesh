@@ -346,8 +346,8 @@ def456abc123789012345678901234567890123456789012345678901234  tunnelmesh-darwin-
 	}
 
 	expected := map[string]string{
-		"tunnelmesh-linux-amd64":      "abc123def456789012345678901234567890123456789012345678901234",
-		"tunnelmesh-darwin-arm64":     "def456abc123789012345678901234567890123456789012345678901234",
+		"tunnelmesh-linux-amd64":       "abc123def456789012345678901234567890123456789012345678901234",
+		"tunnelmesh-darwin-arm64":      "def456abc123789012345678901234567890123456789012345678901234",
 		"tunnelmesh-windows-amd64.exe": "111222333444555666777888999000aaabbbcccdddeeefffggghhhiii",
 	}
 
@@ -382,9 +382,9 @@ func TestVerifyChecksum(t *testing.T) {
 	expectedHash := hex.EncodeToString(hash[:])
 
 	tests := []struct {
-		name     string
-		hash     string
-		wantErr  bool
+		name    string
+		hash    string
+		wantErr bool
 	}{
 		{
 			name:    "valid checksum",

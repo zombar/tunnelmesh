@@ -154,11 +154,11 @@ func (m *MultiClient) Close() error {
 
 // Common errors.
 var (
-	ErrNoActiveClient   = clientError("no active client")
-	ErrNoGatewayFound   = clientError("no gateway found")
-	ErrMappingFailed    = clientError("mapping request failed")
-	ErrUnsupported      = clientError("operation not supported")
-	ErrTimeout          = clientError("operation timed out")
+	ErrNoActiveClient     = clientError("no active client")
+	ErrNoGatewayFound     = clientError("no gateway found")
+	ErrMappingFailed      = clientError("mapping request failed")
+	ErrUnsupported        = clientError("operation not supported")
+	ErrTimeout            = clientError("operation timed out")
 	ErrNetworkUnreachable = clientError("network unreachable")
 )
 
