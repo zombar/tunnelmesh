@@ -90,7 +90,7 @@ module "node" {
   # Coordinator settings
   mesh_cidr         = var.mesh_cidr
   domain_suffix     = var.domain_suffix
-  locations_enabled = var.locations_enabled
+  locations_enabled = lookup(each.value, "locations_enabled", var.locations_enabled)
   external_api_port = var.external_api_port
 
   # Peer server URL (for non-coordinator nodes)
@@ -130,7 +130,7 @@ module "node" {
   auto_update_schedule = var.auto_update_schedule
 
   # Monitoring (coordinator only)
-  monitoring_enabled        = lookup(each.value, "coordinator", false) && var.monitoring_enabled
+  monitoring_enabled        = lookup(each.value, "coordinator", false) && lookup(each.value, "monitoring_enabled", var.monitoring_enabled)
   prometheus_retention_days = var.prometheus_retention_days
   loki_retention_days       = var.loki_retention_days
 

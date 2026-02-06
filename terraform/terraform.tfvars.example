@@ -45,6 +45,10 @@ admin_token = ""
 #
 # DNS alias options (custom hostnames pointing to this node):
 #   dns_aliases = ["webserver", "api.mynode"]  # Additional DNS names for this peer
+#
+# Coordinator-specific options (override global defaults):
+#   locations_enabled  = true/false  # Enable location tracking for this coordinator
+#   monitoring_enabled = true/false  # Enable monitoring stack on this coordinator
 
 # --- Example 1: All-in-One (recommended for getting started) ---
 # Single $4/month droplet with everything
