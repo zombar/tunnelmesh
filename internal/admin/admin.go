@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/metrics"
+	"github.com/tunnelmesh/tunnelmesh/internal/tracing"
 )
 
 // AdminServer provides an HTTPS admin interface for peer metrics and health checks.
@@ -23,6 +24,7 @@ func NewAdminServer() *AdminServer {
 	// Register handlers
 	mux.HandleFunc("/health", healthHandler)
 	mux.Handle("/metrics", metrics.Handler())
+	mux.HandleFunc("/debug/trace", traceHandler)
 
 	return &AdminServer{
 		mux: mux,
@@ -87,4 +89,21 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok\n"))
+}
+
+// traceHandler returns a runtime trace snapshot.
+// The output is compatible with `go tool trace`.
+func traceHandler(w http.ResponseWriter, r *http.Request) {
+	if !tracing.Enabled() {
+		http.Error(w, "tracing not enabled (use --enable-tracing flag)", http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=trace.out")
+
+	if err := tracing.Snapshot(w); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }

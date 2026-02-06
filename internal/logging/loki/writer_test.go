@@ -390,11 +390,9 @@ func TestWriter_ConcurrentWrites(t *testing.T) {
 	// Concurrent writes
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		wg.Go(func() {
 			_, _ = w.Write([]byte(`{"level":"info","msg":"concurrent message"}`))
-		}(i)
+		})
 	}
 	wg.Wait()
 

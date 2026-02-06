@@ -181,10 +181,8 @@ func (n *Negotiator) ProbeAll(ctx context.Context, peerInfo *PeerInfo) []ProbeRe
 			continue
 		}
 
-		wg.Add(1)
-		go func(idx int, tt TransportType, t Transport) {
-			defer wg.Done()
-
+		idx, tt, t := i, transportType, transport
+		wg.Go(func() {
 			// Acquire semaphore
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -202,7 +200,7 @@ func (n *Negotiator) ProbeAll(ctx context.Context, peerInfo *PeerInfo) []ProbeRe
 				Latency: latency,
 				Error:   err,
 			}
-		}(i, transportType, transport)
+		})
 	}
 
 	wg.Wait()

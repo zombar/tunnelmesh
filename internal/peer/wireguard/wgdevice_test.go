@@ -125,13 +125,11 @@ func TestWGDeviceSetPacketHandlerConcurrency(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func(n int) {
-			defer wg.Done()
+		wg.Go(func() {
 			dev.SetPacketHandler(func(packet []byte) {
 				// Different handler for each goroutine
 			})
-		}(i)
+		})
 	}
 	wg.Wait()
 

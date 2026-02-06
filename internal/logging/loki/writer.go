@@ -129,9 +129,7 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 
 // Start begins the background flush goroutine.
 func (w *Writer) Start() {
-	w.wg.Add(1)
-	go func() {
-		defer w.wg.Done()
+	w.wg.Go(func() {
 		ticker := time.NewTicker(w.flushInterval)
 		defer ticker.Stop()
 
@@ -145,7 +143,7 @@ func (w *Writer) Start() {
 				w.flush()
 			}
 		}
-	}()
+	})
 }
 
 // Stop gracefully shuts down the writer, flushing any remaining entries.

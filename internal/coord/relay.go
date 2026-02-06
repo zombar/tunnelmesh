@@ -860,19 +860,16 @@ func (s *Server) bridgeConnections(conn1, conn2 *websocket.Conn, peer1, peer2 st
 		Msg("relay bridge started")
 
 	var wg sync.WaitGroup
-	wg.Add(2)
 
 	// conn1 -> conn2
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		s.relayMessages(conn1, conn2)
-	}()
+	})
 
 	// conn2 -> conn1
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		s.relayMessages(conn2, conn1)
-	}()
+	})
 
 	wg.Wait()
 

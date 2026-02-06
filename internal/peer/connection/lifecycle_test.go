@@ -572,9 +572,8 @@ func TestLifecycleManager_ConcurrentAccess(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(n int) {
-			defer wg.Done()
+		n := i
+		wg.Go(func() {
 			peerName := "peer" + string(rune('a'+n%26))
 			meshIP := "10.0.0." + string(rune('1'+n%9))
 
@@ -586,7 +585,7 @@ func TestLifecycleManager_ConcurrentAccess(t *testing.T) {
 			lm.IsConnected(peerName)
 			lm.State(peerName)
 			_ = pc.Disconnect("test", nil)
-		}(i)
+		})
 	}
 
 	wg.Wait()
