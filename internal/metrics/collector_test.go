@@ -8,6 +8,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tunnelmesh/tunnelmesh/internal/peer"
 	"github.com/tunnelmesh/tunnelmesh/internal/peer/connection"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
@@ -645,6 +647,76 @@ func TestCollector_NilComponents(t *testing.T) {
 			if val != 0 {
 				t.Errorf("Expected wireguard_enabled=0 with WGEnabled=false, got %f", val)
 			}
+		}
+	}
+}
+
+// mockRTTProvider for testing latency collection.
+type mockRTTProvider struct {
+	rtt time.Duration
+}
+
+func (m *mockRTTProvider) GetLastRTT() time.Duration {
+	return m.rtt
+}
+
+func TestCollector_LatencyStats(t *testing.T) {
+	// Create fresh registry to avoid conflicts
+	Registry = prometheus.NewRegistry()
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	rttProvider := &mockRTTProvider{rtt: 42 * time.Millisecond}
+
+	c := NewCollector(m, CollectorConfig{
+		RTTProvider: rttProvider,
+	})
+
+	c.Collect()
+
+	// Verify latency metric
+	mfs, err := Registry.Gather()
+	require.NoError(t, err)
+
+	var found bool
+	for _, mf := range mfs {
+		if mf.GetName() == "tunnelmesh_coordinator_rtt_ms" {
+			found = true
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			assert.Equal(t, float64(42), val, "Expected coordinator_rtt_ms=42")
+		}
+	}
+	assert.True(t, found, "Expected to find tunnelmesh_coordinator_rtt_ms metric")
+}
+
+func TestCollector_LatencyStats_ZeroRTT(t *testing.T) {
+	// Create fresh registry to avoid conflicts
+	Registry = prometheus.NewRegistry()
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "10.99.0.1", "1.0.0")
+
+	// Zero RTT (no measurement yet)
+	rttProvider := &mockRTTProvider{rtt: 0}
+
+	c := NewCollector(m, CollectorConfig{
+		RTTProvider: rttProvider,
+	})
+
+	c.Collect()
+
+	// Verify metric is not set when RTT is zero
+	mfs, err := Registry.Gather()
+	require.NoError(t, err)
+
+	for _, mf := range mfs {
+		if mf.GetName() == "tunnelmesh_coordinator_rtt_ms" {
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			// Gauge defaults to 0, so this just confirms we don't set it when RTT is 0
+			assert.Equal(t, float64(0), val, "Expected coordinator_rtt_ms=0 when no RTT measured")
 		}
 	}
 }

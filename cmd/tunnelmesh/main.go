@@ -1282,11 +1282,13 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	}
 
 	// Create metrics collector
+	relayWrapper := metrics.NewRelayWrapper(node.PersistentRelay)
 	metricsCollector := metrics.NewCollector(peerMetrics, metrics.CollectorConfig{
 		Forwarder:      forwarder,
 		TunnelMgr:      node.TunnelMgr(),
 		Connections:    node.Connections,
-		Relay:          metrics.NewRelayWrapper(node.PersistentRelay),
+		Relay:          relayWrapper,
+		RTTProvider:    relayWrapper, // Also provides RTT for latency metrics
 		Identity:       identity,
 		AllowsExit:     cfg.AllowExitTraffic,
 		WGEnabled:      cfg.WireGuard.Enabled,
