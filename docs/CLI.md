@@ -5,12 +5,14 @@ Complete command-line reference for TunnelMesh with examples and walkthroughs.
 ## TL;DR - Most Common Commands
 
 ```bash
-# First time setup (no config needed)
-tunnelmesh init                                        # Generate SSH keys
-sudo tunnelmesh trust-ca -s https://coord.example.com  # Trust mesh CA for HTTPS
+# Generate SSH keys (first time only)
+tunnelmesh init
 
 # Run a coordination server
 sudo tunnelmesh serve -c server.yaml
+
+# Trust the mesh CA for HTTPS access (run on peers, requires running coordinator)
+sudo tunnelmesh trust-ca -s https://coord.example.com
 
 # Join the mesh as a peer
 sudo tunnelmesh join -c peer.yaml
