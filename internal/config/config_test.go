@@ -51,6 +51,7 @@ auth_token: "secret"
 	// Check defaults
 	assert.Equal(t, "172.30.0.0/16", cfg.MeshCIDR)
 	assert.Equal(t, ".tunnelmesh", cfg.DomainSuffix)
+	assert.Equal(t, []uint16{9443}, cfg.ServicePorts, "ServicePorts should default to [9443] for metrics")
 }
 
 func TestLoadServerConfig_FileNotFound(t *testing.T) {

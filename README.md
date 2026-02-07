@@ -173,6 +173,10 @@ locations: false
 admin:
   enabled: true
 
+# Service ports to auto-allow on peers (pushed through packet filter)
+# Default: [9443] for Prometheus metrics scraping
+service_ports: [9443]
+
 # Optional: server participates as a mesh node
 join_mesh:
   name: "server-node"

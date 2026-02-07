@@ -1137,14 +1137,16 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 
 		node.PersistentRelay.SetFilterRuleAddHandler(func(rule tunnel.FilterRuleWire) {
 			filter.AddTemporaryRule(routing.FilterRule{
-				Port:     rule.Port,
-				Protocol: routing.ProtocolFromString(rule.Protocol),
-				Action:   routing.ParseFilterAction(rule.Action),
+				Port:       rule.Port,
+				Protocol:   routing.ProtocolFromString(rule.Protocol),
+				Action:     routing.ParseFilterAction(rule.Action),
+				SourcePeer: rule.SourcePeer,
 			})
 			log.Info().
 				Uint16("port", rule.Port).
 				Str("protocol", rule.Protocol).
 				Str("action", rule.Action).
+				Str("source_peer", rule.SourcePeer).
 				Msg("added temporary filter rule from coordinator")
 		})
 

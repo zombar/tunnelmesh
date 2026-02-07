@@ -63,7 +63,8 @@ type ServerConfig struct {
 	Admin             AdminConfig           `yaml:"admin"`
 	Relay             RelayConfig           `yaml:"relay"`
 	WireGuard         WireGuardServerConfig `yaml:"wireguard"`
-	Filter            FilterConfig          `yaml:"filter"` // Global packet filter rules for all peers
+	Filter            FilterConfig          `yaml:"filter"`        // Global packet filter rules for all peers
+	ServicePorts      []uint16              `yaml:"service_ports"` // Service ports to auto-allow on peers (default: [9443] for metrics)
 	JoinMesh          *PeerConfig           `yaml:"join_mesh,omitempty"`
 }
 
@@ -234,6 +235,9 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 	}
 	if cfg.HeartbeatInterval == "" {
 		cfg.HeartbeatInterval = "10s"
+	}
+	if len(cfg.ServicePorts) == 0 {
+		cfg.ServicePorts = []uint16{9443} // Default: metrics port for Prometheus scraping
 	}
 
 	// WireGuard defaults are applied on demand (endpoint must be set manually)
