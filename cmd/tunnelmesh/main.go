@@ -1154,13 +1154,15 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 
 		// Service ports handler - auto-allow coordinator service ports
 		node.PersistentRelay.SetServicePortsHandler(func(ports []uint16) {
-			for _, port := range ports {
-				filter.AddTemporaryRule(routing.FilterRule{
+			rules := make([]routing.FilterRule, len(ports))
+			for i, port := range ports {
+				rules[i] = routing.FilterRule{
 					Port:     port,
 					Protocol: routing.ProtoTCP, // Service ports are typically TCP
 					Action:   routing.ActionAllow,
-				})
+				}
 			}
+			filter.SetServiceRules(rules)
 			log.Info().Int("ports", len(ports)).Msg("added coordinator service ports to filter")
 		})
 	}

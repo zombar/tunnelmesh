@@ -12,7 +12,7 @@ TunnelMesh includes a built-in packet filter that controls which ports are acces
 
 ## Rule Hierarchy
 
-Rules come from three sources, merged with "most restrictive wins" logic:
+Rules come from four sources, merged with "most restrictive wins" logic:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -28,12 +28,29 @@ Rules come from three sources, merged with "most restrictive wins" logic:
 ┌─────────────────────────────────────────────────────────┐
 │  CLI / Admin Panel (temporary)                          │
 │  → Runtime overrides, persist until reboot              │
+└─────────────────────┬───────────────────────────────────┘
+                      ↓
+┌─────────────────────────────────────────────────────────┐
+│  Service Ports (auto-generated)                         │
+│  → Auto-allow access to coordinator services            │
+│  → Read-only, cannot be modified                        │
 └─────────────────────────────────────────────────────────┘
 
 Conflict Resolution: MOST RESTRICTIVE WINS
   - If any source says "deny", the port is denied
   - "allow" only wins if no source denies
 ```
+
+## Service Ports
+
+When a peer connects to the coordinator, the coordinator automatically pushes service port rules. These allow access to essential coordinator services:
+
+- **Admin dashboard port** (typically 443 or 8080)
+
+Service rules:
+- Are shown in the admin UI with source "service"
+- Cannot be removed via CLI or admin panel
+- Persist as long as the peer is connected
 
 ## Configuration
 

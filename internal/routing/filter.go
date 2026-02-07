@@ -18,6 +18,9 @@ const (
 	SourcePeerConfig
 	// SourceTemporary indicates rules added via CLI or admin panel.
 	SourceTemporary
+	// SourceService indicates auto-generated rules for coordinator services.
+	// These cannot be removed via CLI or admin panel.
+	SourceService
 )
 
 // String returns a human-readable name for the rule source.
@@ -29,6 +32,8 @@ func (s RuleSource) String() string {
 		return "config"
 	case SourceTemporary:
 		return "temporary"
+	case SourceService:
+		return "service"
 	default:
 		return "unknown"
 	}
@@ -117,7 +122,7 @@ type FilterRuleWithSource struct {
 type ruleMap map[FilterRuleKey]FilterRule
 
 // PacketFilter filters incoming packets based on port and protocol.
-// Uses a 3-layer rule system with copy-on-write for lock-free reads.
+// Uses a 4-layer rule system with copy-on-write for lock-free reads.
 //
 // Rule precedence (most restrictive wins):
 //   - If ANY layer denies, the packet is denied
@@ -127,6 +132,7 @@ type PacketFilter struct {
 	coordinator atomic.Pointer[ruleMap] // Global rules from server config
 	peerConfig  atomic.Pointer[ruleMap] // Local rules from peer.yaml
 	temporary   atomic.Pointer[ruleMap] // CLI / admin panel (runtime)
+	service     atomic.Pointer[ruleMap] // Auto-generated for coordinator services (read-only)
 
 	mu          sync.Mutex // Serializes writes
 	defaultDeny bool       // If true, deny by default (whitelist mode)
@@ -142,9 +148,11 @@ func NewPacketFilter(defaultDeny bool) *PacketFilter {
 	emptyCoord := make(ruleMap)
 	emptyConfig := make(ruleMap)
 	emptyTemp := make(ruleMap)
+	emptyService := make(ruleMap)
 	f.coordinator.Store(&emptyCoord)
 	f.peerConfig.Store(&emptyConfig)
 	f.temporary.Store(&emptyTemp)
+	f.service.Store(&emptyService)
 	return f
 }
 
@@ -180,6 +188,21 @@ func (f *PacketFilter) SetPeerConfigRules(rules []FilterRule) {
 		newMap[key] = r
 	}
 	f.peerConfig.Store(&newMap)
+}
+
+// SetServiceRules replaces all service-level rules.
+// These are auto-generated rules for coordinator services (admin, metrics, etc).
+// Service rules cannot be removed via CLI or admin panel.
+func (f *PacketFilter) SetServiceRules(rules []FilterRule) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	newMap := make(ruleMap, len(rules))
+	for _, r := range rules {
+		key := FilterRuleKey{Port: r.Port, Protocol: r.Protocol, SourcePeer: r.SourcePeer}
+		newMap[key] = r
+	}
+	f.service.Store(&newMap)
 }
 
 // AddTemporaryRule adds a rule to the temporary layer.
@@ -246,8 +269,9 @@ func (f *PacketFilter) effectiveAction(port uint16, protocol uint8, sourcePeer s
 	coordRules := f.coordinator.Load()
 	configRules := f.peerConfig.Load()
 	tempRules := f.temporary.Load()
+	serviceRules := f.service.Load()
 
-	layers := []*ruleMap{coordRules, configRules, tempRules}
+	layers := []*ruleMap{coordRules, configRules, tempRules, serviceRules}
 
 	// Check if ANY layer denies - deny wins (most restrictive)
 	// Check peer-specific rules first, then global rules
@@ -272,7 +296,7 @@ func (f *PacketFilter) effectiveAction(port uint16, protocol uint8, sourcePeer s
 
 	// Check if any layer explicitly allows (reverse order for precedence display)
 	// Check peer-specific allow first, then global allow
-	for _, layer := range []*ruleMap{tempRules, configRules, coordRules} {
+	for _, layer := range []*ruleMap{serviceRules, tempRules, configRules, coordRules} {
 		// First check peer-specific allow
 		if sourcePeer != "" {
 			peerKey := FilterRuleKey{Port: port, Protocol: protocol, SourcePeer: sourcePeer}
@@ -357,11 +381,12 @@ func (f *PacketFilter) CheckPacketFromPeer(packet []byte, sourcePeer string) Fil
 }
 
 // ListRules returns all rules from all layers with their sources.
-// Rules are returned in order: coordinator, peer config, temporary.
+// Rules are returned in order: coordinator, peer config, temporary, service.
 func (f *PacketFilter) ListRules() []FilterRuleWithSource {
 	coordRules := f.coordinator.Load()
 	configRules := f.peerConfig.Load()
 	tempRules := f.temporary.Load()
+	serviceRules := f.service.Load()
 
 	var result []FilterRuleWithSource
 
@@ -378,6 +403,11 @@ func (f *PacketFilter) ListRules() []FilterRuleWithSource {
 	for _, r := range *tempRules {
 		if !r.IsExpired() {
 			result = append(result, FilterRuleWithSource{Rule: r, Source: SourceTemporary})
+		}
+	}
+	for _, r := range *serviceRules {
+		if !r.IsExpired() {
+			result = append(result, FilterRuleWithSource{Rule: r, Source: SourceService})
 		}
 	}
 
@@ -402,6 +432,11 @@ func (f *PacketFilter) RuleCount() int {
 			count++
 		}
 	}
+	for _, r := range *f.service.Load() {
+		if !r.IsExpired() {
+			count++
+		}
+	}
 	return count
 }
 
@@ -410,6 +445,7 @@ type RuleCounts struct {
 	Coordinator int
 	PeerConfig  int
 	Temporary   int
+	Service     int
 }
 
 // RuleCountBySource returns the rule counts broken down by source.
@@ -429,6 +465,11 @@ func (f *PacketFilter) RuleCountBySource() RuleCounts {
 	for _, r := range *f.temporary.Load() {
 		if !r.IsExpired() {
 			counts.Temporary++
+		}
+	}
+	for _, r := range *f.service.Load() {
+		if !r.IsExpired() {
+			counts.Service++
 		}
 	}
 

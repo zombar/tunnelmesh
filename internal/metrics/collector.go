@@ -327,6 +327,7 @@ func (c *Collector) collectFilterStats() {
 		c.metrics.FilterRulesTotal.WithLabelValues("coordinator").Set(0)
 		c.metrics.FilterRulesTotal.WithLabelValues("config").Set(0)
 		c.metrics.FilterRulesTotal.WithLabelValues("temporary").Set(0)
+		c.metrics.FilterRulesTotal.WithLabelValues("service").Set(0)
 		return
 	}
 
@@ -342,6 +343,7 @@ func (c *Collector) collectFilterStats() {
 	c.metrics.FilterRulesTotal.WithLabelValues("coordinator").Set(float64(counts.Coordinator))
 	c.metrics.FilterRulesTotal.WithLabelValues("config").Set(float64(counts.PeerConfig))
 	c.metrics.FilterRulesTotal.WithLabelValues("temporary").Set(float64(counts.Temporary))
+	c.metrics.FilterRulesTotal.WithLabelValues("service").Set(float64(counts.Service))
 }
 
 // Run starts periodic metric collection.
