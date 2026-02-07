@@ -829,7 +829,22 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 
 	if cfg.Server == "" || cfg.AuthToken == "" || cfg.Name == "" {
-		return fmt.Errorf("server, token, and name are required")
+		// Provide helpful error messages based on what's missing
+		var missing []string
+		if cfg.Server == "" {
+			missing = append(missing, "server (--server)")
+		}
+		if cfg.AuthToken == "" {
+			missing = append(missing, "token (--token)")
+		}
+		if cfg.Name == "" {
+			missing = append(missing, "name (--name)")
+		}
+		hint := ""
+		if cfg.Server != "" && cfg.AuthToken == "" {
+			hint = "\nHint: context may need updating - run with --server and --token flags to save credentials"
+		}
+		return fmt.Errorf("missing required: %s%s", strings.Join(missing, ", "), hint)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
