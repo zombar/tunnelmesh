@@ -2101,11 +2101,11 @@ function updateUsersTable(users) {
     noUsers.style.display = 'none';
     tbody.innerHTML = users.map(u => `
         <tr>
-            <td><code>${TM.format.escapeHtml(u.id)}</code></td>
-            <td>${TM.format.escapeHtml(u.name || '-')}</td>
+            <td><code>${escapeHtml(u.id)}</code></td>
+            <td>${escapeHtml(u.name || '-')}</td>
             <td><span class="status-badge ${u.is_service ? 'service' : 'user'}">${u.is_service ? 'Service' : 'User'}</span></td>
-            <td>${u.groups ? u.groups.map(g => `<span class="group-badge">${TM.format.escapeHtml(g)}</span>`).join(' ') : '-'}</td>
-            <td>${u.last_seen ? formatRelativeTime(u.last_seen) : '-'}</td>
+            <td>${u.groups ? u.groups.map(g => `<span class="group-badge">${escapeHtml(g)}</span>`).join(' ') : '-'}</td>
+            <td>${u.last_seen ? formatLastSeen(u.last_seen) : '-'}</td>
             <td><span class="status-badge ${u.expired ? 'expired' : 'active'}">${u.expired ? 'Expired' : 'Active'}</span></td>
         </tr>
     `).join('');
@@ -2136,12 +2136,12 @@ function updateGroupsTable(groups) {
     noGroups.style.display = 'none';
     tbody.innerHTML = groups.map(g => `
         <tr>
-            <td><strong>${TM.format.escapeHtml(g.name)}</strong></td>
-            <td>${TM.format.escapeHtml(g.description || '-')}</td>
+            <td><strong>${escapeHtml(g.name)}</strong></td>
+            <td>${escapeHtml(g.description || '-')}</td>
             <td>${g.members ? g.members.length : 0}</td>
             <td>${g.builtin ? 'Yes' : 'No'}</td>
             <td>
-                ${!g.builtin ? `<button class="btn-small btn-danger" onclick="deleteGroup('${TM.format.escapeHtml(g.name)}')">Delete</button>` : '-'}
+                ${!g.builtin ? `<button class="btn-small btn-danger" onclick="deleteGroup('${escapeHtml(g.name)}')">Delete</button>` : '-'}
             </td>
         </tr>
     `).join('');
@@ -2153,17 +2153,19 @@ function openGroupModal() {
     document.getElementById('group-description').value = '';
     document.getElementById('group-name').focus();
 }
+window.openGroupModal = openGroupModal;
 
 function closeGroupModal() {
     document.getElementById('group-modal').style.display = 'none';
 }
+window.closeGroupModal = closeGroupModal;
 
 async function createGroup() {
     const name = document.getElementById('group-name').value.trim();
     const description = document.getElementById('group-description').value.trim();
 
     if (!name) {
-        TM.toast('Group name is required', 'error');
+        showToast('Group name is required', 'error');
         return;
     }
 
@@ -2175,17 +2177,18 @@ async function createGroup() {
         });
 
         if (resp.ok) {
-            TM.toast(`Group "${name}" created`, 'success');
+            showToast(`Group "${name}" created`, 'success');
             closeGroupModal();
             fetchGroups();
         } else {
             const data = await resp.json();
-            TM.toast(data.error || 'Failed to create group', 'error');
+            showToast(data.error || 'Failed to create group', 'error');
         }
     } catch (err) {
-        TM.toast('Failed to create group: ' + err.message, 'error');
+        showToast('Failed to create group: ' + err.message, 'error');
     }
 }
+window.createGroup = createGroup;
 
 async function deleteGroup(name) {
     if (!confirm(`Delete group "${name}"?`)) return;
@@ -2193,16 +2196,17 @@ async function deleteGroup(name) {
     try {
         const resp = await fetch(`api/groups/${name}`, { method: 'DELETE' });
         if (resp.ok) {
-            TM.toast(`Group "${name}" deleted`, 'success');
+            showToast(`Group "${name}" deleted`, 'success');
             fetchGroups();
         } else {
             const data = await resp.json();
-            TM.toast(data.error || 'Failed to delete group', 'error');
+            showToast(data.error || 'Failed to delete group', 'error');
         }
     } catch (err) {
-        TM.toast('Failed to delete group: ' + err.message, 'error');
+        showToast('Failed to delete group: ' + err.message, 'error');
     }
 }
+window.deleteGroup = deleteGroup;
 
 async function fetchShares() {
     try {
@@ -2229,12 +2233,12 @@ function updateSharesTable(shares) {
     noShares.style.display = 'none';
     tbody.innerHTML = shares.map(s => `
         <tr>
-            <td><strong>${TM.format.escapeHtml(s.name)}</strong></td>
-            <td>${TM.format.escapeHtml(s.description || '-')}</td>
-            <td>${TM.format.escapeHtml(s.owner)}</td>
+            <td><strong>${escapeHtml(s.name)}</strong></td>
+            <td>${escapeHtml(s.description || '-')}</td>
+            <td>${escapeHtml(s.owner)}</td>
             <td>${s.created_at ? new Date(s.created_at).toLocaleDateString() : '-'}</td>
             <td>
-                <button class="btn-small btn-danger" onclick="deleteShare('${TM.format.escapeHtml(s.name)}')">Delete</button>
+                <button class="btn-small btn-danger" onclick="deleteShare('${escapeHtml(s.name)}')">Delete</button>
             </td>
         </tr>
     `).join('');
@@ -2246,17 +2250,19 @@ function openShareModal() {
     document.getElementById('share-description').value = '';
     document.getElementById('share-name').focus();
 }
+window.openShareModal = openShareModal;
 
 function closeShareModal() {
     document.getElementById('share-modal').style.display = 'none';
 }
+window.closeShareModal = closeShareModal;
 
 async function createShare() {
     const name = document.getElementById('share-name').value.trim();
     const description = document.getElementById('share-description').value.trim();
 
     if (!name) {
-        TM.toast('Share name is required', 'error');
+        showToast('Share name is required', 'error');
         return;
     }
 
@@ -2268,17 +2274,18 @@ async function createShare() {
         });
 
         if (resp.ok) {
-            TM.toast(`File share "${name}" created`, 'success');
+            showToast(`File share "${name}" created`, 'success');
             closeShareModal();
             fetchShares();
         } else {
             const data = await resp.json();
-            TM.toast(data.error || 'Failed to create share', 'error');
+            showToast(data.error || 'Failed to create share', 'error');
         }
     } catch (err) {
-        TM.toast('Failed to create share: ' + err.message, 'error');
+        showToast('Failed to create share: ' + err.message, 'error');
     }
 }
+window.createShare = createShare;
 
 async function deleteShare(name) {
     if (!confirm(`Delete file share "${name}"? All files will be deleted.`)) return;
@@ -2286,16 +2293,17 @@ async function deleteShare(name) {
     try {
         const resp = await fetch(`api/shares/${name}`, { method: 'DELETE' });
         if (resp.ok) {
-            TM.toast(`File share "${name}" deleted`, 'success');
+            showToast(`File share "${name}" deleted`, 'success');
             fetchShares();
         } else {
             const data = await resp.json();
-            TM.toast(data.error || 'Failed to delete share', 'error');
+            showToast(data.error || 'Failed to delete share', 'error');
         }
     } catch (err) {
-        TM.toast('Failed to delete share: ' + err.message, 'error');
+        showToast('Failed to delete share: ' + err.message, 'error');
     }
 }
+window.deleteShare = deleteShare;
 
 // Cleanup on page unload to prevent memory leaks
 window.addEventListener('beforeunload', cleanup);
