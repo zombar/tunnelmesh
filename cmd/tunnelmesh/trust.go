@@ -323,3 +323,51 @@ func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
+
+// IsCATrusted checks if a TunnelMesh CA certificate is installed in the system trust store.
+// It returns true if a CA with "TunnelMesh" in the name is found.
+func IsCATrusted(serverURL string) (bool, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		return isCATrustedMacOS()
+	case "linux":
+		return isCATrustedLinux()
+	case "windows":
+		return isCATrustedWindows()
+	default:
+		return false, fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+	}
+}
+
+func isCATrustedMacOS() (bool, error) {
+	// Use security find-certificate to search for TunnelMesh CA
+	cmd := exec.Command("security", "find-certificate", "-c", "TunnelMesh CA", "/Library/Keychains/System.keychain")
+	output, err := cmd.Output()
+	if err != nil {
+		// Command fails if cert not found
+		return false, nil
+	}
+	// If we got output, the cert exists
+	return len(output) > 0, nil
+}
+
+func isCATrustedLinux() (bool, error) {
+	// Check if cert file exists in any known location
+	for _, distro := range linuxDistros {
+		if fileExists(distro.certPath) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func isCATrustedWindows() (bool, error) {
+	// Use certutil to check if TunnelMesh CA exists in root store
+	cmd := exec.Command("certutil", "-store", "ROOT")
+	output, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("certutil failed: %w", err)
+	}
+	// Check if output contains TunnelMesh CA
+	return strings.Contains(string(output), "TunnelMesh CA"), nil
+}

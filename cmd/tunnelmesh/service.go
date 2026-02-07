@@ -6,13 +6,14 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"github.com/tunnelmesh/tunnelmesh/internal/context"
 	"github.com/tunnelmesh/tunnelmesh/internal/svc"
 )
 
 var (
 	serviceMode       string
 	serviceConfigPath string
-	serviceName       string
+	serviceContext    string
 	serviceUser       string
 	forceInstall      bool
 	logsFollow        bool
@@ -30,11 +31,18 @@ Supported platforms:
   - macOS (launchd)
   - Windows (Service Control Manager)
 
-Examples:
-  # Install as peer service
-  sudo tunnelmesh service install --mode join --config /etc/tunnelmesh/peer.yaml
+Service names are derived from context names:
+  - Context "work" → Service "tunnelmesh-work"
+  - Context "default" → Service "tunnelmesh"
 
-  # Install as server service
+Examples:
+  # Install service for active context
+  sudo tunnelmesh service install
+
+  # Install service for a specific context
+  sudo tunnelmesh service install --context work
+
+  # Install as server service (uses --mode serve)
   sudo tunnelmesh service install --mode serve --config /etc/tunnelmesh/server.yaml
 
   # Control the service
@@ -52,12 +60,15 @@ Examples:
 		Short: "Install TunnelMesh as a system service",
 		Long: `Install TunnelMesh as a system service that starts automatically at boot.
 
+For peer mode (--mode join), uses the active context or --context flag to determine
+the service name and configuration. For server mode (--mode serve), requires --config.
+
 Requires administrator/root privileges.`,
 		RunE: runServiceInstall,
 	}
 	installCmd.Flags().StringVar(&serviceMode, "mode", "join", "Service mode: 'serve' (coordination server) or 'join' (peer)")
-	installCmd.Flags().StringVarP(&serviceConfigPath, "config", "c", "", "Path to configuration file")
-	installCmd.Flags().StringVarP(&serviceName, "name", "n", "", "Service name (default: tunnelmesh or tunnelmesh-server)")
+	installCmd.Flags().StringVarP(&serviceConfigPath, "config", "c", "", "Path to configuration file (required for serve mode)")
+	installCmd.Flags().StringVar(&serviceContext, "context", "", "Context name (uses active context if not specified)")
 	installCmd.Flags().StringVar(&serviceUser, "user", "", "Run service as this user (Linux/macOS only)")
 	installCmd.Flags().BoolVarP(&forceInstall, "force", "f", false, "Force reinstall if service already exists")
 	serviceCmd.AddCommand(installCmd)
@@ -68,7 +79,7 @@ Requires administrator/root privileges.`,
 		Short: "Remove the TunnelMesh system service",
 		RunE:  runServiceUninstall,
 	}
-	uninstallCmd.Flags().StringVarP(&serviceName, "name", "n", "", "Service name")
+	uninstallCmd.Flags().StringVar(&serviceContext, "context", "", "Context name (uses active context if not specified)")
 	serviceCmd.AddCommand(uninstallCmd)
 
 	// Start subcommand
@@ -77,7 +88,7 @@ Requires administrator/root privileges.`,
 		Short: "Start the TunnelMesh service",
 		RunE:  runServiceStart,
 	}
-	startCmd.Flags().StringVarP(&serviceName, "name", "n", "", "Service name")
+	startCmd.Flags().StringVar(&serviceContext, "context", "", "Context name (uses active context if not specified)")
 	serviceCmd.AddCommand(startCmd)
 
 	// Stop subcommand
@@ -86,7 +97,7 @@ Requires administrator/root privileges.`,
 		Short: "Stop the TunnelMesh service",
 		RunE:  runServiceStop,
 	}
-	stopCmd.Flags().StringVarP(&serviceName, "name", "n", "", "Service name")
+	stopCmd.Flags().StringVar(&serviceContext, "context", "", "Context name (uses active context if not specified)")
 	serviceCmd.AddCommand(stopCmd)
 
 	// Restart subcommand
@@ -95,7 +106,7 @@ Requires administrator/root privileges.`,
 		Short: "Restart the TunnelMesh service",
 		RunE:  runServiceRestart,
 	}
-	restartCmd.Flags().StringVarP(&serviceName, "name", "n", "", "Service name")
+	restartCmd.Flags().StringVar(&serviceContext, "context", "", "Context name (uses active context if not specified)")
 	serviceCmd.AddCommand(restartCmd)
 
 	// Status subcommand
@@ -104,7 +115,7 @@ Requires administrator/root privileges.`,
 		Short: "Show TunnelMesh service status",
 		RunE:  runServiceStatus,
 	}
-	statusCmd.Flags().StringVarP(&serviceName, "name", "n", "", "Service name")
+	statusCmd.Flags().StringVar(&serviceContext, "context", "", "Context name (uses active context if not specified)")
 	serviceCmd.AddCommand(statusCmd)
 
 	// Logs subcommand
@@ -119,7 +130,7 @@ Log locations by platform:
   - Windows: Event Viewer > Application log`,
 		RunE: runServiceLogs,
 	}
-	logsCmd.Flags().StringVarP(&serviceName, "name", "n", "", "Service name")
+	logsCmd.Flags().StringVar(&serviceContext, "context", "", "Context name (uses active context if not specified)")
 	logsCmd.Flags().BoolVarP(&logsFollow, "follow", "f", false, "Follow log output (like tail -f)")
 	logsCmd.Flags().IntVar(&logsLines, "lines", 50, "Number of log lines to show")
 	serviceCmd.AddCommand(logsCmd)
@@ -127,33 +138,68 @@ Log locations by platform:
 	return serviceCmd
 }
 
-func getServiceConfig() *svc.ServiceConfig {
-	// Determine mode - default to "join" for most service operations
+// getServiceConfig returns service configuration based on context or explicit flags.
+// For serve mode, it uses traditional config-based approach.
+// For join mode, it uses the context system.
+func getServiceConfig() (*svc.ServiceConfig, error) {
 	mode := serviceMode
 	if mode == "" {
 		mode = "join"
 	}
 
-	// Determine service name
-	name := serviceName
-	if name == "" {
-		name = svc.DefaultServiceName(mode)
+	// For serve mode, use traditional config-based approach
+	if mode == "serve" {
+		configPath := serviceConfigPath
+		if configPath == "" {
+			configPath = svc.DefaultConfigPath(mode)
+		}
+		return &svc.ServiceConfig{
+			Name:        svc.DefaultServiceName(mode),
+			DisplayName: svc.DefaultDisplayName(mode),
+			Description: svc.DefaultDescription(mode),
+			Mode:        mode,
+			ConfigPath:  configPath,
+			UserName:    serviceUser,
+		}, nil
 	}
 
-	// Determine config path
+	// For join mode, use context system
+	store, err := context.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load context store: %w", err)
+	}
+
+	// Use specified context or active context
+	ctxName := serviceContext
+	if ctxName == "" {
+		ctxName = store.Active
+	}
+	if ctxName == "" {
+		return nil, fmt.Errorf("no active context; use --context or 'tunnelmesh context use <name>'")
+	}
+
+	ctx := store.Get(ctxName)
+	if ctx == nil {
+		return nil, fmt.Errorf("context %q not found", ctxName)
+	}
+
+	// If explicit config path provided, use it
 	configPath := serviceConfigPath
 	if configPath == "" {
-		configPath = svc.DefaultConfigPath(mode)
+		configPath = ctx.ConfigPath
+	}
+	if configPath == "" {
+		return nil, fmt.Errorf("context %q has no config path; use --config to specify one", ctxName)
 	}
 
 	return &svc.ServiceConfig{
-		Name:        name,
-		DisplayName: svc.DefaultDisplayName(mode),
-		Description: svc.DefaultDescription(mode),
+		Name:        ctx.ServiceName(),
+		DisplayName: fmt.Sprintf("TunnelMesh Peer (%s)", ctxName),
+		Description: fmt.Sprintf("TunnelMesh P2P mesh network peer daemon for context %q", ctxName),
 		Mode:        mode,
 		ConfigPath:  configPath,
 		UserName:    serviceUser,
-	}
+	}, nil
 }
 
 func runServiceInstall(cmd *cobra.Command, args []string) error {
@@ -169,7 +215,10 @@ func runServiceInstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid mode %q: must be 'serve' or 'join'", serviceMode)
 	}
 
-	cfg := getServiceConfig()
+	cfg, err := getServiceConfig()
+	if err != nil {
+		return err
+	}
 
 	// Validate config file exists
 	if _, err := os.Stat(cfg.ConfigPath); os.IsNotExist(err) {
@@ -188,9 +237,9 @@ func runServiceInstall(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Service %q installed successfully.\n", cfg.Name)
 	fmt.Printf("\nTo start the service:\n")
-	fmt.Printf("  tunnelmesh service start --name %s\n", cfg.Name)
+	fmt.Printf("  tunnelmesh service start\n")
 	fmt.Printf("\nTo view logs:\n")
-	fmt.Printf("  tunnelmesh service logs --name %s\n", cfg.Name)
+	fmt.Printf("  tunnelmesh service logs\n")
 
 	return nil
 }
@@ -202,7 +251,10 @@ func runServiceUninstall(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cfg := getServiceConfig()
+	cfg, err := getServiceConfig()
+	if err != nil {
+		return err
+	}
 
 	log.Info().Str("name", cfg.Name).Msg("uninstalling service")
 
@@ -221,7 +273,10 @@ func runServiceStart(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cfg := getServiceConfig()
+	cfg, err := getServiceConfig()
+	if err != nil {
+		return err
+	}
 
 	log.Info().Str("name", cfg.Name).Msg("starting service")
 
@@ -240,7 +295,10 @@ func runServiceStop(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cfg := getServiceConfig()
+	cfg, err := getServiceConfig()
+	if err != nil {
+		return err
+	}
 
 	log.Info().Str("name", cfg.Name).Msg("stopping service")
 
@@ -259,7 +317,10 @@ func runServiceRestart(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cfg := getServiceConfig()
+	cfg, err := getServiceConfig()
+	if err != nil {
+		return err
+	}
 
 	log.Info().Str("name", cfg.Name).Msg("restarting service")
 
@@ -274,7 +335,10 @@ func runServiceRestart(cmd *cobra.Command, args []string) error {
 func runServiceStatus(cmd *cobra.Command, args []string) error {
 	setupLogging()
 
-	cfg := getServiceConfig()
+	cfg, err := getServiceConfig()
+	if err != nil {
+		return err
+	}
 
 	status, err := svc.Status(cfg)
 	if err != nil {
@@ -294,7 +358,10 @@ func runServiceStatus(cmd *cobra.Command, args []string) error {
 }
 
 func runServiceLogs(cmd *cobra.Command, args []string) error {
-	cfg := getServiceConfig()
+	cfg, err := getServiceConfig()
+	if err != nil {
+		return err
+	}
 
 	return svc.ViewLogs(svc.LogOptions{
 		ServiceName: cfg.Name,
