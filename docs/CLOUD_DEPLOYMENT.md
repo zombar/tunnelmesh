@@ -376,7 +376,6 @@ Each developer runs:
 sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
   --token team-token \
-  --name $(whoami) \
   --context team
 ```
 

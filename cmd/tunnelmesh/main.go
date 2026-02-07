@@ -811,6 +811,9 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 	if nodeName != "" {
 		cfg.Name = nodeName
+	} else if cfg.Name == "" {
+		// Default to hostname if no name specified
+		cfg.Name, _ = os.Hostname()
 	}
 	if wireguardEnabled {
 		cfg.WireGuard.Enabled = true

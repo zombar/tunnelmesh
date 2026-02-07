@@ -178,7 +178,7 @@ tunnelmesh join [flags]
 |------|-------|-------------|
 | `--server` | `-s` | Coordination server URL |
 | `--token` | `-t` | Authentication token |
-| `--name` | `-n` | Peer name |
+| `--name` | `-n` | Peer name (defaults to hostname) |
 | `--context` | | Save/update as named context |
 | `--wireguard` | | Enable WireGuard concentrator |
 | `--exit-node` | | Route internet through specified peer |
@@ -193,8 +193,7 @@ tunnelmesh join [flags]
 ```bash
 sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
-  --token your-secure-token \
-  --name my-laptop
+  --token your-secure-token
 ```
 
 **Example - Join with exit node:**
@@ -202,7 +201,6 @@ sudo tunnelmesh join \
 sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
   --token your-secure-token \
-  --name my-laptop \
   --exit-node server-node
 ```
 
@@ -211,7 +209,6 @@ sudo tunnelmesh join \
 sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
   --token your-secure-token \
-  --name exit-singapore \
   --allow-exit-traffic \
   --latitude 1.3521 \
   --longitude 103.8198 \
@@ -223,7 +220,6 @@ sudo tunnelmesh join \
 sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
   --token your-secure-token \
-  --name wg-gateway \
   --wireguard
 ```
 
@@ -815,7 +811,6 @@ tunnelmesh init
 sudo tunnelmesh join \
   --server http://coordinator-ip:8080 \
   --token team-secret-token \
-  --name $(whoami) \
   --context team
 ```
 
