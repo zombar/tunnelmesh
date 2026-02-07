@@ -30,8 +30,8 @@ For a complete step-by-step setup guide including downloading releases, configur
 
 ## Documentation
 
-- **[Getting Started Guide](docs/GETTING_STARTED.md)** - Installation, configuration, and running as a service
-- **[CLI Reference](docs/CLI.md)** - Complete command-line reference with examples and walkthroughs
+- **[Getting Started Guide](docs/GETTING_STARTED.md)** - Installation, configuration, contexts, and running as a service
+- **[CLI Reference](docs/CLI.md)** - Complete command-line reference including context management
 - **[WireGuard Integration](docs/WIREGUARD.md)** - Connect mobile devices and standard WireGuard clients
 - **[Docker Deployment](docs/DOCKER.md)** - Running TunnelMesh in containers for development and production
 - **[Cloud Deployment](docs/CLOUD_DEPLOYMENT.md)** - Deploy to DigitalOcean with Terraform (includes deployment scenarios)
@@ -342,19 +342,23 @@ tunnelmesh init                    # Generate SSH keys
 # Run coordination server
 sudo tunnelmesh serve -c server.yaml
 
-# Join mesh as peer
-sudo tunnelmesh join -c peer.yaml
+# Join mesh as peer (saves config as named context)
+sudo tunnelmesh join -c peer.yaml --context home
 
-# Check status
+# Manage contexts
+tunnelmesh context list            # List all contexts
+tunnelmesh context use work        # Switch active context
+
+# Check status (uses active context)
 tunnelmesh status                  # Connection status
 tunnelmesh peers                   # List all peers
 
-# System service
-sudo tunnelmesh service install --mode join -c /etc/tunnelmesh/peer.yaml
+# System service (uses active context)
+sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
 
-Most commands require a config file (`-c` flag) or one in a default location (`~/.tunnelmesh/config.yaml`, `peer.yaml`).
+**Context management:** After joining with `--context`, TunnelMesh remembers your configuration. Commands automatically use the active context—no need to specify `-c` every time.
 
 See **[CLI Reference](docs/CLI.md)** for complete documentation, all flags, and walkthroughs.
 

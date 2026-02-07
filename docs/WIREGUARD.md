@@ -51,8 +51,11 @@ sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
   --token your-token \
   --name wg-gateway \
-  --wireguard
+  --wireguard \
+  --context wg-gateway
 ```
+
+This creates a context named "wg-gateway" that you can manage with `tunnelmesh context` commands.
 
 Or in config:
 ```yaml

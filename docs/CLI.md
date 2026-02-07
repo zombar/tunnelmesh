@@ -11,31 +11,32 @@ tunnelmesh init
 # Run a coordination server
 sudo tunnelmesh serve -c server.yaml
 
-# Trust the mesh CA for HTTPS access (run on peers, requires running coordinator)
-sudo tunnelmesh trust-ca -s https://coord.example.com
+# Join the mesh as a peer (--context saves it for future use)
+sudo tunnelmesh join -c peer.yaml --context home
 
-# Join the mesh as a peer
-sudo tunnelmesh join -c peer.yaml
+# List your contexts
+tunnelmesh context list
+
+# Switch active context (changes DNS resolution)
+tunnelmesh context use work
 
 # Check your connection status
-tunnelmesh status -c peer.yaml
+tunnelmesh status
 
 # List all peers in the mesh
-tunnelmesh peers -c peer.yaml
+tunnelmesh peers
 
 # Speed test to another peer
 tunnelmesh benchmark other-peer --size 100MB
 
-# Install as system service (starts on boot)
-sudo tunnelmesh service install --mode join -c /etc/tunnelmesh/peer.yaml
+# Install as system service (uses active context)
+sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
 
-> **Config file required:** Almost all commands need a config file to know which server to connect to and authenticate with. Use `-c path/to/config.yaml` explicitly, or place your config in a default location:
-> - `~/.tunnelmesh/config.yaml` (recommended for personal use)
-> - `peer.yaml` or `tunnelmesh.yaml` in current directory
+> **Contexts simplify management:** After joining with `--context`, TunnelMesh remembers your configuration. Subsequent commands use the active context automatically—no need to specify `-c` every time.
 >
-> Commands that work without a config: `init`, `version`, `trust-ca` (uses `-s` flag), and `service` subcommands.
+> Commands that work without a context: `init`, `version`, `trust-ca` (uses `-s` flag), and `context` subcommands.
 
 ---
 
@@ -80,6 +81,7 @@ sudo mv tunnelmesh /usr/local/bin/
 |---------|-------------|
 | `tunnelmesh serve` | Run coordination server |
 | `tunnelmesh join` | Connect peer to mesh |
+| `tunnelmesh context` | Manage mesh contexts |
 | `tunnelmesh status` | Show connection status |
 | `tunnelmesh peers` | List mesh peers |
 | `tunnelmesh resolve <name>` | Resolve mesh hostname |
@@ -193,6 +195,7 @@ tunnelmesh join [flags]
 | `--server` | `-s` | Coordination server URL |
 | `--token` | `-t` | Authentication token |
 | `--name` | `-n` | Peer name |
+| `--context` | | Save/update as named context |
 | `--wireguard` | | Enable WireGuard concentrator |
 | `--exit-node` | | Route internet through specified peer |
 | `--allow-exit-traffic` | | Allow this node as exit for others |
@@ -285,6 +288,137 @@ metrics_port: 9090
 loki:
   enabled: false
   url: "http://loki:3100"
+```
+
+---
+
+### tunnelmesh context
+
+Manage mesh contexts. Contexts store configuration paths, allocated IPs, and DNS settings for easy switching between multiple meshes.
+
+```bash
+tunnelmesh context <subcommand>
+```
+
+**Subcommands:**
+
+| Subcommand | Description |
+|------------|-------------|
+| `create` | Create a new context from a config file |
+| `list` | List all contexts |
+| `use` | Switch active context (updates DNS) |
+| `delete` | Delete a context |
+| `show` | Show context details |
+
+---
+
+#### tunnelmesh context create
+
+Create a new context from a configuration file.
+
+```bash
+tunnelmesh context create <name> --config <path> [--mode serve|join]
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--config`, `-c` | Path to config file (required) |
+| `--mode` | Mode: `serve` or `join` (default: `join`) |
+
+**Example:**
+```bash
+# Create a peer context
+tunnelmesh context create home --config ~/.tunnelmesh/home.yaml
+
+# Create a server context
+tunnelmesh context create coordinator --config /etc/tunnelmesh/server.yaml --mode serve
+```
+
+---
+
+#### tunnelmesh context list
+
+List all contexts with their status.
+
+```bash
+tunnelmesh context list
+```
+
+**Example output:**
+```
+NAME         SERVER                      STATUS     ACTIVE
+home         http://home-server:8080     running    *
+work         https://work.mesh.io        stopped
+dev          http://192.168.1.10:8080    -
+```
+
+- `STATUS`: Service status (`running`, `stopped`, or `-` if no service installed)
+- `ACTIVE`: `*` marks the currently active context
+
+---
+
+#### tunnelmesh context use
+
+Switch the active context. This changes which mesh's DNS resolver handles `.tunnelmesh` domains.
+
+```bash
+tunnelmesh context use <name>
+```
+
+**Example:**
+```bash
+tunnelmesh context use work
+```
+
+**What happens:**
+1. Updates active context in `~/.tunnelmesh/.context`
+2. Reconfigures system DNS resolver for the new mesh's domain
+3. CLI commands now target the new context by default
+
+**Note:** Switching contexts doesn't stop running tunnels. Multiple meshes can run simultaneously—only the DNS "focus" changes.
+
+---
+
+#### tunnelmesh context delete
+
+Delete a context. Prompts to stop/uninstall service if running.
+
+```bash
+tunnelmesh context delete <name>
+```
+
+**Example:**
+```bash
+tunnelmesh context delete dev
+```
+
+**Prompts:**
+- If service is running: "Service is running. Stop and uninstall?"
+- "Remove config file at /path/to/config.yaml?"
+
+---
+
+#### tunnelmesh context show
+
+Show details of a specific context.
+
+```bash
+tunnelmesh context show [name]
+```
+
+If no name is provided, shows the active context.
+
+**Example output:**
+```
+Context: home
+  Config:     /home/user/.tunnelmesh/home.yaml
+  Server:     http://home-server:8080
+  Mesh IP:    172.30.0.5
+  Domain:     .tunnelmesh
+  DNS Listen: 127.0.0.53:5353
+  Service:    tunnelmesh-home (running)
 ```
 
 ---
@@ -473,13 +607,16 @@ tunnelmesh service <subcommand> [flags]
 | `status` | Show service status |
 | `logs` | View service logs |
 
+**Common flags (all subcommands):**
+
+| Flag | Description |
+|------|-------------|
+| `--context` | Target specific context (default: active context) |
+
 **Install flags:**
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--mode` | | `serve` or `join` |
-| `--config` | `-c` | Config file path |
-| `--name` | `-n` | Custom service name |
 | `--user` | | Run as user (Linux/macOS) |
 | `--force` | `-f` | Force reinstall |
 
@@ -490,14 +627,13 @@ tunnelmesh service <subcommand> [flags]
 | `--follow` | Follow logs in real-time |
 | `--lines` | Number of lines to show |
 
-**Example - Install peer service:**
+**Example - Install peer service (context-based):**
 ```bash
-# Create config directory
-sudo mkdir -p /etc/tunnelmesh
-sudo cp peer.yaml /etc/tunnelmesh/peer.yaml
+# First, join and create a context
+sudo tunnelmesh join --config /etc/tunnelmesh/peer.yaml --context home
 
-# Install service
-sudo tunnelmesh service install --mode join --config /etc/tunnelmesh/peer.yaml
+# Install service for the active context
+sudo tunnelmesh service install
 
 # Start service
 sudo tunnelmesh service start
@@ -511,20 +647,35 @@ tunnelmesh service logs --follow
 
 **Example - Install server service:**
 ```bash
-sudo tunnelmesh service install --mode serve --config /etc/tunnelmesh/server.yaml
+# Create context and install
+tunnelmesh context create coordinator --config /etc/tunnelmesh/server.yaml --mode serve
+sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
 
-**Example - Multiple instances:**
+**Example - Multiple meshes:**
 ```bash
-# Install two peer services with different names
-sudo tunnelmesh service install --mode join --name tunnelmesh-home --config /etc/tunnelmesh/home.yaml
-sudo tunnelmesh service install --mode join --name tunnelmesh-work --config /etc/tunnelmesh/work.yaml
+# Join two different meshes
+sudo tunnelmesh join --config ~/.tunnelmesh/home.yaml --context home
+sudo tunnelmesh join --config ~/.tunnelmesh/work.yaml --context work
 
-# Control specific instance
-sudo tunnelmesh service start --name tunnelmesh-home
-sudo tunnelmesh service status --name tunnelmesh-work
+# Install services for both
+sudo tunnelmesh service install --context home
+sudo tunnelmesh service install --context work
+
+# Start both
+sudo tunnelmesh service start --context home
+sudo tunnelmesh service start --context work
+
+# Control specific context
+tunnelmesh service status --context work
+tunnelmesh service logs --context home --follow
 ```
+
+**Service naming:** Service names are derived from context names:
+- Context `home` → Service `tunnelmesh-home`
+- Context `work` → Service `tunnelmesh-work`
+- Context `default` → Service `tunnelmesh`
 
 **Platform-specific paths:**
 
@@ -766,7 +917,8 @@ join_mesh:
 EOF
 
 tunnelmesh init
-sudo tunnelmesh service install --mode serve --config /etc/tunnelmesh/server.yaml
+tunnelmesh context create vpn --config /etc/tunnelmesh/server.yaml --mode serve
+sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
 
@@ -775,7 +927,7 @@ sudo tunnelmesh service start
 # On your laptop
 tunnelmesh init
 
-cat > ~/.tunnelmesh/config.yaml << 'EOF'
+cat > ~/.tunnelmesh/vpn.yaml << 'EOF'
 name: "my-laptop"
 server: "http://your-server-ip:8080"
 auth_token: "same-token-from-server"
@@ -788,12 +940,13 @@ dns:
   listen: "127.0.0.53:5353"
 EOF
 
-sudo tunnelmesh join
+# Join and save as context (prompts to install CA cert if missing)
+sudo tunnelmesh join --config ~/.tunnelmesh/vpn.yaml --context vpn
 ```
 
 **Step 3: Verify connection**
 ```bash
-# Check status
+# Check status (uses active context)
 tunnelmesh status
 
 # Ping the server
@@ -818,7 +971,9 @@ admin:
   enabled: true
 EOF
 
-sudo tunnelmesh serve --config server.yaml
+tunnelmesh context create team --config server.yaml --mode serve
+sudo tunnelmesh service install
+sudo tunnelmesh service start
 ```
 
 **Step 2: Each developer joins**
@@ -829,7 +984,8 @@ tunnelmesh init
 sudo tunnelmesh join \
   --server http://coordinator-ip:8080 \
   --token team-secret-token \
-  --name $(whoami)
+  --name $(whoami) \
+  --context team
 ```
 
 **Step 3: Team collaboration**
@@ -882,7 +1038,8 @@ dns:
     - "homeassistant"
 EOF
 
-sudo tunnelmesh service install --mode join --config peer.yaml
+sudo tunnelmesh join --config peer.yaml --context homelab
+sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
 
@@ -896,14 +1053,25 @@ sudo tunnelmesh service start
 
 ## Troubleshooting
 
+### "No active context"
+```bash
+# List available contexts
+tunnelmesh context list
+
+# Set an active context
+tunnelmesh context use home
+
+# Or specify context for commands
+tunnelmesh status --context home
+```
+
 ### "Config file required"
 ```bash
-# Create config or specify path
-tunnelmesh join --config /path/to/config.yaml
+# Join with --context to save configuration
+sudo tunnelmesh join --config /path/to/config.yaml --context mycontext
 
-# Or create in default location
-mkdir -p ~/.tunnelmesh
-cp peer.yaml ~/.tunnelmesh/config.yaml
+# Or create context manually
+tunnelmesh context create mycontext --config /path/to/config.yaml
 ```
 
 ### "Failed to create TUN device"

@@ -185,7 +185,7 @@ nodes = {
 
 On your local machine:
 ```bash
-tunnelmesh join --exit-node tm-exit-sgp
+sudo tunnelmesh join --config peer.yaml --exit-node tm-exit-sgp --context work
 ```
 
 ---
@@ -322,6 +322,13 @@ dns:
     - "homeassistant"
 ```
 
+On the home server:
+```bash
+sudo tunnelmesh join --config peer.yaml --context homelab
+sudo tunnelmesh service install
+sudo tunnelmesh service start
+```
+
 ---
 
 ### Scenario 6: Development Team Secure Mesh
@@ -367,10 +374,11 @@ nodes = {
 
 Each developer runs:
 ```bash
-tunnelmesh join \
+sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
   --token team-token \
-  --name $(whoami)
+  --name $(whoami) \
+  --context team
 ```
 
 ---
@@ -421,7 +429,11 @@ nodes = {
 Players join from their gaming PCs:
 ```bash
 # Automatic UDP hole-punching for lowest latency
-tunnelmesh join --server https://tunnelmesh.example.com --name player1
+sudo tunnelmesh join \
+  --server https://tunnelmesh.example.com \
+  --token game-token \
+  --name player1 \
+  --context gaming
 ```
 
 ---
