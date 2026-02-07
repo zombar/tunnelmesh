@@ -223,13 +223,9 @@ func (s *Server) handleFilterList(filter *routing.PacketFilter) Response {
 
 	details := make([]FilterRuleDetail, 0, len(rules))
 	for _, r := range rules {
-		proto := "tcp"
-		if r.Rule.Protocol == routing.ProtoUDP {
-			proto = "udp"
-		}
 		details = append(details, FilterRuleDetail{
 			Port:       r.Rule.Port,
-			Protocol:   proto,
+			Protocol:   routing.ProtocolToString(r.Rule.Protocol),
 			Action:     r.Rule.Action.String(),
 			Source:     r.Source.String(),
 			Expires:    r.Rule.Expires,
@@ -256,7 +252,7 @@ func (s *Server) handleFilterAdd(filter *routing.PacketFilter, payload json.RawM
 	if req.Port == 0 {
 		return Response{Success: false, Error: "port is required"}
 	}
-	proto := parseProtocol(req.Protocol)
+	proto := routing.ProtocolFromString(req.Protocol)
 	if proto == 0 {
 		return Response{Success: false, Error: "protocol must be 'tcp' or 'udp'"}
 	}
@@ -294,7 +290,7 @@ func (s *Server) handleFilterRemove(filter *routing.PacketFilter, payload json.R
 		return Response{Success: false, Error: fmt.Sprintf("invalid payload: %v", err)}
 	}
 
-	proto := parseProtocol(req.Protocol)
+	proto := routing.ProtocolFromString(req.Protocol)
 	if proto == 0 {
 		return Response{Success: false, Error: "protocol must be 'tcp' or 'udp'"}
 	}
@@ -312,17 +308,6 @@ func (s *Server) handleFilterRemove(filter *routing.PacketFilter, payload json.R
 func (s *Server) sendError(conn net.Conn, err error) {
 	resp := Response{Success: false, Error: err.Error()}
 	_ = json.NewEncoder(conn).Encode(resp)
-}
-
-func parseProtocol(s string) uint8 {
-	switch s {
-	case "tcp", "TCP":
-		return routing.ProtoTCP
-	case "udp", "UDP":
-		return routing.ProtoUDP
-	default:
-		return 0
-	}
 }
 
 // Client is a control socket client for CLI commands.

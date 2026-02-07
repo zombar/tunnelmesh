@@ -425,14 +425,7 @@ func (c *Collector) TrackReconnect(targetPeer string) {
 // - HandleRelayPacket has sourcePeer from the relay message
 // - HandleTunnel has peerName from the tunnel association
 func (c *Collector) TrackFilterDrop(protocol uint8, sourcePeer string) {
-	protoStr := "other"
-	switch protocol {
-	case 6: // TCP
-		protoStr = "tcp"
-	case 17: // UDP
-		protoStr = "udp"
-	}
-	c.metrics.DroppedFiltered.WithLabelValues(protoStr, sourcePeer).Inc()
+	c.metrics.DroppedFiltered.WithLabelValues(routing.ProtocolToString(protocol), sourcePeer).Inc()
 }
 
 // FilterDropCallback returns a callback function for the forwarder to call on filter drops.

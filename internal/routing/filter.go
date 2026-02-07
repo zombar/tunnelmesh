@@ -72,6 +72,18 @@ func ProtocolFromString(s string) uint8 {
 	}
 }
 
+// ProtocolToString converts a protocol number to its name.
+func ProtocolToString(proto uint8) string {
+	switch proto {
+	case ProtoTCP:
+		return "tcp"
+	case ProtoUDP:
+		return "udp"
+	default:
+		return "other"
+	}
+}
+
 // FilterRule represents a single packet filter rule.
 type FilterRule struct {
 	Port       uint16       // Port number (1-65535)
@@ -137,8 +149,9 @@ func NewPacketFilter(defaultDeny bool) *PacketFilter {
 }
 
 // DefaultDeny returns whether the filter defaults to denying traffic.
+// Deprecated: Use IsDefaultDeny instead for consistency.
 func (f *PacketFilter) DefaultDeny() bool {
-	return f.defaultDeny
+	return f.IsDefaultDeny()
 }
 
 // SetCoordinatorRules replaces all coordinator-level rules.
