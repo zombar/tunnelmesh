@@ -20,6 +20,7 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 - **Node Location Map** - Optional geographic visualization of mesh nodes (requires `--locations` flag)
 - **Server-as-Client** - Coordination server can also participate as a mesh node
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
+- **Packet Filter** - Port-based firewall with per-peer rules, configurable via config, CLI, or admin UI
 
 ![Admin Dashboard](docs/images/admin-dashboard.webp)
 
@@ -35,6 +36,7 @@ For a complete step-by-step setup guide including downloading releases, configur
 - **[Docker Deployment](docs/DOCKER.md)** - Running TunnelMesh in containers for development and production
 - **[Cloud Deployment](docs/CLOUD_DEPLOYMENT.md)** - Deploy to DigitalOcean with Terraform (includes deployment scenarios)
 - **[Benchmarking & Stress Testing](docs/BENCHMARKING.md)** - Measure throughput, latency, and chaos testing
+- **[Packet Filter](docs/PACKET_FILTER.md)** - Port-based firewall with per-peer rules and metrics
 
 ## Architecture
 
@@ -292,6 +294,32 @@ TunnelMesh automatically configures:
 - **Client**: Default routes (0.0.0.0/1 and 128.0.0.0/1) through the TUN interface
 
 This works on Linux and macOS. On Windows, manual route configuration may be required.
+
+### Packet Filter
+
+Control which ports are accessible on each peer with a 3-layer rule system. Rules from the coordinator, peer config, and CLI/admin panel are merged, with the most restrictive rule winning.
+
+```yaml
+# peer.yaml - local filter rules
+filter:
+  rules:
+    - port: 22
+      protocol: tcp
+      action: allow
+    - port: 3306
+      protocol: tcp
+      action: deny
+      source_peer: untrusted-node  # Block specific peer
+```
+
+```bash
+# CLI commands
+tunnelmesh filter list
+tunnelmesh filter add --port 80 --protocol tcp --action allow
+tunnelmesh filter add --port 22 --action deny --source-peer badpeer
+```
+
+See **[Packet Filter Guide](docs/PACKET_FILTER.md)** for full documentation including coordinator rules, metrics, and alerts.
 
 ### Config File Locations
 

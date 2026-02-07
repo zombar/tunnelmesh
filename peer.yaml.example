@@ -53,3 +53,14 @@ dns:
 #   listen_port: 51820
 #   data_dir: /var/lib/tunnelmesh/wireguard
 #   endpoint: "peer.example.com:51820"
+
+# Packet filter - local rules for this peer (extend/override coordinator rules)
+# filter:
+#   rules:
+#     - port: 80
+#       protocol: tcp
+#       action: allow           # Allow HTTP on this peer
+#     - port: 3306
+#       protocol: tcp
+#       action: deny
+#       source_peer: dev-node   # Block dev-node from MySQL

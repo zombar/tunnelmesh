@@ -40,6 +40,18 @@ relay:
   enabled: true
   pair_timeout: "90s"
 
+# Packet filter - global rules pushed to all peers on connect
+# filter:
+#   default_deny: true   # Block all ports unless explicitly allowed
+#   rules:
+#     - port: 22
+#       protocol: tcp
+#       action: allow     # Allow SSH mesh-wide
+#     - port: 80
+#       protocol: tcp
+#       action: deny
+#       source_peer: untrusted-node   # Block specific peer from port 80
+
 # Node location tracking (shows map in admin dashboard)
 # WARNING: Queries ip-api.com to geolocate nodes by public IP
 locations: false
