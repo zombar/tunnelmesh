@@ -252,6 +252,9 @@ It does not route traffic - peers connect directly to each other.`,
 	// User command - manage user identity
 	rootCmd.AddCommand(newUserCmd())
 
+	// Buckets command - manage S3 buckets
+	rootCmd.AddCommand(newBucketsCmd())
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
