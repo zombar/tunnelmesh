@@ -10,4 +10,5 @@ var (
 	ErrObjectNotFound = errors.New("object not found")
 	ErrAccessDenied   = errors.New("access denied")
 	ErrInvalidRequest = errors.New("invalid request")
+	ErrQuotaExceeded  = errors.New("storage quota exceeded")
 )

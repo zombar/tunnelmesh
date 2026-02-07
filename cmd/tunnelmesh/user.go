@@ -2,14 +2,22 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
+	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/context"
+	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
 var (
@@ -67,6 +75,22 @@ recover your identity on other devices or if your local data is lost.`,
 		RunE:  runUserInfo,
 	}
 	userCmd.AddCommand(infoCmd)
+
+	// Register subcommand
+	registerCmd := &cobra.Command{
+		Use:   "register",
+		Short: "Register with current mesh",
+		Long: `Register your identity with the currently active mesh context.
+
+This connects to the coordinator and registers your public key.
+The first user to register becomes an admin.
+
+You must have:
+1. An identity (run 'tunnelmesh user setup' first)
+2. An active context (run 'tunnelmesh context use <name>')`,
+		RunE: runUserRegister,
+	}
+	userCmd.AddCommand(registerCmd)
 
 	return userCmd
 }
@@ -225,6 +249,156 @@ func runUserInfo(cmd *cobra.Command, args []string) error {
 			fmt.Println("Run 'tunnelmesh user register' to register with this mesh.")
 		}
 	}
+
+	return nil
+}
+
+func runUserRegister(cmd *cobra.Command, args []string) error {
+	// Load identity
+	identityPath, err := defaultIdentityPath()
+	if err != nil {
+		return fmt.Errorf("get identity path: %w", err)
+	}
+
+	identity, err := auth.LoadUserIdentity(identityPath)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("no identity found. Run 'tunnelmesh user setup' first")
+	}
+	if err != nil {
+		return fmt.Errorf("load identity: %w", err)
+	}
+
+	// Load context store
+	store, err := context.Load()
+	if err != nil {
+		return fmt.Errorf("load context: %w", err)
+	}
+
+	activeCtx := store.GetActive()
+	if activeCtx == nil {
+		return fmt.Errorf("no active context. Run 'tunnelmesh context use <name>' first")
+	}
+
+	// Load the peer config to get the server address and auth token
+	if activeCtx.ConfigPath == "" {
+		return fmt.Errorf("context %q has no config path", activeCtx.Name)
+	}
+
+	peerCfg, err := config.LoadPeerConfig(activeCtx.ConfigPath)
+	if err != nil {
+		return fmt.Errorf("load peer config: %w", err)
+	}
+
+	// Sign the user ID to prove ownership
+	signature, err := identity.SignMessage(identity.User.ID)
+	if err != nil {
+		return fmt.Errorf("sign user ID: %w", err)
+	}
+
+	// Create registration request
+	req := proto.UserRegisterRequest{
+		UserID:    identity.User.ID,
+		PublicKey: identity.User.PublicKey,
+		Name:      identity.User.Name,
+		Signature: signature,
+	}
+
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+
+	// Build the registration URL
+	serverURL := peerCfg.Server
+	if !strings.HasPrefix(serverURL, "http") {
+		serverURL = "https://" + serverURL
+	}
+	registerURL := strings.TrimSuffix(serverURL, "/") + "/api/v1/user/register"
+
+	// Create HTTP client with TLS config that skips verification for self-signed certs
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, // Allow self-signed mesh CA certs
+			},
+		},
+	}
+
+	httpReq, err := http.NewRequest(http.MethodPost, registerURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	fmt.Printf("Registering with %s...\n", activeCtx.Name)
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("send request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp proto.ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Message != "" {
+			return fmt.Errorf("registration failed: %s", errResp.Message)
+		}
+		return fmt.Errorf("registration failed: %s", resp.Status)
+	}
+
+	var regResp proto.UserRegisterResponse
+	if err := json.Unmarshal(body, &regResp); err != nil {
+		return fmt.Errorf("parse response: %w", err)
+	}
+
+	// Save registration to context directory
+	regPath := auth.DefaultRegistrationPath(activeCtx.Name)
+	reg := &auth.Registration{
+		UserID:       regResp.UserID,
+		MeshDomain:   activeCtx.Domain,
+		RegisteredAt: time.Now().UTC(),
+		Roles:        regResp.Roles,
+		S3AccessKey:  regResp.S3AccessKey,
+		S3SecretKey:  regResp.S3SecretKey,
+	}
+
+	if err := reg.Save(regPath); err != nil {
+		return fmt.Errorf("save registration: %w", err)
+	}
+
+	// Update context with registration info
+	activeCtx.UserID = regResp.UserID
+	activeCtx.RegistrationPath = regPath
+	store.Add(*activeCtx)
+	if err := store.Save(); err != nil {
+		fmt.Printf("Warning: failed to update context store: %v\n", err)
+	}
+
+	// Print result
+	fmt.Println()
+	fmt.Println("Registration successful!")
+	fmt.Printf("User ID: %s\n", regResp.UserID)
+	fmt.Printf("Roles:   %s\n", strings.Join(regResp.Roles, ", "))
+
+	if regResp.IsFirstUser {
+		fmt.Println()
+		fmt.Println("You are the first user - you have been granted admin role.")
+	}
+
+	if regResp.S3AccessKey != "" {
+		fmt.Println()
+		fmt.Println("S3 Credentials:")
+		fmt.Printf("  Access Key: %s\n", regResp.S3AccessKey)
+		fmt.Printf("  Secret Key: %s\n", regResp.S3SecretKey)
+	}
+
+	fmt.Printf("\nRegistration saved: %s\n", regPath)
 
 	return nil
 }

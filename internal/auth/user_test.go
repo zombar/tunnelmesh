@@ -121,3 +121,45 @@ func TestServiceUser(t *testing.T) {
 	}
 	assert.False(t, user2.IsService())
 }
+
+func TestVerifyUserSignature(t *testing.T) {
+	mnemonic := "abandon ability able"
+	identity, err := NewUserIdentity(mnemonic, "TestUser")
+	require.NoError(t, err)
+
+	message := identity.User.ID
+
+	// Sign the message
+	signature, err := identity.SignMessage(message)
+	require.NoError(t, err)
+
+	// Verify should succeed
+	valid := VerifyUserSignature(identity.User.PublicKey, message, signature)
+	assert.True(t, valid)
+
+	// Wrong message should fail
+	valid = VerifyUserSignature(identity.User.PublicKey, "wrong-message", signature)
+	assert.False(t, valid)
+
+	// Wrong signature should fail
+	valid = VerifyUserSignature(identity.User.PublicKey, message, "invalidsignature")
+	assert.False(t, valid)
+
+	// Invalid public key should fail
+	valid = VerifyUserSignature("invalidpubkey", message, signature)
+	assert.False(t, valid)
+}
+
+func TestSignMessage(t *testing.T) {
+	mnemonic := "abandon ability able"
+	identity, err := NewUserIdentity(mnemonic, "TestUser")
+	require.NoError(t, err)
+
+	signature, err := identity.SignMessage("test message")
+	require.NoError(t, err)
+
+	// Signature should be valid base64
+	decoded, err := base64.StdEncoding.DecodeString(signature)
+	require.NoError(t, err)
+	assert.Len(t, decoded, 64) // ED25519 signature is 64 bytes
+}

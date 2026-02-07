@@ -14,7 +14,7 @@ import (
 func TestNewStore(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	store, err := NewStore(tmpDir)
+	store, err := NewStore(tmpDir, nil)
 	require.NoError(t, err)
 	assert.Equal(t, tmpDir, store.DataDir())
 
@@ -359,7 +359,33 @@ func TestStoreOverwriteObject(t *testing.T) {
 // newTestStore creates a store with a temporary directory for testing.
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	store, err := NewStore(t.TempDir())
+	store, err := NewStore(t.TempDir(), nil)
 	require.NoError(t, err)
 	return store
+}
+
+func TestStoreWithQuota(t *testing.T) {
+	tmpDir := t.TempDir()
+	quota := NewQuotaManager(1) // 1 GB limit
+
+	store, err := NewStore(tmpDir, quota)
+	require.NoError(t, err)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Put object should update quota
+	content := []byte("hello world")
+	_, err = store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	stats := store.QuotaStats()
+	require.NotNil(t, stats)
+	assert.Equal(t, int64(len(content)), stats.UsedBytes)
+	assert.Equal(t, int64(len(content)), stats.PerBucket["test-bucket"])
+
+	// Delete object should release quota
+	err = store.DeleteObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	stats = store.QuotaStats()
+	assert.Equal(t, int64(0), stats.UsedBytes)
 }

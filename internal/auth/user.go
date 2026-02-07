@@ -135,3 +135,33 @@ func computeUserID(pubKey ed25519.PublicKey) string {
 	hash := sha256.Sum256(pubKey)
 	return hex.EncodeToString(hash[:8])
 }
+
+// VerifyUserSignature verifies a signature of a message using a base64-encoded public key.
+// This is used to verify user registration requests.
+func VerifyUserSignature(publicKeyB64, message, signatureB64 string) bool {
+	pubKey, err := base64.StdEncoding.DecodeString(publicKeyB64)
+	if err != nil {
+		return false
+	}
+
+	signature, err := base64.StdEncoding.DecodeString(signatureB64)
+	if err != nil {
+		return false
+	}
+
+	if len(pubKey) != ed25519.PublicKeySize {
+		return false
+	}
+
+	return ed25519.Verify(pubKey, []byte(message), signature)
+}
+
+// SignMessage signs a message with the identity's private key and returns base64-encoded signature.
+func (ui *UserIdentity) SignMessage(message string) (string, error) {
+	privKey, err := ui.GetPrivateKey()
+	if err != nil {
+		return "", err
+	}
+	signature := ed25519.Sign(privKey, []byte(message))
+	return base64.StdEncoding.EncodeToString(signature), nil
+}

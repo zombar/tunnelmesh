@@ -356,11 +356,14 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 
 	meta, err := s.store.PutObject(bucket, key, r.Body, r.ContentLength, contentType, metadata)
 	if err != nil {
-		if err == ErrBucketNotFound {
+		switch err {
+		case ErrBucketNotFound:
 			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
-			return
+		case ErrQuotaExceeded:
+			s.writeError(w, http.StatusForbidden, "QuotaExceeded", "Storage quota exceeded")
+		default:
+			s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
 		}
-		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
 		return
 	}
 

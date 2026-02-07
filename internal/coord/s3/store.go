@@ -41,24 +41,81 @@ type ObjectMeta struct {
 //	        {key}.json        # object metadata
 type Store struct {
 	dataDir string
+	quota   *QuotaManager
 	mu      sync.RWMutex
 }
 
 // NewStore creates a new S3 store with the given data directory.
-func NewStore(dataDir string) (*Store, error) {
+// If quota is nil, no quota enforcement is applied.
+func NewStore(dataDir string, quota *QuotaManager) (*Store, error) {
 	bucketsDir := filepath.Join(dataDir, "buckets")
 	if err := os.MkdirAll(bucketsDir, 0755); err != nil {
 		return nil, fmt.Errorf("create buckets dir: %w", err)
 	}
 
-	return &Store{
+	store := &Store{
 		dataDir: dataDir,
-	}, nil
+		quota:   quota,
+	}
+
+	// Calculate initial quota usage from existing objects
+	if quota != nil {
+		if err := store.calculateQuotaUsage(); err != nil {
+			return nil, fmt.Errorf("calculate quota usage: %w", err)
+		}
+	}
+
+	return store, nil
 }
 
 // DataDir returns the data directory path.
 func (s *Store) DataDir() string {
 	return s.dataDir
+}
+
+// QuotaStats returns current quota statistics, or nil if no quota is configured.
+func (s *Store) QuotaStats() *QuotaStats {
+	if s.quota == nil {
+		return nil
+	}
+	stats := s.quota.Stats()
+	return &stats
+}
+
+// calculateQuotaUsage scans all objects and updates quota tracking.
+func (s *Store) calculateQuotaUsage() error {
+	bucketsDir := filepath.Join(s.dataDir, "buckets")
+	entries, err := os.ReadDir(bucketsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		bucket := entry.Name()
+		var bucketSize int64
+
+		// Sum all object sizes in this bucket
+		objectsDir := filepath.Join(bucketsDir, bucket, "objects")
+		_ = filepath.Walk(objectsDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			bucketSize += info.Size()
+			return nil
+		})
+
+		if bucketSize > 0 {
+			s.quota.SetUsed(bucket, bucketSize)
+		}
+	}
+
+	return nil
 }
 
 // bucketPath returns the path to a bucket directory.
@@ -221,6 +278,20 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 	objectPath := s.objectPath(bucket, key)
 	metaPath := s.objectMetaPath(bucket, key)
 
+	// Check if object already exists (for quota update calculation)
+	var oldSize int64
+	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
+		oldSize = oldMeta.Size
+	}
+
+	// Check quota if configured (only if object is growing)
+	if s.quota != nil && size > oldSize {
+		delta := size - oldSize
+		if !s.quota.CanAllocate(delta) {
+			return nil, ErrQuotaExceeded
+		}
+	}
+
 	// Create parent directories for nested keys
 	if err := os.MkdirAll(filepath.Dir(objectPath), 0755); err != nil {
 		return nil, fmt.Errorf("create object dir: %w", err)
@@ -240,6 +311,15 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 	if err != nil {
 		_ = os.Remove(objectPath)
 		return nil, fmt.Errorf("write object: %w", err)
+	}
+
+	// Update quota tracking
+	if s.quota != nil {
+		if oldSize > 0 {
+			s.quota.Update(bucket, oldSize, written)
+		} else {
+			s.quota.Allocate(bucket, written)
+		}
 	}
 
 	// Generate ETag (simplified - just use size for now, real impl uses MD5)
@@ -339,6 +419,12 @@ func (s *Store) DeleteObject(bucket, key string) error {
 		return err
 	}
 
+	// Get object size for quota release
+	var objectSize int64
+	if meta, err := s.getObjectMeta(bucket, key); err == nil {
+		objectSize = meta.Size
+	}
+
 	objectPath := s.objectPath(bucket, key)
 	metaPath := s.objectMetaPath(bucket, key)
 
@@ -352,6 +438,11 @@ func (s *Store) DeleteObject(bucket, key string) error {
 		return fmt.Errorf("remove object: %w", err)
 	}
 	_ = os.Remove(metaPath) // Ignore error if meta doesn't exist
+
+	// Release quota
+	if s.quota != nil && objectSize > 0 {
+		s.quota.Release(bucket, objectSize)
+	}
 
 	return nil
 }
@@ -397,6 +488,9 @@ func (s *Store) listObjectsUnsafe(bucket, prefix string, maxKeys int) ([]ObjectM
 			return nil
 		}
 		key := relPath[:len(relPath)-5] // Remove .json
+
+		// Normalize path separators to forward slashes (S3 uses forward slashes)
+		key = filepath.ToSlash(key)
 
 		// Apply prefix filter
 		if prefix != "" && !hasPrefix(key, prefix) {

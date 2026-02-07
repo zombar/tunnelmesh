@@ -6,12 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 )
 
-// SystemBucket is the reserved bucket name for coordinator internal data.
-const SystemBucket = "_tunnelmesh"
+// SystemBucket is an alias for auth.SystemBucket for convenience.
+const SystemBucket = auth.SystemBucket
 
 // SystemStore provides high-level access to the _tunnelmesh system bucket.
 // This is used by the coordinator to store internal state like users, roles,
@@ -176,9 +177,10 @@ func (ss *SystemStore) loadJSON(key string, target interface{}) error {
 // --- Migration helpers ---
 
 // MigrateFromFile migrates data from a local file to S3.
-// If the file exists, it's read and saved to the S3 path.
+// If the S3 key already exists, no migration is performed.
+// If the local file exists, it's read and saved to the S3 path.
 // Returns true if migration was performed.
-func (ss *SystemStore) MigrateFromFile(localPath, s3Key string, target interface{}) (bool, error) {
+func (ss *SystemStore) MigrateFromFile(localPath, s3Key string) (bool, error) {
 	// Check if already exists in S3
 	_, _, err := ss.store.GetObject(SystemBucket, s3Key)
 	if err == nil {
@@ -189,8 +191,20 @@ func (ss *SystemStore) MigrateFromFile(localPath, s3Key string, target interface
 	}
 
 	// Read from local file
-	// This will be implemented by the caller using os.ReadFile
-	return false, nil
+	data, err := os.ReadFile(localPath)
+	if os.IsNotExist(err) {
+		return false, nil // No local file to migrate
+	}
+	if err != nil {
+		return false, fmt.Errorf("read local file: %w", err)
+	}
+
+	// Save to S3
+	if _, err := ss.store.PutObject(SystemBucket, s3Key, bytes.NewReader(data), int64(len(data)), "application/json", nil); err != nil {
+		return false, fmt.Errorf("save to S3: %w", err)
+	}
+
+	return true, nil
 }
 
 // Exists checks if an object exists in the system bucket.
