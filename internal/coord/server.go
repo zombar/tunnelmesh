@@ -322,7 +322,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // getServicePorts returns the list of service ports the coordinator exposes.
-// These ports are pushed to peers so they can auto-allow access.
+// These ports are pushed to peers so they can auto-allow access through the packet filter.
 func (s *Server) getServicePorts() []uint16 {
 	var ports []uint16
 
@@ -331,9 +331,8 @@ func (s *Server) getServicePorts() []uint16 {
 		ports = append(ports, uint16(s.cfg.Admin.Port))
 	}
 
-	// Relay and WebSocket are on the main listen port, which is parsed from cfg.Listen
-	// The main server port is typically already accessible, so we only need to expose
-	// the admin port which runs on the mesh IP
+	// Configured service ports (includes metrics port 9443 by default)
+	ports = append(ports, s.cfg.ServicePorts...)
 
 	return ports
 }

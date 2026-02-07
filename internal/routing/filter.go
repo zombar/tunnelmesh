@@ -365,6 +365,24 @@ func (f *PacketFilter) CheckPacketFromPeer(packet []byte, sourcePeer string) Fil
 		return FilterResult{Drop: false, Protocol: 0, SourcePeer: sourcePeer}
 	}
 
+	// For TCP, only filter NEW connections (SYN without ACK).
+	// This allows response packets (SYN-ACK, ACK, etc.) to pass through,
+	// enabling outgoing connections to work even in allowlist mode.
+	if protocol == ProtoTCP {
+		// TCP header must be at least 20 bytes, flags are at offset 13
+		if len(packet) < ihl+14 {
+			return FilterResult{Drop: false, Protocol: 0, SourcePeer: sourcePeer}
+		}
+		tcpFlags := packet[ihl+13]
+		// SYN=0x02, ACK=0x10. Only filter pure SYN (new connection attempts)
+		isSYN := (tcpFlags & 0x02) != 0
+		isACK := (tcpFlags & 0x10) != 0
+		if !isSYN || isACK {
+			// Not a new connection attempt - allow through
+			return FilterResult{Drop: false, Protocol: protocol, SourcePeer: sourcePeer}
+		}
+	}
+
 	// Extract destination port from TCP/UDP header (bytes 2-3)
 	dstPort := binary.BigEndian.Uint16(packet[ihl+2 : ihl+4])
 

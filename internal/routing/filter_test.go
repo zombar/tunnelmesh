@@ -62,6 +62,51 @@ func TestPacketFilter_SetPeerConfigRules(t *testing.T) {
 	}
 }
 
+func TestPacketFilter_SetServiceRules(t *testing.T) {
+	f := NewPacketFilter(true)
+
+	// Add service rules (like coordinator service ports)
+	rules := []FilterRule{
+		{Port: 9443, Protocol: ProtoTCP, Action: ActionAllow},
+		{Port: 443, Protocol: ProtoTCP, Action: ActionAllow},
+	}
+	f.SetServiceRules(rules)
+
+	if f.RuleCount() != 2 {
+		t.Errorf("expected 2 rules, got %d", f.RuleCount())
+	}
+
+	// Verify service rules show in list
+	allRules := f.ListRules()
+	serviceCount := 0
+	for _, r := range allRules {
+		if r.Source == SourceService {
+			serviceCount++
+		}
+	}
+	if serviceCount != 2 {
+		t.Errorf("expected 2 service rules, got %d", serviceCount)
+	}
+
+	// Replace with new rules
+	newRules := []FilterRule{
+		{Port: 8080, Protocol: ProtoTCP, Action: ActionAllow},
+	}
+	f.SetServiceRules(newRules)
+
+	if f.RuleCount() != 1 {
+		t.Errorf("expected 1 rule after replacement, got %d", f.RuleCount())
+	}
+
+	// Verify service rules allow traffic (SYN to port 8080)
+	src := net.ParseIP("10.0.0.1")
+	dst := net.ParseIP("10.0.0.2")
+	packet := buildTCPPacket(src, dst, 12345, 8080)
+	if f.ShouldDrop(packet) {
+		t.Error("expected service rule to allow SYN to port 8080")
+	}
+}
+
 func TestPacketFilter_TemporaryRules(t *testing.T) {
 	f := NewPacketFilter(true)
 
@@ -148,8 +193,14 @@ func TestPacketFilter_ListRules(t *testing.T) {
 	}
 }
 
-// buildTCPPacket creates a minimal TCP packet for testing.
+// buildTCPPacket creates a minimal TCP SYN packet for testing (new connection attempt).
 func buildTCPPacket(srcIP, dstIP net.IP, srcPort, dstPort uint16) []byte {
+	return buildTCPPacketWithFlags(srcIP, dstIP, srcPort, dstPort, 0x02) // SYN flag
+}
+
+// buildTCPPacketWithFlags creates a TCP packet with specific flags for testing.
+// Common flags: SYN=0x02, ACK=0x10, SYN+ACK=0x12, FIN=0x01
+func buildTCPPacketWithFlags(srcIP, dstIP net.IP, srcPort, dstPort uint16, flags byte) []byte {
 	// 20 bytes IP header + 20 bytes TCP header (minimum)
 	packet := make([]byte, 40)
 
@@ -164,6 +215,10 @@ func buildTCPPacket(srcIP, dstIP net.IP, srcPort, dstPort uint16) []byte {
 	packet[21] = byte(srcPort)
 	packet[22] = byte(dstPort >> 8)
 	packet[23] = byte(dstPort)
+	// Data offset (5 = 20 bytes header) and reserved
+	packet[32] = 0x50
+	// TCP flags at offset 13 of TCP header (offset 33 of packet)
+	packet[33] = flags
 
 	return packet
 }
@@ -708,6 +763,62 @@ func TestFilterResult_SourcePeer(t *testing.T) {
 	result = f.CheckPacketFromPeer(packet, "")
 	if result.SourcePeer != "" {
 		t.Errorf("expected empty SourcePeer, got '%s'", result.SourcePeer)
+	}
+}
+
+// TestPacketFilter_TCPResponsesAllowed verifies that TCP response packets (non-SYN)
+// are allowed through even in deny-by-default mode. This enables outgoing connections
+// to work while still filtering incoming connection attempts.
+func TestPacketFilter_TCPResponsesAllowed(t *testing.T) {
+	f := NewPacketFilter(true) // Default deny
+
+	src := net.ParseIP("10.0.0.1")
+	dst := net.ParseIP("10.0.0.2")
+
+	// Test SYN packet (new connection) - should be filtered
+	synPacket := buildTCPPacketWithFlags(src, dst, 12345, 8080, 0x02) // SYN only
+	result := f.CheckPacketFromPeer(synPacket, "peer1")
+	if !result.Drop {
+		t.Error("expected SYN packet to port 8080 to be dropped (not in allow list)")
+	}
+
+	// Test SYN-ACK packet (response to SYN) - should be allowed
+	synAckPacket := buildTCPPacketWithFlags(src, dst, 8080, 12345, 0x12) // SYN+ACK
+	result = f.CheckPacketFromPeer(synAckPacket, "peer1")
+	if result.Drop {
+		t.Error("expected SYN-ACK packet to be allowed (response traffic)")
+	}
+
+	// Test ACK packet (established connection) - should be allowed
+	ackPacket := buildTCPPacketWithFlags(src, dst, 8080, 12345, 0x10) // ACK only
+	result = f.CheckPacketFromPeer(ackPacket, "peer1")
+	if result.Drop {
+		t.Error("expected ACK packet to be allowed (established traffic)")
+	}
+
+	// Test pure data packet (PSH+ACK) - should be allowed
+	pshAckPacket := buildTCPPacketWithFlags(src, dst, 8080, 12345, 0x18) // PSH+ACK
+	result = f.CheckPacketFromPeer(pshAckPacket, "peer1")
+	if result.Drop {
+		t.Error("expected PSH+ACK packet to be allowed (data traffic)")
+	}
+
+	// Test FIN packet - should be allowed
+	finPacket := buildTCPPacketWithFlags(src, dst, 8080, 12345, 0x01) // FIN only
+	result = f.CheckPacketFromPeer(finPacket, "peer1")
+	if result.Drop {
+		t.Error("expected FIN packet to be allowed")
+	}
+
+	// Now add an allow rule and verify SYN to allowed port works
+	f.SetCoordinatorRules([]FilterRule{
+		{Port: 22, Protocol: ProtoTCP, Action: ActionAllow},
+	})
+
+	synToAllowed := buildTCPPacketWithFlags(src, dst, 12345, 22, 0x02) // SYN to port 22
+	result = f.CheckPacketFromPeer(synToAllowed, "peer1")
+	if result.Drop {
+		t.Error("expected SYN to allowed port 22 to pass")
 	}
 }
 
