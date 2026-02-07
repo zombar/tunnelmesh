@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -192,7 +193,17 @@ func getServiceConfig() (*svc.ServiceConfig, error) {
 		configPath = ctx.ConfigPath
 	}
 	if configPath == "" {
-		return nil, fmt.Errorf("context %q has no config path; use --config to specify one", ctxName)
+		// No config path - generate one from context values if we have server/token
+		if ctx.Server == "" || ctx.AuthToken == "" {
+			return nil, fmt.Errorf("context %q has no config path and no server/token; use --config to specify one", ctxName)
+		}
+		// Generate config file from context
+		generatedPath, err := generateConfigFromContext(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("generate config from context: %w", err)
+		}
+		configPath = generatedPath
+		log.Info().Str("path", configPath).Msg("generated config file from context")
 	}
 
 	return &svc.ServiceConfig{
@@ -427,4 +438,45 @@ func runServiceLogs(cmd *cobra.Command, args []string) error {
 		Follow:      logsFollow,
 		Lines:       logsLines,
 	})
+}
+
+// generateConfigFromContext creates a config file from context values.
+// This is used when installing a service from a context that was created
+// with --server/--token flags instead of a config file.
+func generateConfigFromContext(ctx *context.Context) (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("get home dir: %w", err)
+	}
+
+	// Create config directory if needed
+	configDir := filepath.Join(homeDir, ".tunnelmesh")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		return "", fmt.Errorf("create config dir: %w", err)
+	}
+
+	// Config file path based on context name
+	configPath := filepath.Join(configDir, fmt.Sprintf("config-%s.yaml", ctx.Name))
+
+	// Generate minimal config
+	dnsListen := ctx.DNSListen
+	if dnsListen == "" {
+		dnsListen = "127.0.0.53:5353"
+	}
+
+	configContent := fmt.Sprintf(`# Auto-generated from context %q
+server: %q
+auth_token: %q
+private_key: %q
+
+dns:
+  enabled: true
+  listen: %q
+`, ctx.Name, ctx.Server, ctx.AuthToken, filepath.Join(configDir, "id_ed25519"), dnsListen)
+
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		return "", fmt.Errorf("write config file: %w", err)
+	}
+
+	return configPath, nil
 }
