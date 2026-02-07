@@ -196,7 +196,7 @@ func TestPutObject(t *testing.T) {
 	assert.NotEmpty(t, w.Header().Get("ETag"))
 
 	// Verify object exists
-	_, meta, err := store.GetObject("my-bucket", "greeting.txt")
+	meta, err := store.HeadObject("my-bucket", "greeting.txt")
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(content)), meta.Size)
 }
