@@ -36,14 +36,15 @@ class NodeMap {
             center: [20, 0],
             zoom: 2,
             scrollWheelZoom: false,
-            attributionControl: false
+            attributionControl: false,
         });
 
         // Use CartoDB Dark Matter tiles for dark theme
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            attribution:
+                '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
             subdomains: 'abcd',
-            maxZoom: 19
+            maxZoom: 19,
         }).addTo(this.map);
 
         this.initialized = true;
@@ -68,7 +69,7 @@ class NodeMap {
         // Group peers by location to detect co-located nodes
         // Only include peers with confirmed location (has source = "manual" or "ip")
         const locationGroups = new Map(); // "lat,lng" -> [peer, ...]
-        peers.forEach(peer => {
+        peers.forEach((peer) => {
             if (!peer.location || !peer.location.source) {
                 return; // No location or location not yet determined
             }
@@ -81,7 +82,7 @@ class NodeMap {
 
         // Calculate offsets for co-located nodes (arrange in a circle)
         const peerOffsets = new Map(); // peerName -> {latOffset, lngOffset}
-        locationGroups.forEach(groupPeers => {
+        locationGroups.forEach((groupPeers) => {
             if (groupPeers.length > 1) {
                 // Offset in degrees (~0.45 degrees ≈ 50km)
                 const offsetRadius = 0.45;
@@ -89,13 +90,13 @@ class NodeMap {
                     const angle = (2 * Math.PI * i) / groupPeers.length;
                     peerOffsets.set(peer.name, {
                         latOffset: offsetRadius * Math.sin(angle),
-                        lngOffset: offsetRadius * Math.cos(angle)
+                        lngOffset: offsetRadius * Math.cos(angle),
                     });
                 });
             }
         });
 
-        peers.forEach(peer => {
+        peers.forEach((peer) => {
             if (!peer.location || !peer.location.source) {
                 // No location or location not yet determined - remove marker if exists
                 if (this.markers.has(peer.name)) {
@@ -123,8 +124,9 @@ class NodeMap {
             // Track online peers with location for connection drawing
             if (peer.online) {
                 this.onlinePeersWithLocation.set(peer.name, {
-                    lat, lng,
-                    exitNode: peer.exit_node || ''
+                    lat,
+                    lng,
+                    exitNode: peer.exit_node || '',
                 });
             }
 
@@ -153,7 +155,7 @@ class NodeMap {
 
         // Remove markers for peers no longer present
         // Note: iterate over a copy of keys since removeMarker modifies the Map
-        [...this.markers.keys()].forEach(peerName => {
+        [...this.markers.keys()].forEach((peerName) => {
             if (!seenPeers.has(peerName)) {
                 this.removeMarker(peerName);
             }
@@ -187,7 +189,7 @@ class NodeMap {
         if (boundsArray.length > 0 && this.map && !this.bounds) {
             const bounds = L.latLngBounds(boundsArray);
             // Delay fitBounds if map was just shown to ensure invalidateSize completed
-            const fitBoundsDelay = (mapSection && mapSection.style.display !== 'none') ? 150 : 0;
+            const fitBoundsDelay = mapSection && mapSection.style.display !== 'none' ? 150 : 0;
             setTimeout(() => {
                 if (this.map) {
                     // Disable animation to prevent elastic zoom on page load
@@ -217,12 +219,19 @@ class NodeMap {
                 const key = `${this.selectedPeer}-${peerName}`;
 
                 // Skip if either location is invalid
-                if (!selectedLoc || !loc || isNaN(selectedLoc.lat) || isNaN(selectedLoc.lng) || isNaN(loc.lat) || isNaN(loc.lng)) {
+                if (
+                    !selectedLoc ||
+                    !loc ||
+                    Number.isNaN(selectedLoc.lat) ||
+                    Number.isNaN(selectedLoc.lng) ||
+                    Number.isNaN(loc.lat) ||
+                    Number.isNaN(loc.lng)
+                ) {
                     return;
                 }
 
                 // Check if this is an exit path connection
-                const isExitPath = (selectedExitNode === peerName) || (loc.exitNode === this.selectedPeer);
+                const isExitPath = selectedExitNode === peerName || loc.exitNode === this.selectedPeer;
 
                 expectedConnections.add(key);
 
@@ -238,7 +247,7 @@ class NodeMap {
 
         // Remove connections that no longer exist
         // Note: iterate over a copy of keys since removeConnection modifies the Map
-        [...this.connections.keys()].forEach(key => {
+        [...this.connections.keys()].forEach((key) => {
             if (!expectedConnections.has(key)) {
                 this.removeConnection(key);
             }
@@ -267,8 +276,8 @@ class NodeMap {
 
         // Offset perpendicular to the line (scale with distance)
         const curveAmount = distance * 0.15;
-        const perpX = -dy / distance * curveAmount;
-        const perpY = dx / distance * curveAmount;
+        const perpX = (-dy / distance) * curveAmount;
+        const perpY = (dx / distance) * curveAmount;
 
         // Control point for quadratic bezier
         const ctrlLat = midLat + perpY;
@@ -315,11 +324,11 @@ class NodeMap {
             weight: isExitPath ? 3 : 2,
             opacity: 1,
             smoothFactor: 1,
-            dashArray: isExitPath ? null : '6, 4'  // Solid for exit, dashed for mesh
+            dashArray: isExitPath ? null : '6, 4', // Solid for exit, dashed for mesh
         }).addTo(this.map);
 
         // Bring markers to front (above connection lines)
-        this.markers.forEach(entry => {
+        this.markers.forEach((entry) => {
             if (entry.marker) entry.marker.bringToFront();
         });
 
@@ -340,7 +349,7 @@ class NodeMap {
                 entry.polyline.setStyle({
                     color: isExitPath ? '#f0a500' : '#58a6ff',
                     weight: isExitPath ? 3 : 2,
-                    dashArray: isExitPath ? null : '6, 4'
+                    dashArray: isExitPath ? null : '6, 4',
                 });
                 entry.isExitPath = isExitPath;
             }
@@ -365,7 +374,7 @@ class NodeMap {
             color: color,
             weight: 2,
             opacity: 1,
-            fillOpacity: 0.8
+            fillOpacity: 0.8,
         }).addTo(this.map);
 
         // Click to select this node (without zooming since user already sees it)
@@ -392,7 +401,7 @@ class NodeMap {
         // Update style
         marker.setStyle({
             fillColor: color,
-            color: color
+            color: color,
         });
 
         // Store updated location info
@@ -432,7 +441,7 @@ class NodeMap {
         if (previousSelected && this.markers.has(previousSelected)) {
             const entry = this.markers.get(previousSelected);
             // Use correct color based on online status
-            const isOnline = entry.peer && entry.peer.online;
+            const isOnline = entry.peer?.online;
             const color = isOnline ? '#3fb950' : '#6b7280'; // green for online, grey for offline
             if (entry.marker) {
                 entry.marker.setStyle({ fillColor: color, color: color });
@@ -448,7 +457,8 @@ class NodeMap {
             }
 
             // Manage single accuracy circle (only for IP geolocation, never for manual)
-            const shouldShowCircle = entry.loc &&
+            const shouldShowCircle =
+                entry.loc &&
                 entry.loc.source === 'ip' &&
                 entry.loc.accuracy &&
                 entry.loc.accuracy > 1000 &&
@@ -468,7 +478,7 @@ class NodeMap {
                         weight: 1,
                         opacity: 0.3,
                         fillOpacity: 0.1,
-                        dashArray: '5, 5'
+                        dashArray: '5, 5',
                     }).addTo(this.map);
                 }
             } else {
@@ -557,3 +567,6 @@ class NodeMap {
         this.initialized = false;
     }
 }
+
+// Expose to window for use in app.js
+window.NodeMap = NodeMap;

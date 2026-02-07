@@ -65,6 +65,7 @@ header .brand {
 header .logo {
     width: 54px;
     height: 54px;
+    border-radius: 22.37%; /* Apple squircle approximation */
 }
 
 header h1 {
@@ -669,6 +670,17 @@ tr:last-child td {
 
 tr:hover td {
     background: var(--color-bg-secondary);
+}
+
+/* DNS group highlight - invert: brighten OTHER rows, keep grouped rows normal */
+#dns-body.dns-group-active tr:not(.dns-group-highlight) td {
+    background: var(--color-bg-secondary);
+}
+
+/* Override normal hover for grouped rows - keep them at base background */
+#dns-body.dns-group-active tr.dns-group-highlight td,
+#dns-body.dns-group-active tr.dns-group-highlight:hover td {
+    background: var(--color-bg-primary);
 }
 
 td {
@@ -1318,6 +1330,51 @@ a.logs-container {
 #no-logs {
     padding: 2rem;
     text-align: center;
+}
+
+/* Resize handle (GitHub-style) */
+.resize-handle {
+    height: 8px;
+    background: var(--color-bg-secondary);
+    border-top: 1px solid var(--color-border-primary);
+    cursor: ns-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    transition: background 0.15s ease;
+}
+
+.resize-handle:hover {
+    background: var(--color-bg-tertiary);
+}
+
+.resize-handle:active {
+    background: var(--color-bg-tertiary);
+}
+
+.resize-handle-grip {
+    width: 36px;
+    height: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+}
+
+.resize-handle-grip::before,
+.resize-handle-grip::after {
+    content: '';
+    width: 36px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--color-border-primary);
+    transition: background 0.15s ease;
+}
+
+.resize-handle:hover .resize-handle-grip::before,
+.resize-handle:hover .resize-handle-grip::after {
+    background: var(--color-text-secondary);
 }
 
 /* Packet Filter Section */
