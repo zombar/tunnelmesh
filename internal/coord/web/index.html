@@ -165,6 +165,70 @@
             </div>
         </section>
 
+        <section id="filter-section" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Packet Filter</h2>
+                <button id="add-filter-rule-btn" class="btn-primary" onclick="event.stopPropagation(); openFilterModal()">+ Add Rule</button>
+            </div>
+            <div class="collapsible-content">
+                <div class="filter-peer-select">
+                    <label for="filter-peer">Select Peer:</label>
+                    <select id="filter-peer" onchange="loadFilterRules()">
+                        <option value="">-- Select a peer --</option>
+                    </select>
+                </div>
+                <div id="filter-info" style="display: none;">
+                    <p class="filter-policy">Default Policy: <strong id="filter-default-policy">--</strong></p>
+                </div>
+                <table id="filter-rules">
+                    <thead>
+                        <tr>
+                            <th>Port</th>
+                            <th>Protocol</th>
+                            <th>Action</th>
+                            <th>Source</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="filter-rules-body"></tbody>
+                </table>
+                <div id="no-filter-rules" class="empty-state" style="display: none;">
+                    No filter rules configured. Select a peer to view their rules.
+                </div>
+            </div>
+        </section>
+
+        <!-- Packet Filter Modal -->
+        <div id="filter-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Add Filter Rule</h3>
+                    <button class="modal-close" onclick="closeFilterModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="filter-rule-port">Port</label>
+                        <input type="number" id="filter-rule-port" min="1" max="65535" placeholder="e.g., 22, 80, 443">
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-protocol">Protocol</label>
+                        <select id="filter-rule-protocol">
+                            <option value="tcp">TCP</option>
+                            <option value="udp">UDP</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="filter-rule-action">Action</label>
+                        <select id="filter-rule-action">
+                            <option value="allow">Allow</option>
+                            <option value="deny">Deny</option>
+                        </select>
+                    </div>
+                    <button class="btn-primary" onclick="addFilterRule()">Add Rule</button>
+                </div>
+            </div>
+        </div>
+
         <section id="dns-section">
             <h2 class="section-toggle" onclick="toggleSection(this)">DNS Records</h2>
             <div class="collapsible-content">

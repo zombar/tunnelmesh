@@ -110,6 +110,15 @@ function initDOMCache() {
     dom.addWgClientBtn = document.getElementById('add-wg-client-btn');
     dom.wgModal = document.getElementById('wg-modal');
 
+    // Filter elements
+    dom.filterSection = document.getElementById('filter-section');
+    dom.filterPeerSelect = document.getElementById('filter-peer');
+    dom.filterRulesBody = document.getElementById('filter-rules-body');
+    dom.noFilterRules = document.getElementById('no-filter-rules');
+    dom.filterModal = document.getElementById('filter-modal');
+    dom.filterInfo = document.getElementById('filter-info');
+    dom.filterDefaultPolicy = document.getElementById('filter-default-policy');
+
     // Chart canvases
     dom.throughputChart = document.getElementById('throughput-chart');
     dom.packetsChart = document.getElementById('packets-chart');
@@ -349,6 +358,12 @@ function updateDashboard(data, loadHistory = false) {
     // Render tables with pagination (reuse the render functions)
     renderDnsTable();
     renderPeersTable();
+
+    // Show filter section and populate peer dropdown if we have peers
+    if (sortedPeers.length > 0 && dom.filterSection) {
+        dom.filterSection.style.display = 'block';
+        populateFilterPeerSelect(sortedPeers);
+    }
 }
 
 function createSparklineSVG(dataTx, dataRx) {
@@ -1600,6 +1615,183 @@ async function deleteWGClient(id, name) {
     }
 }
 
+// ============= PACKET FILTER FUNCTIONS =============
+
+// Populate the peer dropdown for filter rules
+function populateFilterPeerSelect(peers) {
+    if (!dom.filterPeerSelect) return;
+
+    const currentValue = dom.filterPeerSelect.value;
+    dom.filterPeerSelect.innerHTML = '<option value="">-- Select a peer --</option>';
+
+    peers.forEach(peer => {
+        const opt = document.createElement('option');
+        opt.value = peer.name;
+        opt.textContent = peer.name;
+        dom.filterPeerSelect.appendChild(opt);
+    });
+
+    // Restore selection if it still exists
+    if (currentValue && peers.some(p => p.name === currentValue)) {
+        dom.filterPeerSelect.value = currentValue;
+    }
+}
+
+// Load filter rules for selected peer
+async function loadFilterRules() {
+    const peerName = dom.filterPeerSelect?.value;
+
+    if (!peerName) {
+        if (dom.filterRulesBody) dom.filterRulesBody.innerHTML = '';
+        if (dom.noFilterRules) dom.noFilterRules.style.display = 'block';
+        if (dom.filterInfo) dom.filterInfo.style.display = 'none';
+        return;
+    }
+
+    try {
+        const resp = await fetch(`api/filter/rules?peer=${encodeURIComponent(peerName)}`);
+        if (!resp.ok) {
+            showToast('Failed to load filter rules', 'error');
+            return;
+        }
+
+        const data = await resp.json();
+        renderFilterRules(data);
+    } catch (err) {
+        console.error('Failed to load filter rules:', err);
+        showToast('Failed to load filter rules', 'error');
+    }
+}
+window.loadFilterRules = loadFilterRules;
+
+// Render filter rules table
+function renderFilterRules(data) {
+    if (!dom.filterRulesBody) return;
+
+    // Show default policy
+    if (dom.filterInfo) {
+        dom.filterInfo.style.display = 'block';
+    }
+    if (dom.filterDefaultPolicy) {
+        dom.filterDefaultPolicy.textContent = data.default_deny ? 'DENY (whitelist mode)' : 'ALLOW (blacklist mode)';
+        dom.filterDefaultPolicy.className = data.default_deny ? 'policy-deny' : 'policy-allow';
+    }
+
+    if (!data.rules || data.rules.length === 0) {
+        dom.filterRulesBody.innerHTML = '';
+        if (dom.noFilterRules) dom.noFilterRules.style.display = 'block';
+        return;
+    }
+
+    if (dom.noFilterRules) dom.noFilterRules.style.display = 'none';
+
+    dom.filterRulesBody.innerHTML = data.rules.map(rule => `
+        <tr>
+            <td>${rule.port}</td>
+            <td>${rule.protocol.toUpperCase()}</td>
+            <td class="${rule.action === 'allow' ? 'action-allow' : 'action-deny'}">${rule.action.toUpperCase()}</td>
+            <td>${rule.source}</td>
+            <td>
+                ${rule.source === 'temporary' ?
+                    `<button class="btn-danger" onclick="removeFilterRule('${data.peer}', ${rule.port}, '${rule.protocol}')">Remove</button>` :
+                    '<span class="text-muted">-</span>'}
+            </td>
+        </tr>
+    `).join('');
+}
+
+// Open filter rule modal
+function openFilterModal() {
+    if (!dom.filterPeerSelect?.value) {
+        showToast('Please select a peer first', 'warning');
+        return;
+    }
+    if (dom.filterModal) {
+        dom.filterModal.style.display = 'flex';
+    }
+}
+window.openFilterModal = openFilterModal;
+
+// Close filter rule modal
+function closeFilterModal() {
+    if (dom.filterModal) {
+        dom.filterModal.style.display = 'none';
+    }
+    // Clear form
+    const port = document.getElementById('filter-rule-port');
+    if (port) port.value = '';
+}
+window.closeFilterModal = closeFilterModal;
+
+// Add a filter rule
+async function addFilterRule() {
+    const peerName = dom.filterPeerSelect?.value;
+    const port = parseInt(document.getElementById('filter-rule-port')?.value);
+    const protocol = document.getElementById('filter-rule-protocol')?.value;
+    const action = document.getElementById('filter-rule-action')?.value;
+
+    if (!peerName || !port || !protocol || !action) {
+        showToast('Please fill in all fields', 'warning');
+        return;
+    }
+
+    if (port < 1 || port > 65535) {
+        showToast('Port must be between 1 and 65535', 'warning');
+        return;
+    }
+
+    try {
+        const resp = await fetch('api/filter/rules', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ peer: peerName, port, protocol, action })
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            showToast('Failed to add rule: ' + (err.message || 'Unknown error'), 'error');
+            return;
+        }
+
+        showToast('Filter rule added', 'success');
+        closeFilterModal();
+        loadFilterRules();
+    } catch (err) {
+        console.error('Failed to add filter rule:', err);
+        showToast('Failed to add filter rule', 'error');
+    }
+}
+window.addFilterRule = addFilterRule;
+
+// Remove a filter rule
+async function removeFilterRule(peerName, port, protocol) {
+    if (!confirm(`Remove filter rule for port ${port}/${protocol.toUpperCase()}?`)) {
+        return;
+    }
+
+    try {
+        const resp = await fetch('api/filter/rules', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ peer: peerName, port, protocol })
+        });
+
+        if (!resp.ok) {
+            showToast('Failed to remove rule', 'error');
+            return;
+        }
+
+        showToast('Filter rule removed', 'success');
+        loadFilterRules();
+    } catch (err) {
+        console.error('Failed to remove filter rule:', err);
+        showToast('Failed to remove filter rule', 'error');
+    }
+}
+window.removeFilterRule = removeFilterRule;
+
+// ============= END PACKET FILTER FUNCTIONS =============
+
 // Highlight peer on charts when selected
 function highlightPeerOnCharts(peerName) {
     state.charts.highlightedPeer = peerName;
@@ -1694,6 +1886,15 @@ document.addEventListener('DOMContentLoaded', () => {
         dom.wgModal.addEventListener('click', (e) => {
             if (e.target === dom.wgModal) {
                 closeWGModal();
+            }
+        });
+    }
+
+    // Close filter modal on background click
+    if (dom.filterModal) {
+        dom.filterModal.addEventListener('click', (e) => {
+            if (e.target === dom.filterModal) {
+                closeFilterModal();
             }
         });
     }

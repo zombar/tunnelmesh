@@ -1089,7 +1089,7 @@ func TestFilterConfig_Validate(t *testing.T) {
 			name: "valid TCP allow rule",
 			config: FilterConfig{
 				Rules: []FilterRule{
-					{Port: 22, Protocol: 6, Action: "allow"},
+					{Port: 22, Protocol: "tcp", Action: "allow"},
 				},
 			},
 			wantErr: false,
@@ -1098,7 +1098,7 @@ func TestFilterConfig_Validate(t *testing.T) {
 			name: "valid UDP deny rule",
 			config: FilterConfig{
 				Rules: []FilterRule{
-					{Port: 53, Protocol: 17, Action: "deny"},
+					{Port: 53, Protocol: "udp", Action: "deny"},
 				},
 			},
 			wantErr: false,
@@ -1107,10 +1107,20 @@ func TestFilterConfig_Validate(t *testing.T) {
 			name: "multiple valid rules",
 			config: FilterConfig{
 				Rules: []FilterRule{
-					{Port: 22, Protocol: 6, Action: "allow"},
-					{Port: 80, Protocol: 6, Action: "allow"},
-					{Port: 443, Protocol: 6, Action: "allow"},
-					{Port: 53, Protocol: 17, Action: "allow"},
+					{Port: 22, Protocol: "tcp", Action: "allow"},
+					{Port: 80, Protocol: "tcp", Action: "allow"},
+					{Port: 443, Protocol: "tcp", Action: "allow"},
+					{Port: 53, Protocol: "udp", Action: "allow"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "case insensitive protocol",
+			config: FilterConfig{
+				Rules: []FilterRule{
+					{Port: 22, Protocol: "TCP", Action: "allow"},
+					{Port: 53, Protocol: "UDP", Action: "allow"},
 				},
 			},
 			wantErr: false,
@@ -1119,7 +1129,7 @@ func TestFilterConfig_Validate(t *testing.T) {
 			name: "missing port",
 			config: FilterConfig{
 				Rules: []FilterRule{
-					{Port: 0, Protocol: 6, Action: "allow"},
+					{Port: 0, Protocol: "tcp", Action: "allow"},
 				},
 			},
 			wantErr: true,
@@ -1129,17 +1139,17 @@ func TestFilterConfig_Validate(t *testing.T) {
 			name: "invalid protocol",
 			config: FilterConfig{
 				Rules: []FilterRule{
-					{Port: 22, Protocol: 1, Action: "allow"}, // ICMP not supported
+					{Port: 22, Protocol: "icmp", Action: "allow"},
 				},
 			},
 			wantErr: true,
-			errMsg:  "protocol must be 6 (TCP) or 17 (UDP)",
+			errMsg:  "protocol must be 'tcp' or 'udp'",
 		},
 		{
 			name: "invalid action",
 			config: FilterConfig{
 				Rules: []FilterRule{
-					{Port: 22, Protocol: 6, Action: "block"},
+					{Port: 22, Protocol: "tcp", Action: "block"},
 				},
 			},
 			wantErr: true,
@@ -1149,7 +1159,7 @@ func TestFilterConfig_Validate(t *testing.T) {
 			name: "empty action",
 			config: FilterConfig{
 				Rules: []FilterRule{
-					{Port: 22, Protocol: 6, Action: ""},
+					{Port: 22, Protocol: "tcp", Action: ""},
 				},
 			},
 			wantErr: true,
@@ -1182,13 +1192,13 @@ filter:
   default_deny: true
   rules:
     - port: 22
-      protocol: 6
+      protocol: tcp
       action: allow
     - port: 80
-      protocol: 6
+      protocol: tcp
       action: allow
     - port: 53
-      protocol: 17
+      protocol: udp
       action: allow
 `
 	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
@@ -1199,7 +1209,8 @@ filter:
 	assert.True(t, cfg.Filter.IsDefaultDeny())
 	assert.Len(t, cfg.Filter.Rules, 3)
 	assert.Equal(t, uint16(22), cfg.Filter.Rules[0].Port)
-	assert.Equal(t, uint8(6), cfg.Filter.Rules[0].Protocol)
+	assert.Equal(t, "tcp", cfg.Filter.Rules[0].Protocol)
+	assert.Equal(t, uint8(6), cfg.Filter.Rules[0].ProtocolNumber())
 	assert.Equal(t, "allow", cfg.Filter.Rules[0].Action)
 }
 
@@ -1214,10 +1225,10 @@ filter:
   default_deny: true
   rules:
     - port: 22
-      protocol: 6
+      protocol: tcp
       action: allow
     - port: 9443
-      protocol: 6
+      protocol: tcp
       action: allow
 `
 	configPath := testutil.TempFile(t, dir, "server.yaml", content)
@@ -1227,4 +1238,25 @@ filter:
 
 	assert.True(t, cfg.Filter.IsDefaultDeny())
 	assert.Len(t, cfg.Filter.Rules, 2)
+}
+
+func TestFilterRule_ProtocolNumber(t *testing.T) {
+	tests := []struct {
+		protocol string
+		want     uint8
+	}{
+		{"tcp", 6},
+		{"TCP", 6},
+		{"udp", 17},
+		{"UDP", 17},
+		{"icmp", 0},
+		{"", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.protocol, func(t *testing.T) {
+			rule := FilterRule{Protocol: tt.protocol}
+			assert.Equal(t, tt.want, rule.ProtocolNumber())
+		})
+	}
 }

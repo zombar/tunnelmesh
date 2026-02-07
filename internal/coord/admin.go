@@ -253,6 +253,9 @@ func (s *Server) setupAdminRoutes() {
 			s.adminMux.HandleFunc("/api/wireguard/clients/", s.handleWGClientByID)
 		}
 
+		// Filter rule management
+		s.adminMux.HandleFunc("/api/filter/rules", s.handleFilterRules)
+
 		// Expose metrics on admin interface for Prometheus scraping via mesh IP
 		s.adminMux.Handle("/metrics", promhttp.Handler())
 
@@ -267,6 +270,9 @@ func (s *Server) setupAdminRoutes() {
 			s.mux.HandleFunc("/admin/api/wireguard/clients", s.handleWGClients)
 			s.mux.HandleFunc("/admin/api/wireguard/clients/", s.handleWGClientByID)
 		}
+
+		// Filter rule management
+		s.mux.HandleFunc("/admin/api/filter/rules", s.handleFilterRules)
 
 		s.mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
@@ -495,4 +501,136 @@ func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
 			}
 		}
 	}
+}
+
+// FilterRulesRequest is the request for adding/removing filter rules.
+type FilterRulesRequest struct {
+	PeerName string `json:"peer"`     // Target peer name
+	Port     uint16 `json:"port"`     // Port number
+	Protocol string `json:"protocol"` // "tcp" or "udp"
+	Action   string `json:"action"`   // "allow" or "deny"
+}
+
+// FilterRulesResponse is the response for listing filter rules.
+type FilterRulesResponse struct {
+	PeerName    string           `json:"peer"`
+	DefaultDeny bool             `json:"default_deny"`
+	Rules       []FilterRuleInfo `json:"rules"`
+}
+
+// FilterRuleInfo represents a filter rule for API responses.
+type FilterRuleInfo struct {
+	Port     uint16 `json:"port"`
+	Protocol string `json:"protocol"`
+	Action   string `json:"action"`
+	Source   string `json:"source"`  // "coordinator", "config", "temporary"
+	Expires  int64  `json:"expires"` // Unix timestamp, 0=permanent
+}
+
+// handleFilterRules handles GET (list) and POST/DELETE for filter rules.
+// GET: List rules for a peer (requires ?peer=name query param)
+// POST: Add a temporary rule to a peer
+// DELETE: Remove a temporary rule from a peer
+func (s *Server) handleFilterRules(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleFilterRulesList(w, r)
+	case http.MethodPost:
+		s.handleFilterRuleAdd(w, r)
+	case http.MethodDelete:
+		s.handleFilterRuleRemove(w, r)
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleFilterRulesList returns the filter rules for a peer.
+func (s *Server) handleFilterRulesList(w http.ResponseWriter, r *http.Request) {
+	peerName := r.URL.Query().Get("peer")
+	if peerName == "" {
+		s.jsonError(w, "peer parameter required", http.StatusBadRequest)
+		return
+	}
+
+	// For now, we return the coordinator's global filter rules
+	// In a full implementation, we'd query the peer's current rules via the relay
+	rules := make([]FilterRuleInfo, 0, len(s.cfg.Filter.Rules))
+	for _, r := range s.cfg.Filter.Rules {
+		rules = append(rules, FilterRuleInfo{
+			Port:     r.Port,
+			Protocol: r.Protocol,
+			Action:   r.Action,
+			Source:   "coordinator",
+			Expires:  0,
+		})
+	}
+
+	resp := FilterRulesResponse{
+		PeerName:    peerName,
+		DefaultDeny: s.cfg.Filter.IsDefaultDeny(),
+		Rules:       rules,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleFilterRuleAdd adds a temporary filter rule to a peer.
+func (s *Server) handleFilterRuleAdd(w http.ResponseWriter, r *http.Request) {
+	var req FilterRulesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.PeerName == "" {
+		s.jsonError(w, "peer is required", http.StatusBadRequest)
+		return
+	}
+	if req.Port == 0 {
+		s.jsonError(w, "port is required", http.StatusBadRequest)
+		return
+	}
+	if req.Protocol != "tcp" && req.Protocol != "udp" {
+		s.jsonError(w, "protocol must be 'tcp' or 'udp'", http.StatusBadRequest)
+		return
+	}
+	if req.Action != "allow" && req.Action != "deny" {
+		s.jsonError(w, "action must be 'allow' or 'deny'", http.StatusBadRequest)
+		return
+	}
+
+	// Push the rule to the peer via relay
+	s.relay.PushFilterRuleAdd(req.PeerName, req.Port, req.Protocol, req.Action)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// handleFilterRuleRemove removes a temporary filter rule from a peer.
+func (s *Server) handleFilterRuleRemove(w http.ResponseWriter, r *http.Request) {
+	var req FilterRulesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.PeerName == "" {
+		s.jsonError(w, "peer is required", http.StatusBadRequest)
+		return
+	}
+	if req.Port == 0 {
+		s.jsonError(w, "port is required", http.StatusBadRequest)
+		return
+	}
+	if req.Protocol != "tcp" && req.Protocol != "udp" {
+		s.jsonError(w, "protocol must be 'tcp' or 'udp'", http.StatusBadRequest)
+		return
+	}
+
+	// Push the rule removal to the peer via relay
+	s.relay.PushFilterRuleRemove(req.PeerName, req.Port, req.Protocol)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

@@ -321,6 +321,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
+// getServicePorts returns the list of service ports the coordinator exposes.
+// These ports are pushed to peers so they can auto-allow access.
+func (s *Server) getServicePorts() []uint16 {
+	var ports []uint16
+
+	// Admin dashboard port (if enabled)
+	if s.cfg.Admin.Enabled && s.cfg.Admin.Port > 0 {
+		ports = append(ports, uint16(s.cfg.Admin.Port))
+	}
+
+	// Relay and WebSocket are on the main listen port, which is parsed from cfg.Listen
+	// The main server port is typically already accessible, so we only need to expose
+	// the admin port which runs on the mesh IP
+
+	return ports
+}
+
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")

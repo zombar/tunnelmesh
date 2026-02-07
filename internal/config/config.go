@@ -120,8 +120,20 @@ type LokiConfig struct {
 // FilterRule represents a single packet filter rule for config files.
 type FilterRule struct {
 	Port     uint16 `yaml:"port"`     // Port number (1-65535)
-	Protocol uint8  `yaml:"protocol"` // 6=TCP, 17=UDP
+	Protocol string `yaml:"protocol"` // "tcp" or "udp"
 	Action   string `yaml:"action"`   // "allow" or "deny"
+}
+
+// ProtocolNumber returns the IP protocol number (6 for TCP, 17 for UDP).
+func (r *FilterRule) ProtocolNumber() uint8 {
+	switch strings.ToLower(r.Protocol) {
+	case "tcp":
+		return 6
+	case "udp":
+		return 17
+	default:
+		return 0
+	}
 }
 
 // FilterConfig holds packet filter configuration.
@@ -143,8 +155,9 @@ func (f *FilterConfig) Validate() error {
 		if rule.Port == 0 {
 			return fmt.Errorf("filter.rules[%d].port is required", i)
 		}
-		if rule.Protocol != 6 && rule.Protocol != 17 {
-			return fmt.Errorf("filter.rules[%d].protocol must be 6 (TCP) or 17 (UDP), got %d", i, rule.Protocol)
+		proto := strings.ToLower(rule.Protocol)
+		if proto != "tcp" && proto != "udp" {
+			return fmt.Errorf("filter.rules[%d].protocol must be 'tcp' or 'udp', got %q", i, rule.Protocol)
 		}
 		if rule.Action != "allow" && rule.Action != "deny" {
 			return fmt.Errorf("filter.rules[%d].action must be 'allow' or 'deny', got %q", i, rule.Action)

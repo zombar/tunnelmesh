@@ -1319,3 +1319,77 @@ a.logs-container {
     padding: 2rem;
     text-align: center;
 }
+
+/* Packet Filter Section */
+#filter-section {
+    margin-top: 1.5rem;
+}
+
+.filter-peer-select {
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.filter-peer-select label {
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+}
+
+.filter-peer-select select {
+    padding: 0.5rem;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: 6px;
+    color: var(--color-text-primary);
+    font-size: 0.875rem;
+    min-width: 200px;
+}
+
+.filter-peer-select select:focus {
+    outline: none;
+    border-color: var(--color-accent-blue);
+    box-shadow: 0 0 0 2px var(--color-focus-ring);
+}
+
+.filter-policy {
+    margin-bottom: 1rem;
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+}
+
+.policy-deny {
+    color: var(--color-accent-red);
+}
+
+.policy-allow {
+    color: var(--color-accent-green);
+}
+
+.action-allow {
+    color: var(--color-accent-green);
+    font-weight: 500;
+}
+
+.action-deny {
+    color: var(--color-accent-red);
+    font-weight: 500;
+}
+
+/* Form select styling (shared) */
+.form-group select {
+    width: 100%;
+    padding: 0.5rem;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: 6px;
+    color: var(--color-text-primary);
+    font-size: 0.875rem;
+}
+
+.form-group select:focus {
+    outline: none;
+    border-color: var(--color-accent-blue);
+    box-shadow: 0 0 0 2px var(--color-focus-ring);
+}

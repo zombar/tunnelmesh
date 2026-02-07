@@ -60,6 +60,18 @@ func ParseFilterAction(s string) FilterAction {
 	return ActionDeny
 }
 
+// ProtocolFromString converts a protocol name to its number.
+func ProtocolFromString(s string) uint8 {
+	switch s {
+	case "tcp", "TCP":
+		return ProtoTCP
+	case "udp", "UDP":
+		return ProtoUDP
+	default:
+		return 0
+	}
+}
+
 // FilterRule represents a single packet filter rule.
 type FilterRule struct {
 	Port     uint16       // Port number (1-65535)
