@@ -677,6 +677,12 @@ tr:hover td {
     background: var(--color-bg-secondary);
 }
 
+/* Override normal hover for grouped rows - keep them at base background */
+#dns-body.dns-group-active tr.dns-group-highlight td,
+#dns-body.dns-group-active tr.dns-group-highlight:hover td {
+    background: var(--color-bg-primary);
+}
+
 td {
     color: var(--color-text-primary);
 }
