@@ -36,7 +36,7 @@ sudo tunnelmesh service start
 
 > **Contexts simplify management:** After joining with `--context`, TunnelMesh remembers your configuration. Subsequent commands use the active context automatically—no need to specify `-c` every time.
 >
-> Commands that work without a context: `init`, `version`, `trust-ca` (uses `-s` flag), and `context` subcommands.
+> Commands that work without a context: `init`, `version`, and `context` subcommands.
 
 ---
 
@@ -90,7 +90,6 @@ sudo mv tunnelmesh /usr/local/bin/
 | `tunnelmesh benchmark <peer>` | Speed test to peer |
 | `tunnelmesh service` | Manage system service |
 | `tunnelmesh update` | Self-update binary |
-| `tunnelmesh trust-ca` | Install mesh CA cert |
 | `tunnelmesh version` | Show version info |
 
 ---
@@ -186,7 +185,6 @@ tunnelmesh join [flags]
 | `--latitude` | | Manual latitude (-90 to 90) |
 | `--longitude` | | Manual longitude (-180 to 180) |
 | `--city` | | City name for admin UI display |
-| `--trust-ca` | | Install mesh CA cert (requires sudo) |
 | `--enable-tracing` | | Enable runtime tracing |
 
 **Example - Basic join:**
@@ -657,36 +655,6 @@ sudo tunnelmesh update
 ```bash
 sudo tunnelmesh update --version v1.2.3
 ```
-
----
-
-### tunnelmesh trust-ca
-
-Install the mesh CA certificate in system trust store.
-
-```bash
-sudo tunnelmesh trust-ca [flags]
-```
-
-**Flags:**
-
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--server` | `-s` | Coordinator server URL |
-
-**Example:**
-```bash
-sudo tunnelmesh trust-ca --server https://tunnelmesh.example.com
-```
-
-**What it does:**
-1. Downloads the mesh CA certificate from the coordinator
-2. Installs it in the system trust store
-3. Enables HTTPS connections to mesh services without browser warnings
-
-After trusting the CA, you can access:
-- `https://this.tunnelmesh/` - Admin dashboard
-- `https://peer-name.tunnelmesh/` - Peer services
 
 ---
 
