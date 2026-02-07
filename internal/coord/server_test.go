@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -962,4 +963,76 @@ func TestServer_ValidateAliases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
+	// This test verifies that registered users are recovered after coordinator restart
+	tempDir := t.TempDir()
+
+	cfg := &config.ServerConfig{
+		Listen:       ":0",
+		AuthToken:    "test-token",
+		MeshCIDR:     "172.30.0.0/16",
+		DomainSuffix: ".tunnelmesh",
+		DataDir:      tempDir,
+		S3: config.S3Config{
+			Enabled: true,
+			DataDir: tempDir + "/s3",
+			Port:    9000,
+		},
+	}
+
+	// Create first server instance
+	srv1, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	// Simulate user registration by directly adding to stores
+	testUserID := "testuser123"
+	testPubKey := "dGVzdHB1YmxpY2tleQ==" // base64 "testpublickey"
+
+	// Register user credentials
+	accessKey, secretKey, err := srv1.s3Credentials.RegisterUser(testUserID, testPubKey)
+	require.NoError(t, err)
+	require.NotEmpty(t, accessKey)
+	require.NotEmpty(t, secretKey)
+
+	// Add role binding
+	srv1.s3Authorizer.Bindings.Add(&auth.RoleBinding{
+		Name:     "test-binding",
+		UserID:   testUserID,
+		RoleName: auth.RoleBucketRead,
+	})
+
+	// Persist to system store
+	users := []*auth.User{{ID: testUserID, PublicKey: testPubKey, Name: "Test User"}}
+	err = srv1.s3SystemStore.SaveUsers(users)
+	require.NoError(t, err)
+
+	bindings := srv1.s3Authorizer.Bindings.List()
+	// Filter out service user binding for persistence
+	var userBindings []*auth.RoleBinding
+	for _, b := range bindings {
+		if b.UserID == testUserID {
+			userBindings = append(userBindings, b)
+		}
+	}
+	err = srv1.s3SystemStore.SaveBindings(userBindings)
+	require.NoError(t, err)
+
+	// Create second server instance (simulating restart)
+	srv2, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	// Verify user credentials were recovered
+	recoveredUserID, ok := srv2.s3Credentials.LookupUser(accessKey)
+	assert.True(t, ok, "user should be recovered after restart")
+	assert.Equal(t, testUserID, recoveredUserID)
+
+	recoveredSecret, ok := srv2.s3Credentials.GetSecret(testUserID)
+	assert.True(t, ok, "user secret should be recovered after restart")
+	assert.Equal(t, secretKey, recoveredSecret)
+
+	// Verify role bindings were recovered
+	canRead := srv2.s3Authorizer.Authorize(testUserID, "get", "objects", "test-bucket")
+	assert.True(t, canRead, "user should have read permission after restart")
 }

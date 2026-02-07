@@ -39,6 +39,14 @@ type WireGuardServerConfig struct {
 	Endpoint string `yaml:"endpoint"` // Public endpoint for clients (concentrator address:port)
 }
 
+// S3Config holds configuration for the S3-compatible storage service.
+type S3Config struct {
+	Enabled   bool   `yaml:"enabled"`     // Enable S3 storage (default: false)
+	DataDir   string `yaml:"data_dir"`    // Storage directory for S3 objects (default: {data_dir}/s3)
+	MaxSizeGB int    `yaml:"max_size_gb"` // Maximum storage size in GB (0 = unlimited)
+	Port      int    `yaml:"port"`        // S3 API port (default: 9000)
+}
+
 // WireGuardPeerConfig holds configuration for the WireGuard concentrator mode.
 type WireGuardPeerConfig struct {
 	Enabled      bool   `yaml:"enabled"`       // Run as WireGuard concentrator
@@ -63,6 +71,7 @@ type ServerConfig struct {
 	Admin             AdminConfig           `yaml:"admin"`
 	Relay             RelayConfig           `yaml:"relay"`
 	WireGuard         WireGuardServerConfig `yaml:"wireguard"`
+	S3                S3Config              `yaml:"s3"`            // S3-compatible storage configuration
 	Filter            FilterConfig          `yaml:"filter"`        // Global packet filter rules for all peers
 	ServicePorts      []uint16              `yaml:"service_ports"` // Service ports to auto-allow on peers (default: [9443] for metrics)
 	JoinMesh          *PeerConfig           `yaml:"join_mesh,omitempty"`
@@ -238,6 +247,16 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 	}
 	if len(cfg.ServicePorts) == 0 {
 		cfg.ServicePorts = []uint16{9443} // Default: metrics port for Prometheus scraping
+	}
+
+	// S3 defaults
+	if cfg.S3.Enabled {
+		if cfg.S3.DataDir == "" {
+			cfg.S3.DataDir = filepath.Join(cfg.DataDir, "s3")
+		}
+		if cfg.S3.Port == 0 {
+			cfg.S3.Port = 9000
+		}
 	}
 
 	// WireGuard defaults are applied on demand (endpoint must be set manually)

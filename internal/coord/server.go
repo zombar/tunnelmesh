@@ -18,7 +18,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
+	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
 	"github.com/tunnelmesh/tunnelmesh/internal/tracing"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
@@ -75,6 +77,12 @@ type Server struct {
 	ipGeoCache   *IPGeoCache           // IP geolocation cache for location fallback
 	coordMeshIP  string                // Coordinator's mesh IP for "this.tunnelmesh" resolution
 	coordMetrics *CoordMetrics         // Prometheus metrics for coordinator
+	// S3 storage
+	s3Store       *s3.Store           // S3 file-based storage
+	s3Server      *s3.Server          // S3 HTTP server
+	s3Authorizer  *auth.Authorizer    // RBAC authorizer for S3
+	s3Credentials *s3.CredentialStore // S3 credential store
+	s3SystemStore *s3.SystemStore     // System bucket accessor
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -198,6 +206,13 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		log.Info().Msg("WireGuard client management enabled")
 	}
 
+	// Initialize S3 storage if enabled
+	if cfg.S3.Enabled {
+		if err := srv.initS3Storage(cfg); err != nil {
+			return nil, fmt.Errorf("initialize S3 storage: %w", err)
+		}
+	}
+
 	// Initialize Certificate Authority for mesh TLS
 	ca, err := NewCertificateAuthority(cfg.DataDir, cfg.DomainSuffix)
 	if err != nil {
@@ -315,6 +330,11 @@ func (s *Server) setupRoutes() {
 	if s.cfg.WireGuard.Enabled {
 		s.setupWireGuardRoutes()
 	}
+
+	// Setup user registration endpoint (if S3 is enabled for user management)
+	if s.cfg.S3.Enabled {
+		s.mux.HandleFunc("/api/v1/user/register", s.handleUserRegister)
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -331,10 +351,169 @@ func (s *Server) getServicePorts() []uint16 {
 		ports = append(ports, uint16(s.cfg.Admin.Port))
 	}
 
+	// S3 port (if enabled)
+	if s.cfg.S3.Enabled && s.cfg.S3.Port > 0 {
+		ports = append(ports, uint16(s.cfg.S3.Port))
+	}
+
 	// Configured service ports (includes metrics port 9443 by default)
 	ports = append(ports, s.cfg.ServicePorts...)
 
 	return ports
+}
+
+// initS3Storage initializes the S3 storage subsystem.
+func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
+	// Create quota manager if limit is set
+	var quota *s3.QuotaManager
+	if cfg.S3.MaxSizeGB > 0 {
+		quota = s3.NewQuotaManager(cfg.S3.MaxSizeGB)
+	}
+
+	// Create store
+	store, err := s3.NewStore(cfg.S3.DataDir, quota)
+	if err != nil {
+		return fmt.Errorf("create S3 store: %w", err)
+	}
+	s.s3Store = store
+
+	// Create authorizer
+	s.s3Authorizer = auth.NewAuthorizer()
+
+	// Create credential store
+	s.s3Credentials = s3.NewCredentialStore()
+
+	// Create RBAC authorizer for S3
+	rbacAuth := s3.NewRBACAuthorizer(s.s3Credentials, s.s3Authorizer)
+
+	// Initialize S3 metrics
+	s3Metrics := s3.InitS3Metrics(nil)
+
+	// Create S3 server
+	s.s3Server = s3.NewServer(store, rbacAuth, s3Metrics)
+
+	// Create system store for internal coordinator data
+	// Use a service user ID for the coordinator
+	serviceUserID := auth.ServiceUserPrefix + "coordinator"
+	systemStore, err := s3.NewSystemStore(store, serviceUserID)
+	if err != nil {
+		return fmt.Errorf("create system store: %w", err)
+	}
+	s.s3SystemStore = systemStore
+
+	// Recover users and credentials from previous runs
+	if users, err := systemStore.LoadUsers(); err == nil && len(users) > 0 {
+		log.Info().Int("count", len(users)).Msg("recovering registered users")
+		for _, user := range users {
+			if _, _, err := s.s3Credentials.RegisterUser(user.ID, user.PublicKey); err != nil {
+				log.Warn().Err(err).Str("user", user.ID).Msg("failed to recover user credentials")
+			}
+		}
+	}
+
+	// Recover role bindings
+	if bindings, err := systemStore.LoadBindings(); err == nil && len(bindings) > 0 {
+		log.Info().Int("count", len(bindings)).Msg("recovering role bindings")
+		for _, binding := range bindings {
+			s.s3Authorizer.Bindings.Add(binding)
+		}
+	}
+
+	// Bind service user with system role
+	s.s3Authorizer.Bindings.Add(&auth.RoleBinding{
+		Name:     "coordinator-system",
+		UserID:   serviceUserID,
+		RoleName: auth.RoleSystem,
+	})
+
+	// Register service user credentials (derived from a fixed key for now)
+	// In production, this would be derived from the CA private key
+	if _, _, err := s.s3Credentials.RegisterUser(serviceUserID, serviceUserID); err != nil {
+		return fmt.Errorf("register service user credentials: %w", err)
+	}
+
+	log.Info().
+		Str("data_dir", cfg.S3.DataDir).
+		Int("port", cfg.S3.Port).
+		Int("max_size_gb", cfg.S3.MaxSizeGB).
+		Msg("S3 storage initialized")
+
+	return nil
+}
+
+// StartS3Server starts the S3 API server on the specified address.
+// This should be called after join_mesh completes to bind to the mesh IP.
+func (s *Server) StartS3Server(addr string, tlsCert *tls.Certificate) error {
+	if s.s3Server == nil {
+		return fmt.Errorf("S3 storage not initialized")
+	}
+
+	// Create listener with SO_REUSEADDR
+	lc := net.ListenConfig{
+		Control: setReuseAddr,
+	}
+
+	ln, err := lc.Listen(context.Background(), "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", addr, err)
+	}
+
+	server := &http.Server{
+		Handler: s.s3Server.Handler(),
+	}
+
+	if tlsCert != nil {
+		server.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{*tlsCert},
+			MinVersion:   tls.VersionTLS12,
+		}
+		log.Info().Str("addr", addr).Msg("starting S3 server (HTTPS)")
+		go func() {
+			if err := server.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("S3 server error")
+			}
+		}()
+	} else {
+		log.Info().Str("addr", addr).Msg("starting S3 server (HTTP)")
+		go func() {
+			if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("S3 server error")
+			}
+		}()
+	}
+
+	return nil
+}
+
+// RegisterS3User registers a user for S3 access.
+// Returns the user's S3 access key and secret key.
+func (s *Server) RegisterS3User(userID, publicKey string, roles []string) (accessKey, secretKey string, err error) {
+	if s.s3Credentials == nil {
+		return "", "", fmt.Errorf("S3 storage not initialized")
+	}
+
+	// Register credentials
+	accessKey, secretKey, err = s.s3Credentials.RegisterUser(userID, publicKey)
+	if err != nil {
+		return "", "", fmt.Errorf("register S3 credentials: %w", err)
+	}
+
+	// Bind roles
+	for _, role := range roles {
+		s.s3Authorizer.Bindings.Add(&auth.RoleBinding{
+			Name:     fmt.Sprintf("%s-%s", userID, role),
+			UserID:   userID,
+			RoleName: role,
+		})
+	}
+
+	return accessKey, secretKey, nil
+}
+
+// S3SystemStore returns the system store for internal coordinator data.
+// Returns nil if S3 is not enabled.
+func (s *Server) S3SystemStore() *s3.SystemStore {
+	return s.s3SystemStore
 }
 
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -861,4 +1040,127 @@ func (s *Server) handleWireGuardHandshake(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// handleUserRegister handles user registration requests.
+// This endpoint allows users to register their identity with the mesh.
+// The first human user to register becomes an admin.
+func (s *Server) handleUserRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req proto.UserRegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if req.UserID == "" || req.PublicKey == "" {
+		s.jsonError(w, "user_id and public_key are required", http.StatusBadRequest)
+		return
+	}
+
+	// Verify the signature to prove ownership of the private key
+	if !auth.VerifyUserSignature(req.PublicKey, req.UserID, req.Signature) {
+		s.jsonError(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	// Check if user is already registered
+	existingBindings := s.s3Authorizer.Bindings.GetForUser(req.UserID)
+	if len(existingBindings) > 0 {
+		// User already registered - return existing info
+		roles := make([]string, 0, len(existingBindings))
+		for _, b := range existingBindings {
+			roles = append(roles, b.RoleName)
+		}
+
+		// Get existing S3 credentials
+		accessKey, secretKey, _ := s.s3Credentials.RegisterUser(req.UserID, req.PublicKey)
+
+		resp := proto.UserRegisterResponse{
+			UserID:      req.UserID,
+			Roles:       roles,
+			S3AccessKey: accessKey,
+			S3SecretKey: secretKey,
+			IsFirstUser: false,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	// Determine roles for new user
+	var roles []string
+	isFirstUser := !s.s3Authorizer.HasHumanAdmin()
+
+	if isFirstUser {
+		// First human user becomes admin
+		roles = []string{auth.RoleAdmin}
+		log.Info().Str("user_id", req.UserID).Msg("first user registered as admin")
+	} else {
+		// Subsequent users get bucket-read by default
+		roles = []string{auth.RoleBucketRead}
+	}
+
+	// Register S3 credentials
+	accessKey, secretKey, err := s.s3Credentials.RegisterUser(req.UserID, req.PublicKey)
+	if err != nil {
+		s.jsonError(w, "failed to register S3 credentials", http.StatusInternalServerError)
+		return
+	}
+
+	// Bind roles
+	for _, role := range roles {
+		s.s3Authorizer.Bindings.Add(&auth.RoleBinding{
+			Name:     fmt.Sprintf("%s-%s", req.UserID, role),
+			UserID:   req.UserID,
+			RoleName: role,
+		})
+	}
+
+	// Create user record
+	user := &auth.User{
+		ID:        req.UserID,
+		Name:      req.Name,
+		PublicKey: req.PublicKey,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	// Save user to system store if available
+	if s.s3SystemStore != nil {
+		// Load existing users
+		users, _ := s.s3SystemStore.LoadUsers()
+		users = append(users, user)
+		if err := s.s3SystemStore.SaveUsers(users); err != nil {
+			log.Warn().Err(err).Str("user_id", req.UserID).Msg("failed to persist user")
+		}
+
+		// Save bindings
+		if err := s.s3SystemStore.SaveBindings(s.s3Authorizer.Bindings.List()); err != nil {
+			log.Warn().Err(err).Msg("failed to persist bindings")
+		}
+	}
+
+	log.Info().
+		Str("user_id", req.UserID).
+		Str("name", req.Name).
+		Strs("roles", roles).
+		Bool("is_first_user", isFirstUser).
+		Msg("user registered")
+
+	resp := proto.UserRegisterResponse{
+		UserID:      req.UserID,
+		Roles:       roles,
+		S3AccessKey: accessKey,
+		S3SecretKey: secretKey,
+		IsFirstUser: isFirstUser,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }

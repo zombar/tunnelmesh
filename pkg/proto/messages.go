@@ -153,6 +153,23 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
+// UserRegisterRequest is sent by a user to register with the mesh.
+type UserRegisterRequest struct {
+	UserID    string `json:"user_id"`    // User's unique ID (derived from public key)
+	PublicKey string `json:"public_key"` // ED25519 public key (base64)
+	Name      string `json:"name"`       // Display name
+	Signature string `json:"signature"`  // Signature of user_id using private key (proves ownership)
+}
+
+// UserRegisterResponse is returned after successful user registration.
+type UserRegisterResponse struct {
+	UserID      string   `json:"user_id"`
+	Roles       []string `json:"roles"`                   // Assigned roles (first user gets "admin")
+	S3AccessKey string   `json:"s3_access_key,omitempty"` // S3 access key
+	S3SecretKey string   `json:"s3_secret_key,omitempty"` // S3 secret key
+	IsFirstUser bool     `json:"is_first_user"`           // True if this was the first user (now admin)
+}
+
 // GetLocalIPs returns the local IP addresses of the machine.
 // The behindNAT return value is true if the public IP was fetched from an external service.
 func GetLocalIPs() (public []string, private []string, behindNAT bool) {

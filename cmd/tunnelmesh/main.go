@@ -249,6 +249,9 @@ It does not route traffic - peers connect directly to each other.`,
 	// Filter command - manage packet filter rules
 	rootCmd.AddCommand(newFilterCmd())
 
+	// User command - manage user identity
+	rootCmd.AddCommand(newUserCmd())
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}

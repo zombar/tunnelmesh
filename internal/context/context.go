@@ -17,6 +17,14 @@ type Context struct {
 	Domain     string `json:"domain,omitempty"`
 	MeshIP     string `json:"mesh_ip,omitempty"`
 	DNSListen  string `json:"dns_listen,omitempty"`
+	// User registration for this mesh
+	UserID           string `json:"user_id,omitempty"`           // Registered user ID on this mesh
+	RegistrationPath string `json:"registration_path,omitempty"` // Path to registration.json
+}
+
+// IsRegistered returns true if a user is registered with this mesh.
+func (c *Context) IsRegistered() bool {
+	return c.UserID != ""
 }
 
 // ServiceName returns the derived service name for this context.

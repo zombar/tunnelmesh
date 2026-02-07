@@ -352,3 +352,41 @@ func TestStore_SaveCreatesDirectory(t *testing.T) {
 	_, err = os.Stat(filepath.Dir(path))
 	require.NoError(t, err)
 }
+
+func TestContext_UserRegistration(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, ".context")
+
+	store, err := LoadFromPath(path)
+	require.NoError(t, err)
+
+	// Create context with user registration info
+	ctx := Context{
+		Name:             "work",
+		ConfigPath:       "/path/to/config.yaml",
+		Server:           "https://mesh.work.com",
+		UserID:           "abc123def456",
+		RegistrationPath: filepath.Join(tmpDir, "contexts", "work", "registration.json"),
+	}
+
+	store.Add(ctx)
+	err = store.Save()
+	require.NoError(t, err)
+
+	// Load and verify
+	store2, err := LoadFromPath(path)
+	require.NoError(t, err)
+
+	retrieved := store2.Get("work")
+	require.NotNil(t, retrieved)
+	assert.Equal(t, "abc123def456", retrieved.UserID)
+	assert.Contains(t, retrieved.RegistrationPath, "registration.json")
+}
+
+func TestContext_IsRegistered(t *testing.T) {
+	ctx := Context{Name: "test"}
+	assert.False(t, ctx.IsRegistered())
+
+	ctx.UserID = "abc123"
+	assert.True(t, ctx.IsRegistered())
+}
