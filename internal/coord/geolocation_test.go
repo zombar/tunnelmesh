@@ -207,3 +207,50 @@ func TestIPGeoCache_Timeout(t *testing.T) {
 	_, err := cache.Lookup(ctx, "1.2.3.4")
 	assert.Error(t, err) // Should timeout
 }
+
+func TestIPGeoCache_LRUEviction(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"status":     "success",
+			"lat":        51.5074,
+			"lon":        -0.1278,
+			"city":       "London",
+			"regionName": "England",
+			"country":    "United Kingdom",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	cache := NewIPGeoCache(ts.URL + "/json/")
+	cache.maxCacheSize = 3 // Small size for testing
+	ctx := context.Background()
+
+	// Add 3 entries to fill the cache
+	_, _ = cache.Lookup(ctx, "1.1.1.1")
+	_, _ = cache.Lookup(ctx, "2.2.2.2")
+	_, _ = cache.Lookup(ctx, "3.3.3.3")
+
+	assert.Equal(t, 3, cache.Len())
+
+	// Access 1.1.1.1 to make it the most recently used
+	_, _ = cache.Lookup(ctx, "1.1.1.1")
+
+	// Add a 4th entry - should evict 2.2.2.2 (oldest unused)
+	_, _ = cache.Lookup(ctx, "4.4.4.4")
+
+	assert.Equal(t, 3, cache.Len())
+
+	// Verify 2.2.2.2 was evicted (cache miss would require new lookup)
+	cache.mu.RLock()
+	_, found := cache.cache["2.2.2.2"]
+	cache.mu.RUnlock()
+	assert.False(t, found, "2.2.2.2 should have been evicted")
+
+	// Verify 1.1.1.1 is still cached (was recently accessed)
+	cache.mu.RLock()
+	_, found = cache.cache["1.1.1.1"]
+	cache.mu.RUnlock()
+	assert.True(t, found, "1.1.1.1 should still be cached")
+}

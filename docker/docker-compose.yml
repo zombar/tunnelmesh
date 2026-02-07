@@ -19,6 +19,9 @@ services:
         ipv4_address: 172.28.0.10
     ports:
       - "8880:8080"   # Admin UI + Prometheus/Grafana proxies
+      - "6060:6060"   # pprof (when PPROF_ADDR is set)
+    environment:
+      - PPROF_ADDR=localhost:6060  # Enable pprof for memory profiling
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 5s

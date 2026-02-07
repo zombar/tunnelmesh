@@ -598,6 +598,11 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 			s.holePunch.RemoveEndpoint(name)
 		}
 
+		// Clean up stats history for the peer
+		if s.statsHistory != nil {
+			s.statsHistory.CleanupPeer(name)
+		}
+
 		if !exists {
 			s.jsonError(w, "peer not found", http.StatusNotFound)
 			return

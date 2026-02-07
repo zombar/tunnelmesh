@@ -212,7 +212,7 @@ func (r *relayManager) RegisterPersistent(peerName string, conn *websocket.Conn)
 	pc := &persistentConn{
 		peerName:  peerName,
 		conn:      conn,
-		writeChan: make(chan []byte, 256), // Buffered channel to prevent blocking
+		writeChan: make(chan []byte, 128), // Buffered channel to prevent blocking
 		closeChan: make(chan struct{}),
 	}
 	r.persistent[peerName] = pc

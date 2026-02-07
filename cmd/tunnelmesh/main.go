@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -100,6 +102,9 @@ var (
 	// Tracing flag
 	enableTracing bool
 
+	// Pprof flag
+	pprofAddr string
+
 	// Service mode flags (hidden, used when running as a service)
 	serviceRun     bool
 	serviceRunMode string
@@ -143,6 +148,7 @@ It does not route traffic - peers connect directly to each other.`,
 	}
 	serveCmd.Flags().BoolVar(&locationsEnabled, "locations", false, "enable node location tracking (uses external IP geolocation API)")
 	serveCmd.Flags().BoolVar(&enableTracing, "enable-tracing", false, "enable runtime tracing (exposes /debug/trace endpoint)")
+	serveCmd.Flags().StringVar(&pprofAddr, "pprof-addr", "", "enable pprof profiling on this address (e.g., localhost:6060)")
 	rootCmd.AddCommand(serveCmd)
 
 	// Join command
@@ -446,6 +452,16 @@ func runServe(cmd *cobra.Command, args []string) error {
 			log.Info().Msg("runtime tracing enabled")
 			defer tracing.Stop()
 		}
+	}
+
+	// Start pprof server if enabled
+	if pprofAddr != "" {
+		go func() {
+			log.Info().Str("addr", pprofAddr).Msg("starting pprof server")
+			if err := http.ListenAndServe(pprofAddr, nil); err != nil {
+				log.Error().Err(err).Msg("pprof server error")
+			}
+		}()
 	}
 
 	var cfg *config.ServerConfig
