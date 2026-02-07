@@ -518,6 +518,7 @@ type FilterRulesResponse struct {
 	PeerName    string           `json:"peer"`
 	DefaultDeny bool             `json:"default_deny"`
 	Rules       []FilterRuleInfo `json:"rules"`
+	Error       string           `json:"error,omitempty"` // Set when query failed (peer offline/timeout)
 }
 
 // FilterRuleInfo represents a filter rule for API responses.
@@ -558,12 +559,13 @@ func (s *Server) handleFilterRulesList(w http.ResponseWriter, r *http.Request) {
 	// Query the peer for their current filter rules
 	rulesJSON, err := s.relay.QueryFilterRules(peerName, 10*time.Second)
 	if err != nil {
-		// Peer not connected or timeout - return empty rules with error indication
+		// Peer not connected or timeout - return empty rules with error message
 		log.Debug().Err(err).Str("peer", peerName).Msg("failed to query peer filter rules")
 		resp := FilterRulesResponse{
 			PeerName:    peerName,
 			DefaultDeny: s.cfg.Filter.IsDefaultDeny(),
 			Rules:       []FilterRuleInfo{},
+			Error:       "Peer offline or unreachable",
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)

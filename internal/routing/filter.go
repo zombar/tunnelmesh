@@ -96,7 +96,6 @@ type FilterRule struct {
 	Action     FilterAction // Allow or deny
 	Expires    int64        // Unix timestamp, 0=permanent
 	SourcePeer string       // Source peer name (empty = any peer)
-	TargetPeer string       // Target peer name (empty = any peer)
 }
 
 // IsExpired returns true if the rule has expired.
@@ -154,12 +153,6 @@ func NewPacketFilter(defaultDeny bool) *PacketFilter {
 	f.temporary.Store(&emptyTemp)
 	f.service.Store(&emptyService)
 	return f
-}
-
-// DefaultDeny returns whether the filter defaults to denying traffic.
-// Deprecated: Use IsDefaultDeny instead for consistency.
-func (f *PacketFilter) DefaultDeny() bool {
-	return f.IsDefaultDeny()
 }
 
 // SetCoordinatorRules replaces all coordinator-level rules.

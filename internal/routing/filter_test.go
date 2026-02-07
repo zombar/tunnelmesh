@@ -9,7 +9,7 @@ import (
 func TestNewPacketFilter(t *testing.T) {
 	t.Run("default deny mode", func(t *testing.T) {
 		f := NewPacketFilter(true)
-		if !f.DefaultDeny() {
+		if !f.IsDefaultDeny() {
 			t.Error("expected default deny to be true")
 		}
 		if f.RuleCount() != 0 {
@@ -19,7 +19,7 @@ func TestNewPacketFilter(t *testing.T) {
 
 	t.Run("default allow mode", func(t *testing.T) {
 		f := NewPacketFilter(false)
-		if f.DefaultDeny() {
+		if f.IsDefaultDeny() {
 			t.Error("expected default deny to be false")
 		}
 	})

@@ -1679,7 +1679,15 @@ function renderFilterRules(data) {
 
     if (!data.rules || data.rules.length === 0) {
         dom.filterRulesBody.innerHTML = '';
-        if (dom.noFilterRules) dom.noFilterRules.style.display = 'block';
+        if (dom.noFilterRules) {
+            dom.noFilterRules.style.display = 'block';
+            // Show error message if peer query failed
+            if (data.error) {
+                dom.noFilterRules.innerHTML = `<span class="text-warning">⚠ ${data.error}</span>`;
+            } else {
+                dom.noFilterRules.textContent = 'No filter rules configured. Select a peer to view their rules.';
+            }
+        }
         return;
     }
 

@@ -230,7 +230,7 @@ func (s *Server) handleFilterList(filter *routing.PacketFilter) Response {
 	}
 
 	resp := FilterListResponse{
-		DefaultDeny: filter.DefaultDeny(),
+		DefaultDeny: filter.IsDefaultDeny(),
 		Rules:       details,
 	}
 
