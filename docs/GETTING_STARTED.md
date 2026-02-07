@@ -123,29 +123,35 @@ admin:
 
 ---
 
-### Install and Start the Server Service
+### Create a Context and Install the Server Service
+
+TunnelMesh uses **contexts** to manage multiple mesh configurations. Each context tracks a config file, allocated IP, and service status.
 
 #### Linux/macOS
 
 ```bash
-# Install as a system service
-sudo tunnelmesh service install --mode serve --config /etc/tunnelmesh/server.yaml
+# Create a context for the server
+tunnelmesh context create server --config /etc/tunnelmesh/server.yaml --mode serve
 
-# Start the service
+# Install and start as a system service
+sudo tunnelmesh service install
 sudo tunnelmesh service start
 
 # Check status
-sudo tunnelmesh service status
+tunnelmesh service status
 
 # View logs
-sudo tunnelmesh service logs --follow
+tunnelmesh service logs --follow
 ```
 
 #### Windows (PowerShell as Administrator)
 
 ```powershell
+# Create a context for the server
+tunnelmesh context create server --config "C:\ProgramData\TunnelMesh\server.yaml" --mode serve
+
 # Install as a Windows service
-tunnelmesh service install --mode serve --config "C:\ProgramData\TunnelMesh\server.yaml"
+tunnelmesh service install
 
 # Start the service
 tunnelmesh service start
@@ -153,6 +159,8 @@ tunnelmesh service start
 # Check status
 tunnelmesh service status
 ```
+
+**Note:** The service name is derived from the context name. The "server" context creates a service named "tunnelmesh-server".
 
 ---
 
@@ -271,29 +279,35 @@ dns:
 
 ---
 
-### Install and Start the Peer Service
+### Create a Context and Install the Peer Service
+
+Each peer should have its own context. This allows you to manage multiple mesh memberships and switch between them easily.
 
 #### Linux/macOS
 
 ```bash
-# Install as a system service
-sudo tunnelmesh service install --mode join --config /etc/tunnelmesh/peer.yaml
+# Join the mesh and create a context (this also prompts to install CA cert if missing)
+sudo tunnelmesh join --config /etc/tunnelmesh/peer.yaml --context home
 
-# Start the service
+# The context is now active. Install as a system service:
+sudo tunnelmesh service install
 sudo tunnelmesh service start
 
 # Check status
-sudo tunnelmesh service status
+tunnelmesh service status
 
 # View logs
-sudo tunnelmesh service logs --follow
+tunnelmesh service logs --follow
 ```
 
 #### Windows (PowerShell as Administrator)
 
 ```powershell
+# Join the mesh and create a context
+tunnelmesh join --config "C:\ProgramData\TunnelMesh\peer.yaml" --context home
+
 # Install as a Windows service
-tunnelmesh service install --mode join --config "C:\ProgramData\TunnelMesh\peer.yaml"
+tunnelmesh service install
 
 # Start the service
 tunnelmesh service start
@@ -301,6 +315,8 @@ tunnelmesh service start
 # Check status
 tunnelmesh service status
 ```
+
+**Tip:** When joining, if the mesh CA certificate isn't installed, TunnelMesh will prompt you to install it for HTTPS access to mesh services.
 
 ---
 
@@ -338,13 +354,61 @@ If a peer is behind NAT and cannot receive incoming connections, TunnelMesh will
 
 ---
 
+## Managing Multiple Contexts
+
+You can be a member of multiple meshes simultaneously. Each mesh runs as a separate service with its own TUN interface.
+
+### List all contexts
+
+```bash
+tunnelmesh context list
+```
+
+Example output:
+```
+NAME      SERVER                      STATUS     ACTIVE
+home      http://home-server:8080     running    *
+work      https://work.mesh.io        stopped
+dev       http://192.168.1.10:8080    -
+```
+
+### Switch active context
+
+When you switch contexts, system DNS resolution switches to that mesh:
+
+```bash
+tunnelmesh context use work
+```
+
+This changes which mesh's DNS resolver handles `.tunnelmesh` domains. The previous mesh's tunnels remain active—only the "focus" changes.
+
+### Start/stop individual contexts
+
+```bash
+# Control specific context's service
+tunnelmesh service start --context work
+tunnelmesh service stop --context home
+
+# Status of specific context
+tunnelmesh service status --context work
+```
+
+### Delete a context
+
+```bash
+# This prompts to stop/uninstall the service and optionally remove the config
+tunnelmesh context delete dev
+```
+
+---
+
 ## Troubleshooting
 
 ### Service won't start
 
 ```bash
 # Check logs for errors
-sudo tunnelmesh service logs --lines 100
+tunnelmesh service logs --lines 100
 
 # Verify config file syntax
 cat /etc/tunnelmesh/peer.yaml
@@ -400,9 +464,9 @@ Add:
 allow_exit_traffic: true
 ```
 
-Restart the peer service:
+Restart the service:
 ```bash
-sudo tunnelmesh service restart
+tunnelmesh service restart
 ```
 
 TunnelMesh automatically configures IP forwarding and NAT when `allow_exit_traffic` is enabled.

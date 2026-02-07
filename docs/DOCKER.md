@@ -111,6 +111,8 @@ services:
 
 ## Configuration
 
+> **Note:** Context management (`tunnelmesh context`) is designed for host-based installations where you run multiple meshes from one machine. In Docker deployments, each container is typically dedicated to a single mesh and receives its config directly via volume mount or environment variables.
+
 ### Server Configuration
 
 Create `docker/config/server.yaml`:
