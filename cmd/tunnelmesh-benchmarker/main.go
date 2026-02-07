@@ -261,6 +261,10 @@ type peerInfo struct {
 	MeshIP string `json:"mesh_ip"`
 }
 
+type peersResponse struct {
+	Peers []peerInfo `json:"peers"`
+}
+
 func fetchPeers(cfg Config) ([]peerInfo, error) {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.TLSSkipVerify},
@@ -284,10 +288,11 @@ func fetchPeers(cfg Config) ([]peerInfo, error) {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
-	var peers []peerInfo
-	if err := json.NewDecoder(resp.Body).Decode(&peers); err != nil {
+	var response peersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
+	peers := response.Peers
 
 	// Filter out self
 	var filtered []peerInfo
