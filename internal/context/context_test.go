@@ -282,3 +282,73 @@ func TestStore_UpdateExisting(t *testing.T) {
 	assert.Equal(t, "172.30.0.10", work.MeshIP)
 	assert.Equal(t, 1, store.Count()) // Should still be just one context
 }
+
+func TestDefaultStorePath(t *testing.T) {
+	path, err := DefaultStorePath()
+	require.NoError(t, err)
+	assert.Contains(t, path, ".tunnelmesh")
+	assert.Contains(t, path, ".context")
+}
+
+func TestLoad(t *testing.T) {
+	// Load uses DefaultStorePath which may or may not have a file
+	// This test just ensures it doesn't panic
+	store, err := Load()
+	require.NoError(t, err)
+	assert.NotNil(t, store)
+}
+
+func TestLoadFromPath_InvalidJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, ".context")
+
+	// Write invalid JSON
+	err := os.WriteFile(path, []byte("not valid json"), 0600)
+	require.NoError(t, err)
+
+	_, err = LoadFromPath(path)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parse context file")
+}
+
+func TestLoadFromPath_NilContextsMap(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, ".context")
+
+	// Write JSON with null contexts
+	err := os.WriteFile(path, []byte(`{"active":"test","contexts":null}`), 0600)
+	require.NoError(t, err)
+
+	store, err := LoadFromPath(path)
+	require.NoError(t, err)
+	assert.NotNil(t, store.Contexts)
+}
+
+func TestStore_AddToNilMap(t *testing.T) {
+	store := &Store{
+		Contexts: nil,
+	}
+
+	store.Add(Context{Name: "test"})
+
+	assert.NotNil(t, store.Contexts)
+	assert.Equal(t, 1, len(store.Contexts))
+}
+
+func TestStore_SaveCreatesDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "nested", "dir", ".context")
+
+	store := &Store{
+		Contexts: make(map[string]Context),
+		path:     path,
+	}
+	store.Add(Context{Name: "test"})
+
+	err := store.Save()
+	require.NoError(t, err)
+
+	// Verify directory was created
+	_, err = os.Stat(filepath.Dir(path))
+	require.NoError(t, err)
+}
