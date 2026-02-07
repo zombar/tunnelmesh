@@ -30,9 +30,11 @@ For a complete step-by-step setup guide including downloading releases, configur
 ## Documentation
 
 - **[Getting Started Guide](docs/GETTING_STARTED.md)** - Installation, configuration, and running as a service
+- **[CLI Reference](docs/CLI.md)** - Complete command-line reference with examples and walkthroughs
+- **[WireGuard Integration](docs/WIREGUARD.md)** - Connect mobile devices and standard WireGuard clients
 - **[Docker Deployment](docs/DOCKER.md)** - Running TunnelMesh in containers for development and production
-- **[Cloud Deployment](docs/CLOUD_DEPLOYMENT.md)** - Deploy to DigitalOcean App Platform with Terraform
-- **[Benchmarking & Stress Testing](docs/BENCHMARKING.md)** - Measure throughput, latency, and test mesh resilience with chaos testing
+- **[Cloud Deployment](docs/CLOUD_DEPLOYMENT.md)** - Deploy to DigitalOcean with Terraform (includes deployment scenarios)
+- **[Benchmarking & Stress Testing](docs/BENCHMARKING.md)** - Measure throughput, latency, and chaos testing
 
 ## Architecture
 
