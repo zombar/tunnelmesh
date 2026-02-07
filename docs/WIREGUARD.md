@@ -227,7 +227,6 @@ Single node acts as coordinator, peer, and WireGuard gateway:
 # server.yaml
 listen: ":8080"
 auth_token: "your-token"
-mesh_cidr: "172.30.0.0/16"
 
 join_mesh:
   name: "all-in-one"
@@ -266,7 +265,6 @@ Separate the WireGuard concentrator from the coordinator:
 ```yaml
 listen: ":8080"
 auth_token: "your-token"
-mesh_cidr: "172.30.0.0/16"
 join_mesh:
   name: "coordinator"
   # No wireguard here

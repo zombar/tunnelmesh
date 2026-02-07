@@ -58,18 +58,6 @@ variable "external_api_port" {
   default     = 8443
 }
 
-variable "mesh_cidr" {
-  description = "CIDR for mesh IP allocation"
-  type        = string
-  default     = "172.30.0.0/16"
-}
-
-variable "domain_suffix" {
-  description = "Domain suffix for mesh DNS (e.g., .tunnelmesh)"
-  type        = string
-  default     = ".tunnelmesh"
-}
-
 variable "relay_enabled" {
   description = "Enable relay server on coordinator"
   type        = bool

@@ -92,11 +92,9 @@ func TestDownsampleHistory(t *testing.T) {
 
 func TestAdminOverview_IncludesLocation(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Locations:    true, // Enable location tracking for this test
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Locations: true, // Enable location tracking for this test
 		Admin: config.AdminConfig{
 			Enabled: true,
 		},
@@ -147,10 +145,8 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 
 func TestAdminOverview_ExitNodeInfo(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
+		Listen:    ":0",
+		AuthToken: "test-token",
 		Admin: config.AdminConfig{
 			Enabled: true,
 		},
@@ -212,10 +208,8 @@ func TestAdminOverview_ExitNodeInfo(t *testing.T) {
 
 func TestAdminOverview_ConnectionTypes(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
+		Listen:    ":0",
+		AuthToken: "test-token",
 		Admin: config.AdminConfig{
 			Enabled: true,
 		},
@@ -278,10 +272,8 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
 	// Create a server with JoinMesh configured to enable adminMux
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
+		Listen:    ":0",
+		AuthToken: "test-token",
 		Admin: config.AdminConfig{
 			Enabled: true,
 		},

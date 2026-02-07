@@ -103,18 +103,6 @@ variable "external_api_port" {
 # GLOBAL SETTINGS
 # ============================================================================
 
-variable "mesh_cidr" {
-  description = "CIDR block for mesh network IP allocation"
-  type        = string
-  default     = "172.30.0.0/16"
-}
-
-variable "domain_suffix" {
-  description = "Domain suffix for mesh hostnames"
-  type        = string
-  default     = ".tunnelmesh"
-}
-
 variable "locations_enabled" {
   description = "Enable node location tracking (uses external IP geolocation API)"
   type        = bool

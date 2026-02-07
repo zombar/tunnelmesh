@@ -365,7 +365,6 @@ cat /etc/tunnelmesh/peer.yaml
 
 - **Add more peers**: Repeat Part 2 on additional machines
 - **Enable server as peer**: Add `join_mesh` section to server config (see main README)
-- **Customize network**: Adjust `mesh_cidr` for different IP ranges
 - **Secure the server**: Put behind a reverse proxy with TLS
 - **Set up exit nodes**: Route internet traffic through specific peers (see below)
 

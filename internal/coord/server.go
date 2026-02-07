@@ -22,6 +22,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
+	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 	"github.com/tunnelmesh/tunnelmesh/internal/tracing"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -174,7 +175,7 @@ func (a *ipAllocator) release(ip string) {
 
 // NewServer creates a new coordination server.
 func NewServer(cfg *config.ServerConfig) (*Server, error) {
-	ipAlloc, err := newIPAllocator(cfg.MeshCIDR)
+	ipAlloc, err := newIPAllocator(mesh.CIDR)
 	if err != nil {
 		return nil, fmt.Errorf("create IP allocator: %w", err)
 	}
@@ -202,7 +203,7 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 
 	// Initialize WireGuard client store if enabled
 	if cfg.WireGuard.Enabled {
-		srv.wgStore = wireguard.NewStore(cfg.MeshCIDR)
+		srv.wgStore = wireguard.NewStore(mesh.CIDR)
 		log.Info().Msg("WireGuard client management enabled")
 	}
 
@@ -214,7 +215,7 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	// Initialize Certificate Authority for mesh TLS
-	ca, err := NewCertificateAuthority(cfg.DataDir, cfg.DomainSuffix)
+	ca, err := NewCertificateAuthority(cfg.DataDir, mesh.DomainSuffix)
 	if err != nil {
 		return nil, fmt.Errorf("initialize CA: %w", err)
 	}
@@ -711,8 +712,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	resp := proto.RegisterResponse{
 		MeshIP:        meshIP,
-		MeshCIDR:      s.cfg.MeshCIDR,
-		Domain:        s.cfg.DomainSuffix,
+		MeshCIDR:      mesh.CIDR,
+		Domain:        mesh.DomainSuffix,
 		Token:         token,
 		CoordMeshIP:   s.coordMeshIP, // For "this.tunnelmesh" resolution
 		ServerVersion: s.version,
@@ -720,7 +721,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	// Generate TLS certificate for the peer
 	if s.ca != nil {
-		certPEM, keyPEM, err := s.ca.GeneratePeerCert(req.Name, s.cfg.DomainSuffix, meshIP)
+		certPEM, keyPEM, err := s.ca.GeneratePeerCert(req.Name, mesh.DomainSuffix, meshIP)
 		if err != nil {
 			log.Warn().Err(err).Str("peer", req.Name).Msg("failed to generate TLS cert")
 		} else {
@@ -918,7 +919,7 @@ func (s *Server) StartAdminServer(addr string, tlsCert *tls.Certificate) error {
 	}
 
 	s.adminServer = &http.Server{
-		Handler: s.adminMux,
+		Handler: redirectToCanonicalDomain(s.adminMux),
 	}
 
 	if tlsCert != nil {

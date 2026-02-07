@@ -123,7 +123,6 @@ Create `docker/config/server.yaml`:
 ```yaml
 name: "server"
 listen: ":8080"
-mesh_cidr: "172.30.0.0/16"
 auth_token: "your-secure-token"
 admin:
   enabled: true

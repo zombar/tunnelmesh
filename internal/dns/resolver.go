@@ -8,11 +8,11 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog/log"
+	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 )
 
 // Resolver is a local DNS server that resolves mesh hostnames.
 type Resolver struct {
-	suffix      string            // Domain suffix (e.g., ".mesh")
 	ttl         uint32            // TTL for DNS responses
 	records     map[string]string // hostname (without suffix) -> IP
 	coordMeshIP string            // Coordinator's mesh IP for "this.tunnelmesh" resolution
@@ -22,9 +22,9 @@ type Resolver struct {
 }
 
 // NewResolver creates a new DNS resolver.
-func NewResolver(suffix string, ttl int) *Resolver {
+// The suffix parameter is ignored - all supported suffixes (.tunnelmesh, .tm, .mesh) are handled.
+func NewResolver(_ string, ttl int) *Resolver {
 	return &Resolver{
-		suffix:   suffix,
 		ttl:      uint32(ttl),
 		records:  make(map[string]string),
 		shutdown: make(chan struct{}),
@@ -125,11 +125,15 @@ func (r *Resolver) ListenAndServe(addr string) error {
 		Net:  "udp",
 	}
 
-	dns.HandleFunc(strings.TrimPrefix(r.suffix, "."), r.handleDNS)
+	// Register handlers for all supported domain suffixes
+	for _, suffix := range mesh.AllSuffixes() {
+		zone := strings.TrimPrefix(suffix, ".")
+		dns.HandleFunc(zone, r.handleDNS)
+	}
 
 	log.Info().
 		Str("addr", addr).
-		Str("suffix", r.suffix).
+		Strs("suffixes", mesh.AllSuffixes()).
 		Msg("starting DNS server")
 
 	return r.server.ListenAndServe()
@@ -186,6 +190,11 @@ func (r *Resolver) handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 
 func (r *Resolver) stripSuffix(hostname string) string {
 	hostname = strings.TrimSuffix(hostname, ".")
-	hostname = strings.TrimSuffix(hostname, r.suffix)
+	// Try all supported suffixes
+	for _, suffix := range mesh.AllSuffixes() {
+		if strings.HasSuffix(hostname, suffix) {
+			return strings.TrimSuffix(hostname, suffix)
+		}
+	}
 	return hostname
 }

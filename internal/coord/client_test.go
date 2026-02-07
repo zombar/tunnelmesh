@@ -17,10 +17,8 @@ import (
 func TestClient_Register(t *testing.T) {
 	// Create test server
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
+		Listen:    ":0",
+		AuthToken: "test-token",
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -43,11 +41,9 @@ func TestClient_Register(t *testing.T) {
 func TestClient_RegisterWithLocation(t *testing.T) {
 	// Create test server
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Locations:    true, // Enable location tracking for this test
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Locations: true, // Enable location tracking for this test
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -81,10 +77,8 @@ func TestClient_RegisterWithLocation(t *testing.T) {
 
 func TestClient_ListPeers(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
+		Listen:    ":0",
+		AuthToken: "test-token",
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -112,10 +106,8 @@ func TestClient_ListPeers(t *testing.T) {
 
 func TestClient_Deregister(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
+		Listen:    ":0",
+		AuthToken: "test-token",
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -144,10 +136,8 @@ func TestClient_Deregister(t *testing.T) {
 
 func TestClient_GetDNSRecords(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
+		Listen:    ":0",
+		AuthToken: "test-token",
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -172,10 +162,8 @@ func TestClient_GetDNSRecords(t *testing.T) {
 
 func TestClient_RegisterWithRetry_SuccessOnFirstTry(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
+		Listen:    ":0",
+		AuthToken: "test-token",
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -340,11 +328,9 @@ func TestServer_GeolocationOnlyOnNewOrChangedIP(t *testing.T) {
 
 	// Create test server with custom geolocation cache
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Locations:    true, // Enable location tracking for this test
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Locations: true, // Enable location tracking for this test
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -394,11 +380,9 @@ func TestServer_GeolocationOnlyOnNewOrChangedIP(t *testing.T) {
 
 func TestServer_ManualLocationPreservedOnIPChange(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Locations:    true, // Enable location tracking for this test
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Locations: true, // Enable location tracking for this test
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)

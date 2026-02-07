@@ -48,12 +48,10 @@ locals {
     # Names and domains
     node_name     = var.name
     domain        = var.domain
-    domain_suffix = var.domain_suffix
 
     # Coordinator settings
     coordinator_port  = var.coordinator_port
     external_api_port = var.external_api_port
-    mesh_cidr         = var.mesh_cidr
     relay_enabled     = var.relay_enabled
     auth_token        = var.auth_token
     locations_enabled = var.locations_enabled

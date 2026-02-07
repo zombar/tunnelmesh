@@ -87,8 +87,6 @@ module "node" {
   wireguard_enabled   = lookup(each.value, "wireguard", false)
 
   # Coordinator settings
-  mesh_cidr         = var.mesh_cidr
-  domain_suffix     = var.domain_suffix
   locations_enabled = lookup(each.value, "locations_enabled", var.locations_enabled)
   external_api_port = var.external_api_port
 
