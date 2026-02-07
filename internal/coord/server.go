@@ -398,6 +398,24 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	}
 	s.s3SystemStore = systemStore
 
+	// Recover users and credentials from previous runs
+	if users, err := systemStore.LoadUsers(); err == nil && len(users) > 0 {
+		log.Info().Int("count", len(users)).Msg("recovering registered users")
+		for _, user := range users {
+			if _, _, err := s.s3Credentials.RegisterUser(user.ID, user.PublicKey); err != nil {
+				log.Warn().Err(err).Str("user", user.ID).Msg("failed to recover user credentials")
+			}
+		}
+	}
+
+	// Recover role bindings
+	if bindings, err := systemStore.LoadBindings(); err == nil && len(bindings) > 0 {
+		log.Info().Int("count", len(bindings)).Msg("recovering role bindings")
+		for _, binding := range bindings {
+			s.s3Authorizer.Bindings.Add(binding)
+		}
+	}
+
 	// Bind service user with system role
 	s.s3Authorizer.Bindings.Add(&auth.RoleBinding{
 		Name:     "coordinator-system",
