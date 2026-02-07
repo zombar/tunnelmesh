@@ -403,7 +403,8 @@ main {
 }
 
 /* Override h2 styles when inside section-header (has button beside it) */
-#wireguard-section .section-header h2 {
+#wireguard-section .section-header h2,
+#filter-section .section-header h2 {
     border-bottom: none;
 }
 

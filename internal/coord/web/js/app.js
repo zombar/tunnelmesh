@@ -1622,6 +1622,16 @@ async function deleteWGClient(id, name) {
 function populateFilterPeerSelect(peers) {
     if (!dom.filterPeerSelect) return;
 
+    // Build new peer list for comparison - skip rebuild if unchanged
+    const newPeerList = peers.map(p => p.name).join(',');
+    const currentOptions = Array.from(dom.filterPeerSelect.options);
+    const currentPeerList = currentOptions.map(o => o.value).join(',');
+
+    if (newPeerList === currentPeerList) {
+        // Peer list unchanged, skip rebuild to avoid disrupting user interaction
+        return;
+    }
+
     const currentValue = dom.filterPeerSelect.value;
     dom.filterPeerSelect.innerHTML = '';
 
