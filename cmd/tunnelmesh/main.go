@@ -1695,6 +1695,10 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Start heartbeat loop
 	go node.RunHeartbeat(ctx)
 
+	// Show ready message
+	fmt.Fprintf(os.Stderr, "\n  ✓ Connected to mesh as %s (%s)\n", cfg.Name, resp.MeshIP)
+	fmt.Fprintf(os.Stderr, "  Press CTRL+C to disconnect\n\n")
+
 	// Wait for context cancellation (shutdown signal)
 	<-ctx.Done()
 
@@ -1715,13 +1719,25 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Close all connections via FSM (properly transitions states and triggers observers)
 	node.Connections.CloseAll()
 
-	// Don't deregister on shutdown - keep the peer record so we get the same
-	// mesh IP when we reconnect. Use 'tunnelmesh leave' for intentional removal.
-	log.Info().Msg("disconnected from mesh (peer record retained for sticky IP)")
-
 	if node.Resolver != nil {
 		_ = node.Resolver.Shutdown()
 	}
+
+	// Show exit instructions
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "  Disconnected from mesh.")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "  To reconnect:")
+	// Check for active context to show appropriate command
+	if store, err := meshctx.Load(); err == nil && store.HasActive() {
+		fmt.Fprintf(os.Stderr, "    tunnelmesh join                    # rejoin using context %q\n", store.Active)
+	} else {
+		fmt.Fprintln(os.Stderr, "    tunnelmesh join --server <url> --token <token>")
+	}
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "  To run as a background service:")
+	fmt.Fprintln(os.Stderr, "    tunnelmesh service install && tunnelmesh service start")
+	fmt.Fprintln(os.Stderr)
 
 	return nil
 }
