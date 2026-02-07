@@ -915,6 +915,19 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		Str("domain", resp.Domain).
 		Msg("joined mesh network")
 
+	// Check for version mismatch between client and server
+	if resp.ServerVersion != "" && resp.ServerVersion != Version {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+		fmt.Fprintln(os.Stderr, "@              VERSION MISMATCH DETECTED                @")
+		fmt.Fprintln(os.Stderr, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+		fmt.Fprintf(os.Stderr, "  Client version: %s\n", Version)
+		fmt.Fprintf(os.Stderr, "  Server version: %s\n", resp.ServerVersion)
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Consider updating your client: tunnelmesh update")
+		fmt.Fprintln(os.Stderr)
+	}
+
 	// Save/update context if --context flag is set
 	if joinContext != "" {
 		store, err := meshctx.Load()

@@ -710,11 +710,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := proto.RegisterResponse{
-		MeshIP:      meshIP,
-		MeshCIDR:    s.cfg.MeshCIDR,
-		Domain:      s.cfg.DomainSuffix,
-		Token:       token,
-		CoordMeshIP: s.coordMeshIP, // For "this.tunnelmesh" resolution
+		MeshIP:        meshIP,
+		MeshCIDR:      s.cfg.MeshCIDR,
+		Domain:        s.cfg.DomainSuffix,
+		Token:         token,
+		CoordMeshIP:   s.coordMeshIP, // For "this.tunnelmesh" resolution
+		ServerVersion: s.version,
 	}
 
 	// Generate TLS certificate for the peer

@@ -102,9 +102,9 @@ dev-server: build
 	@echo "=== Join command for peers ==="
 	@TOKEN=$$(grep 'auth_token:' server.yaml 2>/dev/null | head -1 | sed 's/.*"\(.*\)".*/\1/'); \
 	if [ -n "$$TOKEN" ]; then \
-		echo "sudo ./bin/tunnelmesh join --server http://localhost:8080 --token $$TOKEN --context dev"; \
+		echo "tunnelmesh join --server http://localhost:8080 --token $$TOKEN --context dev"; \
 	else \
-		echo "sudo ./bin/tunnelmesh join --server http://localhost:8080 --token <your-token> --context dev"; \
+		echo "tunnelmesh join --server http://localhost:8080 --token <your-token> --context dev"; \
 	fi
 	@echo ""
 	./$(BUILD_DIR)/$(BINARY_NAME) serve --config server.yaml
@@ -185,7 +185,7 @@ docker-up: docker-build
 	@echo "Use 'make docker-logs' to follow logs"
 	@echo ""
 	@echo "=== Join from this machine ==="
-	@echo "sudo ./bin/tunnelmesh join --server http://localhost:8081 --token docker-test-token-123 --context docker"
+	@echo "tunnelmesh join --server http://localhost:8081 --token docker-test-token-123 --context docker"
 	@echo ""
 	@echo "After joining, run 'make docker-admin' to open the admin panel"
 
