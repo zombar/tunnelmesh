@@ -979,21 +979,28 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		}
 		log.Info().Str("ca", tlsMgr.CAPath()).Msg("CA certificate stored")
 
-		// Check if CA is already installed in system trust store and prompt if not
+		// Check if CA is already installed in system trust store
+		// Always prompt to (re)install since the server may have changed
 		trusted, err := IsCATrusted()
 		if err != nil {
 			log.Debug().Err(err).Msg("could not check CA trust status")
-		} else if !trusted {
+		}
+
+		if trusted {
+			fmt.Println("\nA TunnelMesh CA certificate is already installed in your system trust store.")
+			fmt.Println("If this server has a different CA, you should reinstall to avoid HTTPS errors.")
+			fmt.Print("Reinstall CA certificate? [Y/n]: ")
+		} else {
 			fmt.Println("\nThe mesh CA certificate is not installed in your system trust store.")
 			fmt.Println("This is required for HTTPS connections to mesh services without browser warnings.")
 			fmt.Print("Install CA certificate now? [Y/n]: ")
-			var response string
-			_, _ = fmt.Scanln(&response)
-			response = strings.TrimSpace(strings.ToLower(response))
-			if response == "" || response == "y" || response == "yes" {
-				if err := InstallCA(caPEM, ""); err != nil {
-					log.Warn().Err(err).Msg("failed to install CA certificate (you may need sudo)")
-				}
+		}
+		var response string
+		_, _ = fmt.Scanln(&response)
+		response = strings.TrimSpace(strings.ToLower(response))
+		if response == "" || response == "y" || response == "yes" {
+			if err := InstallCA(caPEM, ""); err != nil {
+				log.Warn().Err(err).Msg("failed to install CA certificate (you may need sudo)")
 			}
 		}
 	}
