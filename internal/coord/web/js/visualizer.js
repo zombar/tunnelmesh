@@ -1,6 +1,10 @@
 // Node Visualizer for TunnelMesh Dashboard
 // Shows mesh topology with selected node centered
 
+// Import utilities from TM modules
+const { extractRegion } = TM.utils;
+const { formatBytesCompact, formatLatencyCompact } = TM.format;
+
 // =============================================================================
 // Constants and Types
 // =============================================================================
@@ -8,15 +12,15 @@
 const NodeType = {
     STANDARD: 'standard',
     WG_CONCENTRATOR: 'wg_concentrator',
-    EXIT_NODE: 'exit_node'
+    EXIT_NODE: 'exit_node',
 };
 
 const CARD_WIDTH = 210;
 const CARD_HEIGHT = 80;
 const TAB_HEIGHT = 22;
-const ROW_SPACING = 110;  // Vertical spacing between spread nodes
+const ROW_SPACING = 110; // Vertical spacing between spread nodes
 const CONNECTION_DOT_RADIUS = 5;
-const MAX_VISIBLE_NODES = 3;  // Show max 3 nodes per column, then "+ N more"
+const MAX_VISIBLE_NODES = 3; // Show max 3 nodes per column, then "+ N more"
 
 // Content dimension bounds (content size scales with canvas, within these limits)
 const MIN_CONTENT_WIDTH = 1200;
@@ -28,16 +32,16 @@ const MAX_CONTENT_HEIGHT = 500;
 const COLORS = {
     background: '#0d1117',
     cardFill: '#21262d',
-    cardStroke: '#484f58',  // Light grey stroke for all nodes
+    cardStroke: '#484f58', // Light grey stroke for all nodes
     text: '#e6edf3',
     textDim: '#8b949e',
     connection: '#30363d',
     connectionHighlight: '#58a6ff',
-    exitConnection: '#f0a500',  // Golden color for exit path connections
+    exitConnection: '#f0a500', // Golden color for exit path connections
     // Transport type badge colors
-    transportSSH: '#3fb950',    // Green
-    transportUDP: '#58a6ff',    // Blue
-    transportRelay: '#d29922'   // Orange/amber
+    transportSSH: '#3fb950', // Green
+    transportUDP: '#58a6ff', // Blue
+    transportRelay: '#d29922', // Orange/amber
 };
 
 // =============================================================================
@@ -67,12 +71,12 @@ class VisualizerNode {
 
         // Build DNS name with truncation
         const fullDns = peer.name + (domainSuffix || '');
-        this.dnsName = fullDns.length > 25 ? fullDns.substring(0, 22) + '...' : fullDns;
+        this.dnsName = fullDns.length > 25 ? `${fullDns.substring(0, 22)}...` : fullDns;
 
         // Exit node info
-        this.exitNode = peer.exit_node || '';           // Name of peer this node uses as exit
-        this.allowsExitTraffic = peer.allows_exit_traffic || false;  // Whether this node can be exit
-        this.exitClients = peer.exit_clients || [];     // Clients using this as exit
+        this.exitNode = peer.exit_node || ''; // Name of peer this node uses as exit
+        this.allowsExitTraffic = peer.allows_exit_traffic || false; // Whether this node can be exit
+        this.exitClients = peer.exit_clients || []; // Clients using this as exit
 
         // Connection types (peer -> transport type)
         this.connections = peer.connections || {};
@@ -88,7 +92,7 @@ class VisualizerNode {
         this.hovered = false;
         this.stackIndex = 0;
         this.stackSize = 1;
-        this.visible = true;  // Whether to render this node
+        this.visible = true; // Whether to render this node
     }
 
     get category() {
@@ -100,34 +104,6 @@ class VisualizerNode {
 // Core Logic Functions
 // =============================================================================
 
-// Format bytes rate compactly
-function formatBytesCompact(bytes) {
-    if (bytes < 1024) return Math.round(bytes) + 'B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'K';
-    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'M';
-    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
-}
-
-// Format latency compactly
-function formatLatencyCompact(ms) {
-    if (ms === 0 || ms === undefined || ms === null) return '-';
-    if (ms < 1) return '<1ms';
-    if (ms < 1000) return Math.round(ms) + 'ms';
-    return (ms / 1000).toFixed(1) + 's';
-    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
-}
-
-// Extract region/city from peer location data
-function extractRegion(peer) {
-    if (!peer.location) return null;
-    // Prefer city, fall back to region, then country
-    let region = peer.location.city || peer.location.region || peer.location.country || null;
-    if (region && region.length > 20) {
-        region = region.substring(0, 18) + '…';
-    }
-    return region;
-}
-
 // =============================================================================
 // Visual Slot - represents a node's position on one side (left or right)
 // =============================================================================
@@ -135,7 +111,7 @@ function extractRegion(peer) {
 class VisualSlot {
     constructor(node, side) {
         this.node = node;
-        this.side = side;  // 'left', 'center', or 'right'
+        this.side = side; // 'left', 'center', or 'right'
         this.x = 0;
         this.y = 0;
         this.startX = 0;
@@ -145,7 +121,9 @@ class VisualSlot {
         this.visible = true;
     }
 
-    get id() { return `${this.node.id}_${this.side}`; }
+    get id() {
+        return `${this.node.id}_${this.side}`;
+    }
 }
 
 // =============================================================================
@@ -226,7 +204,7 @@ function layoutColumn(nodes, centerX, centerY, stackInfo, slots, side) {
     let currentY = centerY - totalHeight / 2;
 
     // Elliptical offset - nodes at top/bottom curve inward
-    const ellipseWidth = 40;  // Max horizontal offset for ellipse effect
+    const ellipseWidth = 40; // Max horizontal offset for ellipse effect
 
     for (let i = 0; i < visibleCount; i++) {
         const node = nodes[i];
@@ -236,12 +214,12 @@ function layoutColumn(nodes, centerX, centerY, stackInfo, slots, side) {
         // Nodes at centerY get max offset, nodes away from center curve inward
         const yDistFromCenter = Math.abs(currentY - centerY);
         const maxYDist = totalHeight / 2 || 1;
-        const normalizedDist = yDistFromCenter / maxYDist;  // 0 at center, 1 at edges
+        const normalizedDist = yDistFromCenter / maxYDist; // 0 at center, 1 at edges
         const ellipseOffset = ellipseWidth * (1 - normalizedDist * normalizedDist);
 
         // Apply offset away from center (left side goes more left, right side goes more right)
         const offsetDir = side === 'left' ? -1 : 1;
-        slot.targetX = centerX + (offsetDir * ellipseOffset);
+        slot.targetX = centerX + offsetDir * ellipseOffset;
         slot.targetY = currentY;
         slots.push(slot);
         currentY += ROW_SPACING;
@@ -259,24 +237,24 @@ class NodeVisualizer {
 
         // Data
         this.nodes = new Map();
-        this.slots = [];  // Visual slots for rendering
+        this.slots = []; // Visual slots for rendering
         this.selectedNodeId = null;
         this.hoveredSlotId = null;
-        this.hoveredArrow = null;  // 'left' or 'right'
-        this.navArrows = null;  // Arrow positions for hit testing
+        this.hoveredArrow = null; // 'left' or 'right'
+        this.navArrows = null; // Arrow positions for hit testing
         this.domainSuffix = '.tunnelmesh';
-        this.coordNodeName = null;  // Name of coord node if enabled as peer
+        this.coordNodeName = null; // Name of coord node if enabled as peer
 
         // Stack info for "+ N more" labels
         this.stackInfo = {
             left: { total: 0, hidden: 0 },
-            right: { total: 0, hidden: 0 }
+            right: { total: 0, hidden: 0 },
         };
 
         // Animation
         this.animating = false;
         this.animationStart = 0;
-        this.animationDuration = 400;  // ms
+        this.animationDuration = 400; // ms
 
         // Pan state
         this.panX = 0;
@@ -319,7 +297,7 @@ class NodeVisualizer {
 
     syncNodes(peers, wgConcentratorName = null) {
         const existingIds = new Set(this.nodes.keys());
-        const newIds = new Set(peers.map(p => p.name));
+        const newIds = new Set(peers.map((p) => p.name));
 
         // Remove nodes that no longer exist
         for (const id of existingIds) {
@@ -441,8 +419,8 @@ class NodeVisualizer {
 
         this.canvas.width = rect.width * dpr;
         this.canvas.height = rect.height * dpr;
-        this.canvas.style.width = rect.width + 'px';
-        this.canvas.style.height = rect.height + 'px';
+        this.canvas.style.width = `${rect.width}px`;
+        this.canvas.style.height = `${rect.height}px`;
 
         this.ctx.scale(dpr, dpr);
 
@@ -459,10 +437,17 @@ class NodeVisualizer {
     // -------------------------------------------------------------------------
 
     recalculateLayout() {
-        const oldSlots = new Map(this.slots.map(s => [s.id, { x: s.x, y: s.y }]));
+        const oldSlots = new Map(this.slots.map((s) => [s.id, { x: s.x, y: s.y }]));
 
         // Use dynamic content size for layout
-        calculateLayout(this.nodes, this.selectedNodeId, this.contentWidth, this.contentHeight, this.stackInfo, this.slots);
+        calculateLayout(
+            this.nodes,
+            this.selectedNodeId,
+            this.contentWidth,
+            this.contentHeight,
+            this.stackInfo,
+            this.slots,
+        );
 
         // Preserve old positions for animation, or initialize to target
         for (const slot of this.slots) {
@@ -505,7 +490,7 @@ class NodeVisualizer {
         const progress = Math.min(elapsed / this.animationDuration, 1);
 
         // Ease out cubic
-        const t = 1 - Math.pow(1 - progress, 3);
+        const t = 1 - (1 - progress) ** 3;
 
         // Interpolate positions
         for (const slot of this.slots) {
@@ -548,7 +533,7 @@ class NodeVisualizer {
         const offsetY = (rect.height - this.contentHeight) / 2 + this.panY;
         return {
             x: screenX - offsetX,
-            y: screenY - offsetY
+            y: screenY - offsetY,
         };
     }
 
@@ -628,7 +613,7 @@ class NodeVisualizer {
 
         if (newHoveredId !== this.hoveredSlotId || !arrow) {
             this.hoveredSlotId = newHoveredId;
-            this.canvas.style.cursor = (newHoveredId || arrow) ? 'pointer' : 'grab';
+            this.canvas.style.cursor = newHoveredId || arrow ? 'pointer' : 'grab';
             this.render();
         }
     }
@@ -684,8 +669,12 @@ class NodeVisualizer {
             const halfWidth = CARD_WIDTH / 2;
             const halfHeight = CARD_HEIGHT / 2;
 
-            if (contentX >= slot.x - halfWidth && contentX <= slot.x + halfWidth &&
-                contentY >= slot.y - halfHeight - TAB_HEIGHT && contentY <= slot.y + halfHeight) {
+            if (
+                contentX >= slot.x - halfWidth &&
+                contentX <= slot.x + halfWidth &&
+                contentY >= slot.y - halfHeight - TAB_HEIGHT &&
+                contentY <= slot.y + halfHeight
+            ) {
                 return slot;
             }
         }
@@ -753,7 +742,7 @@ class NodeVisualizer {
     }
 
     renderNavArrows(ctx) {
-        const centerSlot = this.slots.find(s => s.side === 'center');
+        const centerSlot = this.slots.find((s) => s.side === 'center');
         if (!centerSlot || this.nodes.size <= 1) return;
 
         const arrowY = centerSlot.y + CARD_HEIGHT / 2 + 30;
@@ -774,7 +763,7 @@ class NodeVisualizer {
         this.navArrows = {
             y: arrowY,
             leftX: centerSlot.x - arrowSpacing,
-            rightX: centerSlot.x + arrowSpacing
+            rightX: centerSlot.x + arrowSpacing,
         };
     }
 
@@ -812,7 +801,7 @@ class NodeVisualizer {
     }
 
     renderStackLabels(ctx, width, height) {
-        const centerSlot = this.slots.find(s => s.side === 'center');
+        const centerSlot = this.slots.find((s) => s.side === 'center');
         if (!centerSlot) return;
 
         const columnSpacing = this.stackInfo.columnSpacing || 280;
@@ -838,7 +827,7 @@ class NodeVisualizer {
     }
 
     renderConnections(ctx) {
-        const centerSlot = this.slots.find(s => s.side === 'center');
+        const centerSlot = this.slots.find((s) => s.side === 'center');
         if (!centerSlot) return;
 
         for (const slot of this.slots) {
@@ -854,7 +843,7 @@ class NodeVisualizer {
 
             ctx.beginPath();
             ctx.strokeStyle = isExitPath ? COLORS.exitConnection : COLORS.connectionHighlight;
-            ctx.lineWidth = isExitPath ? 3 : 2;  // Thicker for exit path
+            ctx.lineWidth = isExitPath ? 3 : 2; // Thicker for exit path
 
             const startX = isLeft ? slot.x + CARD_WIDTH / 2 : slot.x - CARD_WIDTH / 2;
             const startY = slot.y;
@@ -981,8 +970,7 @@ class NodeVisualizer {
         if (selectedNode && slot.side !== 'center') {
             // Get transport type from this node's connections to the selected node
             // or from selected node's connections to this node
-            let transportType = node.connections[selectedNode.name] ||
-                               selectedNode.connections[node.name];
+            const transportType = node.connections[selectedNode.name] || selectedNode.connections[node.name];
             if (transportType) {
                 this.drawTransportBadge(ctx, x + CARD_WIDTH - 10, contentY + lineHeight * 2 + 8, transportType);
             }
@@ -1018,8 +1006,8 @@ class NodeVisualizer {
         const textWidth = ctx.measureText(text).width;
 
         // Draw badge background (square corners)
-        const paddingH = 3;  // horizontal padding
-        const paddingV = 2;  // vertical padding
+        const paddingH = 3; // horizontal padding
+        const _paddingV = 2; // vertical padding
         const badgeWidth = textWidth + paddingH * 2;
         const badgeHeight = 12;
         const badgeX = x;
@@ -1039,7 +1027,6 @@ class NodeVisualizer {
         ctx.textBaseline = 'middle';
         ctx.fillText(text, badgeX + badgeWidth / 2, badgeY + badgeHeight / 2);
     }
-
 }
 
 // Export for use in app.js

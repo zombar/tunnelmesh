@@ -1,0 +1,17 @@
+# Bun configuration for TunnelMesh Dashboard JavaScript tests
+
+[test]
+# Enable coverage reporting
+coverage = true
+
+# Output formats for Codecov integration
+coverageReporter = ["lcov", "text"]
+
+# Coverage output directory
+coverageDir = "./coverage"
+
+# Preload DOM mocks before tests
+preload = ["./js/__tests__/setup.js"]
+
+# Test file pattern
+root = "./js"

@@ -1,4 +1,4 @@
-.PHONY: all build build-force test test-verbose test-coverage clean install lint fmt hooks hooks-install \
+.PHONY: all build build-force test test-verbose test-coverage test-js test-js-coverage test-all clean install lint fmt hooks hooks-install \
         dev-server dev-peer gen-keys release release-all push-release \
         docker-build docker-up docker-down docker-logs docker-clean docker-test \
         ghcr-login ghcr-build ghcr-push deploy deploy-plan deploy-destroy deploy-taint-coordinator \
@@ -41,6 +41,29 @@ test-coverage:
 	$(GO) test -race -coverprofile=coverage.out ./...
 	$(GO) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
+
+# JavaScript tests with Bun
+JS_DIR = internal/coord/web
+
+test-js:
+	@if command -v bun >/dev/null 2>&1; then \
+		cd $(JS_DIR) && bun test; \
+	else \
+		echo "Bun not installed. Install with: curl -fsSL https://bun.sh/install | bash"; \
+		exit 1; \
+	fi
+
+test-js-coverage:
+	@if command -v bun >/dev/null 2>&1; then \
+		cd $(JS_DIR) && bun test --coverage; \
+		echo "Coverage report: $(JS_DIR)/coverage/lcov.info"; \
+	else \
+		echo "Bun not installed. Install with: curl -fsSL https://bun.sh/install | bash"; \
+		exit 1; \
+	fi
+
+# Run all tests (Go + JavaScript)
+test-all: test test-js
 
 # Clean build artifacts
 clean:
@@ -301,9 +324,12 @@ help:
 	@echo "Available targets:"
 	@echo "  build          - Build for current platform"
 	@echo "  build-force    - Clean and rebuild"
-	@echo "  test           - Run tests with race detector"
-	@echo "  test-verbose   - Run tests with verbose output"
-	@echo "  test-coverage  - Run tests and generate coverage report"
+	@echo "  test           - Run Go tests with race detector"
+	@echo "  test-verbose   - Run Go tests with verbose output"
+	@echo "  test-coverage  - Run Go tests and generate coverage report"
+	@echo "  test-js        - Run JavaScript tests with Bun"
+	@echo "  test-js-coverage - Run JS tests with coverage (lcov for Codecov)"
+	@echo "  test-all       - Run all tests (Go + JavaScript)"
 	@echo "  clean          - Remove build artifacts"
 	@echo "  install        - Install to /usr/local/bin"
 	@echo "  lint           - Run golangci-lint"
