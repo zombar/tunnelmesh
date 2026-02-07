@@ -24,12 +24,12 @@ groups:
       # Early warning: Some peers disconnected
       - alert: TunnelMeshPeerDisconnected
         expr: count(tunnelmesh_connection_state == 0) > 0
-        for: 2m
+        for: 5m
         labels:
           severity: warning
         annotations:
           summary: "Peer(s) disconnected"
-          description: "One or more peers have been disconnected for 2+ minutes"
+          description: "One or more peers have been disconnected for 5+ minutes"
 
       # Early warning: Tunnel health degraded
       - alert: TunnelMeshUnhealthyTunnels
@@ -56,12 +56,12 @@ groups:
       # Critical: Multiple peers disconnected
       - alert: TunnelMeshMultiplePeersDown
         expr: count(tunnelmesh_connection_state == 0) >= 3
-        for: 1m
+        for: 3m
         labels:
           severity: critical
         annotations:
           summary: "Multiple peers disconnected"
-          description: "3+ peers are currently disconnected - mesh connectivity severely impacted"
+          description: "3+ peers are currently disconnected for 3+ minutes - mesh connectivity severely impacted"
 
       # Critical: High error rate
       - alert: TunnelMeshHighErrorRate
@@ -96,12 +96,12 @@ groups:
       # Critical: Relay connection lost (affects NAT traversal)
       - alert: TunnelMeshRelayDisconnected
         expr: tunnelmesh_relay_connected == 0
-        for: 1m
+        for: 3m
         labels:
           severity: critical
         annotations:
           summary: "Relay connection lost"
-          description: "Peer lost connection to relay server - NAT traversal may fail"
+          description: "Peer lost connection to relay server for 3+ minutes - NAT traversal may fail"
 
   - name: tunnelmesh-page
     rules:
