@@ -4,6 +4,11 @@ auth_token: "docker-test-token-123"
 locations: true  # Enable node location tracking (uses ip-api.com)
 log_level: "info"
 
+# S3 storage (enables user/group management, file shares)
+s3:
+  enabled: true
+  data_dir: "/var/lib/tunnelmesh/s3"
+
 admin:
   enabled: true
   # Admin accessible at https://server-node.tunnelmesh/ from mesh peers

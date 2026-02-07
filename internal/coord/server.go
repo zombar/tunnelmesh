@@ -79,11 +79,12 @@ type Server struct {
 	coordMeshIP  string                // Coordinator's mesh IP for "this.tunnelmesh" resolution
 	coordMetrics *CoordMetrics         // Prometheus metrics for coordinator
 	// S3 storage
-	s3Store       *s3.Store           // S3 file-based storage
-	s3Server      *s3.Server          // S3 HTTP server
-	s3Authorizer  *auth.Authorizer    // RBAC authorizer for S3
-	s3Credentials *s3.CredentialStore // S3 credential store
-	s3SystemStore *s3.SystemStore     // System bucket accessor
+	s3Store       *s3.Store            // S3 file-based storage
+	s3Server      *s3.Server           // S3 HTTP server
+	s3Authorizer  *auth.Authorizer     // RBAC authorizer for S3
+	s3Credentials *s3.CredentialStore  // S3 credential store
+	s3SystemStore *s3.SystemStore      // System bucket accessor
+	fileShareMgr  *s3.FileShareManager // File share manager
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -378,8 +379,8 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	}
 	s.s3Store = store
 
-	// Create authorizer
-	s.s3Authorizer = auth.NewAuthorizer()
+	// Create authorizer with group support
+	s.s3Authorizer = auth.NewAuthorizerWithGroups()
 
 	// Create credential store
 	s.s3Credentials = s3.NewCredentialStore()
@@ -420,12 +421,27 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 		}
 	}
 
-	// Bind service user with system role
-	s.s3Authorizer.Bindings.Add(&auth.RoleBinding{
-		Name:     "coordinator-system",
-		UserID:   serviceUserID,
-		RoleName: auth.RoleSystem,
-	})
+	// Recover groups
+	if groups, err := systemStore.LoadGroups(); err == nil && len(groups) > 0 {
+		log.Info().Int("count", len(groups)).Msg("recovering groups")
+		s.s3Authorizer.Groups.LoadGroups(groups)
+	}
+
+	// Recover group bindings
+	if groupBindings, err := systemStore.LoadGroupBindings(); err == nil && len(groupBindings) > 0 {
+		log.Info().Int("count", len(groupBindings)).Msg("recovering group bindings")
+		s.s3Authorizer.GroupBindings.LoadBindings(groupBindings)
+	}
+
+	// Set up built-in group bindings if not already present
+	s.ensureBuiltinGroupBindings()
+
+	// Initialize file share manager
+	s.fileShareMgr = s3.NewFileShareManager(store, systemStore, s.s3Authorizer)
+	log.Info().Int("shares", len(s.fileShareMgr.List())).Msg("file share manager initialized")
+
+	// Add coordinator service user to all_service_users group
+	_ = s.s3Authorizer.Groups.AddMember(auth.GroupAllServiceUsers, serviceUserID)
 
 	// Register service user credentials (derived from a fixed key for now)
 	// In production, this would be derived from the CA private key
@@ -440,6 +456,30 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 		Msg("S3 storage initialized")
 
 	return nil
+}
+
+// ensureBuiltinGroupBindings sets up the built-in group bindings if not already present.
+// - all_service_users group gets system role on _tunnelmesh bucket
+// - all_admin_users group gets admin role (unscoped)
+func (s *Server) ensureBuiltinGroupBindings() {
+	// Check if bindings already exist
+	serviceBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllServiceUsers)
+	if len(serviceBindings) == 0 {
+		s.s3Authorizer.GroupBindings.Add(auth.NewGroupBinding(
+			auth.GroupAllServiceUsers,
+			auth.RoleSystem,
+			"", // Unscoped, but RoleSystem only applies to _tunnelmesh
+		))
+	}
+
+	adminBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllAdminUsers)
+	if len(adminBindings) == 0 {
+		s.s3Authorizer.GroupBindings.Add(auth.NewGroupBinding(
+			auth.GroupAllAdminUsers,
+			auth.RoleAdmin,
+			"", // Unscoped - admin has access to all buckets
+		))
+	}
 }
 
 // StartS3Server starts the S3 API server on the specified address.
@@ -1071,13 +1111,38 @@ func (s *Server) handleUserRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if user is already registered
+	// Load existing users to check for expired users
+	var existingUsers []*auth.User
+	var existingUser *auth.User
+	if s.s3SystemStore != nil {
+		existingUsers, _ = s.s3SystemStore.LoadUsers()
+		for _, u := range existingUsers {
+			if u.ID == req.UserID {
+				existingUser = u
+				break
+			}
+		}
+	}
+
+	// Check if user is already registered and not expired
 	existingBindings := s.s3Authorizer.Bindings.GetForUser(req.UserID)
-	if len(existingBindings) > 0 {
-		// User already registered - return existing info
+	existingGroups := s.s3Authorizer.Groups.GetGroupsForUser(req.UserID)
+	isActiveUser := (len(existingBindings) > 0 || len(existingGroups) > 0) &&
+		(existingUser == nil || !existingUser.IsExpired())
+
+	if isActiveUser {
+		// User already registered and active - return existing info
 		roles := make([]string, 0, len(existingBindings))
 		for _, b := range existingBindings {
 			roles = append(roles, b.RoleName)
+		}
+
+		// Update LastSeen
+		if existingUser != nil {
+			existingUser.LastSeen = time.Now().UTC()
+			if s.s3SystemStore != nil {
+				_ = s.s3SystemStore.SaveUsers(existingUsers)
+			}
 		}
 
 		// Get existing S3 credentials
@@ -1086,6 +1151,7 @@ func (s *Server) handleUserRegister(w http.ResponseWriter, r *http.Request) {
 		resp := proto.UserRegisterResponse{
 			UserID:      req.UserID,
 			Roles:       roles,
+			Groups:      existingGroups,
 			S3AccessKey: accessKey,
 			S3SecretKey: secretKey,
 			IsFirstUser: false,
@@ -1096,18 +1162,8 @@ func (s *Server) handleUserRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine roles for new user
-	var roles []string
+	// Determine if this is the first user
 	isFirstUser := !s.s3Authorizer.HasHumanAdmin()
-
-	if isFirstUser {
-		// First human user becomes admin
-		roles = []string{auth.RoleAdmin}
-		log.Info().Str("user_id", req.UserID).Msg("first user registered as admin")
-	} else {
-		// Subsequent users get bucket-read by default
-		roles = []string{auth.RoleBucketRead}
-	}
 
 	// Register S3 credentials
 	accessKey, secretKey, err := s.s3Credentials.RegisterUser(req.UserID, req.PublicKey)
@@ -1116,48 +1172,77 @@ func (s *Server) handleUserRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Bind roles
-	for _, role := range roles {
-		s.s3Authorizer.Bindings.Add(&auth.RoleBinding{
-			Name:     fmt.Sprintf("%s-%s", req.UserID, role),
-			UserID:   req.UserID,
-			RoleName: role,
-		})
+	// Add user to appropriate groups
+	var groups []string
+	if strings.HasPrefix(req.UserID, auth.ServiceUserPrefix) {
+		// Service users go to all_service_users group
+		_ = s.s3Authorizer.Groups.AddMember(auth.GroupAllServiceUsers, req.UserID)
+		groups = append(groups, auth.GroupAllServiceUsers)
+	} else {
+		// Human users go to everyone group
+		_ = s.s3Authorizer.Groups.AddMember(auth.GroupEveryone, req.UserID)
+		groups = append(groups, auth.GroupEveryone)
+
+		if isFirstUser {
+			// First human user also becomes admin
+			_ = s.s3Authorizer.Groups.AddMember(auth.GroupAllAdminUsers, req.UserID)
+			groups = append(groups, auth.GroupAllAdminUsers)
+			log.Info().Str("user_id", req.UserID).Msg("first user registered as admin")
+		}
 	}
 
-	// Create user record
-	user := &auth.User{
-		ID:        req.UserID,
-		Name:      req.Name,
-		PublicKey: req.PublicKey,
-		CreatedAt: time.Now().UTC(),
+	// Create or update user record
+	now := time.Now().UTC()
+	isReactivation := existingUser != nil && existingUser.IsExpired()
+
+	if existingUser != nil {
+		// Update existing user (reactivation case)
+		existingUser.Name = req.Name
+		existingUser.LastSeen = now
+		existingUser.Expired = false
+		existingUser.ExpiredAt = time.Time{}
+	} else {
+		// Create new user record
+		user := &auth.User{
+			ID:        req.UserID,
+			Name:      req.Name,
+			PublicKey: req.PublicKey,
+			CreatedAt: now,
+			LastSeen:  now,
+		}
+		existingUsers = append(existingUsers, user)
 	}
 
-	// Save user to system store if available
+	// Save user and groups to system store if available
 	if s.s3SystemStore != nil {
-		// Load existing users
-		users, _ := s.s3SystemStore.LoadUsers()
-		users = append(users, user)
-		if err := s.s3SystemStore.SaveUsers(users); err != nil {
+		if err := s.s3SystemStore.SaveUsers(existingUsers); err != nil {
 			log.Warn().Err(err).Str("user_id", req.UserID).Msg("failed to persist user")
 		}
 
-		// Save bindings
-		if err := s.s3SystemStore.SaveBindings(s.s3Authorizer.Bindings.List()); err != nil {
-			log.Warn().Err(err).Msg("failed to persist bindings")
+		// Save groups
+		if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+			log.Warn().Err(err).Msg("failed to persist groups")
 		}
 	}
 
-	log.Info().
-		Str("user_id", req.UserID).
-		Str("name", req.Name).
-		Strs("roles", roles).
-		Bool("is_first_user", isFirstUser).
-		Msg("user registered")
+	if isReactivation {
+		log.Info().
+			Str("user_id", req.UserID).
+			Str("name", req.Name).
+			Strs("groups", groups).
+			Msg("expired user reactivated")
+	} else {
+		log.Info().
+			Str("user_id", req.UserID).
+			Str("name", req.Name).
+			Strs("groups", groups).
+			Bool("is_first_user", isFirstUser).
+			Msg("user registered")
+	}
 
 	resp := proto.UserRegisterResponse{
 		UserID:      req.UserID,
-		Roles:       roles,
+		Groups:      groups,
 		S3AccessKey: accessKey,
 		S3SecretKey: secretKey,
 		IsFirstUser: isFirstUser,

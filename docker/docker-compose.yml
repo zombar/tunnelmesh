@@ -10,6 +10,7 @@ services:
       - ./config/server.yaml:/etc/tunnelmesh/server.yaml:ro
       - ./scripts/server-entrypoint.sh:/scripts/server-entrypoint.sh:ro
       - metrics-data:/var/lib/tunnelmesh
+      - s3-data:/var/lib/tunnelmesh/s3
     cap_add:
       - NET_ADMIN
     devices:
@@ -213,6 +214,10 @@ volumes:
     name: tunnelmesh-metrics-data
     labels:
       - "com.tunnelmesh.description=Stats history for dashboard charts"
+  s3-data:
+    name: tunnelmesh-s3-data
+    labels:
+      - "com.tunnelmesh.description=S3 storage for users, groups, and file shares"
   prometheus-data:
   grafana-data:
   loki-data:

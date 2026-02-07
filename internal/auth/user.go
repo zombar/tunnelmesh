@@ -15,6 +15,9 @@ import (
 // ServiceUserPrefix is the prefix for service user IDs.
 const ServiceUserPrefix = "svc:"
 
+// UserExpirationDays is the number of days after LastSeen when a user expires.
+const UserExpirationDays = 30
+
 // User represents a TunnelMesh user identified by an ED25519 public key.
 type User struct {
 	ID        string    `json:"id"`         // SHA256(pubkey)[:8] hex, or "svc:name" for services
@@ -22,11 +25,38 @@ type User struct {
 	Name      string    `json:"name"`       // Optional display name
 	CreatedAt time.Time `json:"created_at"`
 	LastSeen  time.Time `json:"last_seen,omitempty"`
+	Expired   bool      `json:"expired,omitempty"`    // True if account is expired
+	ExpiredAt time.Time `json:"expired_at,omitempty"` // When the account was expired
 }
 
 // IsService returns true if this is a service user (ID starts with "svc:").
 func (u *User) IsService() bool {
 	return strings.HasPrefix(u.ID, ServiceUserPrefix)
+}
+
+// IsExpired returns true if the user account is expired.
+// An account is expired if:
+// - It has been explicitly marked as expired (Expired == true), OR
+// - For human users: LastSeen is more than UserExpirationDays ago
+// Service users never expire based on time, only when explicitly marked.
+func (u *User) IsExpired() bool {
+	// If explicitly marked as expired, always return true
+	if u.Expired {
+		return true
+	}
+
+	// Service users don't expire based on time
+	if u.IsService() {
+		return false
+	}
+
+	// Check if LastSeen is too old
+	if u.LastSeen.IsZero() {
+		return false // Never seen, not expired yet
+	}
+
+	expirationDuration := time.Duration(UserExpirationDays) * 24 * time.Hour
+	return time.Since(u.LastSeen) > expirationDuration
 }
 
 // UserIdentity holds a user's identity including their private key.

@@ -371,14 +371,16 @@ main {
     color: var(--color-accent-green);
 }
 
-#peers-section, #dns-section, #wireguard-section, #filter-section {
+#peers-section, #dns-section, #wireguard-section, #filter-section,
+#users-section, #groups-section, #shares-section {
     background: var(--color-bg-primary);
     padding: 0;
     border: 1px solid var(--color-border-primary);
     margin-bottom: 1.5rem;
 }
 
-#peers-section h2, #dns-section h2, #wireguard-section h2, #filter-section h2 {
+#peers-section h2, #dns-section h2, #wireguard-section h2, #filter-section h2,
+#users-section h2, #groups-section h2, #shares-section h2 {
     font-size: 1rem;
     font-weight: 600;
     padding: 1rem;
@@ -405,7 +407,10 @@ main {
 
 /* Override h2 styles when inside section-header (has button beside it) */
 #wireguard-section .section-header h2,
-#filter-section .section-header h2 {
+#filter-section .section-header h2,
+#users-section .section-header h2,
+#groups-section .section-header h2,
+#shares-section .section-header h2 {
     border-bottom: none;
 }
 

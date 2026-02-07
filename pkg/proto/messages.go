@@ -165,7 +165,8 @@ type UserRegisterRequest struct {
 // UserRegisterResponse is returned after successful user registration.
 type UserRegisterResponse struct {
 	UserID      string   `json:"user_id"`
-	Roles       []string `json:"roles"`                   // Assigned roles (first user gets "admin")
+	Roles       []string `json:"roles,omitempty"`         // Assigned roles (legacy, for backwards compat)
+	Groups      []string `json:"groups,omitempty"`        // Assigned groups (everyone, all_admin_users, etc.)
 	S3AccessKey string   `json:"s3_access_key,omitempty"` // S3 access key
 	S3SecretKey string   `json:"s3_secret_key,omitempty"` // S3 secret key
 	IsFirstUser bool     `json:"is_first_user"`           // True if this was the first user (now admin)

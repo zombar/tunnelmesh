@@ -280,6 +280,121 @@
             </div>
         </section>
 
+        <section id="users-section" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Users</h2>
+            </div>
+            <div class="collapsible-content">
+                <table id="users">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>Groups</th>
+                            <th>Last Seen</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-body"></tbody>
+                </table>
+                <div id="no-users" class="empty-state" style="display: none;">
+                    No users registered yet.
+                </div>
+            </div>
+        </section>
+
+        <section id="groups-section" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Groups</h2>
+                <button id="add-group-btn" class="btn-primary" onclick="event.stopPropagation(); openGroupModal();">+ Add Group</button>
+            </div>
+            <div class="collapsible-content">
+                <table id="groups">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Description</th>
+                            <th>Members</th>
+                            <th>Built-in</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="groups-body"></tbody>
+                </table>
+                <div id="no-groups" class="empty-state" style="display: none;">
+                    No groups found.
+                </div>
+            </div>
+        </section>
+
+        <section id="shares-section" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>File Shares</h2>
+                <button id="add-share-btn" class="btn-primary" onclick="event.stopPropagation(); openShareModal();">+ New Share</button>
+            </div>
+            <div class="collapsible-content">
+                <table id="shares">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Description</th>
+                            <th>Owner</th>
+                            <th>Created</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="shares-body"></tbody>
+                </table>
+                <div id="no-shares" class="empty-state" style="display: none;">
+                    No file shares yet. Create one to share files across the mesh.
+                </div>
+            </div>
+        </section>
+
+        <!-- Group Modal -->
+        <div id="group-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Add Group</h3>
+                    <button class="modal-close" onclick="closeGroupModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="group-name">Group Name</label>
+                        <input type="text" id="group-name" placeholder="e.g., developers">
+                    </div>
+                    <div class="form-group">
+                        <label for="group-description">Description</label>
+                        <input type="text" id="group-description" placeholder="Optional description">
+                    </div>
+                    <button class="btn-primary" onclick="createGroup()">Create Group</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Share Modal -->
+        <div id="share-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>New File Share</h3>
+                    <button class="modal-close" onclick="closeShareModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="share-name">Share Name</label>
+                        <input type="text" id="share-name" placeholder="e.g., documents">
+                        <small class="form-hint">Bucket will be created as: fs+&lt;name&gt;</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="share-description">Description</label>
+                        <input type="text" id="share-description" placeholder="Optional description">
+                    </div>
+                    <button class="btn-primary" onclick="createShare()">Create Share</button>
+                </div>
+            </div>
+        </div>
+
         <!-- WireGuard Peer Modal -->
         <div id="wg-modal" class="modal" style="display: none;">
             <div class="modal-content">

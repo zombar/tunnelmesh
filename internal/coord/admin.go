@@ -16,6 +16,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
+	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/web"
 	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
@@ -284,6 +285,17 @@ func (s *Server) setupAdminRoutes() {
 
 	// Filter rule management
 	s.adminMux.HandleFunc("/api/filter/rules", s.handleFilterRules)
+
+	// Group management API
+	s.adminMux.HandleFunc("/api/groups", s.handleGroups)
+	s.adminMux.HandleFunc("/api/groups/", s.handleGroupByName)
+
+	// File share management API
+	s.adminMux.HandleFunc("/api/shares", s.handleShares)
+	s.adminMux.HandleFunc("/api/shares/", s.handleShareByName)
+
+	// User management API
+	s.adminMux.HandleFunc("/api/users", s.handleUsers)
 
 	// Expose metrics on admin interface for Prometheus scraping via mesh IP
 	s.adminMux.Handle("/metrics", promhttp.Handler())
@@ -701,4 +713,477 @@ func (s *Server) handleFilterRuleRemove(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// --- Group API Handlers ---
+
+// handleGroups handles GET (list) and POST (create) for groups.
+func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleGroupsList(w, r)
+	case http.MethodPost:
+		s.handleGroupCreate(w, r)
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleGroupsList returns all groups.
+func (s *Server) handleGroupsList(w http.ResponseWriter, _ *http.Request) {
+	if s.s3Authorizer == nil || s.s3Authorizer.Groups == nil {
+		s.jsonError(w, "groups not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	groups := s.s3Authorizer.Groups.List()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(groups)
+}
+
+// GroupCreateRequest is the request body for creating a group.
+type GroupCreateRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// handleGroupCreate creates a new group.
+func (s *Server) handleGroupCreate(w http.ResponseWriter, r *http.Request) {
+	if s.s3Authorizer == nil || s.s3Authorizer.Groups == nil {
+		s.jsonError(w, "groups not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req GroupCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		s.jsonError(w, "name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if group already exists
+	if s.s3Authorizer.Groups.Get(req.Name) != nil {
+		s.jsonError(w, "group already exists", http.StatusConflict)
+		return
+	}
+
+	// Create the group
+	group, err := s.s3Authorizer.Groups.Create(req.Name, req.Description)
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Persist
+	if s.s3SystemStore != nil {
+		if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+			log.Warn().Err(err).Msg("failed to persist groups")
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(group)
+}
+
+// handleGroupByName handles GET, DELETE, and sub-resources for a specific group.
+func (s *Server) handleGroupByName(w http.ResponseWriter, r *http.Request) {
+	if s.s3Authorizer == nil || s.s3Authorizer.Groups == nil {
+		s.jsonError(w, "groups not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Parse path: /api/groups/{name} or /api/groups/{name}/members[/{id}]
+	path := strings.TrimPrefix(r.URL.Path, "/api/groups/")
+	parts := strings.Split(path, "/")
+	groupName := parts[0]
+
+	if groupName == "" {
+		s.jsonError(w, "group name required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if this is a sub-resource request
+	if len(parts) > 1 {
+		switch parts[1] {
+		case "members":
+			s.handleGroupMembers(w, r, groupName, parts[2:])
+			return
+		case "bindings":
+			s.handleGroupBindings(w, r, groupName)
+			return
+		}
+	}
+
+	// Direct group operations
+	switch r.Method {
+	case http.MethodGet:
+		group := s.s3Authorizer.Groups.Get(groupName)
+		if group == nil {
+			s.jsonError(w, "group not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(group)
+
+	case http.MethodDelete:
+		group := s.s3Authorizer.Groups.Get(groupName)
+		if group == nil {
+			s.jsonError(w, "group not found", http.StatusNotFound)
+			return
+		}
+		if group.Builtin {
+			s.jsonError(w, "cannot delete built-in group", http.StatusForbidden)
+			return
+		}
+		_ = s.s3Authorizer.Groups.Delete(groupName)
+
+		// Persist
+		if s.s3SystemStore != nil {
+			if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+				log.Warn().Err(err).Msg("failed to persist groups")
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// GroupMemberRequest is the request body for adding a member.
+type GroupMemberRequest struct {
+	UserID string `json:"user_id"`
+}
+
+// handleGroupMembers handles member management for a group.
+func (s *Server) handleGroupMembers(w http.ResponseWriter, r *http.Request, groupName string, pathParts []string) {
+	group := s.s3Authorizer.Groups.Get(groupName)
+	if group == nil {
+		s.jsonError(w, "group not found", http.StatusNotFound)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		// List members
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(group.Members)
+
+	case http.MethodPost:
+		// Add member
+		var req GroupMemberRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.jsonError(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.UserID == "" {
+			s.jsonError(w, "user_id is required", http.StatusBadRequest)
+			return
+		}
+
+		if err := s.s3Authorizer.Groups.AddMember(groupName, req.UserID); err != nil {
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Persist
+		if s.s3SystemStore != nil {
+			if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+				log.Warn().Err(err).Msg("failed to persist groups")
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "added"})
+
+	case http.MethodDelete:
+		// Remove member - user ID in path
+		if len(pathParts) == 0 || pathParts[0] == "" {
+			s.jsonError(w, "user_id required in path", http.StatusBadRequest)
+			return
+		}
+		userID := pathParts[0]
+
+		if err := s.s3Authorizer.Groups.RemoveMember(groupName, userID); err != nil {
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Persist
+		if s.s3SystemStore != nil {
+			if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+				log.Warn().Err(err).Msg("failed to persist groups")
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "removed"})
+
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// GroupBindingRequest is the request body for granting a role to a group.
+type GroupBindingRequest struct {
+	RoleName    string `json:"role_name"`
+	BucketScope string `json:"bucket_scope,omitempty"`
+}
+
+// handleGroupBindings handles role bindings for a group.
+func (s *Server) handleGroupBindings(w http.ResponseWriter, r *http.Request, groupName string) {
+	group := s.s3Authorizer.Groups.Get(groupName)
+	if group == nil {
+		s.jsonError(w, "group not found", http.StatusNotFound)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		bindings := s.s3Authorizer.GroupBindings.GetForGroup(groupName)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(bindings)
+
+	case http.MethodPost:
+		var req GroupBindingRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.jsonError(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.RoleName == "" {
+			s.jsonError(w, "role_name is required", http.StatusBadRequest)
+			return
+		}
+
+		binding := auth.NewGroupBinding(groupName, req.RoleName, req.BucketScope)
+		s.s3Authorizer.GroupBindings.Add(binding)
+
+		// Persist
+		if s.s3SystemStore != nil {
+			if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
+				log.Warn().Err(err).Msg("failed to persist group bindings")
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(binding)
+
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// --- File Share API Handlers ---
+
+// handleShares handles GET (list) and POST (create) for file shares.
+func (s *Server) handleShares(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleSharesList(w, r)
+	case http.MethodPost:
+		s.handleShareCreate(w, r)
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleSharesList returns all file shares.
+func (s *Server) handleSharesList(w http.ResponseWriter, _ *http.Request) {
+	if s.fileShareMgr == nil {
+		s.jsonError(w, "file shares not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	shares := s.fileShareMgr.List()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(shares)
+}
+
+// ShareCreateRequest is the request body for creating a file share.
+type ShareCreateRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// handleShareCreate creates a new file share.
+func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
+	if s.fileShareMgr == nil {
+		s.jsonError(w, "file shares not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req ShareCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		s.jsonError(w, "name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get owner from TLS client certificate if available
+	ownerID := s.getRequestOwner(r)
+
+	share, err := s.fileShareMgr.Create(req.Name, req.Description, ownerID)
+	if err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			s.jsonError(w, err.Error(), http.StatusConflict)
+		} else {
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Persist group bindings (file share creates them)
+	if s.s3SystemStore != nil {
+		if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
+			log.Warn().Err(err).Msg("failed to persist group bindings")
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(share)
+}
+
+// handleShareByName handles GET and DELETE for a specific file share.
+func (s *Server) handleShareByName(w http.ResponseWriter, r *http.Request) {
+	if s.fileShareMgr == nil {
+		s.jsonError(w, "file shares not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Parse path: /api/shares/{name}
+	path := strings.TrimPrefix(r.URL.Path, "/api/shares/")
+	shareName := strings.TrimSuffix(path, "/")
+
+	if shareName == "" {
+		s.jsonError(w, "share name required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		share := s.fileShareMgr.Get(shareName)
+		if share == nil {
+			s.jsonError(w, "share not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(share)
+
+	case http.MethodDelete:
+		share := s.fileShareMgr.Get(shareName)
+		if share == nil {
+			s.jsonError(w, "share not found", http.StatusNotFound)
+			return
+		}
+
+		if err := s.fileShareMgr.Delete(shareName); err != nil {
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Persist group bindings (file share removes them)
+		if s.s3SystemStore != nil {
+			if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
+				log.Warn().Err(err).Msg("failed to persist group bindings")
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// --- User API Handlers ---
+
+// UserInfo represents user information for the API.
+type UserInfo struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	PublicKey string   `json:"public_key,omitempty"`
+	IsService bool     `json:"is_service"`
+	Groups    []string `json:"groups"`
+	Expired   bool     `json:"expired"`
+	LastSeen  string   `json:"last_seen,omitempty"`
+	CreatedAt string   `json:"created_at,omitempty"`
+}
+
+// handleUsers handles GET for listing users.
+func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.s3SystemStore == nil {
+		s.jsonError(w, "user management not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	users, err := s.s3SystemStore.LoadUsers()
+	if err != nil {
+		s.jsonError(w, "failed to load users", http.StatusInternalServerError)
+		return
+	}
+
+	// Build user info with groups
+	result := make([]UserInfo, 0, len(users))
+	for _, u := range users {
+		groups := []string{}
+		if s.s3Authorizer != nil && s.s3Authorizer.Groups != nil {
+			groups = s.s3Authorizer.Groups.GetGroupsForUser(u.ID)
+		}
+
+		info := UserInfo{
+			ID:        u.ID,
+			Name:      u.Name,
+			IsService: u.IsService(),
+			Groups:    groups,
+			Expired:   u.IsExpired(),
+		}
+		if !u.LastSeen.IsZero() {
+			info.LastSeen = u.LastSeen.Format(time.RFC3339)
+		}
+		if !u.CreatedAt.IsZero() {
+			info.CreatedAt = u.CreatedAt.Format(time.RFC3339)
+		}
+		result = append(result, info)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+// getRequestOwner extracts the owner identity from the request.
+// It tries to get the peer name from the TLS client certificate,
+// falling back to "admin" if not available.
+func (s *Server) getRequestOwner(r *http.Request) string {
+	// Try to get peer name from TLS client certificate
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		cn := r.TLS.PeerCertificates[0].Subject.CommonName
+		// CN format is "peername.tunnelmesh" - extract just the peer name
+		if strings.HasSuffix(cn, ".tunnelmesh") {
+			return strings.TrimSuffix(cn, ".tunnelmesh")
+		}
+		return cn
+	}
+	// Fallback to admin if no TLS client certificate
+	return "admin"
 }

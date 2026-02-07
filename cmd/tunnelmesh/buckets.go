@@ -114,18 +114,21 @@ func newS3Client() (*s3Client, error) {
 		return nil, fmt.Errorf("no S3 credentials found. Re-register with 'tunnelmesh user register'")
 	}
 
-	// Load peer config for server URL
-	if activeCtx.ConfigPath == "" {
-		return nil, fmt.Errorf("context %q has no config path", activeCtx.Name)
-	}
-
-	peerCfg, err := config.LoadPeerConfig(activeCtx.ConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("load peer config: %w", err)
+	// Get server URL from context or config file
+	var serverURL string
+	if activeCtx.Server != "" {
+		serverURL = activeCtx.Server
+	} else if activeCtx.ConfigPath != "" {
+		peerCfg, err := config.LoadPeerConfig(activeCtx.ConfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("load peer config: %w", err)
+		}
+		serverURL = peerCfg.Server
+	} else {
+		return nil, fmt.Errorf("context %q has no server URL or config path", activeCtx.Name)
 	}
 
 	// Build S3 endpoint URL
-	serverURL := peerCfg.Server
 	if !strings.HasPrefix(serverURL, "http") {
 		serverURL = "https://" + serverURL
 	}

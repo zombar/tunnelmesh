@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 )
@@ -42,9 +43,12 @@ func NewSystemStore(store *Store, serviceUserID string) (*SystemStore, error) {
 
 // Auth paths
 const (
-	UsersPath    = "auth/users.json"
-	RolesPath    = "auth/roles.json"
-	BindingsPath = "auth/bindings.json"
+	UsersPath         = "auth/users.json"
+	RolesPath         = "auth/roles.json"
+	BindingsPath      = "auth/bindings.json"
+	GroupsPath        = "auth/groups.json"
+	GroupBindingsPath = "auth/group_bindings.json"
+	FileSharesPath    = "auth/file_shares.json"
 )
 
 // Stats paths
@@ -103,6 +107,65 @@ func (ss *SystemStore) LoadBindings() ([]*auth.RoleBinding, error) {
 		return nil, err
 	}
 	return bindings, nil
+}
+
+// --- Groups ---
+
+// SaveGroups saves groups to S3.
+func (ss *SystemStore) SaveGroups(groups []*auth.Group) error {
+	return ss.saveJSON(GroupsPath, groups)
+}
+
+// LoadGroups loads groups from S3.
+func (ss *SystemStore) LoadGroups() ([]*auth.Group, error) {
+	var groups []*auth.Group
+	if err := ss.loadJSON(GroupsPath, &groups); err != nil {
+		return nil, err
+	}
+	return groups, nil
+}
+
+// --- Group Bindings ---
+
+// SaveGroupBindings saves group bindings to S3.
+func (ss *SystemStore) SaveGroupBindings(bindings []*auth.GroupBinding) error {
+	return ss.saveJSON(GroupBindingsPath, bindings)
+}
+
+// LoadGroupBindings loads group bindings from S3.
+func (ss *SystemStore) LoadGroupBindings() ([]*auth.GroupBinding, error) {
+	var bindings []*auth.GroupBinding
+	if err := ss.loadJSON(GroupBindingsPath, &bindings); err != nil {
+		return nil, err
+	}
+	return bindings, nil
+}
+
+// --- File Shares ---
+
+// FileShare represents a file sharing configuration backed by an S3 bucket.
+type FileShare struct {
+	Name        string    `json:"name"`        // Share name (bucket will be "fs+{name}")
+	Description string    `json:"description"` // Human-readable description
+	Owner       string    `json:"owner"`       // UserID of creator
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// FileShareBucketPrefix is the prefix for file share bucket names.
+const FileShareBucketPrefix = "fs+"
+
+// SaveFileShares saves file shares to S3.
+func (ss *SystemStore) SaveFileShares(shares []*FileShare) error {
+	return ss.saveJSON(FileSharesPath, shares)
+}
+
+// LoadFileShares loads file shares from S3.
+func (ss *SystemStore) LoadFileShares() ([]*FileShare, error) {
+	var shares []*FileShare
+	if err := ss.loadJSON(FileSharesPath, &shares); err != nil {
+		return nil, err
+	}
+	return shares, nil
 }
 
 // --- Stats History ---

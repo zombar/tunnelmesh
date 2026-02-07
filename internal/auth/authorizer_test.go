@@ -137,3 +137,119 @@ func TestAuthorizerGetUserRoles(t *testing.T) {
 	assert.True(t, roleNames[RoleAdmin])
 	assert.True(t, roleNames[RoleBucketRead])
 }
+
+// --- Group-based authorization tests ---
+
+func TestAuthorizer_AuthorizeWithGroups(t *testing.T) {
+	auth := NewAuthorizerWithGroups()
+
+	// Create developers group and add alice
+	_, _ = auth.Groups.Create("developers", "Development team")
+	_ = auth.Groups.AddMember("developers", "alice")
+
+	// Grant developers bucket-read on all buckets
+	auth.GroupBindings.Add(NewGroupBinding("developers", RoleBucketRead, ""))
+
+	// Alice should have read access via group membership
+	assert.True(t, auth.Authorize("alice", "get", "objects", "any-bucket"))
+	assert.True(t, auth.Authorize("alice", "list", "objects", "any-bucket"))
+
+	// Alice should not have write access
+	assert.False(t, auth.Authorize("alice", "put", "objects", "any-bucket"))
+
+	// Bob is not in the group, should be denied
+	assert.False(t, auth.Authorize("bob", "get", "objects", "any-bucket"))
+}
+
+func TestAuthorizer_AuthorizeWithScopedGroupBinding(t *testing.T) {
+	auth := NewAuthorizerWithGroups()
+
+	// Add alice to everyone group
+	_ = auth.Groups.AddMember(GroupEveryone, "alice")
+
+	// Everyone gets bucket-read only on fs+data bucket
+	auth.GroupBindings.Add(NewGroupBinding(GroupEveryone, RoleBucketRead, "fs+data"))
+
+	// Alice can read fs+data
+	assert.True(t, auth.Authorize("alice", "get", "objects", "fs+data"))
+
+	// Alice cannot read other buckets via this binding
+	assert.False(t, auth.Authorize("alice", "get", "objects", "other-bucket"))
+}
+
+func TestAuthorizer_UserBindingTakesPrecedence(t *testing.T) {
+	auth := NewAuthorizerWithGroups()
+
+	// Alice has direct admin binding
+	auth.Bindings.Add(NewRoleBinding("alice", RoleAdmin, ""))
+
+	// Alice is also in a group with read-only access
+	_ = auth.Groups.AddMember("readers", "alice")
+	auth.GroupBindings.Add(NewGroupBinding("readers", RoleBucketRead, ""))
+
+	// Alice should have admin access (from direct binding)
+	assert.True(t, auth.Authorize("alice", "delete", "buckets", "any-bucket"))
+}
+
+func TestAuthorizer_IsAdmin_ViaGroup(t *testing.T) {
+	auth := NewAuthorizerWithGroups()
+
+	// Alice is not admin initially
+	assert.False(t, auth.IsAdmin("alice"))
+
+	// Add alice to all_admin_users group
+	_ = auth.Groups.AddMember(GroupAllAdminUsers, "alice")
+
+	// Now alice should be considered admin
+	assert.True(t, auth.IsAdmin("alice"))
+}
+
+func TestAuthorizer_ServiceUsersViaGroup(t *testing.T) {
+	auth := NewAuthorizerWithGroups()
+
+	// Add service user to all_service_users group
+	_ = auth.Groups.AddMember(GroupAllServiceUsers, "svc:coordinator")
+
+	// Grant system role to all_service_users group
+	auth.GroupBindings.Add(NewGroupBinding(GroupAllServiceUsers, RoleSystem, ""))
+
+	// Service user should access _tunnelmesh bucket
+	assert.True(t, auth.Authorize("svc:coordinator", "put", "objects", "_tunnelmesh"))
+	assert.True(t, auth.Authorize("svc:coordinator", "get", "objects", "_tunnelmesh"))
+
+	// But not other buckets
+	assert.False(t, auth.Authorize("svc:coordinator", "get", "objects", "user-bucket"))
+}
+
+func TestAuthorizer_GroupBindingPrecedence(t *testing.T) {
+	auth := NewAuthorizerWithGroups()
+
+	// Create groups and add Alice to both
+	_, _ = auth.Groups.Create("readers", "")
+	_, _ = auth.Groups.Create("writers", "")
+	_ = auth.Groups.AddMember("readers", "alice")
+	_ = auth.Groups.AddMember("writers", "alice")
+
+	// readers group has read access
+	auth.GroupBindings.Add(NewGroupBinding("readers", RoleBucketRead, ""))
+	// writers group has write access
+	auth.GroupBindings.Add(NewGroupBinding("writers", RoleBucketWrite, ""))
+
+	// Alice should have both read and write access
+	assert.True(t, auth.Authorize("alice", "get", "objects", "any-bucket"))
+	assert.True(t, auth.Authorize("alice", "put", "objects", "any-bucket"))
+}
+
+func TestAuthorizer_HasHumanAdmin_ViaGroup(t *testing.T) {
+	auth := NewAuthorizerWithGroups()
+
+	assert.False(t, auth.HasHumanAdmin())
+
+	// Add service user to admin group - should not count
+	_ = auth.Groups.AddMember(GroupAllAdminUsers, "svc:coordinator")
+	assert.False(t, auth.HasHumanAdmin())
+
+	// Add human user to admin group
+	_ = auth.Groups.AddMember(GroupAllAdminUsers, "alice")
+	assert.True(t, auth.HasHumanAdmin())
+}

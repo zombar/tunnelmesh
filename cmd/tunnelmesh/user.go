@@ -298,17 +298,20 @@ func runUserRegister(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("no active context. Run 'tunnelmesh context use <name>' or use --server flag")
 		}
 
-		// Load the peer config to get the server address
-		if activeCtx.ConfigPath == "" {
-			return fmt.Errorf("context %q has no config path", activeCtx.Name)
+		// Get server address from context or config file
+		if activeCtx.Server != "" {
+			// Context has server URL directly (created via join with --server flag)
+			serverURL = activeCtx.Server
+		} else if activeCtx.ConfigPath != "" {
+			// Load from config file
+			peerCfg, err := config.LoadPeerConfig(activeCtx.ConfigPath)
+			if err != nil {
+				return fmt.Errorf("load peer config: %w", err)
+			}
+			serverURL = peerCfg.Server
+		} else {
+			return fmt.Errorf("context %q has no server URL or config path", activeCtx.Name)
 		}
-
-		peerCfg, err := config.LoadPeerConfig(activeCtx.ConfigPath)
-		if err != nil {
-			return fmt.Errorf("load peer config: %w", err)
-		}
-
-		serverURL = peerCfg.Server
 		contextName = activeCtx.Name
 	}
 

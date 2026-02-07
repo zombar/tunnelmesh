@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -162,4 +163,66 @@ func TestSignMessage(t *testing.T) {
 	decoded, err := base64.StdEncoding.DecodeString(signature)
 	require.NoError(t, err)
 	assert.Len(t, decoded, 64) // ED25519 signature is 64 bytes
+}
+
+// --- User expiration tests ---
+
+func TestUser_IsExpired_NotExpired(t *testing.T) {
+	user := User{
+		ID:       "abc123def456",
+		Name:     "Alice",
+		LastSeen: time.Now().Add(-1 * time.Hour), // Seen 1 hour ago
+	}
+
+	assert.False(t, user.IsExpired())
+}
+
+func TestUser_IsExpired_ExplicitlyExpired(t *testing.T) {
+	user := User{
+		ID:        "abc123def456",
+		Name:      "Alice",
+		LastSeen:  time.Now().Add(-1 * time.Hour),
+		Expired:   true,
+		ExpiredAt: time.Now().Add(-1 * time.Hour),
+	}
+
+	assert.True(t, user.IsExpired())
+}
+
+func TestUser_IsExpired_LastSeenTooOld(t *testing.T) {
+	user := User{
+		ID:       "abc123def456",
+		Name:     "Alice",
+		LastSeen: time.Now().Add(-31 * 24 * time.Hour), // Seen 31 days ago
+	}
+
+	assert.True(t, user.IsExpired())
+}
+
+func TestUser_IsExpired_ServiceUserNeverExpires(t *testing.T) {
+	user := User{
+		ID:       "svc:coordinator",
+		Name:     "Coordinator Service",
+		LastSeen: time.Now().Add(-365 * 24 * time.Hour), // Seen 1 year ago
+	}
+
+	// Service users don't expire based on time
+	assert.False(t, user.IsExpired())
+}
+
+func TestUser_IsExpired_ServiceUserCanBeExplicitlyExpired(t *testing.T) {
+	user := User{
+		ID:        "svc:coordinator",
+		Name:      "Coordinator Service",
+		Expired:   true,
+		ExpiredAt: time.Now(),
+	}
+
+	// Service users can still be explicitly expired (when peer is removed)
+	assert.True(t, user.IsExpired())
+}
+
+func TestUserExpirationDays(t *testing.T) {
+	// Verify the constant value
+	assert.Equal(t, 30, UserExpirationDays)
 }
