@@ -57,14 +57,24 @@ sudo tunnelmesh join \
 Or in config:
 ```yaml
 name: "wg-gateway"
-server: "https://tunnelmesh.example.com"
+
+# Coordination server (HTTPS) - where this peer registers with the mesh
+server: "https://coord.example.com"
 auth_token: "your-token"
 
 wireguard:
   enabled: true
   listen_port: 51820
-  endpoint: "wg.example.com:51820"  # Public endpoint for clients
+
+  # Public endpoint (UDP) - where WireGuard clients connect
+  # This is YOUR public IP or hostname, not the coordinator!
+  # If empty, clients will use this peer's detected public IP
+  endpoint: "203.0.113.50:51820"  # or "wg.example.com:51820"
 ```
+
+**Important distinction:**
+- `server` = Coordination server URL (HTTPS, port 443/8443) - mesh registration
+- `endpoint` = This peer's WireGuard endpoint (UDP, port 51820) - where mobile clients connect
 
 ### 2. Add a Client via Admin Panel
 
@@ -94,18 +104,25 @@ wireguard:
 ### Peer Configuration
 
 ```yaml
+# Full peer config with WireGuard enabled
+name: "wg-gateway"
+server: "https://coord.example.com"    # Coordination server (HTTPS)
+auth_token: "your-64-char-hex-token"
+
 wireguard:
-  # Enable WireGuard concentrator
+  # Enable WireGuard concentrator on this peer
   enabled: true
 
-  # UDP port for WireGuard (default: 51820)
+  # UDP port to listen on (ensure firewall allows this)
   listen_port: 51820
 
-  # Public endpoint for clients to connect
-  # If empty, clients use the peer's public IP
-  endpoint: "wg.example.com:51820"
+  # Public endpoint for WireGuard clients to connect to
+  # This is THIS PEER's public address, not the coordinator!
+  # Format: "ip:port" or "hostname:port"
+  # If empty/omitted, uses this peer's auto-detected public IP
+  endpoint: "203.0.113.50:51820"
 
-  # Data directory for persistent state
+  # Persistent storage for client keys and assignments
   # Default: ~/.tunnelmesh/wireguard/
   data_dir: "/var/lib/tunnelmesh/wireguard"
 ```

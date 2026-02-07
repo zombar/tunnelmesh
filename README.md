@@ -301,141 +301,30 @@ The tool searches for config files in the following order:
 
 **Peer:** `~/.tunnelmesh/config.yaml`, `tunnelmesh.yaml`, `peer.yaml`
 
-## CLI Reference
-
-| Command | Description |
-|---------|-------------|
-| `tunnelmesh serve` | Run the coordination server |
-| `tunnelmesh join` | Connect a peer to the mesh |
-| `tunnelmesh status` | Show node status and connectivity |
-| `tunnelmesh peers` | List all connected peers |
-| `tunnelmesh resolve <hostname>` | Resolve mesh hostname to IP |
-| `tunnelmesh leave` | Deregister from the mesh |
-| `tunnelmesh init` | Generate SSH keys |
-| `tunnelmesh version` | Show version information |
-| `tunnelmesh service install` | Install as system service |
-| `tunnelmesh service uninstall` | Remove system service |
-| `tunnelmesh service start/stop` | Control the service |
-| `tunnelmesh service status` | Show service status |
-| `tunnelmesh service logs` | View service logs |
-| `tunnelmesh trust-ca` | Install mesh CA certificate in system trust store |
-| `tunnelmesh update` | Update to latest version |
-
-### Global Flags
-
-| Flag | Description |
-|------|-------------|
-| `-c, --config` | Config file path |
-| `-l, --log-level` | Logging level (debug, info, warn, error) |
-| `-s, --server` | Coordination server URL |
-| `-t, --token` | Authentication token |
-| `-n, --name` | Node name |
-
-### Join Flags
-
-| Flag | Description |
-|------|-------------|
-| `--exit-node` | Route internet traffic through specified peer |
-| `--allow-exit-traffic` | Allow this node to act as an exit node |
-| `--latitude` | Manual latitude for location (overrides IP geolocation) |
-| `--longitude` | Manual longitude for location |
-
-## Running as a System Service
-
-TunnelMesh can be installed as a system service that starts automatically at boot.
-
-### Supported Platforms
-
-| Platform | Service Manager | Config Location | Log Command |
-|----------|-----------------|-----------------|-------------|
-| Linux | systemd | `/etc/tunnelmesh/` | `journalctl -u tunnelmesh` |
-| macOS | launchd | `/etc/tunnelmesh/` | `tunnelmesh service logs` |
-| Windows | SCM | `C:\ProgramData\TunnelMesh\` | Event Viewer |
-
-### Install as a Service
-
-#### Linux/macOS
+## CLI Quick Reference
 
 ```bash
-# Create config directory and copy config
-sudo mkdir -p /etc/tunnelmesh
-sudo cp peer.yaml /etc/tunnelmesh/peer.yaml
+# First time setup
+tunnelmesh init                    # Generate SSH keys
 
-# Install as peer service (default)
-sudo tunnelmesh service install --mode join --config /etc/tunnelmesh/peer.yaml
+# Run coordination server
+sudo tunnelmesh serve -c server.yaml
 
-# Or install as server service
-sudo tunnelmesh service install --mode serve --config /etc/tunnelmesh/server.yaml
+# Join mesh as peer
+sudo tunnelmesh join -c peer.yaml
 
-# Start the service
+# Check status
+tunnelmesh status                  # Connection status
+tunnelmesh peers                   # List all peers
+
+# System service
+sudo tunnelmesh service install --mode join -c /etc/tunnelmesh/peer.yaml
 sudo tunnelmesh service start
 ```
 
-#### Windows (as Administrator)
+Most commands require a config file (`-c` flag) or one in a default location (`~/.tunnelmesh/config.yaml`, `peer.yaml`).
 
-```powershell
-# Create config directory
-mkdir C:\ProgramData\TunnelMesh
-
-# Copy config file
-copy peer.yaml C:\ProgramData\TunnelMesh\peer.yaml
-
-# Install service
-tunnelmesh service install --mode join --config C:\ProgramData\TunnelMesh\peer.yaml
-
-# Start service
-tunnelmesh service start
-```
-
-### Service Commands
-
-```bash
-# Control the service
-tunnelmesh service start
-tunnelmesh service stop
-tunnelmesh service restart
-tunnelmesh service status
-
-# View logs
-tunnelmesh service logs              # Last 50 lines
-tunnelmesh service logs --follow     # Follow logs in real-time
-tunnelmesh service logs --lines 100  # Show more lines
-
-# Uninstall
-sudo tunnelmesh service uninstall
-```
-
-### Service Install Options
-
-| Flag | Description |
-|------|-------------|
-| `--mode` | Service mode: `join` (peer) or `serve` (server) |
-| `--config` | Path to configuration file |
-| `--name` | Custom service name (for multiple instances) |
-| `--force` | Force reinstall if already installed |
-| `--user` | Run as specific user (Linux/macOS) |
-
-### Multiple Instances
-
-You can run multiple TunnelMesh instances with different names:
-
-```bash
-# Install two peer instances
-sudo tunnelmesh service install --mode join --name tunnelmesh-peer1 --config /etc/tunnelmesh/peer1.yaml
-sudo tunnelmesh service install --mode join --name tunnelmesh-peer2 --config /etc/tunnelmesh/peer2.yaml
-
-# Control specific instance
-sudo tunnelmesh service start --name tunnelmesh-peer1
-sudo tunnelmesh service status --name tunnelmesh-peer2
-```
-
-### Updating Configuration
-
-After modifying the config file, restart the service:
-
-```bash
-sudo tunnelmesh service restart
-```
+See **[CLI Reference](docs/CLI.md)** for complete documentation, all flags, and walkthroughs.
 
 ## Docker Deployment
 

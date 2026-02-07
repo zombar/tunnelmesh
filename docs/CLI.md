@@ -2,6 +2,40 @@
 
 Complete command-line reference for TunnelMesh with examples and walkthroughs.
 
+## TL;DR - Most Common Commands
+
+```bash
+# First time? Generate SSH keys (no config needed)
+tunnelmesh init
+
+# Run a coordination server
+sudo tunnelmesh serve -c server.yaml
+
+# Join the mesh as a peer
+sudo tunnelmesh join -c peer.yaml
+
+# Check your connection status
+tunnelmesh status -c peer.yaml
+
+# List all peers in the mesh
+tunnelmesh peers -c peer.yaml
+
+# Speed test to another peer
+tunnelmesh benchmark other-peer --size 100MB
+
+# Install as system service (starts on boot)
+sudo tunnelmesh service install --mode join -c /etc/tunnelmesh/peer.yaml
+sudo tunnelmesh service start
+```
+
+> **Config file required:** Almost all commands need a config file to know which server to connect to and authenticate with. Use `-c path/to/config.yaml` explicitly, or place your config in a default location:
+> - `~/.tunnelmesh/config.yaml` (recommended for personal use)
+> - `peer.yaml` or `tunnelmesh.yaml` in current directory
+>
+> Only `tunnelmesh init`, `tunnelmesh version`, and `tunnelmesh service` subcommands work without a config.
+
+---
+
 ## Installation
 
 Download the latest release for your platform:
