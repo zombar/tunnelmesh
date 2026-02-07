@@ -12,80 +12,43 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
 )
 
-var (
-	trustCAServer string
-	trustCARemove bool
-)
-
-func newTrustCACmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "trust-ca",
-		Short: "Install mesh CA certificate in system trust store",
-		Long: `Downloads the TunnelMesh CA certificate from the coordination server and
-installs it in the system trust store. This allows HTTPS connections to
-mesh services (like https://this.tunnelmesh) to work without browser warnings.
-
-Requires administrator/root privileges on most systems.
-
-Examples:
-  # Install CA cert from server
-  tunnelmesh trust-ca --server http://coord.example.com:8080
-
-  # Remove previously installed CA cert
-  tunnelmesh trust-ca --server http://coord.example.com:8080 --remove`,
-		RunE: runTrustCA,
-	}
-	cmd.Flags().StringVar(&trustCAServer, "server", "", "coordination server URL (required)")
-	cmd.Flags().BoolVar(&trustCARemove, "remove", false, "remove the CA certificate instead of installing")
-	_ = cmd.MarkFlagRequired("server")
-	return cmd
-}
-
-func runTrustCA(cmd *cobra.Command, args []string) error {
-	setupLogging()
-
-	if trustCARemove {
-		return removeCA()
-	}
-	return InstallCAFromServer(trustCAServer)
-}
-
-// InstallCAFromServer fetches and installs the CA certificate from the given server URL.
-// This is exported so it can be called from the join command with --trust-ca flag.
-func InstallCAFromServer(serverURL string) error {
+// FetchCA fetches the CA certificate from the given server URL and returns the PEM bytes.
+// This is used by the join command to store the CA locally.
+func FetchCA(serverURL string) ([]byte, error) {
 	// Normalize server URL
 	server := strings.TrimSuffix(serverURL, "/")
 
-	// Fetch CA cert
-	log.Info().Str("server", server).Msg("fetching CA certificate")
+	log.Debug().Str("server", server).Msg("fetching CA certificate")
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(server + "/ca.crt")
 	if err != nil {
-		return fmt.Errorf("fetch CA cert: %w", err)
+		return nil, fmt.Errorf("fetch CA cert: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned status %d", resp.StatusCode)
-	}
-
-	// Get CA name from header (used for removal)
-	caName := resp.Header.Get("X-TunnelMesh-CA-Name")
-	if caName == "" {
-		caName = "TunnelMesh CA" // Fallback for older servers
+		return nil, fmt.Errorf("server returned status %d", resp.StatusCode)
 	}
 
 	caPEM, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("read response: %w", err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 
 	if len(caPEM) == 0 {
-		return fmt.Errorf("empty CA certificate")
+		return nil, fmt.Errorf("empty CA certificate")
+	}
+
+	return caPEM, nil
+}
+
+// InstallCA installs the given CA certificate PEM into the system trust store.
+func InstallCA(caPEM []byte, caName string) error {
+	if caName == "" {
+		caName = "TunnelMesh CA"
 	}
 
 	// Save to temp file
@@ -105,6 +68,20 @@ func InstallCAFromServer(serverURL string) error {
 	return installCAWithName(tmpPath, caName)
 }
 
+// RemoveCA removes the TunnelMesh CA certificate from the system trust store.
+func RemoveCA() error {
+	switch runtime.GOOS {
+	case "darwin":
+		return removeCAMacOS()
+	case "linux":
+		return removeCALinux()
+	case "windows":
+		return removeCAWindows()
+	default:
+		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+	}
+}
+
 func installCAWithName(certPath, caName string) error {
 	switch runtime.GOOS {
 	case "darwin":
@@ -113,19 +90,6 @@ func installCAWithName(certPath, caName string) error {
 		return installCALinux(certPath)
 	case "windows":
 		return installCAWindows(certPath, caName)
-	default:
-		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
-	}
-}
-
-func removeCA() error {
-	switch runtime.GOOS {
-	case "darwin":
-		return removeCAMacOS()
-	case "linux":
-		return removeCALinux()
-	case "windows":
-		return removeCAWindows()
 	default:
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
@@ -326,7 +290,7 @@ func fileExists(path string) bool {
 
 // IsCATrusted checks if a TunnelMesh CA certificate is installed in the system trust store.
 // It returns true if a CA with "TunnelMesh" in the name is found.
-func IsCATrusted(serverURL string) (bool, error) {
+func IsCATrusted() (bool, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		return isCATrustedMacOS()

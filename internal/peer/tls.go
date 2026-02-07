@@ -36,6 +36,11 @@ func (m *TLSManager) KeyPath() string {
 	return filepath.Join(m.tlsDir(), "key.pem")
 }
 
+// CAPath returns the path to the CA certificate file.
+func (m *TLSManager) CAPath() string {
+	return filepath.Join(m.tlsDir(), "ca.pem")
+}
+
 // StoreCert saves the certificate and private key to disk.
 func (m *TLSManager) StoreCert(certPEM, keyPEM []byte) error {
 	// Ensure directory exists
@@ -58,6 +63,22 @@ func (m *TLSManager) StoreCert(certPEM, keyPEM []byte) error {
 		Str("key", m.KeyPath()).
 		Msg("stored TLS certificate")
 
+	return nil
+}
+
+// StoreCA saves the CA certificate to disk.
+func (m *TLSManager) StoreCA(caPEM []byte) error {
+	// Ensure directory exists
+	if err := os.MkdirAll(m.tlsDir(), 0755); err != nil {
+		return fmt.Errorf("create tls dir: %w", err)
+	}
+
+	// Save CA certificate
+	if err := os.WriteFile(m.CAPath(), caPEM, 0644); err != nil {
+		return fmt.Errorf("write ca: %w", err)
+	}
+
+	log.Debug().Str("ca", m.CAPath()).Msg("stored CA certificate")
 	return nil
 }
 

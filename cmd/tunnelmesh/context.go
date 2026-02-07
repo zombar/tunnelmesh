@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/context"
+	"github.com/tunnelmesh/tunnelmesh/internal/peer"
 	"github.com/tunnelmesh/tunnelmesh/internal/svc"
 )
 
@@ -325,10 +327,39 @@ func runContextDelete(cmd *cobra.Command, args []string) error {
 		response, _ := reader.ReadString('\n')
 		response = strings.TrimSpace(strings.ToLower(response))
 		if response == "y" || response == "yes" {
+			// Load config to find TLS directory before removing
+			if cfg, err := config.LoadPeerConfig(ctx.ConfigPath); err == nil {
+				// Remove TLS certificates
+				tlsDataDir := filepath.Dir(cfg.PrivateKey)
+				tlsMgr := peer.NewTLSManager(tlsDataDir)
+				if tlsMgr.HasCert() {
+					tlsDir := filepath.Join(tlsDataDir, "tls")
+					if err := os.RemoveAll(tlsDir); err != nil {
+						fmt.Printf("Warning: failed to remove TLS certificates: %v\n", err)
+					} else {
+						fmt.Printf("TLS certificates removed.\n")
+					}
+				}
+			}
+
 			if err := os.Remove(ctx.ConfigPath); err != nil {
 				fmt.Printf("Warning: failed to remove config: %v\n", err)
 			} else {
 				fmt.Printf("Config file removed.\n")
+			}
+		}
+	}
+
+	// Prompt to remove CA from system trust store
+	if trusted, _ := IsCATrusted(); trusted {
+		fmt.Print("Remove CA certificate from system trust store? [y/N]: ")
+		response, _ := reader.ReadString('\n')
+		response = strings.TrimSpace(strings.ToLower(response))
+		if response == "y" || response == "yes" {
+			if err := RemoveCA(); err != nil {
+				fmt.Printf("Warning: failed to remove CA certificate: %v\n", err)
+			} else {
+				fmt.Printf("CA certificate removed from system trust store.\n")
 			}
 		}
 	}

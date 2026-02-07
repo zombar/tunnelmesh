@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -97,9 +98,6 @@ var (
 	// Exit node flags
 	exitNodeFlag     string
 	allowExitTraffic bool
-
-	// CA trust flag
-	trustCA bool
 
 	// Context flag for join command
 	joinContext string
@@ -207,7 +205,6 @@ It does not route traffic - peers connect directly to each other.`,
 	joinCmd.Flags().StringVar(&city, "city", "", "city name for manual geolocation (shown in admin UI)")
 	joinCmd.Flags().StringVar(&exitNodeFlag, "exit-node", "", "name of peer to route internet traffic through")
 	joinCmd.Flags().BoolVar(&allowExitTraffic, "allow-exit-traffic", false, "allow this node to act as exit node for other peers")
-	joinCmd.Flags().BoolVar(&trustCA, "trust-ca", false, "install mesh CA certificate in system trust store (requires sudo)")
 	joinCmd.Flags().BoolVar(&enableTracing, "enable-tracing", false, "enable runtime tracing (exposes /debug/trace endpoint)")
 	joinCmd.Flags().StringVar(&joinContext, "context", "", "save/update context with this name after joining")
 	rootCmd.AddCommand(joinCmd)
@@ -292,7 +289,6 @@ Examples:
 	rootCmd.AddCommand(newUpdateCmd())
 
 	// Trust CA command - install mesh CA cert in system trust store
-	rootCmd.AddCommand(newTrustCACmd())
 
 	// Benchmark command - speed test between peers
 	rootCmd.AddCommand(newBenchmarkCmd())
@@ -973,32 +969,30 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 				Msg("TLS certificate stored")
 		}
 
-		// Check if CA is trusted and prompt to install if not
-		if trustCA {
-			// Explicit --trust-ca flag, install directly
-			if err := InstallCAFromServer(cfg.Server); err != nil {
-				log.Warn().Err(err).Msg("failed to install CA certificate (you may need sudo)")
-				log.Info().Str("command", fmt.Sprintf("sudo tunnelmesh trust-ca --server %s", cfg.Server)).
-					Msg("run manually with sudo to install CA")
-			}
-		} else {
-			// Check if CA is already installed and prompt if not
-			trusted, err := IsCATrusted(cfg.Server)
-			if err != nil {
-				log.Debug().Err(err).Msg("could not check CA trust status")
-			} else if !trusted {
-				fmt.Println("\nThe mesh CA certificate is not installed in your system trust store.")
-				fmt.Println("This is required for HTTPS connections to mesh services.")
-				fmt.Print("Install CA certificate now? [Y/n]: ")
-				var response string
-				_, _ = fmt.Scanln(&response)
-				response = strings.TrimSpace(strings.ToLower(response))
-				if response == "" || response == "y" || response == "yes" {
-					if err := InstallCAFromServer(cfg.Server); err != nil {
-						log.Warn().Err(err).Msg("failed to install CA certificate (you may need sudo)")
-						log.Info().Str("command", fmt.Sprintf("sudo tunnelmesh trust-ca --server %s", cfg.Server)).
-							Msg("run manually with sudo to install CA")
-					}
+		// Fetch and store CA certificate locally
+		caPEM, err := FetchCA(cfg.Server)
+		if err != nil {
+			return fmt.Errorf("fetch CA certificate: %w", err)
+		}
+		if err := tlsMgr.StoreCA(caPEM); err != nil {
+			return fmt.Errorf("store CA certificate: %w", err)
+		}
+		log.Info().Str("ca", tlsMgr.CAPath()).Msg("CA certificate stored")
+
+		// Check if CA is already installed in system trust store and prompt if not
+		trusted, err := IsCATrusted()
+		if err != nil {
+			log.Debug().Err(err).Msg("could not check CA trust status")
+		} else if !trusted {
+			fmt.Println("\nThe mesh CA certificate is not installed in your system trust store.")
+			fmt.Println("This is required for HTTPS connections to mesh services without browser warnings.")
+			fmt.Print("Install CA certificate now? [Y/n]: ")
+			var response string
+			_, _ = fmt.Scanln(&response)
+			response = strings.TrimSpace(strings.ToLower(response))
+			if response == "" || response == "y" || response == "yes" {
+				if err := InstallCA(caPEM, ""); err != nil {
+					log.Warn().Err(err).Msg("failed to install CA certificate (you may need sudo)")
 				}
 			}
 		}
@@ -1915,6 +1909,34 @@ func runLeave(cmd *cobra.Command, args []string) error {
 	}
 
 	log.Info().Msg("left mesh network")
+
+	// Clean up TLS certificates
+	tlsDataDir := filepath.Dir(cfg.PrivateKey)
+	tlsMgr := peer.NewTLSManager(tlsDataDir)
+	if tlsMgr.HasCert() {
+		tlsDir := filepath.Join(tlsDataDir, "tls")
+		if err := os.RemoveAll(tlsDir); err != nil {
+			log.Warn().Err(err).Msg("failed to remove TLS certificates")
+		} else {
+			log.Info().Msg("TLS certificates removed")
+		}
+	}
+
+	// Prompt to remove CA from system trust store
+	if trusted, _ := IsCATrusted(); trusted {
+		fmt.Print("Remove CA certificate from system trust store? [y/N]: ")
+		reader := bufio.NewReader(os.Stdin)
+		response, _ := reader.ReadString('\n')
+		response = strings.TrimSpace(strings.ToLower(response))
+		if response == "y" || response == "yes" {
+			if err := RemoveCA(); err != nil {
+				log.Warn().Err(err).Msg("failed to remove CA certificate")
+			} else {
+				log.Info().Msg("CA certificate removed from system trust store")
+			}
+		}
+	}
+
 	return nil
 }
 
