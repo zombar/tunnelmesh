@@ -181,8 +181,9 @@ func TestChaosWriter_Jitter(t *testing.T) {
 	}
 
 	// All durations should be between 0 and 2*jitter
+	// Use wider tolerance for CI runners which have variable scheduling delays
 	for _, d := range durations {
-		assert.LessOrEqual(t, d, 2*jitter+5*time.Millisecond)
+		assert.LessOrEqual(t, d, 2*jitter+20*time.Millisecond)
 	}
 }
 
@@ -205,9 +206,10 @@ func TestChaosWriter_LatencyWithJitter(t *testing.T) {
 	}
 
 	// All durations should be between latency-jitter and latency+jitter
+	// Use wider tolerance for CI runners which have variable scheduling delays
 	for _, d := range durations {
 		assert.GreaterOrEqual(t, d, latency-jitter-5*time.Millisecond)
-		assert.LessOrEqual(t, d, latency+jitter+5*time.Millisecond)
+		assert.LessOrEqual(t, d, latency+jitter+20*time.Millisecond)
 	}
 }
 
