@@ -41,10 +41,6 @@ output "coordinator_url" {
   value       = local.coordinator_name != null ? module.node[local.coordinator_name].coordinator_url : var.external_coordinator_url
 }
 
-output "admin_url" {
-  description = "Admin dashboard URL"
-  value       = local.coordinator_name != null ? "${module.node[local.coordinator_name].coordinator_url}/admin/" : null
-}
 
 # ============================================================================
 # WIREGUARD ENDPOINTS

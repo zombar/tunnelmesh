@@ -22,6 +22,7 @@ func newTestServer(t *testing.T) *Server {
 		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Admin:        config.AdminConfig{Enabled: true},
+		JoinMesh:     &config.PeerConfig{Name: "test-coord"},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -260,11 +261,13 @@ func TestServer_IPAllocation(t *testing.T) {
 
 func TestServer_AdminOverview_NoPeers(t *testing.T) {
 	srv := newTestServer(t)
+	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
+	// Admin is now mesh-internal only, test via adminMux
+	req := httptest.NewRequest(http.MethodGet, "/api/overview", nil)
 	w := httptest.NewRecorder()
 
-	srv.ServeHTTP(w, req)
+	srv.adminMux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -280,6 +283,7 @@ func TestServer_AdminOverview_NoPeers(t *testing.T) {
 
 func TestServer_AdminOverview_WithPeers(t *testing.T) {
 	srv := newTestServer(t)
+	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
 	// Register a peer first
 	regReq := proto.RegisterRequest{
@@ -298,10 +302,10 @@ func TestServer_AdminOverview_WithPeers(t *testing.T) {
 	srv.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	// Get admin overview
-	req = httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
+	// Get admin overview (mesh-internal only via adminMux)
+	req = httptest.NewRequest(http.MethodGet, "/api/overview", nil)
 	w = httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
+	srv.adminMux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -321,30 +325,26 @@ func TestServer_AdminOverview_WithPeers(t *testing.T) {
 
 func TestServer_AdminStaticFiles(t *testing.T) {
 	srv := newTestServer(t)
+	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
-	// Test index.html redirect
-	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
-	w := httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusMovedPermanently, w.Code)
-
+	// Admin is now mesh-internal only, test via adminMux at root path
 	// Test index.html
-	req = httptest.NewRequest(http.MethodGet, "/admin/", nil)
-	w = httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "<title>TunnelMesh</title>")
 
 	// Test CSS
-	req = httptest.NewRequest(http.MethodGet, "/admin/css/style.css", nil)
+	req = httptest.NewRequest(http.MethodGet, "/css/style.css", nil)
 	w = httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
+	srv.adminMux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	// Test JS
-	req = httptest.NewRequest(http.MethodGet, "/admin/js/app.js", nil)
+	req = httptest.NewRequest(http.MethodGet, "/js/app.js", nil)
 	w = httptest.NewRecorder()
-	srv.ServeHTTP(w, req)
+	srv.adminMux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
@@ -537,6 +537,7 @@ func newTestServerWithWireGuard(t *testing.T) *Server {
 		MeshCIDR:     "172.30.0.0/16",
 		DomainSuffix: ".tunnelmesh",
 		Admin:        config.AdminConfig{Enabled: true},
+		JoinMesh:     &config.PeerConfig{Name: "test-coord"},
 		WireGuard: config.WireGuardServerConfig{
 			Enabled:  true,
 			Endpoint: "wg.example.com:51820",

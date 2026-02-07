@@ -56,7 +56,6 @@ locals {
     mesh_cidr         = var.mesh_cidr
     relay_enabled     = var.relay_enabled
     auth_token        = var.auth_token
-    admin_token       = var.admin_token
     locations_enabled = var.locations_enabled
 
     # Peer settings

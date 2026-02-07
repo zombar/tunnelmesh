@@ -100,9 +100,13 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 		Admin: config.AdminConfig{
 			Enabled: true,
 		},
+		JoinMesh: &config.PeerConfig{
+			Name: "test-coord",
+		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
+	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -120,15 +124,15 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 	_, err = client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", location, "", false, nil)
 	require.NoError(t, err)
 
-	// Fetch admin overview
-	resp, err := http.Get(ts.URL + "/admin/api/overview")
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
+	// Fetch admin overview from adminMux (internal mesh only)
+	req := httptest.NewRequest(http.MethodGet, "/api/overview", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, http.StatusOK, rec.Code)
 
 	var overview AdminOverview
-	err = json.NewDecoder(resp.Body).Decode(&overview)
+	err = json.NewDecoder(rec.Body).Decode(&overview)
 	require.NoError(t, err)
 
 	// Verify location is included in peer info
@@ -150,9 +154,13 @@ func TestAdminOverview_ExitNodeInfo(t *testing.T) {
 		Admin: config.AdminConfig{
 			Enabled: true,
 		},
+		JoinMesh: &config.PeerConfig{
+			Name: "test-coord",
+		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
+	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -166,15 +174,15 @@ func TestAdminOverview_ExitNodeInfo(t *testing.T) {
 	_, err = client.Register("client1", "SHA256:client1key", []string{"5.6.7.8"}, nil, 2223, 0, false, "v1.0.0", nil, "exit-node", false, nil)
 	require.NoError(t, err)
 
-	// Fetch admin overview
-	resp, err := http.Get(ts.URL + "/admin/api/overview")
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
+	// Fetch admin overview from adminMux (internal mesh only)
+	req := httptest.NewRequest(http.MethodGet, "/api/overview", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, http.StatusOK, rec.Code)
 
 	var overview AdminOverview
-	err = json.NewDecoder(resp.Body).Decode(&overview)
+	err = json.NewDecoder(rec.Body).Decode(&overview)
 	require.NoError(t, err)
 
 	// Find peers by name
@@ -211,9 +219,13 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 		Admin: config.AdminConfig{
 			Enabled: true,
 		},
+		JoinMesh: &config.PeerConfig{
+			Name: "test-coord",
+		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
+	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -237,15 +249,15 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 	}
 	srv.peersMu.Unlock()
 
-	// Fetch admin overview
-	resp, err := http.Get(ts.URL + "/admin/api/overview")
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
+	// Fetch admin overview from adminMux (internal mesh only)
+	req := httptest.NewRequest(http.MethodGet, "/api/overview", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, http.StatusOK, rec.Code)
 
 	var overview AdminOverview
-	err = json.NewDecoder(resp.Body).Decode(&overview)
+	err = json.NewDecoder(rec.Body).Decode(&overview)
 	require.NoError(t, err)
 
 	// Find peer1
@@ -300,7 +312,7 @@ func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
 		GrafanaURL:    grafanaServer.URL,
 	})
 
-	// Test adminMux has the prometheus route
+	// Test adminMux has the prometheus route (admin is mesh-internal only)
 	req := httptest.NewRequest(http.MethodGet, "/prometheus/", nil)
 	rec := httptest.NewRecorder()
 	srv.adminMux.ServeHTTP(rec, req)
@@ -314,18 +326,16 @@ func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "grafana", rec.Body.String())
 
-	// Test main mux also has the routes
+	// Verify main mux does NOT have the monitoring routes (admin is mesh-internal only)
 	req = httptest.NewRequest(http.MethodGet, "/prometheus/", nil)
 	rec = httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "prometheus", rec.Body.String())
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 
 	req = httptest.NewRequest(http.MethodGet, "/grafana/", nil)
 	rec = httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "grafana", rec.Body.String())
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 func TestDownsampleHistory_Uniformity(t *testing.T) {

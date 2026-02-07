@@ -17,10 +17,6 @@ domain = "example.com"
 # Generate with: openssl rand -hex 32
 auth_token = ""
 
-# Authentication token for admin web interface
-# Generate with: openssl rand -hex 32
-admin_token = ""
-
 # ============================================================================
 # NODE DEFINITIONS
 # ============================================================================

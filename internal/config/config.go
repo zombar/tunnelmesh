@@ -13,12 +13,12 @@ import (
 )
 
 // AdminConfig holds configuration for the admin web interface.
+// Admin is only accessible from inside the mesh via HTTPS on mesh IP.
+// Requires join_mesh to be configured.
 type AdminConfig struct {
-	Enabled       bool             `yaml:"enabled"`
-	BindAddress   string           `yaml:"bind_address"`    // Bind address for admin server (default: "127.0.0.1" - localhost only)
-	Port          int              `yaml:"port"`            // Port for admin server (default: 8080)
-	MeshOnlyAdmin *bool            `yaml:"mesh_only_admin"` // When join_mesh is set: true=HTTPS on mesh IP only, false=HTTP externally (default: true)
-	Monitoring    MonitoringConfig `yaml:"monitoring"`      // Reverse proxy config for Prometheus/Grafana
+	Enabled    bool             `yaml:"enabled"`
+	Port       int              `yaml:"port"`       // Port for admin server on mesh IP (default: 443)
+	Monitoring MonitoringConfig `yaml:"monitoring"` // Reverse proxy config for Prometheus/Grafana
 }
 
 // MonitoringConfig holds configuration for reverse proxying to monitoring services.
@@ -223,17 +223,10 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 			cfg.DataDir = filepath.Join(homeDir, cfg.DataDir[2:])
 		}
 	}
-	// Admin defaults
+	// Admin defaults (only accessible from mesh via HTTPS)
 	cfg.Admin.Enabled = true
-	if cfg.Admin.BindAddress == "" {
-		cfg.Admin.BindAddress = "127.0.0.1" // Secure by default - localhost only
-	}
 	if cfg.Admin.Port == 0 {
-		if cfg.JoinMesh != nil {
-			cfg.Admin.Port = 443 // Standard HTTPS port for mesh-only admin
-		} else {
-			cfg.Admin.Port = 8080 // HTTP on localhost
-		}
+		cfg.Admin.Port = 443 // Standard HTTPS port for mesh-only admin
 	}
 	// Relay enabled by default
 	if !cfg.Relay.Enabled {

@@ -228,58 +228,38 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 // setupAdminRoutes registers the admin API routes and static file server.
-// Note: Admin routes have no authentication - access is controlled by bind address.
-// With join_mesh + mesh_only_admin=true (default): HTTPS on mesh IP at root (https://this.tunnelmesh/)
-// With join_mesh + mesh_only_admin=false: HTTP on bind_address at /admin/
-// Without join_mesh: HTTP on bind_address at /admin/
+// Note: Admin routes have no authentication - access is controlled by network binding.
+// Admin is only accessible from inside the mesh via HTTPS on mesh IP (https://this.tunnelmesh/)
+// Requires join_mesh to be configured.
 func (s *Server) setupAdminRoutes() {
+	if s.cfg.JoinMesh == nil {
+		// Admin panel requires join_mesh - coordinator must be a mesh peer
+		return
+	}
+
 	// Serve embedded static files
 	staticFS, _ := fs.Sub(web.Assets, ".")
 	fileServer := http.FileServer(http.FS(staticFS))
 
-	// Determine if we should use mesh-only admin (HTTPS on mesh IP)
-	// Default to true when join_mesh is configured
-	meshOnlyAdmin := s.cfg.JoinMesh != nil && (s.cfg.Admin.MeshOnlyAdmin == nil || *s.cfg.Admin.MeshOnlyAdmin)
+	// Create separate adminMux for HTTPS server on mesh IP
+	// Serve at root - dedicated server doesn't need /admin/ prefix
+	s.adminMux = http.NewServeMux()
 
-	if meshOnlyAdmin {
-		// Mesh-only: create separate adminMux for HTTPS server on mesh IP
-		// Serve at root - dedicated server doesn't need /admin/ prefix
-		s.adminMux = http.NewServeMux()
+	s.adminMux.HandleFunc("/api/overview", s.handleAdminOverview)
+	s.adminMux.HandleFunc("/api/events", s.handleSSE)
 
-		s.adminMux.HandleFunc("/api/overview", s.handleAdminOverview)
-		s.adminMux.HandleFunc("/api/events", s.handleSSE)
-
-		if s.cfg.WireGuard.Enabled {
-			s.adminMux.HandleFunc("/api/wireguard/clients", s.handleWGClients)
-			s.adminMux.HandleFunc("/api/wireguard/clients/", s.handleWGClientByID)
-		}
-
-		// Filter rule management
-		s.adminMux.HandleFunc("/api/filter/rules", s.handleFilterRules)
-
-		// Expose metrics on admin interface for Prometheus scraping via mesh IP
-		s.adminMux.Handle("/metrics", promhttp.Handler())
-
-		s.adminMux.Handle("/", fileServer)
-	} else {
-		// External: register on main mux with /admin/ prefix
-		// (shares mux with coordination API, needs prefix to avoid conflicts)
-		s.mux.HandleFunc("/admin/api/overview", s.handleAdminOverview)
-		s.mux.HandleFunc("/admin/api/events", s.handleSSE)
-
-		if s.cfg.WireGuard.Enabled {
-			s.mux.HandleFunc("/admin/api/wireguard/clients", s.handleWGClients)
-			s.mux.HandleFunc("/admin/api/wireguard/clients/", s.handleWGClientByID)
-		}
-
-		// Filter rule management
-		s.mux.HandleFunc("/admin/api/filter/rules", s.handleFilterRules)
-
-		s.mux.HandleFunc("/admin", func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
-		})
-		s.mux.Handle("/admin/", http.StripPrefix("/admin/", fileServer))
+	if s.cfg.WireGuard.Enabled {
+		s.adminMux.HandleFunc("/api/wireguard/clients", s.handleWGClients)
+		s.adminMux.HandleFunc("/api/wireguard/clients/", s.handleWGClientByID)
 	}
+
+	// Filter rule management
+	s.adminMux.HandleFunc("/api/filter/rules", s.handleFilterRules)
+
+	// Expose metrics on admin interface for Prometheus scraping via mesh IP
+	s.adminMux.Handle("/metrics", promhttp.Handler())
+
+	s.adminMux.Handle("/", fileServer)
 }
 
 // handleWGClients handles GET (list) and POST (create) for WireGuard clients.
@@ -368,8 +348,8 @@ func (s *Server) handleWGClientCreate(w http.ResponseWriter, r *http.Request) {
 
 // handleWGClientByID handles GET, PATCH, DELETE for a specific WireGuard client by proxying to the concentrator.
 func (s *Server) handleWGClientByID(w http.ResponseWriter, r *http.Request) {
-	// Extract client ID from path
-	id := strings.TrimPrefix(r.URL.Path, "/admin/api/wireguard/clients/")
+	// Extract client ID from path (admin served at /api/wireguard/clients/)
+	id := strings.TrimPrefix(r.URL.Path, "/api/wireguard/clients/")
 	if id == "" {
 		s.jsonError(w, "client ID required", http.StatusBadRequest)
 		return
@@ -454,11 +434,14 @@ type MonitoringProxyConfig struct {
 }
 
 // SetupMonitoringProxies registers reverse proxy handlers for Prometheus and Grafana.
-// These are registered on the main mux with /prometheus/ and /grafana/ prefixes.
-// If adminMux exists (mesh-only mode), also register there for access via https://this.tunnelmesh/
+// These are registered on the adminMux for access via https://this.tunnelmesh/
 // Prometheus should be configured with --web.route-prefix=/prometheus/
 // Grafana should be configured with GF_SERVER_SERVE_FROM_SUB_PATH=true
 func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
+	if s.adminMux == nil {
+		return
+	}
+
 	if cfg.PrometheusURL != "" {
 		promURL, err := url.Parse(cfg.PrometheusURL)
 		if err == nil {
@@ -471,13 +454,9 @@ func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
 					// Path already includes /prometheus/ prefix which Prometheus expects
 				},
 			}
-			handler := func(w http.ResponseWriter, r *http.Request) {
+			s.adminMux.HandleFunc("/prometheus/", func(w http.ResponseWriter, r *http.Request) {
 				proxy.ServeHTTP(w, r)
-			}
-			s.mux.HandleFunc("/prometheus/", handler)
-			if s.adminMux != nil {
-				s.adminMux.HandleFunc("/prometheus/", handler)
-			}
+			})
 		}
 	}
 
@@ -493,13 +472,9 @@ func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
 					// Path already includes /grafana/ prefix which Grafana expects
 				},
 			}
-			handler := func(w http.ResponseWriter, r *http.Request) {
+			s.adminMux.HandleFunc("/grafana/", func(w http.ResponseWriter, r *http.Request) {
 				proxy.ServeHTTP(w, r)
-			}
-			s.mux.HandleFunc("/grafana/", handler)
-			if s.adminMux != nil {
-				s.adminMux.HandleFunc("/grafana/", handler)
-			}
+			})
 		}
 	}
 }

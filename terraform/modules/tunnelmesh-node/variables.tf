@@ -76,13 +76,6 @@ variable "relay_enabled" {
   default     = true
 }
 
-variable "admin_token" {
-  description = "Authentication token for admin web interface"
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
 variable "locations_enabled" {
   description = "Enable node location tracking (uses external IP geolocation API)"
   type        = bool
