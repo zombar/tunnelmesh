@@ -85,7 +85,6 @@ var (
 	logLevel  string
 	serverURL string
 	authToken string
-	nodeName  string
 
 	// WireGuard concentrator flag
 	wireguardEnabled bool
@@ -198,7 +197,6 @@ It does not route traffic - peers connect directly to each other.`,
 	}
 	joinCmd.Flags().StringVarP(&serverURL, "server", "s", "", "coordination server URL")
 	joinCmd.Flags().StringVarP(&authToken, "token", "t", "", "authentication token")
-	joinCmd.Flags().StringVarP(&nodeName, "name", "n", "", "node name")
 	joinCmd.Flags().BoolVar(&wireguardEnabled, "wireguard", false, "enable WireGuard concentrator mode")
 	joinCmd.Flags().Float64Var(&latitude, "latitude", 0, "manual geolocation latitude (-90 to 90)")
 	joinCmd.Flags().Float64Var(&longitude, "longitude", 0, "manual geolocation longitude (-180 to 180)")
@@ -805,12 +803,8 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	if authToken != "" {
 		cfg.AuthToken = authToken
 	}
-	if nodeName != "" {
-		cfg.Name = nodeName
-	} else if cfg.Name == "" {
-		// Default to hostname if no name specified
-		cfg.Name, _ = os.Hostname()
-	}
+	// Always use system hostname as node name
+	cfg.Name, _ = os.Hostname()
 	if wireguardEnabled {
 		cfg.WireGuard.Enabled = true
 	}
