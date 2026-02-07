@@ -1,4 +1,5 @@
-// Benchmarker service for Docker - runs periodic benchmarks between mesh peers.
+// Benchmarker service for Docker - runs aggressive continuous benchmarks between mesh peers.
+// Multiple concurrent transfers with randomized chaos settings ensure the mesh is always under load.
 // Results are written to JSON files for analysis.
 package main
 
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/benchmark"
@@ -28,8 +30,11 @@ type Config struct {
 	// LocalPeer is the name of this peer (for benchmark results)
 	LocalPeer string
 
-	// Interval between benchmark runs
+	// Interval between benchmark batch starts
 	Interval time.Duration
+
+	// Concurrency is the number of simultaneous benchmarks to run
+	Concurrency int
 
 	// Size of data to transfer in each benchmark
 	Size int64
@@ -40,33 +45,104 @@ type Config struct {
 	// TLSSkipVerify disables TLS certificate verification
 	TLSSkipVerify bool
 
-	// Chaos testing configuration
-	Chaos benchmark.ChaosConfig
+	// RandomizeChaos enables randomized chaos parameters per benchmark
+	RandomizeChaos bool
+}
+
+// Chaos presets for randomization
+var chaosPresets = []struct {
+	name   string
+	config benchmark.ChaosConfig
+}{
+	{
+		name:   "clean",
+		config: benchmark.ChaosConfig{},
+	},
+	{
+		name: "subtle",
+		config: benchmark.ChaosConfig{
+			PacketLossPercent: 0.1,
+			Latency:           2 * time.Millisecond,
+			Jitter:            1 * time.Millisecond,
+		},
+	},
+	{
+		name: "lossy-wifi",
+		config: benchmark.ChaosConfig{
+			PacketLossPercent: 2.0,
+			Latency:           5 * time.Millisecond,
+			Jitter:            3 * time.Millisecond,
+		},
+	},
+	{
+		name: "mobile-3g",
+		config: benchmark.ChaosConfig{
+			PacketLossPercent: 1.0,
+			Latency:           100 * time.Millisecond,
+			Jitter:            50 * time.Millisecond,
+			BandwidthBps:      5 * 1024 * 1024, // 5 Mbps
+		},
+	},
+	{
+		name: "mobile-4g",
+		config: benchmark.ChaosConfig{
+			PacketLossPercent: 0.5,
+			Latency:           30 * time.Millisecond,
+			Jitter:            15 * time.Millisecond,
+			BandwidthBps:      25 * 1024 * 1024, // 25 Mbps
+		},
+	},
+	{
+		name: "satellite",
+		config: benchmark.ChaosConfig{
+			PacketLossPercent: 0.5,
+			Latency:           300 * time.Millisecond,
+			Jitter:            50 * time.Millisecond,
+			BandwidthBps:      10 * 1024 * 1024, // 10 Mbps
+		},
+	},
+	{
+		name: "congested",
+		config: benchmark.ChaosConfig{
+			PacketLossPercent: 3.0,
+			Latency:           20 * time.Millisecond,
+			Jitter:            30 * time.Millisecond,
+			BandwidthBps:      1 * 1024 * 1024, // 1 Mbps
+		},
+	},
+	{
+		name: "bandwidth-10mbps",
+		config: benchmark.ChaosConfig{
+			BandwidthBps: 10 * 1024 * 1024,
+		},
+	},
+	{
+		name: "bandwidth-50mbps",
+		config: benchmark.ChaosConfig{
+			BandwidthBps: 50 * 1024 * 1024,
+		},
+	},
+	{
+		name: "bandwidth-100mbps",
+		config: benchmark.ChaosConfig{
+			BandwidthBps: 100 * 1024 * 1024,
+		},
+	},
 }
 
 func main() {
 	cfg := configFromEnv()
 
-	fmt.Printf("Starting benchmarker\n")
-	fmt.Printf("  Coord server: %s\n", cfg.CoordURL)
-	fmt.Printf("  Local peer:   %s\n", cfg.LocalPeer)
-	fmt.Printf("  Interval:     %s\n", cfg.Interval)
-	fmt.Printf("  Size:         %s\n", bytesize.Format(cfg.Size))
-	fmt.Printf("  Output dir:   %s\n", cfg.OutputDir)
-	if cfg.Chaos.IsEnabled() {
-		fmt.Printf("  Chaos:        enabled\n")
-		if cfg.Chaos.PacketLossPercent > 0 {
-			fmt.Printf("    Packet loss: %.1f%%\n", cfg.Chaos.PacketLossPercent)
-		}
-		if cfg.Chaos.Latency > 0 {
-			fmt.Printf("    Latency:     %v\n", cfg.Chaos.Latency)
-		}
-		if cfg.Chaos.Jitter > 0 {
-			fmt.Printf("    Jitter:      ±%v\n", cfg.Chaos.Jitter)
-		}
-		if cfg.Chaos.BandwidthBps > 0 {
-			fmt.Printf("    Bandwidth:   %s\n", bytesize.FormatRate(cfg.Chaos.BandwidthBps))
-		}
+	fmt.Printf("Starting aggressive benchmarker\n")
+	fmt.Printf("  Coord server:    %s\n", cfg.CoordURL)
+	fmt.Printf("  Local peer:      %s\n", cfg.LocalPeer)
+	fmt.Printf("  Interval:        %s\n", cfg.Interval)
+	fmt.Printf("  Concurrency:     %d parallel transfers\n", cfg.Concurrency)
+	fmt.Printf("  Size:            %s\n", bytesize.Format(cfg.Size))
+	fmt.Printf("  Output dir:      %s\n", cfg.OutputDir)
+	fmt.Printf("  Randomize chaos: %v\n", cfg.RandomizeChaos)
+	if cfg.RandomizeChaos {
+		fmt.Printf("  Chaos presets:   %d available\n", len(chaosPresets))
 	}
 
 	// Ensure output directory exists
@@ -75,21 +151,36 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Wait a bit for mesh to stabilize before first run
+	fmt.Println("Waiting 20s for mesh to stabilize...")
+	time.Sleep(20 * time.Second)
+
+	// Run continuous benchmark loop
+	runContinuousBenchmarks(cfg)
+}
+
+func runContinuousBenchmarks(cfg Config) {
 	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
 
-	// Wait a bit for mesh to stabilize before first run
-	time.Sleep(30 * time.Second)
+	// Track active benchmarks
+	var activeCount int
+	var mu sync.Mutex
 
 	// Run immediately on start
-	runBenchmarks(cfg)
+	go runBenchmarkBatch(cfg, &activeCount, &mu)
 
 	for range ticker.C {
-		runBenchmarks(cfg)
+		mu.Lock()
+		current := activeCount
+		mu.Unlock()
+
+		fmt.Printf("\n=== Starting new batch (currently %d active transfers) ===\n", current)
+		go runBenchmarkBatch(cfg, &activeCount, &mu)
 	}
 }
 
-func runBenchmarks(cfg Config) {
+func runBenchmarkBatch(cfg Config, activeCount *int, mu *sync.Mutex) {
 	peers, err := fetchPeers(cfg)
 	if err != nil {
 		fmt.Printf("Error fetching peers: %v\n", err)
@@ -101,17 +192,68 @@ func runBenchmarks(cfg Config) {
 		return
 	}
 
-	// Select up to 2 random peers to benchmark
-	selectedPeers := selectRandomPeers(peers, 2)
-
-	fmt.Printf("Running benchmarks against %d peers\n", len(selectedPeers))
-
-	for _, peer := range selectedPeers {
-		result := runBenchmark(cfg, peer)
-		if result != nil {
-			saveResult(cfg, result)
-		}
+	// Select peers for this batch - use all available up to concurrency limit
+	numBenchmarks := cfg.Concurrency
+	if numBenchmarks > len(peers) {
+		numBenchmarks = len(peers)
 	}
+
+	// Shuffle peers for variety
+	shuffled := make([]peerInfo, len(peers))
+	copy(shuffled, peers)
+	rand.Shuffle(len(shuffled), func(i, j int) {
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+	})
+
+	selectedPeers := shuffled[:numBenchmarks]
+
+	fmt.Printf("Starting %d concurrent benchmarks\n", len(selectedPeers))
+
+	var wg sync.WaitGroup
+	for _, peer := range selectedPeers {
+		wg.Add(1)
+
+		// Pick chaos config
+		var chaos benchmark.ChaosConfig
+		var chaosName string
+		if cfg.RandomizeChaos {
+			preset := chaosPresets[rand.Intn(len(chaosPresets))]
+			chaos = preset.config
+			chaosName = preset.name
+		}
+
+		// Pick direction randomly
+		direction := benchmark.DirectionUpload
+		if rand.Float32() < 0.3 { // 30% downloads
+			direction = benchmark.DirectionDownload
+		}
+
+		go func(p peerInfo, ch benchmark.ChaosConfig, chName, dir string) {
+			defer wg.Done()
+
+			mu.Lock()
+			*activeCount++
+			current := *activeCount
+			mu.Unlock()
+
+			defer func() {
+				mu.Lock()
+				*activeCount--
+				mu.Unlock()
+			}()
+
+			result := runBenchmark(cfg, p, ch, chName, dir, current)
+			if result != nil {
+				saveResult(cfg, result, chName)
+			}
+		}(peer, chaos, chaosName, direction)
+
+		// Stagger starts slightly to avoid thundering herd
+		time.Sleep(time.Duration(100+rand.Intn(400)) * time.Millisecond)
+	}
+
+	wg.Wait()
+	fmt.Printf("Batch complete\n")
 }
 
 type peerInfo struct {
@@ -158,31 +300,25 @@ func fetchPeers(cfg Config) ([]peerInfo, error) {
 	return filtered, nil
 }
 
-func selectRandomPeers(peers []peerInfo, n int) []peerInfo {
-	if len(peers) <= n {
-		return peers
+func runBenchmark(cfg Config, peer peerInfo, chaos benchmark.ChaosConfig, chaosName, direction string, activeNum int) *benchmark.Result {
+	chaosDesc := "clean"
+	if chaosName != "" {
+		chaosDesc = chaosName
+	}
+	if chaos.IsEnabled() && chaosName == "" {
+		chaosDesc = "custom"
 	}
 
-	// Shuffle and take first n
-	shuffled := make([]peerInfo, len(peers))
-	copy(shuffled, peers)
-	rand.Shuffle(len(shuffled), func(i, j int) {
-		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-	})
-
-	return shuffled[:n]
-}
-
-func runBenchmark(cfg Config, peer peerInfo) *benchmark.Result {
-	fmt.Printf("  Benchmarking %s (%s)...\n", peer.Name, peer.MeshIP)
+	fmt.Printf("  [%d] %s -> %s (%s, %s, %s)\n",
+		activeNum, cfg.LocalPeer, peer.Name, direction, bytesize.Format(cfg.Size), chaosDesc)
 
 	benchCfg := benchmark.Config{
 		PeerName:  peer.Name,
 		Size:      cfg.Size,
-		Direction: benchmark.DirectionUpload,
-		Timeout:   120 * time.Second,
+		Direction: direction,
+		Timeout:   180 * time.Second, // Longer timeout for bandwidth-limited tests
 		Port:      benchmark.DefaultPort,
-		Chaos:     cfg.Chaos,
+		Chaos:     chaos,
 	}
 
 	client := benchmark.NewClient(cfg.LocalPeer, peer.MeshIP)
@@ -191,22 +327,29 @@ func runBenchmark(cfg Config, peer peerInfo) *benchmark.Result {
 
 	result, err := client.Run(ctx, benchCfg)
 	if err != nil {
-		fmt.Printf("    Error: %v\n", err)
+		fmt.Printf("  [%d] %s: ERROR: %v\n", activeNum, peer.Name, err)
 		return nil
 	}
 
-	fmt.Printf("    Throughput: %s\n", bytesize.FormatRate(int64(result.ThroughputBps)))
-	fmt.Printf("    Latency:    %.2f ms (avg)\n", result.LatencyAvgMs)
+	fmt.Printf("  [%d] %s: %s @ %s (lat: %.1fms)\n",
+		activeNum, peer.Name, direction,
+		bytesize.FormatRate(int64(result.ThroughputBps)),
+		result.LatencyAvgMs)
 
 	return result
 }
 
-func saveResult(cfg Config, result *benchmark.Result) {
-	// Create filename with timestamp
-	filename := fmt.Sprintf("benchmark_%s_%s_%s.json",
+func saveResult(cfg Config, result *benchmark.Result, chaosName string) {
+	// Create filename with timestamp and chaos preset
+	suffix := ""
+	if chaosName != "" {
+		suffix = "_" + chaosName
+	}
+	filename := fmt.Sprintf("benchmark_%s_%s_%s%s.json",
 		result.LocalPeer,
 		result.RemotePeer,
-		result.Timestamp.Format("20060102_150405"))
+		result.Timestamp.Format("20060102_150405"),
+		suffix)
 	path := filepath.Join(cfg.OutputDir, filename)
 
 	data, err := json.MarshalIndent(result, "", "  ")
@@ -219,24 +362,17 @@ func saveResult(cfg Config, result *benchmark.Result) {
 		fmt.Printf("    Error writing result: %v\n", err)
 		return
 	}
-
-	fmt.Printf("    Saved: %s\n", filename)
 }
 
 func configFromEnv() Config {
 	cfg := Config{
-		CoordURL:  "http://localhost:8080",
-		LocalPeer: "benchmarker",
-		Interval:  5 * time.Minute,
-		Size:      100 * 1024 * 1024, // 100MB
-		OutputDir: "/results",
-		// Subtle chaos defaults - barely perceptible but simulates real-world conditions
-		Chaos: benchmark.ChaosConfig{
-			PacketLossPercent: 0.1,                  // 0.1% packet loss - occasional retransmit
-			Latency:           2 * time.Millisecond, // 2ms base latency - typical LAN
-			Jitter:            1 * time.Millisecond, // ±1ms jitter - subtle variation
-			BandwidthBps:      0,                    // unlimited
-		},
+		CoordURL:       "http://localhost:8080",
+		LocalPeer:      "benchmarker",
+		Interval:       30 * time.Second,  // Run batches every 30s
+		Concurrency:    3,                 // 3 concurrent benchmarks
+		Size:           100 * 1024 * 1024, // 100MB
+		OutputDir:      "/results",
+		RandomizeChaos: true, // Randomize chaos by default
 	}
 
 	if v := os.Getenv("COORD_SERVER_URL"); v != "" {
@@ -253,6 +389,12 @@ func configFromEnv() Config {
 			cfg.Interval = d
 		}
 	}
+	if v := os.Getenv("BENCHMARK_CONCURRENCY"); v != "" {
+		var c int
+		if _, err := fmt.Sscanf(v, "%d", &c); err == nil && c > 0 {
+			cfg.Concurrency = c
+		}
+	}
 	if v := os.Getenv("BENCHMARK_SIZE"); v != "" {
 		if size, err := bytesize.Parse(v); err == nil {
 			cfg.Size = size
@@ -265,37 +407,10 @@ func configFromEnv() Config {
 		cfg.TLSSkipVerify = true
 	}
 
-	// Chaos config overrides
-	if v := os.Getenv("CHAOS_PACKET_LOSS"); v != "" {
-		if pct, err := parseFloat(v); err == nil {
-			cfg.Chaos.PacketLossPercent = pct
-		}
-	}
-	if v := os.Getenv("CHAOS_LATENCY"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.Chaos.Latency = d
-		}
-	}
-	if v := os.Getenv("CHAOS_JITTER"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.Chaos.Jitter = d
-		}
-	}
-	if v := os.Getenv("CHAOS_BANDWIDTH"); v != "" {
-		if bw, err := bytesize.ParseRate(v); err == nil {
-			cfg.Chaos.BandwidthBps = bw
-		}
-	}
-	// Allow disabling chaos entirely
-	if os.Getenv("CHAOS_DISABLED") == "true" {
-		cfg.Chaos = benchmark.ChaosConfig{}
+	// Chaos randomization toggle
+	if os.Getenv("RANDOMIZE_CHAOS") == "false" {
+		cfg.RandomizeChaos = false
 	}
 
 	return cfg
-}
-
-func parseFloat(s string) (float64, error) {
-	var f float64
-	_, err := fmt.Sscanf(s, "%f", &f)
-	return f, err
 }

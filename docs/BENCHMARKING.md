@@ -113,9 +113,36 @@ tunnelmesh benchmark peer-1 --size 50MB --output baseline.json
 tunnelmesh benchmark peer-1 --size 50MB --packet-loss 5 --output with-loss.json
 ```
 
-## Docker Benchmarker Configuration
+## Docker Benchmarker
 
-The Docker benchmarker runs periodic automated benchmarks with configurable chaos settings.
+The Docker benchmarker runs **aggressive continuous benchmarks** with multiple concurrent transfers and randomized chaos settings. The mesh is always under load.
+
+### Default Behavior
+
+- **Interval:** New batch every 30 seconds
+- **Concurrency:** 3 simultaneous transfers per batch
+- **Size:** 100MB per transfer
+- **Direction:** 70% uploads, 30% downloads (randomized)
+- **Chaos:** Randomly selected preset per transfer
+
+With overlapping batches, you'll typically have 3-6 active transfers at any time.
+
+### Chaos Presets
+
+Each transfer randomly picks from these network condition presets:
+
+| Preset | Packet Loss | Latency | Jitter | Bandwidth |
+|--------|-------------|---------|--------|-----------|
+| `clean` | 0% | 0ms | 0ms | unlimited |
+| `subtle` | 0.1% | 2ms | ±1ms | unlimited |
+| `lossy-wifi` | 2% | 5ms | ±3ms | unlimited |
+| `mobile-3g` | 1% | 100ms | ±50ms | 5 Mbps |
+| `mobile-4g` | 0.5% | 30ms | ±15ms | 25 Mbps |
+| `satellite` | 0.5% | 300ms | ±50ms | 10 Mbps |
+| `congested` | 3% | 20ms | ±30ms | 1 Mbps |
+| `bandwidth-10mbps` | 0% | 0ms | 0ms | 10 Mbps |
+| `bandwidth-50mbps` | 0% | 0ms | 0ms | 50 Mbps |
+| `bandwidth-100mbps` | 0% | 0ms | 0ms | 100 Mbps |
 
 ### Environment Variables
 
@@ -124,45 +151,33 @@ The Docker benchmarker runs periodic automated benchmarks with configurable chao
 COORD_SERVER_URL: http://localhost:8080  # Coordination server
 AUTH_TOKEN: your-token                    # Authentication token
 LOCAL_PEER: benchmarker                   # This peer's name
-BENCHMARK_INTERVAL: 5m                    # Time between benchmark runs
+BENCHMARK_INTERVAL: 30s                   # Time between batch starts
+BENCHMARK_CONCURRENCY: 3                  # Simultaneous transfers per batch
 BENCHMARK_SIZE: 100MB                     # Transfer size per test
 OUTPUT_DIR: /results                      # Where to save JSON results
 
-# Chaos configuration (subtle defaults enabled)
-CHAOS_PACKET_LOSS: 0.1      # Packet loss % (default: 0.1)
-CHAOS_LATENCY: 2ms          # Added latency (default: 2ms)
-CHAOS_JITTER: 1ms           # Latency variation (default: ±1ms)
-CHAOS_BANDWIDTH: ""         # Bandwidth limit (default: unlimited)
-CHAOS_DISABLED: false       # Set to "true" to disable all chaos
+# Chaos randomization
+RANDOMIZE_CHAOS: true                     # Random preset per transfer (default)
+# Set RANDOMIZE_CHAOS=false for all clean benchmarks
 ```
 
-### Default Chaos Settings
-
-By default, the Docker benchmarker applies **barely perceptible** chaos to simulate real-world conditions:
-
-| Setting | Default | Effect |
-|---------|---------|--------|
-| Packet Loss | 0.1% | ~1 in 1000 packets dropped |
-| Latency | 2ms | Typical LAN delay |
-| Jitter | ±1ms | Subtle timing variation |
-| Bandwidth | unlimited | No artificial cap |
-
-These defaults help catch issues that only appear under realistic conditions without significantly impacting benchmark results.
-
-### Running Stress Tests in Docker
+### Controlling the Benchmarker
 
 ```bash
-# Run with aggressive chaos settings
-docker compose run -e CHAOS_PACKET_LOSS=5 \
-  -e CHAOS_LATENCY=100ms \
-  -e CHAOS_JITTER=30ms \
-  benchmarker
+# Start with default aggressive settings
+docker compose up -d benchmarker
 
-# Run clean benchmark (no chaos)
-docker compose run -e CHAOS_DISABLED=true benchmarker
+# Watch the chaos unfold
+docker compose logs -f benchmarker
 
-# Bandwidth stress test
-docker compose run -e CHAOS_BANDWIDTH=5mbps benchmarker
+# Run with more concurrency
+docker compose run -e BENCHMARK_CONCURRENCY=5 benchmarker
+
+# Run all clean benchmarks (no chaos)
+docker compose run -e RANDOMIZE_CHAOS=false benchmarker
+
+# Faster interval (more overlap)
+docker compose run -e BENCHMARK_INTERVAL=15s benchmarker
 ```
 
 ### Viewing Results
