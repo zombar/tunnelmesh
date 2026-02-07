@@ -267,8 +267,8 @@ function updateDashboard(data, loadHistory = false) {
         dom.serverVersion.textContent = data.server_version;
     }
 
-    // Store domain suffix for visualizer
-    state.domainSuffix = data.domain_suffix || '.tunnelmesh';
+    // Domain suffix is hardcoded (aliases .tm/.mesh redirect to .tunnelmesh)
+    state.domainSuffix = '.tunnelmesh';
 
     // Track if locations feature is enabled
     state.locationsEnabled = data.locations_enabled || false;

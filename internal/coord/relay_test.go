@@ -37,11 +37,9 @@ func connectRelay(t *testing.T, serverURL, peerName, jwtToken string) *websocket
 
 func TestRelayManager_HandleHeartbeat(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Relay:        config.RelayConfig{Enabled: true},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Relay:     config.RelayConfig{Enabled: true},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -102,11 +100,9 @@ func TestRelayManager_HandleHeartbeat(t *testing.T) {
 
 func TestRelayManager_NotifyRelayRequest(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Relay:        config.RelayConfig{Enabled: true},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Relay:     config.RelayConfig{Enabled: true},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -146,11 +142,9 @@ func TestRelayManager_NotifyRelayRequest(t *testing.T) {
 
 func TestRelayManager_NotifyHolePunch(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Relay:        config.RelayConfig{Enabled: true},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Relay:     config.RelayConfig{Enabled: true},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -187,11 +181,9 @@ func TestRelayManager_NotifyHolePunch(t *testing.T) {
 
 func TestRelayManager_NotifyPeerNotConnected(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Relay:        config.RelayConfig{Enabled: true},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Relay:     config.RelayConfig{Enabled: true},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -204,11 +196,9 @@ func TestRelayManager_NotifyPeerNotConnected(t *testing.T) {
 
 func TestRelayManager_HeartbeatUpdatesStats(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Relay:        config.RelayConfig{Enabled: true},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Relay:     config.RelayConfig{Enabled: true},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -310,11 +300,9 @@ var _ = sync.WaitGroup{}
 
 func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Relay:        config.RelayConfig{Enabled: true},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Relay:     config.RelayConfig{Enabled: true},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -364,11 +352,9 @@ func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
 
 func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Relay:        config.RelayConfig{Enabled: true},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Relay:     config.RelayConfig{Enabled: true},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -413,11 +399,9 @@ func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 
 func TestRelayManager_QueryFilterRules(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Relay:        config.RelayConfig{Enabled: true},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Relay:     config.RelayConfig{Enabled: true},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -495,11 +479,9 @@ func TestRelayManager_QueryFilterRules(t *testing.T) {
 
 func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Relay:        config.RelayConfig{Enabled: true},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Relay:     config.RelayConfig{Enabled: true},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -523,11 +505,9 @@ func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
 
 func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Relay:        config.RelayConfig{Enabled: true},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Relay:     config.RelayConfig{Enabled: true},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -540,11 +520,9 @@ func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
 
 func TestRelayManager_StoresReportedLatency(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Relay:        config.RelayConfig{Enabled: true},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Relay:     config.RelayConfig{Enabled: true},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)

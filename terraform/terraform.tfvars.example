@@ -189,12 +189,6 @@ nodes = {
 # Email for Let's Encrypt SSL certificate notifications
 # ssl_email = "admin@example.com"
 
-# Mesh network CIDR
-# mesh_cidr = "172.30.0.0/16"
-
-# Domain suffix for mesh hostnames
-# domain_suffix = ".tunnelmesh"
-
 # Enable node location tracking (requires external IP geolocation API)
 # WARNING: When enabled, the coordinator will query ip-api.com to geolocate nodes
 # by their public IP addresses. This is disabled by default for privacy.

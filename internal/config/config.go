@@ -3,7 +3,6 @@ package config
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,8 +61,6 @@ type WireGuardPeerConfig struct {
 type ServerConfig struct {
 	Listen            string                `yaml:"listen"`
 	AuthToken         string                `yaml:"auth_token"`
-	MeshCIDR          string                `yaml:"mesh_cidr"`
-	DomainSuffix      string                `yaml:"domain_suffix"`
 	DataDir           string                `yaml:"data_dir"`           // Data directory for persistence (default: /var/lib/tunnelmesh)
 	HeartbeatInterval string                `yaml:"heartbeat_interval"` // Heartbeat interval (default: 10s)
 	Locations         bool                  `yaml:"locations"`          // Enable node location tracking (requires external IP geolocation API)
@@ -207,12 +204,6 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 	}
 
 	// Apply defaults
-	if cfg.MeshCIDR == "" {
-		cfg.MeshCIDR = "172.30.0.0/16"
-	}
-	if cfg.DomainSuffix == "" {
-		cfg.DomainSuffix = ".tunnelmesh"
-	}
 	if cfg.DataDir == "" {
 		cfg.DataDir = "/var/lib/tunnelmesh"
 	}
@@ -385,12 +376,6 @@ func (c *ServerConfig) Validate() error {
 	}
 	if c.AuthToken == "" {
 		return fmt.Errorf("auth_token is required")
-	}
-	if c.MeshCIDR != "" {
-		_, _, err := net.ParseCIDR(c.MeshCIDR)
-		if err != nil {
-			return fmt.Errorf("invalid mesh_cidr: %w", err)
-		}
 	}
 	// Validate filter config
 	if err := c.Filter.Validate(); err != nil {

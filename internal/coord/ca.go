@@ -16,22 +16,21 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 )
 
 // CertificateAuthority manages TLS certificates for the mesh network.
 type CertificateAuthority struct {
-	dataDir      string
-	domainSuffix string
-	caCert       *x509.Certificate
-	caKey        *ecdsa.PrivateKey
+	dataDir string
+	caCert  *x509.Certificate
+	caKey   *ecdsa.PrivateKey
 }
 
 // NewCertificateAuthority creates or loads a CA from the given data directory.
-// The domainSuffix is used in the CA name to allow multiple mesh networks.
-func NewCertificateAuthority(dataDir, domainSuffix string) (*CertificateAuthority, error) {
+// The domainSuffix parameter is ignored - the canonical domain suffix is always used.
+func NewCertificateAuthority(dataDir, _ string) (*CertificateAuthority, error) {
 	ca := &CertificateAuthority{
-		dataDir:      dataDir,
-		domainSuffix: domainSuffix,
+		dataDir: dataDir,
 	}
 
 	certPath := filepath.Join(dataDir, "ca.crt")
@@ -73,11 +72,7 @@ func (ca *CertificateAuthority) generate() error {
 	}
 
 	// Create CA certificate template
-	// Include domain suffix in CA name to allow multiple mesh networks
-	caName := "TunnelMesh CA"
-	if ca.domainSuffix != "" {
-		caName = fmt.Sprintf("TunnelMesh CA (%s)", ca.domainSuffix)
-	}
+	caName := fmt.Sprintf("TunnelMesh CA (%s)", mesh.DomainSuffix)
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
@@ -190,7 +185,8 @@ func (ca *CertificateAuthority) Name() string {
 
 // GeneratePeerCert creates a new certificate for a peer, signed by the CA.
 // Returns PEM-encoded certificate and private key.
-func (ca *CertificateAuthority) GeneratePeerCert(peerName, domainSuffix, meshIP string) (certPEM, keyPEM []byte, err error) {
+// The domainSuffix parameter is ignored - all supported suffixes are included in SAN.
+func (ca *CertificateAuthority) GeneratePeerCert(peerName, _ string, meshIP string) (certPEM, keyPEM []byte, err error) {
 	// Generate ECDSA P-256 private key for the peer
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -203,10 +199,11 @@ func (ca *CertificateAuthority) GeneratePeerCert(peerName, domainSuffix, meshIP 
 		return nil, nil, fmt.Errorf("generate serial: %w", err)
 	}
 
-	// Build DNS names for SAN
-	dnsNames := []string{
-		peerName + domainSuffix, // e.g., "mynode.tunnelmesh"
-		"this" + domainSuffix,   // e.g., "this.tunnelmesh"
+	// Build DNS names for SAN - include all supported suffixes
+	var dnsNames []string
+	for _, suffix := range mesh.AllSuffixes() {
+		dnsNames = append(dnsNames, peerName+suffix) // e.g., "mynode.tunnelmesh", "mynode.tm", "mynode.mesh"
+		dnsNames = append(dnsNames, "this"+suffix)   // e.g., "this.tunnelmesh", "this.tm", "this.mesh"
 	}
 
 	// Parse mesh IP for SAN
@@ -220,7 +217,7 @@ func (ca *CertificateAuthority) GeneratePeerCert(peerName, domainSuffix, meshIP 
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			Organization: []string{"TunnelMesh"},
-			CommonName:   peerName + domainSuffix,
+			CommonName:   peerName + mesh.DomainSuffix, // Use canonical domain suffix
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().AddDate(1, 0, 0), // 1 year

@@ -505,8 +505,6 @@ export TF_VAR_do_token="dop_v1_xxx"
 | `default_wg_port` | `51820` | Default WireGuard port |
 | `default_ssh_port` | `2222` | Default SSH tunnel port |
 | `external_api_port` | `8443` | HTTPS port for peer connections |
-| `mesh_cidr` | `172.30.0.0/16` | Mesh network range |
-| `domain_suffix` | `.tunnelmesh` | DNS suffix |
 
 ### Feature Flags
 

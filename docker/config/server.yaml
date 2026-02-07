@@ -1,8 +1,6 @@
 # TunnelMesh Server Configuration for Docker testing
 listen: ":8080"
 auth_token: "docker-test-token-123"
-mesh_cidr: "172.30.0.0/16"
-domain_suffix: ".tunnelmesh"
 locations: true  # Enable node location tracking (uses ip-api.com)
 log_level: "info"
 

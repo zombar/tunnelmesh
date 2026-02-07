@@ -64,11 +64,6 @@ output "auth_token" {
   sensitive   = true
 }
 
-output "mesh_cidr" {
-  description = "Mesh network CIDR"
-  value       = var.mesh_cidr
-}
-
 output "peer_config_example" {
   description = "Example peer configuration for connecting to this mesh"
   sensitive   = true

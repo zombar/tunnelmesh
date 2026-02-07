@@ -17,12 +17,10 @@ import (
 
 func newTestServer(t *testing.T) *Server {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Admin:        config.AdminConfig{Enabled: true},
-		JoinMesh:     &config.PeerConfig{Name: "test-coord"},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Admin:     config.AdminConfig{Enabled: true},
+		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -532,12 +530,10 @@ func TestServer_IPv4OnlyEndpointRegistration(t *testing.T) {
 // newTestServerWithWireGuard creates a test server with WireGuard enabled.
 func newTestServerWithWireGuard(t *testing.T) *Server {
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		Admin:        config.AdminConfig{Enabled: true},
-		JoinMesh:     &config.PeerConfig{Name: "test-coord"},
+		Listen:    ":0",
+		AuthToken: "test-token",
+		Admin:     config.AdminConfig{Enabled: true},
+		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
 		WireGuard: config.WireGuardServerConfig{
 			Enabled:  true,
 			Endpoint: "wg.example.com:51820",
@@ -971,11 +967,9 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 	tempDir := t.TempDir()
 
 	cfg := &config.ServerConfig{
-		Listen:       ":0",
-		AuthToken:    "test-token",
-		MeshCIDR:     "172.30.0.0/16",
-		DomainSuffix: ".tunnelmesh",
-		DataDir:      tempDir,
+		Listen:    ":0",
+		AuthToken: "test-token",
+		DataDir:   tempDir,
 		S3: config.S3Config{
 			Enabled: true,
 			DataDir: tempDir + "/s3",

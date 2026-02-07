@@ -22,14 +22,6 @@ listen: ":8443"
 # Generate a secure token: openssl rand -hex 32
 auth_token: "your-secure-token-here"
 
-# Mesh network CIDR - IP addresses assigned to peers
-# Default: "172.30.0.0/16" (avoids conflict with Tailscale's 100.x.x.x)
-mesh_cidr: "172.30.0.0/16"
-
-# Domain suffix for mesh hostnames
-# Peers are accessible as <name>.tunnelmesh
-domain_suffix: ".tunnelmesh"
-
 # Log level: trace, debug, info, warn, error
 # Use "debug" or "trace" for troubleshooting
 log_level: "info"

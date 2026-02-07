@@ -28,8 +28,6 @@ domain_suffix: ".tunnelmesh"
 
 	assert.Equal(t, ":8080", cfg.Listen)
 	assert.Equal(t, "test-token-123", cfg.AuthToken)
-	assert.Equal(t, "172.30.0.0/16", cfg.MeshCIDR)
-	assert.Equal(t, ".tunnelmesh", cfg.DomainSuffix)
 }
 
 func TestLoadServerConfig_Defaults(t *testing.T) {
@@ -49,8 +47,6 @@ auth_token: "secret"
 	assert.Equal(t, ":9000", cfg.Listen)
 	assert.Equal(t, "secret", cfg.AuthToken)
 	// Check defaults
-	assert.Equal(t, "172.30.0.0/16", cfg.MeshCIDR)
-	assert.Equal(t, ".tunnelmesh", cfg.DomainSuffix)
 	assert.Equal(t, []uint16{9443}, cfg.ServicePorts, "ServicePorts should default to [9443] for metrics")
 }
 
@@ -160,38 +156,22 @@ func TestServerConfig_Validate(t *testing.T) {
 		{
 			name: "valid config",
 			cfg: ServerConfig{
-				Listen:       ":8080",
-				AuthToken:    "token",
-				MeshCIDR:     "172.30.0.0/16",
-				DomainSuffix: ".tunnelmesh",
+				Listen:    ":8080",
+				AuthToken: "token",
 			},
 			wantErr: false,
 		},
 		{
 			name: "missing listen",
 			cfg: ServerConfig{
-				AuthToken:    "token",
-				MeshCIDR:     "172.30.0.0/16",
-				DomainSuffix: ".tunnelmesh",
+				AuthToken: "token",
 			},
 			wantErr: true,
 		},
 		{
 			name: "missing auth token",
 			cfg: ServerConfig{
-				Listen:       ":8080",
-				MeshCIDR:     "172.30.0.0/16",
-				DomainSuffix: ".tunnelmesh",
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid CIDR",
-			cfg: ServerConfig{
-				Listen:       ":8080",
-				AuthToken:    "token",
-				MeshCIDR:     "invalid",
-				DomainSuffix: ".tunnelmesh",
+				Listen: ":8080",
 			},
 			wantErr: true,
 		},

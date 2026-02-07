@@ -185,9 +185,11 @@ docker-up: docker-build
 	@echo "Use 'make docker-logs' to follow logs"
 	@echo ""
 	@echo "=== Join from this machine ==="
-	@echo "tunnelmesh join --server http://localhost:8081 --token docker-test-token-123 --context docker"
-	@echo ""
-	@echo "After joining, run 'make docker-admin' to open the admin panel"
+	@read -p "Run 'sudo tunnelmesh join --context docker'? [Y/n] " answer; \
+	if [ "$$answer" != "n" ] && [ "$$answer" != "N" ]; then \
+		sudo tunnelmesh context rm docker 2>/dev/null || true; \
+		sudo tunnelmesh join --server http://localhost:8081 --token docker-test-token-123 --context docker; \
+	fi
 
 docker-admin:
 	@echo "Waiting for admin panel at https://this.tunnelmesh/ ..."

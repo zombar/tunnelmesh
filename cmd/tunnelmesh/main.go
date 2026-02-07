@@ -34,6 +34,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
 	"github.com/tunnelmesh/tunnelmesh/internal/logging/loki"
+	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 	"github.com/tunnelmesh/tunnelmesh/internal/metrics"
 	"github.com/tunnelmesh/tunnelmesh/internal/netmon"
 	"github.com/tunnelmesh/tunnelmesh/internal/peer"
@@ -390,8 +391,8 @@ func runServeFromService(ctx context.Context, configPath string) error {
 
 	log.Info().
 		Str("listen", cfg.Listen).
-		Str("mesh_cidr", cfg.MeshCIDR).
-		Str("domain", cfg.DomainSuffix).
+		Str("mesh_cidr", mesh.CIDR).
+		Str("domain", mesh.DomainSuffix).
 		Str("data_dir", cfg.DataDir).
 		Msg("starting coordination server")
 
@@ -588,8 +589,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	log.Info().
 		Str("listen", cfg.Listen).
-		Str("mesh_cidr", cfg.MeshCIDR).
-		Str("domain", cfg.DomainSuffix).
+		Str("mesh_cidr", mesh.CIDR).
+		Str("domain", mesh.DomainSuffix).
 		Str("data_dir", cfg.DataDir).
 		Msg("starting coordination server")
 
@@ -2109,8 +2110,9 @@ func setupServiceLogging() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: multi, TimeFormat: time.RFC3339})
 }
 
-// configureSystemResolver sets up the system to resolve .mesh domains via our DNS server.
-func configureSystemResolver(domain, dnsAddr string) error {
+// configureSystemResolver sets up the system to resolve all mesh domains via our DNS server.
+// Configures all supported suffixes: .tunnelmesh, .tm, .mesh
+func configureSystemResolver(_, dnsAddr string) error {
 	// Extract port from address
 	parts := strings.Split(dnsAddr, ":")
 	if len(parts) != 2 {
@@ -2118,36 +2120,49 @@ func configureSystemResolver(domain, dnsAddr string) error {
 	}
 	port := parts[1]
 
-	// Remove leading dot from domain
-	domain = strings.TrimPrefix(domain, ".")
+	// Configure all supported domain suffixes
+	for _, suffix := range mesh.AllSuffixes() {
+		domain := strings.TrimPrefix(suffix, ".")
 
-	switch runtime.GOOS {
-	case "darwin":
-		return configureDarwinResolver(domain, port)
-	case "linux":
-		return configureLinuxResolver(domain, dnsAddr)
-	case "windows":
-		return configureWindowsResolver(domain, dnsAddr)
-	default:
-		log.Warn().Str("os", runtime.GOOS).Msg("automatic DNS configuration not supported on this OS")
-		return nil
+		var err error
+		switch runtime.GOOS {
+		case "darwin":
+			err = configureDarwinResolver(domain, port)
+		case "linux":
+			err = configureLinuxResolver(domain, dnsAddr)
+		case "windows":
+			err = configureWindowsResolver(domain, dnsAddr)
+		default:
+			log.Warn().Str("os", runtime.GOOS).Msg("automatic DNS configuration not supported on this OS")
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("configure resolver for %s: %w", suffix, err)
+		}
 	}
+	return nil
 }
 
-// removeSystemResolver removes the system resolver configuration.
-func removeSystemResolver(domain string) error {
-	domain = strings.TrimPrefix(domain, ".")
+// removeSystemResolver removes the system resolver configuration for all mesh domains.
+func removeSystemResolver(_ string) error {
+	// Remove all supported domain suffixes
+	for _, suffix := range mesh.AllSuffixes() {
+		domain := strings.TrimPrefix(suffix, ".")
 
-	switch runtime.GOOS {
-	case "darwin":
-		return removeDarwinResolver(domain)
-	case "linux":
-		return removeLinuxResolver(domain)
-	case "windows":
-		return removeWindowsResolver(domain)
-	default:
-		return nil
+		var err error
+		switch runtime.GOOS {
+		case "darwin":
+			err = removeDarwinResolver(domain)
+		case "linux":
+			err = removeLinuxResolver(domain)
+		case "windows":
+			err = removeWindowsResolver(domain)
+		}
+		if err != nil {
+			log.Warn().Err(err).Str("domain", domain).Msg("failed to remove resolver")
+		}
 	}
+	return nil
 }
 
 func configureDarwinResolver(domain, port string) error {

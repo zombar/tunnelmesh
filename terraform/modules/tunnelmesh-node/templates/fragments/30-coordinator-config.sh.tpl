@@ -3,8 +3,6 @@
 cat > /etc/tunnelmesh/server.yaml <<'SERVERCONF'
 listen: ":${coordinator_port}"
 auth_token: "${auth_token}"
-mesh_cidr: "${mesh_cidr}"
-domain_suffix: "${domain_suffix}"
 
 admin:
   enabled: true

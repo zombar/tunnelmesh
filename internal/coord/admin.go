@@ -17,8 +17,37 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/web"
+	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
+
+// redirectToCanonicalDomain returns middleware that redirects .tm and .mesh requests
+// to the canonical .tunnelmesh domain.
+func redirectToCanonicalDomain(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		// Strip port if present
+		if colonIdx := strings.LastIndex(host, ":"); colonIdx != -1 {
+			host = host[:colonIdx]
+		}
+
+		// Check if using an alias suffix
+		for _, alias := range []string{mesh.AliasTM, mesh.AliasMesh} {
+			if strings.HasSuffix(host, alias) {
+				// Redirect to canonical domain
+				canonical := strings.TrimSuffix(host, alias) + mesh.DomainSuffix
+				scheme := "https"
+				if r.TLS == nil {
+					scheme = "http"
+				}
+				targetURL := scheme + "://" + canonical + r.URL.RequestURI()
+				http.Redirect(w, r, targetURL, http.StatusMovedPermanently)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // AdminOverview is the response for the admin overview endpoint.
 type AdminOverview struct {
@@ -116,8 +145,8 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		ServerVersion:    s.version,
 		TotalPeers:       len(s.peers),
 		TotalHeartbeats:  s.serverStats.totalHeartbeats,
-		MeshCIDR:         s.cfg.MeshCIDR,
-		DomainSuffix:     s.cfg.DomainSuffix,
+		MeshCIDR:         mesh.CIDR,
+		DomainSuffix:     mesh.DomainSuffix,
 		LocationsEnabled: s.cfg.Locations,
 		Peers:            make([]AdminPeerInfo, 0, len(s.peers)),
 	}

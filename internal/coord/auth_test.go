@@ -13,7 +13,6 @@ func TestServer_GenerateAndValidateToken(t *testing.T) {
 	srv, err := NewServer(&config.ServerConfig{
 		Listen:    ":8080",
 		AuthToken: "test-secret-key-12345",
-		MeshCIDR:  "172.30.0.0/16",
 	})
 	require.NoError(t, err)
 
@@ -34,14 +33,12 @@ func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
 	srv1, err := NewServer(&config.ServerConfig{
 		Listen:    ":8080",
 		AuthToken: "secret-key-1",
-		MeshCIDR:  "172.30.0.0/16",
 	})
 	require.NoError(t, err)
 
 	srv2, err := NewServer(&config.ServerConfig{
 		Listen:    ":8080",
 		AuthToken: "secret-key-2", // Different key
-		MeshCIDR:  "172.30.0.0/16",
 	})
 	require.NoError(t, err)
 
@@ -58,7 +55,6 @@ func TestServer_ValidateToken_InvalidToken(t *testing.T) {
 	srv, err := NewServer(&config.ServerConfig{
 		Listen:    ":8080",
 		AuthToken: "test-secret-key",
-		MeshCIDR:  "172.30.0.0/16",
 	})
 	require.NoError(t, err)
 
