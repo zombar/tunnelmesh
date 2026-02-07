@@ -99,6 +99,14 @@ hooks:
 
 # Development helpers
 dev-server: build
+	@echo "=== Join command for peers ==="
+	@TOKEN=$$(grep 'auth_token:' server.yaml 2>/dev/null | head -1 | sed 's/.*"\(.*\)".*/\1/'); \
+	if [ -n "$$TOKEN" ]; then \
+		echo "sudo ./bin/tunnelmesh join --server http://localhost:8080 --token $$TOKEN --context dev"; \
+	else \
+		echo "sudo ./bin/tunnelmesh join --server http://localhost:8080 --token <your-token> --context dev"; \
+	fi
+	@echo ""
 	./$(BUILD_DIR)/$(BINARY_NAME) serve --config server.yaml
 
 dev-peer: build
@@ -178,6 +186,9 @@ docker-up: docker-build
 	@echo "Opening admin interface..."
 	@sleep 2
 	@open http://localhost:8880/admin/
+	@echo ""
+	@echo "=== Join from this machine ==="
+	@echo "sudo ./bin/tunnelmesh join --server http://localhost:8880 --token docker-test-token-123 --context docker"
 
 docker-down:
 	$(DOCKER_COMPOSE) down
