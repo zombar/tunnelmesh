@@ -107,9 +107,30 @@ jobs:
         if: steps.setup-go.outcome != 'success'
         run: echo "::notice::Go 1.26 not yet available, skipping tests"
 
+  test-js:
+    name: JavaScript Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Run JavaScript tests with coverage
+        working-directory: internal/coord/web
+        run: bun test --coverage
+      - name: Upload JS coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./internal/coord/web/coverage/lcov.info
+          flags: javascript
+          name: dashboard-js
+          fail_ci_if_error: false
+
   build:
     name: Build
-    needs: [checks, lint, security, test]
+    needs: [checks, lint, security, test, test-js]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
