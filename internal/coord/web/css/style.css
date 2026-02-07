@@ -672,6 +672,42 @@ tr:hover td {
     background: var(--color-bg-secondary);
 }
 
+/* DNS group highlight - box around grouped rows on hover */
+tr.dns-group-highlight td {
+    background: var(--color-card-hover-bg);
+    border-left: 2px solid var(--color-card-hover-border);
+    border-right: 2px solid var(--color-card-hover-border);
+    border-top-color: transparent;
+    border-bottom-color: transparent;
+}
+
+tr.dns-group-highlight:first-child td,
+tr.dns-group-first td {
+    border-top: 2px solid var(--color-card-hover-border);
+}
+
+tr.dns-group-highlight:last-child td,
+tr.dns-group-last td {
+    border-bottom: 2px solid var(--color-card-hover-border);
+}
+
+/* Adjust first/last cell corners for complete box */
+tr.dns-group-first td:first-child {
+    border-top-left-radius: 4px;
+}
+
+tr.dns-group-first td:last-child {
+    border-top-right-radius: 4px;
+}
+
+tr.dns-group-last td:first-child {
+    border-bottom-left-radius: 4px;
+}
+
+tr.dns-group-last td:last-child {
+    border-bottom-right-radius: 4px;
+}
+
 td {
     color: var(--color-text-primary);
 }
