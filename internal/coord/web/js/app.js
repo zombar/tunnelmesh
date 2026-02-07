@@ -118,6 +118,7 @@ function initDOMCache() {
     dom.filterModal = document.getElementById('filter-modal');
     dom.filterInfo = document.getElementById('filter-info');
     dom.filterDefaultPolicy = document.getElementById('filter-default-policy');
+    dom.addFilterRuleBtn = document.getElementById('add-filter-rule-btn');
 
     // Chart canvases
     dom.throughputChart = document.getElementById('throughput-chart');
@@ -1977,6 +1978,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Add client button handler
     if (dom.addWgClientBtn) {
         dom.addWgClientBtn.addEventListener('click', showAddWGClientModal);
+    }
+
+    // Add filter rule button handler
+    if (dom.addFilterRuleBtn) {
+        dom.addFilterRuleBtn.addEventListener('click', openFilterModal);
     }
 
     // Close modal on background click
