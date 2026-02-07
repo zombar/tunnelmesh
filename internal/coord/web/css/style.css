@@ -672,45 +672,9 @@ tr:hover td {
     background: var(--color-bg-secondary);
 }
 
-/* DNS group highlight - matches clickable-card hover exactly */
-tr.dns-group-highlight {
-    position: relative;
-}
-
+/* DNS group highlight - background shading for grouped rows */
 tr.dns-group-highlight td {
     background: var(--color-card-hover-bg);
-    border-bottom-color: transparent;
-}
-
-/* Use box-shadow to create the outline effect on grouped rows */
-tr.dns-group-first {
-    box-shadow:
-        inset 0 2px 0 0 var(--color-card-hover-border),
-        inset 2px 0 0 0 var(--color-card-hover-border),
-        inset -2px 0 0 0 var(--color-card-hover-border);
-}
-
-tr.dns-group-last {
-    box-shadow:
-        inset 0 -2px 0 0 var(--color-card-hover-border),
-        inset 2px 0 0 0 var(--color-card-hover-border),
-        inset -2px 0 0 0 var(--color-card-hover-border);
-}
-
-/* Middle rows only have left/right */
-tr.dns-group-highlight:not(.dns-group-first):not(.dns-group-last) {
-    box-shadow:
-        inset 2px 0 0 0 var(--color-card-hover-border),
-        inset -2px 0 0 0 var(--color-card-hover-border);
-}
-
-/* Single row (both first and last) gets full outline */
-tr.dns-group-first.dns-group-last {
-    box-shadow:
-        inset 0 2px 0 0 var(--color-card-hover-border),
-        inset 0 -2px 0 0 var(--color-card-hover-border),
-        inset 2px 0 0 0 var(--color-card-hover-border),
-        inset -2px 0 0 0 var(--color-card-hover-border);
 }
 
 td {

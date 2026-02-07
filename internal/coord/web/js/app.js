@@ -623,20 +623,14 @@ function setupDnsGroupHighlight() {
 
             if (groupRows.length <= 1) return; // No grouping needed for single rows
 
-            groupRows.forEach((r, idx) => {
-                r.classList.add('dns-group-highlight');
-                if (idx === 0) r.classList.add('dns-group-first');
-                if (idx === groupRows.length - 1) r.classList.add('dns-group-last');
-            });
+            groupRows.forEach(r => r.classList.add('dns-group-highlight'));
         });
 
         row.addEventListener('mouseleave', () => {
             const peerName = row.getAttribute('data-dns-peer');
             const groupRows = dom.dnsBody.querySelectorAll(`tr[data-dns-peer="${CSS.escape(peerName)}"]`);
 
-            groupRows.forEach(r => {
-                r.classList.remove('dns-group-highlight', 'dns-group-first', 'dns-group-last');
-            });
+            groupRows.forEach(r => r.classList.remove('dns-group-highlight'));
         });
     });
 }
