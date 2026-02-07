@@ -1,6 +1,10 @@
 // Node Visualizer for TunnelMesh Dashboard
 // Shows mesh topology with selected node centered
 
+// Import utilities from TM modules
+const { extractRegion } = TM.utils;
+const { formatBytesCompact, formatLatencyCompact } = TM.format;
+
 // =============================================================================
 // Constants and Types
 // =============================================================================
@@ -99,33 +103,6 @@ class VisualizerNode {
 // =============================================================================
 // Core Logic Functions
 // =============================================================================
-
-// Format bytes rate compactly
-function formatBytesCompact(bytes) {
-    if (bytes < 1024) return `${Math.round(bytes)}B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}K`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}M`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}G`;
-}
-
-// Format latency compactly
-function formatLatencyCompact(ms) {
-    if (ms === 0 || ms === undefined || ms === null) return '-';
-    if (ms < 1) return '<1ms';
-    if (ms < 1000) return `${Math.round(ms)}ms`;
-    return `${(ms / 1000).toFixed(1)}s`;
-}
-
-// Extract region/city from peer location data
-function extractRegion(peer) {
-    if (!peer.location) return null;
-    // Prefer city, fall back to region, then country
-    let region = peer.location.city || peer.location.region || peer.location.country || null;
-    if (region && region.length > 20) {
-        region = `${region.substring(0, 18)}…`;
-    }
-    return region;
-}
 
 // =============================================================================
 // Visual Slot - represents a node's position on one side (left or right)
