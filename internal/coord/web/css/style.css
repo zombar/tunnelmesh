@@ -1366,11 +1366,6 @@ a.logs-container {
     box-shadow: none;
 }
 
-/* Remove header underline for filter section */
-#filter-section .section-header {
-    border-bottom: none;
-}
-
 .filter-policy {
     margin: 0;
     color: var(--color-text-secondary);
