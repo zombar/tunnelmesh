@@ -18,7 +18,7 @@ pre-commit:
       fail_text: "Fix JS linting errors: run 'biome check --write internal/coord/web/js/'"
     js-test:
       glob: "internal/coord/web/js/**/*.js"
-      run: cd internal/coord/web && bun test
+      run: cd internal/coord/web && (command -v bun >/dev/null 2>&1 && bun test || ~/.bun/bin/bun test)
       fail_text: "JS tests failed"
 
 pre-push:

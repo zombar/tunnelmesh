@@ -14,8 +14,9 @@ const {
 // Import utilities from TM modules
 const { escapeHtml } = TM.utils;
 const { formatBytes, formatRate, formatLatency, formatLastSeen } = TM.format;
-const { updatePaginationUI } = TM.pagination;
+const { createPaginationController } = TM.pagination;
 const { createSparklineSVG } = TM.table;
+const { createModalController } = TM.modal;
 
 // Toggle collapsible section
 function toggleSection(header) {
@@ -63,6 +64,7 @@ const state = {
     dnsVisibleCount: ROWS_PER_PAGE,
     wgVisibleCount: ROWS_PER_PAGE,
     currentPeers: [], // Store current peers data for pagination
+    currentDnsRecords: [], // Store current DNS records for pagination
     // Alerts state
     alertsEnabled: false,
     peerAlerts: {}, // { peerName: { warning: count, critical: count, page: count } }
@@ -368,47 +370,68 @@ function updateDashboard(data, loadHistory = false) {
     }
 }
 
-// Pagination functions
-function _showMorePeers() {
-    state.peersVisibleCount += ROWS_PER_PAGE;
-    renderPeersTable();
-}
+// Pagination controllers
+const peersPagination = createPaginationController({
+    pageSize: ROWS_PER_PAGE,
+    getItems: () => state.currentPeers,
+    getVisibleCount: () => state.peersVisibleCount,
+    setVisibleCount: (n) => {
+        state.peersVisibleCount = n;
+    },
+    onRender: () => renderPeersTable(),
+});
 
-function _showLessPeers() {
-    state.peersVisibleCount = ROWS_PER_PAGE;
-    renderPeersTable();
-}
+const dnsPagination = createPaginationController({
+    pageSize: ROWS_PER_PAGE,
+    getItems: () => state.currentDnsRecords || [],
+    getVisibleCount: () => state.dnsVisibleCount,
+    setVisibleCount: (n) => {
+        state.dnsVisibleCount = n;
+    },
+    onRender: () => renderDnsTable(),
+});
 
-function _showMoreDns() {
-    state.dnsVisibleCount += ROWS_PER_PAGE;
-    renderDnsTable();
-}
-
-function _showLessDns() {
-    state.dnsVisibleCount = ROWS_PER_PAGE;
-    renderDnsTable();
-}
-
-function _showMoreWg() {
-    state.wgVisibleCount += ROWS_PER_PAGE;
-    updateWGClientsTable();
-}
-
-function _showLessWg() {
-    state.wgVisibleCount = ROWS_PER_PAGE;
-    updateWGClientsTable();
-}
+const wgPagination = createPaginationController({
+    pageSize: ROWS_PER_PAGE,
+    getItems: () => state.wgClients,
+    getVisibleCount: () => state.wgVisibleCount,
+    setVisibleCount: (n) => {
+        state.wgVisibleCount = n;
+    },
+    onRender: () => updateWGClientsTable(),
+});
 
 // Expose pagination functions for HTML onclick handlers
-window.showMorePeers = _showMorePeers;
-window.showLessPeers = _showLessPeers;
-window.showMoreDns = _showMoreDns;
-window.showLessDns = _showLessDns;
-window.showMoreWg = _showMoreWg;
-window.showLessWg = _showLessWg;
+window.showMorePeers = () => peersPagination.showMore();
+window.showLessPeers = () => peersPagination.showLess();
+window.showMoreDns = () => dnsPagination.showMore();
+window.showLessDns = () => dnsPagination.showLess();
+window.showMoreWg = () => wgPagination.showMore();
+window.showLessWg = () => wgPagination.showLess();
+
+// Modal controllers (initialized with element IDs, resolved lazily)
+const wgModal = createModalController('wg-modal', {
+    onClose: () => {
+        state.currentWGConfig = null;
+        fetchWGClients();
+    },
+});
+
+const filterModal = createModalController('filter-modal', {
+    onClose: () => {
+        // Clear form
+        const port = document.getElementById('filter-rule-port');
+        if (port) port.value = '';
+        const sourcePeer = document.getElementById('filter-rule-source-peer');
+        if (sourcePeer) sourcePeer.value = '';
+        const destPeer = document.getElementById('filter-rule-dest-peer');
+        if (destPeer) destPeer.value = '__all__';
+    },
+});
 
 function renderPeersTable() {
     const peers = state.currentPeers;
+    const uiState = peersPagination.getUIState();
 
     if (peers.length === 0) {
         if (dom.peersBody) dom.peersBody.innerHTML = '';
@@ -418,7 +441,7 @@ function renderPeersTable() {
     }
 
     if (dom.noPeers) dom.noPeers.style.display = 'none';
-    const visiblePeers = peers.slice(0, state.peersVisibleCount);
+    const visiblePeers = peersPagination.getVisibleItems();
     if (!dom.peersBody) return;
     dom.peersBody.innerHTML = visiblePeers
         .map((peer) => {
@@ -469,15 +492,15 @@ function renderPeersTable() {
         })
         .join('');
 
-    updatePaginationUI({
-        paginationId: 'peers-pagination',
-        showMoreId: 'peers-show-more',
-        showLessId: 'peers-show-less',
-        shownCountId: 'peers-shown-count',
-        totalCountId: 'peers-total-count',
-        totalCount: peers.length,
-        visibleCount: state.peersVisibleCount,
-    });
+    // Update pagination UI using controller state
+    const peersPaginationEl = document.getElementById('peers-pagination');
+    if (peersPaginationEl) {
+        peersPaginationEl.style.display = uiState.isEmpty ? 'none' : 'flex';
+        document.getElementById('peers-show-more').style.display = uiState.hasMore ? 'inline' : 'none';
+        document.getElementById('peers-show-less').style.display = uiState.canShowLess ? 'inline' : 'none';
+        document.getElementById('peers-shown-count').textContent = uiState.shown;
+        document.getElementById('peers-total-count').textContent = uiState.total;
+    }
 }
 
 function renderDnsTable() {
@@ -492,10 +515,10 @@ function renderDnsTable() {
     }
 
     // Build DNS records list: peer names + aliases, sorted by peer name then record name
-    const dnsRecords = [];
+    state.currentDnsRecords = [];
     for (const peer of peers) {
         // Add the peer's primary DNS name
-        dnsRecords.push({
+        state.currentDnsRecords.push({
             name: peer.name,
             meshIp: peer.mesh_ip,
             peerName: peer.name,
@@ -504,7 +527,7 @@ function renderDnsTable() {
         // Add aliases for this peer
         if (peer.aliases && peer.aliases.length > 0) {
             for (const alias of peer.aliases) {
-                dnsRecords.push({
+                state.currentDnsRecords.push({
                     name: alias,
                     meshIp: peer.mesh_ip,
                     peerName: peer.name,
@@ -515,7 +538,7 @@ function renderDnsTable() {
     }
 
     // Sort by peer name first (to group), then by record name
-    dnsRecords.sort((a, b) => {
+    state.currentDnsRecords.sort((a, b) => {
         if (a.peerName !== b.peerName) {
             return a.peerName.localeCompare(b.peerName);
         }
@@ -527,7 +550,7 @@ function renderDnsTable() {
     });
 
     if (dom.noDns) dom.noDns.style.display = 'none';
-    const visibleRecords = dnsRecords.slice(0, state.dnsVisibleCount);
+    const visibleRecords = dnsPagination.getVisibleItems();
     if (!dom.dnsBody) return;
     dom.dnsBody.innerHTML = visibleRecords
         .map(
@@ -543,15 +566,16 @@ function renderDnsTable() {
     // Setup DNS row group highlighting
     setupDnsGroupHighlight();
 
-    updatePaginationUI({
-        paginationId: 'dns-pagination',
-        showMoreId: 'dns-show-more',
-        showLessId: 'dns-show-less',
-        shownCountId: 'dns-shown-count',
-        totalCountId: 'dns-total-count',
-        totalCount: dnsRecords.length,
-        visibleCount: state.dnsVisibleCount,
-    });
+    // Update pagination UI using controller state
+    const dnsUIState = dnsPagination.getUIState();
+    const dnsPaginationEl = document.getElementById('dns-pagination');
+    if (dnsPaginationEl) {
+        dnsPaginationEl.style.display = dnsUIState.isEmpty ? 'none' : 'flex';
+        document.getElementById('dns-show-more').style.display = dnsUIState.hasMore ? 'inline' : 'none';
+        document.getElementById('dns-show-less').style.display = dnsUIState.canShowLess ? 'inline' : 'none';
+        document.getElementById('dns-shown-count').textContent = dnsUIState.shown;
+        document.getElementById('dns-total-count').textContent = dnsUIState.total;
+    }
 }
 
 // Setup DNS row group highlighting on hover
@@ -1396,7 +1420,7 @@ function updateWGClientsTable() {
     }
 
     if (dom.noWgClients) dom.noWgClients.style.display = 'none';
-    const visibleClients = state.wgClients.slice(0, state.wgVisibleCount);
+    const visibleClients = wgPagination.getVisibleItems();
     if (!dom.wgClientsBody) return;
     dom.wgClientsBody.innerHTML = visibleClients
         .map((client) => {
@@ -1422,15 +1446,16 @@ function updateWGClientsTable() {
         })
         .join('');
 
-    updatePaginationUI({
-        paginationId: 'wg-pagination',
-        showMoreId: 'wg-show-more',
-        showLessId: 'wg-show-less',
-        shownCountId: 'wg-shown-count',
-        totalCountId: 'wg-total-count',
-        totalCount: state.wgClients.length,
-        visibleCount: state.wgVisibleCount,
-    });
+    // Update pagination UI using controller state
+    const wgUIState = wgPagination.getUIState();
+    const wgPaginationEl = document.getElementById('wg-pagination');
+    if (wgPaginationEl) {
+        wgPaginationEl.style.display = wgUIState.isEmpty ? 'none' : 'flex';
+        document.getElementById('wg-show-more').style.display = wgUIState.hasMore ? 'inline' : 'none';
+        document.getElementById('wg-show-less').style.display = wgUIState.canShowLess ? 'inline' : 'none';
+        document.getElementById('wg-shown-count').textContent = wgUIState.shown;
+        document.getElementById('wg-total-count').textContent = wgUIState.total;
+    }
 }
 
 function showAddWGClientModal() {
@@ -1441,15 +1466,13 @@ function showAddWGClientModal() {
     document.getElementById('wg-add-form').style.display = 'block';
     document.getElementById('wg-config-display').style.display = 'none';
     document.getElementById('wg-client-name').value = '';
-    document.getElementById('wg-modal').style.display = 'flex';
+    wgModal.open();
 }
 
 function closeWGModal() {
-    document.getElementById('wg-modal').style.display = 'none';
-    state.currentWGConfig = null;
-    // Refresh the client list
-    fetchWGClients();
+    wgModal.close();
 }
+window.closeWGModal = closeWGModal;
 
 async function _createWGClient() {
     const nameInput = document.getElementById('wg-client-name');
@@ -1491,6 +1514,7 @@ async function _createWGClient() {
         showToast('Failed to create client', 'error');
     }
 }
+window.createWGClient = _createWGClient;
 
 function _downloadWGConfig() {
     if (!state.currentWGConfig) return;
@@ -1528,6 +1552,7 @@ async function _toggleWGClient(id, enabled) {
         showToast('Failed to update client', 'error');
     }
 }
+window.toggleWGClient = _toggleWGClient;
 
 async function _deleteWGClient(id, name) {
     if (!confirm(`Delete WireGuard peer "${name}"?`)) {
@@ -1550,6 +1575,7 @@ async function _deleteWGClient(id, name) {
         showToast('Failed to delete client', 'error');
     }
 }
+window.deleteWGClient = _deleteWGClient;
 
 // ============= PACKET FILTER FUNCTIONS =============
 
@@ -1728,24 +1754,13 @@ function openFilterModal() {
     // Populate peer dropdowns
     populateSourcePeerSelect();
     populateDestPeerSelect();
-    if (dom.filterModal) {
-        dom.filterModal.style.display = 'flex';
-    }
+    filterModal.open();
 }
 window.openFilterModal = openFilterModal;
 
 // Close filter rule modal
 function closeFilterModal() {
-    if (dom.filterModal) {
-        dom.filterModal.style.display = 'none';
-    }
-    // Clear form
-    const port = document.getElementById('filter-rule-port');
-    if (port) port.value = '';
-    const sourcePeer = document.getElementById('filter-rule-source-peer');
-    if (sourcePeer) sourcePeer.value = '';
-    const destPeer = document.getElementById('filter-rule-dest-peer');
-    if (destPeer) destPeer.value = '__all__';
+    filterModal.close();
 }
 window.closeFilterModal = closeFilterModal;
 
@@ -1961,23 +1976,9 @@ document.addEventListener('DOMContentLoaded', () => {
         dom.addFilterRuleBtn.addEventListener('click', openFilterModal);
     }
 
-    // Close modal on background click
-    if (dom.wgModal) {
-        dom.wgModal.addEventListener('click', (e) => {
-            if (e.target === dom.wgModal) {
-                closeWGModal();
-            }
-        });
-    }
-
-    // Close filter modal on background click
-    if (dom.filterModal) {
-        dom.filterModal.addEventListener('click', (e) => {
-            if (e.target === dom.filterModal) {
-                closeFilterModal();
-            }
-        });
-    }
+    // Setup modal background click handlers
+    wgModal.setupBackgroundClose();
+    filterModal.setupBackgroundClose();
 
     // Logs panel resize handle
     if (dom.logsResizeHandle && dom.logsContainer) {
