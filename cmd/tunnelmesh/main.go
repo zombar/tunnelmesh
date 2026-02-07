@@ -979,13 +979,8 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		}
 		log.Info().Str("ca", tlsMgr.CAPath()).Msg("CA certificate stored")
 
-		// Check if CA is already installed in system trust store
-		// Always prompt to (re)install since the server may have changed
-		trusted, err := IsCATrusted()
-		if err != nil {
-			log.Debug().Err(err).Msg("could not check CA trust status")
-		}
-
+		// Always prompt to install/reinstall CA since the server may have changed
+		trusted, _ := IsCATrusted()
 		if trusted {
 			fmt.Println("\nA TunnelMesh CA certificate is already installed in your system trust store.")
 			fmt.Println("If this server has a different CA, you should reinstall to avoid HTTPS errors.")
