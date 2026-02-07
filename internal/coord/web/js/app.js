@@ -623,6 +623,7 @@ function setupDnsGroupHighlight() {
 
             if (groupRows.length <= 1) return; // No grouping needed for single rows
 
+            dom.dnsBody.classList.add('dns-group-active');
             groupRows.forEach(r => r.classList.add('dns-group-highlight'));
         });
 
@@ -630,6 +631,7 @@ function setupDnsGroupHighlight() {
             const peerName = row.getAttribute('data-dns-peer');
             const groupRows = dom.dnsBody.querySelectorAll(`tr[data-dns-peer="${CSS.escape(peerName)}"]`);
 
+            dom.dnsBody.classList.remove('dns-group-active');
             groupRows.forEach(r => r.classList.remove('dns-group-highlight'));
         });
     });

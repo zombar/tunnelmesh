@@ -672,8 +672,8 @@ tr:hover td {
     background: var(--color-bg-secondary);
 }
 
-/* DNS group highlight - same shading as log rows */
-tr.dns-group-highlight td {
+/* DNS group highlight - invert: brighten OTHER rows, keep grouped rows normal */
+#dns-body.dns-group-active tr:not(.dns-group-highlight) td {
     background: var(--color-bg-secondary);
 }
 

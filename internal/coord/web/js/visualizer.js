@@ -398,6 +398,10 @@ class NodeVisualizer {
             this.nodes.get(nodeId).selected = true;
         }
 
+        // Reset pan to center when selection changes
+        this.panX = 0;
+        this.panY = 0;
+
         this.recalculateLayout();
         this.startAnimation();
 
@@ -422,6 +426,10 @@ class NodeVisualizer {
         if (nodeId && this.nodes.has(nodeId)) {
             this.nodes.get(nodeId).selected = true;
         }
+
+        // Reset pan to center when selection changes
+        this.panX = 0;
+        this.panY = 0;
 
         this.recalculateLayout();
         this.startAnimation();
