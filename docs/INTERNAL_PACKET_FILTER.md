@@ -6,7 +6,7 @@ TunnelMesh includes a built-in internal packet filter that controls which ports 
 
 - **Default deny mode**: Block all incoming ports unless explicitly allowed (allowlist)
 - **Per-peer rules**: Target specific source peers for fine-grained access control
-- **3-layer rule system**: Coordinator, peer config, and temporary rules merge together
+- **4-layer rule system**: Coordinator, peer config, temporary, and service rules merge together
 - **Real-time updates**: Admin panel changes push to peers immediately
 - **Prometheus metrics**: Track filtered packets with per-peer labels
 
@@ -168,10 +168,15 @@ The admin panel provides an "Internal Packet Filter" section for managing rules:
    - Protocol (TCP/UDP)
    - Action (Allow/Deny)
    - From Peer (source peer selector, or "Any peer")
-   - Push To (destination peer, or "All peers")
+   - To Peer (destination peer, or "All peers")
 3. **Remove** button on temporary rules
 
 Rules pushed via admin panel take effect immediately on the target peer(s).
+
+**Important notes:**
+- When pushing to "All peers", a confirmation dialog is shown
+- A peer cannot create a rule filtering traffic from itself (self-targeting is prevented)
+- A warning banner appears when temporary rules exist, reminding that they won't persist after peer restart
 
 ## Per-Peer Filtering
 
