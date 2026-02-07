@@ -1398,6 +1398,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		AllowsExit:          cfg.AllowExitTraffic,
 		WGEnabled:           cfg.WireGuard.Enabled,
 		WGConcentrator:      wgWrapper,
+		Filter:              filter,
 	})
 
 	// Register reconnect observer for metrics

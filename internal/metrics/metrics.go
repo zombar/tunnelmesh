@@ -22,6 +22,13 @@ type PeerMetrics struct {
 	DroppedNonIPv4  prometheus.Counter
 	ForwarderErrors prometheus.Counter
 
+	// Packet filter stats (counters, labeled by protocol)
+	DroppedFiltered *prometheus.CounterVec // labels: protocol (tcp, udp)
+
+	// Packet filter gauges
+	FilterRulesTotal  *prometheus.GaugeVec // labels: source (coordinator, config, temporary)
+	FilterDefaultDeny prometheus.Gauge     // 1 if default-deny mode, 0 if default-allow
+
 	// Exit node stats (counters)
 	ExitPacketsSent prometheus.Counter
 	ExitBytesSent   prometheus.Counter
@@ -111,6 +118,25 @@ func InitMetrics(peerName, meshIP, version string) *PeerMetrics {
 		ForwarderErrors: promauto.With(Registry).NewCounter(prometheus.CounterOpts{
 			Name:        "tunnelmesh_forwarder_errors_total",
 			Help:        "Total forwarder errors",
+			ConstLabels: constLabels,
+		}),
+
+		// Packet filter counters (labeled by protocol)
+		DroppedFiltered: promauto.With(Registry).NewCounterVec(prometheus.CounterOpts{
+			Name:        "tunnelmesh_dropped_filtered_total",
+			Help:        "Packets dropped by packet filter",
+			ConstLabels: constLabels,
+		}, []string{"protocol"}),
+
+		// Packet filter gauges
+		FilterRulesTotal: promauto.With(Registry).NewGaugeVec(prometheus.GaugeOpts{
+			Name:        "tunnelmesh_filter_rules_total",
+			Help:        "Number of active filter rules",
+			ConstLabels: constLabels,
+		}, []string{"source"}),
+		FilterDefaultDeny: promauto.With(Registry).NewGauge(prometheus.GaugeOpts{
+			Name:        "tunnelmesh_filter_default_deny",
+			Help:        "Whether the filter is in default-deny mode (1) or default-allow (0)",
 			ConstLabels: constLabels,
 		}),
 

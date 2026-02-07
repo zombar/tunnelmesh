@@ -12,16 +12,18 @@ import (
 
 // ForwarderSnapshot holds the last-seen forwarder stats for delta calculation.
 type ForwarderSnapshot struct {
-	PacketsSent     uint64
-	PacketsReceived uint64
-	BytesSent       uint64
-	BytesReceived   uint64
-	DroppedNoRoute  uint64
-	DroppedNoTunnel uint64
-	DroppedNonIPv4  uint64
-	Errors          uint64
-	ExitPacketsSent uint64
-	ExitBytesSent   uint64
+	PacketsSent        uint64
+	PacketsReceived    uint64
+	BytesSent          uint64
+	BytesReceived      uint64
+	DroppedNoRoute     uint64
+	DroppedNoTunnel    uint64
+	DroppedNonIPv4     uint64
+	DroppedFilteredTCP uint64
+	DroppedFilteredUDP uint64
+	Errors             uint64
+	ExitPacketsSent    uint64
+	ExitBytesSent      uint64
 }
 
 // Collector periodically collects metrics from the MeshNode.
@@ -40,6 +42,7 @@ type Collector struct {
 	allowsExit          bool
 	wgEnabled           bool
 	wgConcentrator      WGConcentrator
+	filter              FilterStatus
 
 	// Last snapshot for delta calculation
 	lastForwarder ForwarderSnapshot
@@ -83,6 +86,12 @@ type WGConcentrator interface {
 	ClientCount() (total, enabled int)
 }
 
+// FilterStatus interface for getting packet filter status.
+type FilterStatus interface {
+	IsDefaultDeny() bool
+	RuleCountBySource() routing.RuleCounts
+}
+
 // CollectorConfig holds configuration for the collector.
 type CollectorConfig struct {
 	Forwarder           ForwarderStats
@@ -95,6 +104,7 @@ type CollectorConfig struct {
 	AllowsExit          bool
 	WGEnabled           bool
 	WGConcentrator      WGConcentrator
+	Filter              FilterStatus
 }
 
 // NewCollector creates a new metrics collector.
@@ -112,6 +122,7 @@ func NewCollector(m *PeerMetrics, cfg CollectorConfig) *Collector {
 		allowsExit:          cfg.AllowsExit,
 		wgEnabled:           cfg.WGEnabled,
 		wgConcentrator:      cfg.WGConcentrator,
+		filter:              cfg.Filter,
 	}
 }
 
@@ -125,6 +136,7 @@ func (c *Collector) Collect() {
 	c.collectExitNodeStats()
 	c.collectWireGuardStats()
 	c.collectGeolocationStats()
+	c.collectFilterStats()
 }
 
 func (c *Collector) collectForwarderStats() {
@@ -160,6 +172,14 @@ func (c *Collector) collectForwarderStats() {
 		c.metrics.ForwarderErrors.Add(float64(stats.Errors - c.lastForwarder.Errors))
 	}
 
+	// Packet filter drops by protocol
+	if stats.DroppedFilteredTCP > c.lastForwarder.DroppedFilteredTCP {
+		c.metrics.DroppedFiltered.WithLabelValues("tcp").Add(float64(stats.DroppedFilteredTCP - c.lastForwarder.DroppedFilteredTCP))
+	}
+	if stats.DroppedFilteredUDP > c.lastForwarder.DroppedFilteredUDP {
+		c.metrics.DroppedFiltered.WithLabelValues("udp").Add(float64(stats.DroppedFilteredUDP - c.lastForwarder.DroppedFilteredUDP))
+	}
+
 	// Exit traffic stats
 	if stats.ExitPacketsSent > c.lastForwarder.ExitPacketsSent {
 		c.metrics.ExitPacketsSent.Add(float64(stats.ExitPacketsSent - c.lastForwarder.ExitPacketsSent))
@@ -170,16 +190,18 @@ func (c *Collector) collectForwarderStats() {
 
 	// Store current for next delta
 	c.lastForwarder = ForwarderSnapshot{
-		PacketsSent:     stats.PacketsSent,
-		PacketsReceived: stats.PacketsReceived,
-		BytesSent:       stats.BytesSent,
-		BytesReceived:   stats.BytesReceived,
-		DroppedNoRoute:  stats.DroppedNoRoute,
-		DroppedNoTunnel: stats.DroppedNoTunnel,
-		DroppedNonIPv4:  stats.DroppedNonIPv4,
-		Errors:          stats.Errors,
-		ExitPacketsSent: stats.ExitPacketsSent,
-		ExitBytesSent:   stats.ExitBytesSent,
+		PacketsSent:        stats.PacketsSent,
+		PacketsReceived:    stats.PacketsReceived,
+		BytesSent:          stats.BytesSent,
+		BytesReceived:      stats.BytesReceived,
+		DroppedNoRoute:     stats.DroppedNoRoute,
+		DroppedNoTunnel:    stats.DroppedNoTunnel,
+		DroppedNonIPv4:     stats.DroppedNonIPv4,
+		DroppedFilteredTCP: stats.DroppedFilteredTCP,
+		DroppedFilteredUDP: stats.DroppedFilteredUDP,
+		Errors:             stats.Errors,
+		ExitPacketsSent:    stats.ExitPacketsSent,
+		ExitBytesSent:      stats.ExitBytesSent,
 	}
 }
 
@@ -303,6 +325,30 @@ func (c *Collector) collectGeolocationStats() {
 	if loc.City != "" {
 		c.metrics.PeerLocationInfo.WithLabelValues(loc.City).Set(1)
 	}
+}
+
+func (c *Collector) collectFilterStats() {
+	if c.filter == nil {
+		// No filter configured - set defaults
+		c.metrics.FilterDefaultDeny.Set(0)
+		c.metrics.FilterRulesTotal.WithLabelValues("coordinator").Set(0)
+		c.metrics.FilterRulesTotal.WithLabelValues("config").Set(0)
+		c.metrics.FilterRulesTotal.WithLabelValues("temporary").Set(0)
+		return
+	}
+
+	// Default deny mode
+	if c.filter.IsDefaultDeny() {
+		c.metrics.FilterDefaultDeny.Set(1)
+	} else {
+		c.metrics.FilterDefaultDeny.Set(0)
+	}
+
+	// Rule counts by source
+	counts := c.filter.RuleCountBySource()
+	c.metrics.FilterRulesTotal.WithLabelValues("coordinator").Set(float64(counts.Coordinator))
+	c.metrics.FilterRulesTotal.WithLabelValues("config").Set(float64(counts.PeerConfig))
+	c.metrics.FilterRulesTotal.WithLabelValues("temporary").Set(float64(counts.Temporary))
 }
 
 // Run starts periodic metric collection.

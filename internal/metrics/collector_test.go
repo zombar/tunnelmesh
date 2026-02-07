@@ -83,6 +83,19 @@ func (m *mockWGConcentrator) ClientCount() (total, enabled int) {
 	return m.totalClients, m.enabledClients
 }
 
+type mockFilter struct {
+	defaultDeny bool
+	counts      routing.RuleCounts
+}
+
+func (m *mockFilter) IsDefaultDeny() bool {
+	return m.defaultDeny
+}
+
+func (m *mockFilter) RuleCountBySource() routing.RuleCounts {
+	return m.counts
+}
+
 func TestCollector_CollectForwarderStats(t *testing.T) {
 	oldRegistry := Registry
 	Registry = prometheus.NewRegistry()
@@ -717,6 +730,129 @@ func TestCollector_LatencyStats_ZeroRTT(t *testing.T) {
 			val := mf.GetMetric()[0].GetGauge().GetValue()
 			// Gauge defaults to 0, so this just confirms we don't set it when RTT is 0
 			assert.Equal(t, float64(0), val, "Expected peer_coordinator_rtt_ms=0 when no RTT measured")
+		}
+	}
+}
+
+func TestCollector_CollectFilterStats(t *testing.T) {
+	Registry = prometheus.NewRegistry()
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
+
+	filter := &mockFilter{
+		defaultDeny: true,
+		counts: routing.RuleCounts{
+			Coordinator: 3,
+			PeerConfig:  2,
+			Temporary:   1,
+		},
+	}
+
+	c := NewCollector(m, CollectorConfig{
+		Filter: filter,
+	})
+
+	c.Collect()
+
+	mfs, err := Registry.Gather()
+	require.NoError(t, err)
+
+	for _, mf := range mfs {
+		switch mf.GetName() {
+		case "tunnelmesh_filter_default_deny":
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			assert.Equal(t, float64(1), val, "Expected filter_default_deny=1")
+		case "tunnelmesh_filter_rules_total":
+			// Check each source label
+			for _, metric := range mf.GetMetric() {
+				labels := make(map[string]string)
+				for _, l := range metric.GetLabel() {
+					labels[l.GetName()] = l.GetValue()
+				}
+				val := metric.GetGauge().GetValue()
+				switch labels["source"] {
+				case "coordinator":
+					assert.Equal(t, float64(3), val, "Expected coordinator rules=3")
+				case "config":
+					assert.Equal(t, float64(2), val, "Expected config rules=2")
+				case "temporary":
+					assert.Equal(t, float64(1), val, "Expected temporary rules=1")
+				}
+			}
+		}
+	}
+}
+
+func TestCollector_CollectFilterStats_NilFilter(t *testing.T) {
+	Registry = prometheus.NewRegistry()
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
+
+	// No filter configured
+	c := NewCollector(m, CollectorConfig{})
+
+	c.Collect()
+
+	mfs, err := Registry.Gather()
+	require.NoError(t, err)
+
+	for _, mf := range mfs {
+		switch mf.GetName() {
+		case "tunnelmesh_filter_default_deny":
+			val := mf.GetMetric()[0].GetGauge().GetValue()
+			assert.Equal(t, float64(0), val, "Expected filter_default_deny=0 when no filter")
+		case "tunnelmesh_filter_rules_total":
+			// All sources should be 0
+			for _, metric := range mf.GetMetric() {
+				val := metric.GetGauge().GetValue()
+				assert.Equal(t, float64(0), val, "Expected rules=0 when no filter")
+			}
+		}
+	}
+}
+
+func TestCollector_CollectFilteredDrops(t *testing.T) {
+	Registry = prometheus.NewRegistry()
+	Registry.MustRegister(collectors.NewGoCollector())
+	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+
+	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
+
+	fwd := &mockForwarder{
+		stats: routing.ForwarderStats{
+			DroppedFilteredTCP: 100,
+			DroppedFilteredUDP: 50,
+		},
+	}
+
+	c := NewCollector(m, CollectorConfig{
+		Forwarder: fwd,
+	})
+
+	c.Collect()
+
+	mfs, err := Registry.Gather()
+	require.NoError(t, err)
+
+	for _, mf := range mfs {
+		if mf.GetName() == "tunnelmesh_dropped_filtered_total" {
+			for _, metric := range mf.GetMetric() {
+				labels := make(map[string]string)
+				for _, l := range metric.GetLabel() {
+					labels[l.GetName()] = l.GetValue()
+				}
+				val := metric.GetCounter().GetValue()
+				switch labels["protocol"] {
+				case "tcp":
+					assert.Equal(t, float64(100), val, "Expected TCP filtered drops=100")
+				case "udp":
+					assert.Equal(t, float64(50), val, "Expected UDP filtered drops=50")
+				}
+			}
 		}
 	}
 }

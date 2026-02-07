@@ -250,25 +250,38 @@ func (f *PacketFilter) effectiveAction(port uint16, protocol uint8) (FilterActio
 	return ActionAllow, false
 }
 
+// FilterResult contains the result of a filter check.
+type FilterResult struct {
+	Drop     bool  // Whether to drop the packet
+	Protocol uint8 // Protocol that was filtered (6=TCP, 17=UDP, 0=not filtered)
+}
+
 // ShouldDrop returns true if the packet should be dropped.
 // This is the main filter check called on the hot path.
 func (f *PacketFilter) ShouldDrop(packet []byte) bool {
+	result := f.CheckPacket(packet)
+	return result.Drop
+}
+
+// CheckPacket checks a packet and returns detailed filter result.
+// Use this when you need to know what protocol was filtered.
+func (f *PacketFilter) CheckPacket(packet []byte) FilterResult {
 	// Parse IP header to get protocol
 	if len(packet) < 20 {
-		return false // Let other code handle malformed packets
+		return FilterResult{Drop: false, Protocol: 0}
 	}
 
 	protocol := packet[9]
 
 	// Only filter TCP (6) and UDP (17)
 	if protocol != ProtoTCP && protocol != ProtoUDP {
-		return false // Allow other protocols (ICMP, etc.)
+		return FilterResult{Drop: false, Protocol: 0}
 	}
 
 	// Get IP header length
 	ihl := int(packet[0]&0x0F) * 4
 	if len(packet) < ihl+4 {
-		return false // Malformed, let other code handle
+		return FilterResult{Drop: false, Protocol: 0}
 	}
 
 	// Extract destination port from TCP/UDP header (bytes 2-3)
@@ -276,7 +289,7 @@ func (f *PacketFilter) ShouldDrop(packet []byte) bool {
 
 	// Check filter rules
 	action, _ := f.effectiveAction(dstPort, protocol)
-	return action == ActionDeny
+	return FilterResult{Drop: action == ActionDeny, Protocol: protocol}
 }
 
 // ListRules returns all rules from all layers with their sources.
@@ -326,4 +339,39 @@ func (f *PacketFilter) RuleCount() int {
 		}
 	}
 	return count
+}
+
+// RuleCountBySource returns the number of non-expired rules for each source.
+type RuleCounts struct {
+	Coordinator int
+	PeerConfig  int
+	Temporary   int
+}
+
+// RuleCountBySource returns the rule counts broken down by source.
+func (f *PacketFilter) RuleCountBySource() RuleCounts {
+	var counts RuleCounts
+
+	for _, r := range *f.coordinator.Load() {
+		if !r.IsExpired() {
+			counts.Coordinator++
+		}
+	}
+	for _, r := range *f.peerConfig.Load() {
+		if !r.IsExpired() {
+			counts.PeerConfig++
+		}
+	}
+	for _, r := range *f.temporary.Load() {
+		if !r.IsExpired() {
+			counts.Temporary++
+		}
+	}
+
+	return counts
+}
+
+// IsDefaultDeny returns true if the filter is in whitelist mode (deny by default).
+func (f *PacketFilter) IsDefaultDeny() bool {
+	return f.defaultDeny
 }

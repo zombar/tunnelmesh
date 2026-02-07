@@ -57,17 +57,19 @@ type TUNDevice interface {
 
 // ForwarderStats contains forwarding statistics.
 type ForwarderStats struct {
-	PacketsSent     uint64
-	PacketsReceived uint64
-	BytesSent       uint64
-	BytesReceived   uint64
-	DroppedNoRoute  uint64
-	DroppedNoTunnel uint64
-	DroppedNonIPv4  uint64
-	DroppedFiltered uint64 // Packets dropped by packet filter
-	Errors          uint64
-	ExitPacketsSent uint64 // Packets sent through exit node
-	ExitBytesSent   uint64 // Bytes sent through exit node
+	PacketsSent        uint64
+	PacketsReceived    uint64
+	BytesSent          uint64
+	BytesReceived      uint64
+	DroppedNoRoute     uint64
+	DroppedNoTunnel    uint64
+	DroppedNonIPv4     uint64
+	DroppedFiltered    uint64 // Packets dropped by packet filter (total)
+	DroppedFilteredTCP uint64 // TCP packets dropped by filter
+	DroppedFilteredUDP uint64 // UDP packets dropped by filter
+	Errors             uint64
+	ExitPacketsSent    uint64 // Packets sent through exit node
+	ExitBytesSent      uint64 // Bytes sent through exit node
 }
 
 // WGPacketHandler handles packets destined for WireGuard clients.
@@ -546,9 +548,19 @@ func (f *Forwarder) ReceivePacket(packet []byte) error {
 	filter := f.filter
 	f.filterMu.RUnlock()
 
-	if filter != nil && filter.ShouldDrop(packet) {
-		f.incStat(collectStats, &f.stats.DroppedFiltered)
-		return nil // Silently drop filtered packets
+	if filter != nil {
+		result := filter.CheckPacket(packet)
+		if result.Drop {
+			f.incStat(collectStats, &f.stats.DroppedFiltered)
+			// Track by protocol
+			switch result.Protocol {
+			case ProtoTCP:
+				f.incStat(collectStats, &f.stats.DroppedFilteredTCP)
+			case ProtoUDP:
+				f.incStat(collectStats, &f.stats.DroppedFilteredUDP)
+			}
+			return nil // Silently drop filtered packets
+		}
 	}
 
 	f.tunMu.RLock()
@@ -770,17 +782,19 @@ func (f *Forwarder) readFrame(r io.Reader, buf []byte) (int, error) {
 // Stats returns a copy of the forwarding statistics.
 func (f *Forwarder) Stats() ForwarderStats {
 	return ForwarderStats{
-		PacketsSent:     atomic.LoadUint64(&f.stats.PacketsSent),
-		PacketsReceived: atomic.LoadUint64(&f.stats.PacketsReceived),
-		BytesSent:       atomic.LoadUint64(&f.stats.BytesSent),
-		BytesReceived:   atomic.LoadUint64(&f.stats.BytesReceived),
-		DroppedNoRoute:  atomic.LoadUint64(&f.stats.DroppedNoRoute),
-		DroppedNoTunnel: atomic.LoadUint64(&f.stats.DroppedNoTunnel),
-		DroppedNonIPv4:  atomic.LoadUint64(&f.stats.DroppedNonIPv4),
-		DroppedFiltered: atomic.LoadUint64(&f.stats.DroppedFiltered),
-		Errors:          atomic.LoadUint64(&f.stats.Errors),
-		ExitPacketsSent: atomic.LoadUint64(&f.stats.ExitPacketsSent),
-		ExitBytesSent:   atomic.LoadUint64(&f.stats.ExitBytesSent),
+		PacketsSent:        atomic.LoadUint64(&f.stats.PacketsSent),
+		PacketsReceived:    atomic.LoadUint64(&f.stats.PacketsReceived),
+		BytesSent:          atomic.LoadUint64(&f.stats.BytesSent),
+		BytesReceived:      atomic.LoadUint64(&f.stats.BytesReceived),
+		DroppedNoRoute:     atomic.LoadUint64(&f.stats.DroppedNoRoute),
+		DroppedNoTunnel:    atomic.LoadUint64(&f.stats.DroppedNoTunnel),
+		DroppedNonIPv4:     atomic.LoadUint64(&f.stats.DroppedNonIPv4),
+		DroppedFiltered:    atomic.LoadUint64(&f.stats.DroppedFiltered),
+		DroppedFilteredTCP: atomic.LoadUint64(&f.stats.DroppedFilteredTCP),
+		DroppedFilteredUDP: atomic.LoadUint64(&f.stats.DroppedFilteredUDP),
+		Errors:             atomic.LoadUint64(&f.stats.Errors),
+		ExitPacketsSent:    atomic.LoadUint64(&f.stats.ExitPacketsSent),
+		ExitBytesSent:      atomic.LoadUint64(&f.stats.ExitBytesSent),
 	}
 }
 

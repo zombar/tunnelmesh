@@ -51,6 +51,26 @@ groups:
           summary: "Forwarder errors detected"
           description: "Forwarder error rate is elevated"
 
+      # Early warning: Elevated packet filter drops
+      - alert: TunnelMeshElevatedFilteredDrops
+        expr: sum by (peer) (rate(tunnelmesh_dropped_filtered_total[5m])) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High packet filter drop rate on {{ $labels.peer }}"
+          description: "Packet filter is blocking more than 10 packets/s - possible attack or misconfiguration"
+
+      # Early warning: No filter rules with default-deny mode
+      - alert: TunnelMeshNoFilterRules
+        expr: tunnelmesh_filter_default_deny == 1 and sum by (peer) (tunnelmesh_filter_rules_total) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Default-deny filter with no allow rules on {{ $labels.peer }}"
+          description: "Packet filter is in default-deny mode but has no allow rules - all traffic is being blocked"
+
   - name: tunnelmesh-critical
     rules:
       # Critical: Multiple peers disconnected

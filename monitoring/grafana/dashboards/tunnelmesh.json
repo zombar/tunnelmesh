@@ -611,6 +611,16 @@
           "expr": "sum(rate(tunnelmesh_forwarder_errors_total[1m]))",
           "legendFormat": "Errors",
           "refId": "C"
+        },
+        {
+          "expr": "sum(rate(tunnelmesh_dropped_filtered_total{protocol=\"tcp\"}[1m]))",
+          "legendFormat": "Filtered (TCP)",
+          "refId": "D"
+        },
+        {
+          "expr": "sum(rate(tunnelmesh_dropped_filtered_total{protocol=\"udp\"}[1m]))",
+          "legendFormat": "Filtered (UDP)",
+          "refId": "E"
         }
       ],
       "title": "Drops & Errors (Total)",

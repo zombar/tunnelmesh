@@ -392,6 +392,116 @@ func TestRuleSource_String(t *testing.T) {
 	}
 }
 
+func TestPacketFilter_CheckPacket(t *testing.T) {
+	f := NewPacketFilter(true)
+
+	src := net.ParseIP("10.0.0.1")
+	dst := net.ParseIP("10.0.0.2")
+
+	// TCP packet to blocked port
+	tcpPacket := buildTCPPacket(src, dst, 12345, 22)
+	result := f.CheckPacket(tcpPacket)
+	if !result.Drop {
+		t.Error("expected TCP packet to be dropped (default deny)")
+	}
+	if result.Protocol != ProtoTCP {
+		t.Errorf("expected protocol=TCP (6), got %d", result.Protocol)
+	}
+
+	// UDP packet to blocked port
+	udpPacket := buildUDPPacket(src, dst, 12345, 53)
+	result = f.CheckPacket(udpPacket)
+	if !result.Drop {
+		t.Error("expected UDP packet to be dropped (default deny)")
+	}
+	if result.Protocol != ProtoUDP {
+		t.Errorf("expected protocol=UDP (17), got %d", result.Protocol)
+	}
+
+	// Add allow rule
+	f.SetPeerConfigRules([]FilterRule{{Port: 22, Protocol: ProtoTCP, Action: ActionAllow}})
+	result = f.CheckPacket(tcpPacket)
+	if result.Drop {
+		t.Error("expected TCP packet to be allowed")
+	}
+	if result.Protocol != ProtoTCP {
+		t.Errorf("expected protocol=TCP (6), got %d", result.Protocol)
+	}
+
+	// ICMP packet should not be dropped
+	icmpPacket := make([]byte, 28)
+	icmpPacket[0] = 0x45
+	icmpPacket[9] = ProtoICMP
+	result = f.CheckPacket(icmpPacket)
+	if result.Drop {
+		t.Error("expected ICMP to not be dropped")
+	}
+	if result.Protocol != 0 {
+		t.Errorf("expected protocol=0 for non-filtered, got %d", result.Protocol)
+	}
+}
+
+func TestPacketFilter_RuleCountBySource(t *testing.T) {
+	f := NewPacketFilter(true)
+
+	// Initially empty
+	counts := f.RuleCountBySource()
+	if counts.Coordinator != 0 || counts.PeerConfig != 0 || counts.Temporary != 0 {
+		t.Error("expected all counts to be 0")
+	}
+
+	// Add coordinator rules
+	f.SetCoordinatorRules([]FilterRule{
+		{Port: 22, Protocol: ProtoTCP, Action: ActionAllow},
+		{Port: 80, Protocol: ProtoTCP, Action: ActionAllow},
+	})
+
+	counts = f.RuleCountBySource()
+	if counts.Coordinator != 2 {
+		t.Errorf("expected Coordinator=2, got %d", counts.Coordinator)
+	}
+
+	// Add peer config rules
+	f.SetPeerConfigRules([]FilterRule{
+		{Port: 443, Protocol: ProtoTCP, Action: ActionAllow},
+	})
+
+	counts = f.RuleCountBySource()
+	if counts.PeerConfig != 1 {
+		t.Errorf("expected PeerConfig=1, got %d", counts.PeerConfig)
+	}
+
+	// Add temporary rules
+	f.AddTemporaryRule(FilterRule{Port: 8080, Protocol: ProtoTCP, Action: ActionAllow})
+	f.AddTemporaryRule(FilterRule{Port: 3000, Protocol: ProtoTCP, Action: ActionAllow})
+	f.AddTemporaryRule(FilterRule{Port: 5000, Protocol: ProtoTCP, Action: ActionAllow})
+
+	counts = f.RuleCountBySource()
+	if counts.Temporary != 3 {
+		t.Errorf("expected Temporary=3, got %d", counts.Temporary)
+	}
+
+	// Total should be sum
+	total := counts.Coordinator + counts.PeerConfig + counts.Temporary
+	if total != 6 {
+		t.Errorf("expected total=6, got %d", total)
+	}
+}
+
+func TestPacketFilter_IsDefaultDeny(t *testing.T) {
+	// Default deny mode
+	f1 := NewPacketFilter(true)
+	if !f1.IsDefaultDeny() {
+		t.Error("expected IsDefaultDeny()=true")
+	}
+
+	// Default allow mode
+	f2 := NewPacketFilter(false)
+	if f2.IsDefaultDeny() {
+		t.Error("expected IsDefaultDeny()=false")
+	}
+}
+
 // Benchmark the hot path
 func BenchmarkPacketFilter_ShouldDrop(b *testing.B) {
 	f := NewPacketFilter(true)
