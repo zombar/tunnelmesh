@@ -13,8 +13,8 @@ const {
 
 // Import utilities from TM modules
 const { escapeHtml } = TM.utils;
-const { formatBytes, formatRate, formatLatency, formatLastSeen } = TM.format;
-const { createPaginationController } = TM.pagination;
+const { formatBytes, formatRate, formatLatency, formatLastSeen, formatExpiry } = TM.format;
+const { createPaginationController, updatePaginationUI } = TM.pagination;
 const { createSparklineSVG } = TM.table;
 const { createModalController } = TM.modal;
 
@@ -63,8 +63,16 @@ const state = {
     peersVisibleCount: ROWS_PER_PAGE,
     dnsVisibleCount: ROWS_PER_PAGE,
     wgVisibleCount: ROWS_PER_PAGE,
+    usersVisibleCount: ROWS_PER_PAGE,
+    groupsVisibleCount: ROWS_PER_PAGE,
+    sharesVisibleCount: ROWS_PER_PAGE,
+    bindingsVisibleCount: ROWS_PER_PAGE,
     currentPeers: [], // Store current peers data for pagination
     currentDnsRecords: [], // Store current DNS records for pagination
+    currentUsers: [],
+    currentGroups: [],
+    currentShares: [],
+    currentBindings: [],
     // Alerts state
     alertsEnabled: false,
     peerAlerts: {}, // { peerName: { warning: count, critical: count, page: count } }
@@ -130,6 +138,10 @@ function initDOMCache() {
     // Logs resize handle
     dom.logsContainer = document.getElementById('logs-link');
     dom.logsResizeHandle = document.getElementById('logs-resize-handle');
+
+    // S3 resize handle
+    dom.s3Content = document.getElementById('s3-content');
+    dom.s3ResizeHandle = document.getElementById('s3-resize-handle');
 }
 
 // Toast notification system
@@ -401,12 +413,80 @@ const wgPagination = createPaginationController({
     onRender: () => updateWGClientsTable(),
 });
 
+const usersPagination = createPaginationController({
+    pageSize: ROWS_PER_PAGE,
+    getItems: () => state.currentUsers,
+    getVisibleCount: () => state.usersVisibleCount,
+    setVisibleCount: (n) => {
+        state.usersVisibleCount = n;
+    },
+    onRender: () => renderUsersTable(),
+});
+
+const groupsPagination = createPaginationController({
+    pageSize: ROWS_PER_PAGE,
+    getItems: () => state.currentGroups,
+    getVisibleCount: () => state.groupsVisibleCount,
+    setVisibleCount: (n) => {
+        state.groupsVisibleCount = n;
+    },
+    onRender: () => renderGroupsTable(),
+});
+
+const sharesPagination = createPaginationController({
+    pageSize: ROWS_PER_PAGE,
+    getItems: () => state.currentShares,
+    getVisibleCount: () => state.sharesVisibleCount,
+    setVisibleCount: (n) => {
+        state.sharesVisibleCount = n;
+    },
+    onRender: () => renderSharesTable(),
+});
+
+const bindingsPagination = createPaginationController({
+    pageSize: ROWS_PER_PAGE,
+    getItems: () => state.currentBindings,
+    getVisibleCount: () => state.bindingsVisibleCount,
+    setVisibleCount: (n) => {
+        state.bindingsVisibleCount = n;
+    },
+    onRender: () => renderBindingsTable(),
+});
+
+// Helper to update pagination UI for a section
+// Can be called with (prefix, controller) or (prefix, { total, shown, hasMore, canShowLess })
+function updateSectionPagination(prefix, controllerOrState) {
+    const uiState =
+        typeof controllerOrState.getUIState === 'function' ? controllerOrState.getUIState() : controllerOrState;
+    const paginationEl = document.getElementById(`${prefix}-pagination`);
+    if (!paginationEl) return;
+    if (uiState.isEmpty || uiState.total === 0) {
+        paginationEl.style.display = 'none';
+        return;
+    }
+    paginationEl.style.display = uiState.hasMore || uiState.canShowLess ? 'block' : 'none';
+    document.getElementById(`${prefix}-show-more`).style.display = uiState.hasMore ? 'inline' : 'none';
+    document.getElementById(`${prefix}-show-less`).style.display = uiState.canShowLess ? 'inline' : 'none';
+    document.getElementById(`${prefix}-shown-count`).textContent = uiState.shown;
+    document.getElementById(`${prefix}-total-count`).textContent = uiState.total;
+}
+window.updateSectionPagination = updateSectionPagination;
+
 // Expose pagination functions for HTML onclick handlers
 window.showMorePeers = () => peersPagination.showMore();
 window.showLessPeers = () => peersPagination.showLess();
 window.showMoreDns = () => dnsPagination.showMore();
 window.showLessDns = () => dnsPagination.showLess();
 window.showMoreWg = () => wgPagination.showMore();
+window.showLessWg = () => wgPagination.showLess();
+window.showMoreUsers = () => usersPagination.showMore();
+window.showLessUsers = () => usersPagination.showLess();
+window.showMoreGroups = () => groupsPagination.showMore();
+window.showLessGroups = () => groupsPagination.showLess();
+window.showMoreShares = () => sharesPagination.showMore();
+window.showLessShares = () => sharesPagination.showLess();
+window.showMoreBindings = () => bindingsPagination.showMore();
+window.showLessBindings = () => bindingsPagination.showLess();
 window.showLessWg = () => wgPagination.showLess();
 
 // Modal controllers (initialized with element IDs, resolved lazily)
@@ -2010,16 +2090,17 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Logs panel resize handle
+    // Panel resize handles
     if (dom.logsResizeHandle && dom.logsContainer) {
-        initLogsResize();
+        initPanelResize(dom.logsResizeHandle, dom.logsContainer);
+    }
+    if (dom.s3ResizeHandle && dom.s3Content) {
+        initPanelResize(dom.s3ResizeHandle, dom.s3Content);
     }
 });
 
-// Initialize logs panel resize functionality
-function initLogsResize() {
-    const handle = dom.logsResizeHandle;
-    const container = dom.logsContainer;
+// Initialize panel resize functionality (shared by logs and S3 panels)
+function initPanelResize(handle, container) {
     const MIN_HEIGHT = 100;
     const MAX_HEIGHT = 800;
 
@@ -2040,7 +2121,7 @@ function initLogsResize() {
         if (!isResizing) return;
         const delta = e.clientY - startY;
         const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + delta));
-        container.style.maxHeight = `${newHeight}px`;
+        container.style.height = `${newHeight}px`;
     });
 
     document.addEventListener('mouseup', () => {
@@ -2069,7 +2150,7 @@ function initLogsResize() {
             if (!isResizing) return;
             const delta = e.touches[0].clientY - startY;
             const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + delta));
-            container.style.maxHeight = `${newHeight}px`;
+            container.style.height = `${newHeight}px`;
         },
         { passive: true },
     );
@@ -2104,34 +2185,51 @@ async function fetchUsers() {
         const resp = await fetch('api/users');
         if (resp.ok) {
             const users = await resp.json();
-            updateUsersTable(users);
+            state.currentUsers = users || [];
+            renderUsersTable();
         }
     } catch (err) {
         console.error('Failed to fetch users:', err);
     }
 }
 
-function updateUsersTable(users) {
+function renderUsersTable() {
     const tbody = document.getElementById('users-body');
     const noUsers = document.getElementById('no-users');
+    const users = state.currentUsers;
 
     if (!users || users.length === 0) {
         tbody.innerHTML = '';
         noUsers.style.display = 'block';
+        document.getElementById('users-pagination').style.display = 'none';
         return;
     }
 
     noUsers.style.display = 'none';
-    tbody.innerHTML = users.map(u => `
+    const visibleUsers = usersPagination.getVisibleItems();
+    tbody.innerHTML = visibleUsers
+        .map(
+            (u) => `
         <tr>
             <td>${escapeHtml(u.name || '-')}</td>
             <td><code>${escapeHtml(u.id)}</code></td>
             <td><span class="status-badge ${u.is_service ? 'service' : 'user'}">${u.is_service ? 'Service' : 'User'}</span></td>
-            <td>${u.groups ? u.groups.map(g => `<span class="group-badge">${escapeHtml(g)}</span>`).join(' ') : '-'}</td>
+            <td>${u.groups ? u.groups.map((g) => `<span class="group-badge">${escapeHtml(g)}</span>`).join(' ') : '-'}</td>
             <td>${u.last_seen ? formatLastSeen(u.last_seen) : '-'}</td>
+            <td>${u.is_service ? 'Never' : u.expires_at ? formatExpiry(u.expires_at) : '-'}</td>
             <td><span class="status-badge ${u.expired ? 'expired' : 'active'}">${u.expired ? 'Expired' : 'Active'}</span></td>
         </tr>
-    `).join('');
+    `,
+        )
+        .join('');
+
+    updateSectionPagination('users', usersPagination);
+}
+
+// Alias for backward compat
+function updateUsersTable(users) {
+    state.currentUsers = users || [];
+    renderUsersTable();
 }
 
 async function fetchGroups() {
@@ -2139,35 +2237,49 @@ async function fetchGroups() {
         const resp = await fetch('api/groups');
         if (resp.ok) {
             const groups = await resp.json();
-            updateGroupsTable(groups);
+            state.currentGroups = groups || [];
+            renderGroupsTable();
         }
     } catch (err) {
         console.error('Failed to fetch groups:', err);
     }
 }
 
-function updateGroupsTable(groups) {
+function renderGroupsTable() {
     const tbody = document.getElementById('groups-body');
     const noGroups = document.getElementById('no-groups');
+    const groups = state.currentGroups;
 
     if (!groups || groups.length === 0) {
         tbody.innerHTML = '';
         noGroups.style.display = 'block';
+        document.getElementById('groups-pagination').style.display = 'none';
         return;
     }
 
     noGroups.style.display = 'none';
-    tbody.innerHTML = groups.map(g => `
+    const visibleGroups = groupsPagination.getVisibleItems();
+    tbody.innerHTML = visibleGroups
+        .map(
+            (g) => `
         <tr>
             <td><strong>${escapeHtml(g.name)}</strong></td>
             <td>${escapeHtml(g.description || '-')}</td>
             <td>${g.members ? g.members.length : 0}</td>
-            <td>${g.builtin ? 'Yes' : 'No'}</td>
             <td>
-                ${!g.builtin ? `<button class="btn-small btn-danger" onclick="deleteGroup('${escapeHtml(g.name)}')">Delete</button>` : '-'}
+                ${g.builtin ? '<span class="text-muted" title="Built-in group">Protected</span>' : `<button class="btn-small btn-danger" onclick="deleteGroup('${escapeHtml(g.name)}')">Delete</button>`}
             </td>
         </tr>
-    `).join('');
+    `,
+        )
+        .join('');
+
+    updateSectionPagination('groups', groupsPagination);
+}
+
+function _updateGroupsTable(groups) {
+    state.currentGroups = groups || [];
+    renderGroupsTable();
 }
 
 function openGroupModal() {
@@ -2196,7 +2308,7 @@ async function createGroup() {
         const resp = await fetch('api/groups', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, description })
+            body: JSON.stringify({ name, description }),
         });
 
         if (resp.ok) {
@@ -2208,7 +2320,7 @@ async function createGroup() {
             showToast(data.error || 'Failed to create group', 'error');
         }
     } catch (err) {
-        showToast('Failed to create group: ' + err.message, 'error');
+        showToast(`Failed to create group: ${err.message}`, 'error');
     }
 }
 window.createGroup = createGroup;
@@ -2226,7 +2338,7 @@ async function deleteGroup(name) {
             showToast(data.error || 'Failed to delete group', 'error');
         }
     } catch (err) {
-        showToast('Failed to delete group: ' + err.message, 'error');
+        showToast(`Failed to delete group: ${err.message}`, 'error');
     }
 }
 window.deleteGroup = deleteGroup;
@@ -2236,41 +2348,59 @@ async function fetchShares() {
         const resp = await fetch('api/shares');
         if (resp.ok) {
             const shares = await resp.json();
-            updateSharesTable(shares);
+            state.currentShares = shares || [];
+            renderSharesTable();
         }
     } catch (err) {
         console.error('Failed to fetch shares:', err);
     }
 }
 
-function updateSharesTable(shares) {
+function renderSharesTable() {
     const tbody = document.getElementById('shares-body');
     const noShares = document.getElementById('no-shares');
+    const shares = state.currentShares;
 
     if (!shares || shares.length === 0) {
         tbody.innerHTML = '';
         noShares.style.display = 'block';
+        document.getElementById('shares-pagination').style.display = 'none';
         return;
     }
 
     noShares.style.display = 'none';
-    tbody.innerHTML = shares.map(s => `
+    const visibleShares = sharesPagination.getVisibleItems();
+    tbody.innerHTML = visibleShares
+        .map(
+            (s) => `
         <tr>
             <td><strong>${escapeHtml(s.name)}</strong></td>
             <td>${escapeHtml(s.description || '-')}</td>
             <td>${escapeHtml(s.owner)}</td>
+            <td>${s.quota_bytes ? formatBytes(s.quota_bytes) : 'Unlimited'}</td>
             <td>${s.created_at ? new Date(s.created_at).toLocaleDateString() : '-'}</td>
+            <td>${s.expires_at ? formatExpiry(s.expires_at) : 'Never'}</td>
             <td>
                 <button class="btn-small btn-danger" onclick="deleteShare('${escapeHtml(s.name)}')">Delete</button>
             </td>
         </tr>
-    `).join('');
+    `,
+        )
+        .join('');
+
+    updateSectionPagination('shares', sharesPagination);
+}
+
+function _updateSharesTable(shares) {
+    state.currentShares = shares || [];
+    renderSharesTable();
 }
 
 function openShareModal() {
     document.getElementById('share-modal').style.display = 'flex';
     document.getElementById('share-name').value = '';
     document.getElementById('share-description').value = '';
+    document.getElementById('share-quota').value = '';
     document.getElementById('share-name').focus();
 }
 window.openShareModal = openShareModal;
@@ -2283,17 +2413,23 @@ window.closeShareModal = closeShareModal;
 async function createShare() {
     const name = document.getElementById('share-name').value.trim();
     const description = document.getElementById('share-description').value.trim();
+    const quotaValue = document.getElementById('share-quota').value.trim();
+    // Default to 100 MB if empty, but allow explicit 0 for unlimited
+    const quotaMB = quotaValue === '' ? 100 : parseInt(quotaValue, 10) || 0;
 
     if (!name) {
         showToast('Share name is required', 'error');
         return;
     }
 
+    // Convert MB to bytes (0 means unlimited)
+    const quota_bytes = quotaMB > 0 ? quotaMB * 1024 * 1024 : 0;
+
     try {
         const resp = await fetch('api/shares', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, description })
+            body: JSON.stringify({ name, description, quota_bytes }),
         });
 
         if (resp.ok) {
@@ -2301,12 +2437,15 @@ async function createShare() {
             closeShareModal();
             fetchShares();
             fetchBindings(); // Refresh bindings since share creation adds admin binding
+            if (typeof TM !== 'undefined' && TM.s3explorer) {
+                TM.s3explorer.refresh(); // Refresh S3 explorer to show new bucket
+            }
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to create share', 'error');
         }
     } catch (err) {
-        showToast('Failed to create share: ' + err.message, 'error');
+        showToast(`Failed to create share: ${err.message}`, 'error');
     }
 }
 window.createShare = createShare;
@@ -2320,12 +2459,15 @@ async function deleteShare(name) {
             showToast(`File share "${name}" deleted`, 'success');
             fetchShares();
             fetchBindings(); // Refresh bindings since share deletion removes bindings
+            if (typeof TM !== 'undefined' && TM.s3explorer) {
+                TM.s3explorer.refresh(); // Refresh S3 explorer to remove bucket
+            }
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to delete share', 'error');
         }
     } catch (err) {
-        showToast('Failed to delete share: ' + err.message, 'error');
+        showToast(`Failed to delete share: ${err.message}`, 'error');
     }
 }
 window.deleteShare = deleteShare;
@@ -2336,7 +2478,7 @@ window.deleteShare = deleteShare;
 
 function initTabs() {
     const tabs = document.querySelectorAll('#main-tabs .tab');
-    tabs.forEach(tab => {
+    tabs.forEach((tab) => {
         tab.addEventListener('click', () => {
             const tabName = tab.dataset.tab;
             switchTab(tabName);
@@ -2346,21 +2488,29 @@ function initTabs() {
 
 function switchTab(tabName) {
     // Update tab buttons
-    document.querySelectorAll('#main-tabs .tab').forEach(t => {
+    document.querySelectorAll('#main-tabs .tab').forEach((t) => {
         t.classList.toggle('active', t.dataset.tab === tabName);
     });
 
     // Update tab content
-    document.querySelectorAll('.tab-content').forEach(content => {
-        content.classList.toggle('active', content.id === tabName + '-tab');
+    document.querySelectorAll('.tab-content').forEach((content) => {
+        content.classList.toggle('active', content.id === `${tabName}-tab`);
     });
 
-    // Load data for the active tab
-    if (tabName === 'data') {
+    // Handle tab-specific initialization
+    if (tabName === 'mesh') {
+        // Defer visualizer resize until after DOM updates to get correct dimensions
+        requestAnimationFrame(() => {
+            if (state.visualizer) {
+                state.visualizer.resize();
+            }
+        });
+    } else if (tabName === 'data') {
         fetchUsers();
         fetchGroups();
         fetchShares();
         fetchBindings();
+        initS3Explorer();
     }
 }
 window.switchTab = switchTab;
@@ -2374,36 +2524,60 @@ async function fetchBindings() {
         const resp = await fetch('api/bindings');
         if (!resp.ok) return;
         const bindings = await resp.json();
-        renderBindings(bindings);
+        // Sort by user/group name
+        (bindings || []).sort((a, b) => {
+            const aName = (a.user_id || a.group_name || '').toLowerCase();
+            const bName = (b.user_id || b.group_name || '').toLowerCase();
+            return aName.localeCompare(bName);
+        });
+        state.currentBindings = bindings || [];
+        renderBindingsTable();
     } catch (err) {
         console.error('Failed to fetch bindings:', err);
     }
 }
 
-function renderBindings(bindings) {
+function renderBindingsTable() {
     const tbody = document.getElementById('bindings-body');
     const emptyState = document.getElementById('no-bindings');
+    const bindings = state.currentBindings;
 
     if (!bindings || bindings.length === 0) {
         tbody.innerHTML = '';
         emptyState.style.display = 'block';
+        document.getElementById('bindings-pagination').style.display = 'none';
         return;
     }
 
     emptyState.style.display = 'none';
-    tbody.innerHTML = bindings.map(b => `
+    const visibleBindings = bindingsPagination.getVisibleItems();
+    tbody.innerHTML = visibleBindings
+        .map(
+            (b) => `
         <tr>
             <td>${escapeHtml(b.user_id || b.group_name || '-')}</td>
             <td>${escapeHtml(b.role_name)}</td>
             <td>${escapeHtml(b.bucket_scope || 'All')}</td>
             <td>${escapeHtml(b.object_prefix || '-')}</td>
             <td>
-                ${b.protected
-                    ? '<span class="text-muted" title="File share owner binding">Protected</span>'
-                    : `<button class="btn-small btn-danger" onclick="deleteBinding('${escapeHtml(b.name)}')">Delete</button>`}
+                ${
+                    b.protected
+                        ? '<span class="text-muted" title="File share owner binding">Protected</span>'
+                        : `<button class="btn-small btn-danger" onclick="deleteBinding('${escapeHtml(b.name)}')">Delete</button>`
+                }
             </td>
         </tr>
-    `).join('');
+    `,
+        )
+        .join('');
+
+    updateSectionPagination('bindings', bindingsPagination);
+}
+
+// Alias for backward compat
+function _renderBindings(bindings) {
+    state.currentBindings = bindings || [];
+    renderBindingsTable();
 }
 
 function openBindingModal() {
@@ -2424,7 +2598,7 @@ async function populateBindingUsers() {
         const resp = await fetch('api/users');
         if (resp.ok) {
             const users = await resp.json();
-            users.forEach(u => {
+            users.forEach((u) => {
                 const opt = document.createElement('option');
                 opt.value = u.id;
                 opt.textContent = u.name || u.id;
@@ -2460,8 +2634,8 @@ async function createBinding() {
                 user_id: userId,
                 role_name: roleName,
                 bucket_scope: bucketScope,
-                object_prefix: objectPrefix
-            })
+                object_prefix: objectPrefix,
+            }),
         });
 
         if (resp.ok) {
@@ -2473,7 +2647,7 @@ async function createBinding() {
             showToast(data.error || 'Failed to create binding', 'error');
         }
     } catch (err) {
-        showToast('Failed to create binding: ' + err.message, 'error');
+        showToast(`Failed to create binding: ${err.message}`, 'error');
     }
 }
 window.createBinding = createBinding;
@@ -2491,10 +2665,116 @@ async function deleteBinding(name) {
             showToast(data.error || 'Failed to delete binding', 'error');
         }
     } catch (err) {
-        showToast('Failed to delete binding: ' + err.message, 'error');
+        showToast(`Failed to delete binding: ${err.message}`, 'error');
     }
 }
 window.deleteBinding = deleteBinding;
 
 // Cleanup on page unload to prevent memory leaks
 window.addEventListener('beforeunload', cleanup);
+
+// =====================
+// S3 Explorer Integration
+// =====================
+
+let s3ExplorerInitialized = false;
+
+async function initS3Explorer() {
+    if (s3ExplorerInitialized) return;
+
+    // Check if S3 is available
+    try {
+        const resp = await fetch('api/s3/buckets');
+        if (resp.ok) {
+            document.getElementById('s3-section').style.display = 'block';
+            if (typeof TM !== 'undefined' && TM.s3explorer) {
+                await TM.s3explorer.init();
+                s3ExplorerInitialized = true;
+            }
+        }
+    } catch (err) {
+        // S3 not available, section stays hidden
+        console.log('S3 explorer not available:', err.message);
+    }
+}
+
+// S3 Explorer global handlers
+function s3NewFile() {
+    if (TM.s3explorer) TM.s3explorer.openNewModal();
+}
+window.s3NewFile = s3NewFile;
+
+function s3Upload() {
+    if (TM.s3explorer) TM.s3explorer.openUploadDialog();
+}
+window.s3Upload = s3Upload;
+
+function s3Save() {
+    if (TM.s3explorer) TM.s3explorer.saveFile();
+}
+window.s3Save = s3Save;
+
+function s3Download() {
+    if (TM.s3explorer) TM.s3explorer.downloadFile();
+}
+window.s3Download = s3Download;
+
+function s3Delete() {
+    if (TM.s3explorer) TM.s3explorer.deleteFile();
+}
+window.s3Delete = s3Delete;
+
+function s3CloseFile() {
+    if (TM.s3explorer) TM.s3explorer.closeFile();
+}
+window.s3CloseFile = s3CloseFile;
+
+function s3CreateFile() {
+    if (TM.s3explorer) TM.s3explorer.createFile();
+}
+window.s3CreateFile = s3CreateFile;
+
+function s3CreateFolder() {
+    if (TM.s3explorer) TM.s3explorer.createFolder();
+}
+window.s3CreateFolder = s3CreateFolder;
+
+function closeS3Modal(modalId) {
+    if (TM.s3explorer) TM.s3explorer.closeModal(modalId);
+}
+window.closeS3Modal = closeS3Modal;
+
+function s3HandleFileSelect(event) {
+    if (TM.s3explorer) TM.s3explorer.handleFileSelect(event);
+}
+window.s3HandleFileSelect = s3HandleFileSelect;
+
+function s3ShowMore() {
+    if (TM.s3explorer) TM.s3explorer.showMore();
+}
+window.s3ShowMore = s3ShowMore;
+
+function s3ShowLess() {
+    if (TM.s3explorer) TM.s3explorer.showLess();
+}
+window.s3ShowLess = s3ShowLess;
+
+function s3Rename() {
+    if (TM.s3explorer) TM.s3explorer.renameSelected();
+}
+window.s3Rename = s3Rename;
+
+function s3DeleteSelected() {
+    if (TM.s3explorer) TM.s3explorer.deleteSelected();
+}
+window.s3DeleteSelected = s3DeleteSelected;
+
+function s3ToggleAutosave(enabled) {
+    if (TM.s3explorer) TM.s3explorer.setAutosave(enabled);
+}
+window.s3ToggleAutosave = s3ToggleAutosave;
+
+function s3ToggleFullscreen() {
+    if (TM.s3explorer) TM.s3explorer.toggleFullscreen();
+}
+window.s3ToggleFullscreen = s3ToggleFullscreen;

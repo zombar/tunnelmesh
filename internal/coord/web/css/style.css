@@ -46,7 +46,7 @@ body {
 }
 
 header {
-    background: var(--color-bg-secondary);
+    background: #1e252e;
     padding: 1rem 2rem;
     border-bottom: 1px solid var(--color-border-primary);
     display: flex;
@@ -419,7 +419,7 @@ main {
 }
 
 #peers-section, #dns-section, #wireguard-section, #filter-section,
-#users-section, #groups-section, #shares-section, #bindings-section {
+#s3-section, #users-section, #groups-section, #shares-section, #bindings-section {
     background: var(--color-bg-primary);
     padding: 0;
     border: 1px solid var(--color-border-primary);
@@ -427,7 +427,7 @@ main {
 }
 
 #peers-section h2, #dns-section h2, #wireguard-section h2, #filter-section h2,
-#users-section h2, #groups-section h2, #shares-section h2, #bindings-section h2 {
+#s3-section h2, #users-section h2, #groups-section h2, #shares-section h2, #bindings-section h2 {
     font-size: 1rem;
     font-weight: 600;
     padding: 1rem;
@@ -455,6 +455,7 @@ main {
 /* Override h2 styles when inside section-header (has button beside it) */
 #wireguard-section .section-header h2,
 #filter-section .section-header h2,
+#s3-section .section-header h2,
 #users-section .section-header h2,
 #groups-section .section-header h2,
 #shares-section .section-header h2,
@@ -730,6 +731,11 @@ tr:hover td {
     background: var(--color-bg-secondary);
 }
 
+/* Ensure pagination after tables is centered */
+table + .show-more-container {
+    text-align: center;
+}
+
 /* DNS group highlight - invert: brighten OTHER rows, keep grouped rows normal */
 #dns-body.dns-group-active tr:not(.dns-group-highlight) td {
     background: var(--color-bg-secondary);
@@ -922,6 +928,8 @@ tr:nth-child(10) .obscured-ip { --stipple-seed: 5.6; }
     font-size: 0.75rem;
     cursor: pointer;
     padding: 0;
+    display: inline;
+    vertical-align: baseline;
 }
 
 .show-more-link:hover {
@@ -1142,7 +1150,7 @@ footer {
 }
 
 .section-toggle.collapsed::after {
-    transform: rotate(-90deg);
+    transform: rotate(90deg);
 }
 
 .section-toggle:hover::after {
@@ -1593,4 +1601,501 @@ a.logs-container {
 
 #data-tab .section-header {
     border-bottom: 1px solid var(--color-border-primary);
+}
+
+/* =========================================================================
+   S3 Explorer Styles (GitHub-style single-pane file browser)
+   ========================================================================= */
+
+/* Navigation bar with breadcrumb */
+.s3-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 1rem;
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border-primary);
+    min-height: 40px;
+    gap: 0.75rem;
+}
+
+.s3-breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.8125rem;
+    flex: 1;
+    overflow: hidden;
+}
+
+.s3-breadcrumb-item {
+    color: var(--color-accent-blue);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.s3-breadcrumb-item:hover {
+    text-decoration: underline;
+}
+
+.s3-breadcrumb-item.current {
+    color: var(--color-text-primary);
+    font-weight: 600;
+    cursor: default;
+}
+
+.s3-breadcrumb-item.current:hover {
+    text-decoration: none;
+}
+
+.s3-breadcrumb-sep {
+    color: var(--color-text-secondary);
+}
+
+/* Toolbar with action buttons */
+.s3-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+.s3-browse-actions,
+.s3-file-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+/* S3 Button styling - Material-style grey buttons */
+.s3-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.75rem;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: 0;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    white-space: nowrap;
+}
+
+.s3-btn svg {
+    flex-shrink: 0;
+}
+
+.s3-btn:hover {
+    background: var(--color-border-primary);
+    border-color: var(--color-text-secondary);
+    color: var(--color-text-primary);
+}
+
+.s3-btn:active {
+    background: var(--color-border-secondary);
+}
+
+/* Save button highlight when dirty */
+.s3-btn-save.dirty {
+    background: var(--color-btn-primary);
+    border-color: var(--color-btn-primary);
+    color: #fff;
+}
+
+.s3-btn-save.dirty:hover {
+    background: var(--color-btn-primary-hover);
+    border-color: var(--color-btn-primary-hover);
+}
+
+/* Danger button */
+.s3-btn-danger:hover {
+    background: var(--color-btn-danger);
+    border-color: var(--color-btn-danger);
+    color: #fff;
+}
+
+.s3-btn-icon {
+    padding: 0.375rem;
+}
+
+.s3-btn-icon span {
+    display: none;
+}
+
+.s3-toolbar-spacer {
+    flex: 1;
+}
+
+.s3-autosave-label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.s3-autosave-label input {
+    cursor: pointer;
+}
+
+/* Fullscreen mode */
+.s3-fullscreen {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    z-index: 1000 !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+}
+
+.s3-fullscreen .s3-content {
+    height: calc(100vh - 90px) !important;
+}
+
+.s3-fullscreen .section-toggle {
+    pointer-events: none;
+    cursor: default;
+}
+
+.s3-fullscreen .section-toggle::after {
+    display: none;
+}
+
+/* Resizable content container */
+.s3-content {
+    height: 320px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* Discreet scrollbar for s3 content */
+.s3-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.s3-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.s3-content::-webkit-scrollbar-thumb {
+    background: var(--color-border-primary);
+    border-radius: 3px;
+}
+
+.s3-content::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-secondary);
+}
+
+/* File browser table */
+.s3-browser {
+    position: relative;
+}
+
+#s3-files {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+#s3-files th {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    font-weight: 600;
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border-primary);
+}
+
+#s3-files td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--color-border-primary);
+    font-size: 0.8125rem;
+}
+
+#s3-files tbody tr {
+    cursor: pointer;
+    transition: background 0.1s ease;
+}
+
+#s3-files tbody tr:hover {
+    background: var(--color-bg-tertiary);
+}
+
+.s3-col-checkbox {
+    width: 32px;
+    padding: 0 0.5rem !important;
+}
+
+.s3-col-name {
+    width: calc(35% - 32px);
+}
+
+.s3-col-size {
+    width: 10%;
+}
+
+.s3-col-quota {
+    width: 10%;
+}
+
+.s3-col-modified {
+    width: 18%;
+}
+
+.s3-col-expires {
+    width: 18%;
+}
+
+.s3-checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--color-accent-blue);
+}
+
+.s3-checkbox:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+}
+
+#s3-files tbody tr.s3-selected {
+    background: var(--color-bg-tertiary);
+}
+
+#s3-files tbody tr.s3-tombstoned {
+    opacity: 0.5;
+}
+
+#s3-files tbody tr.s3-tombstoned:hover {
+    opacity: 0.7;
+}
+
+.s3-badge {
+    font-size: 0.65rem;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    margin-left: 0.5rem;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.s3-badge-deleted {
+    background: var(--color-danger-bg, #f8d7da);
+    color: var(--color-danger, #dc3545);
+}
+
+.s3-selection-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.s3-selection-count {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    margin-left: 0.5rem;
+}
+
+/* File/folder row styling */
+.s3-item-name {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.s3-icon {
+    flex-shrink: 0;
+    vertical-align: middle;
+}
+
+.s3-icon-folder {
+    color: var(--color-accent-blue);
+}
+
+.s3-icon-file {
+    color: var(--color-text-secondary);
+}
+
+.s3-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.s3-name-folder {
+    color: var(--color-accent-blue);
+    font-weight: 500;
+}
+
+/* File viewer/editor */
+.s3-viewer {
+    border: 1px solid var(--color-border-primary);
+    border-top: none;
+    background: var(--color-bg-primary);
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.s3-editor-wrap {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.s3-readonly-badge {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-accent-orange);
+    color: var(--color-accent-orange);
+    padding: 0.25rem 0.75rem;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    pointer-events: none;
+    z-index: 10;
+    text-shadow: 0 0 8px rgba(210, 153, 34, 0.4);
+    box-shadow: 0 4px 12px rgba(210, 153, 34, 0.15);
+    flex-shrink: 0;
+}
+
+.s3-line-numbers {
+    width: 3.5rem;
+    padding: 0.75rem 0;
+    background: var(--color-bg-secondary);
+    border-right: 1px solid var(--color-border-primary);
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: var(--color-text-secondary);
+    text-align: right;
+    overflow: hidden;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.s3-line-numbers div {
+    padding-right: 0.75rem;
+}
+
+.s3-editor {
+    flex: 1;
+    min-height: 0;
+    resize: none;
+    border: none;
+    outline: none;
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    padding: 0.75rem;
+    overflow: auto;
+    tab-size: 4;
+    white-space: pre;
+}
+
+.s3-editor:focus {
+    outline: none;
+}
+
+.s3-editor[readonly] {
+    background: var(--color-bg-secondary);
+    cursor: default;
+}
+
+/* Image/binary preview */
+.s3-preview {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border-primary);
+    border-top: none;
+    height: 100%;
+    box-sizing: border-box;
+    overflow: auto;
+}
+
+.s3-preview img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+.s3-binary-info {
+    text-align: center;
+    color: var(--color-text-secondary);
+}
+
+.s3-binary-icon {
+    color: var(--color-text-secondary);
+    margin-bottom: 0.75rem;
+}
+
+.s3-binary-name {
+    font-size: 1rem;
+    color: var(--color-text-primary);
+    margin-bottom: 0.25rem;
+}
+
+.s3-binary-hint {
+    font-size: 0.8125rem;
+}
+
+/* Drop zone overlay */
+.s3-drop-zone {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(88, 166, 255, 0.15);
+    border: 2px dashed var(--color-accent-blue);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    pointer-events: none;
+    font-size: 1rem;
+    color: var(--color-accent-blue);
+    font-weight: 500;
+}
+
+.s3-drop-zone::after {
+    content: 'Drop files to upload';
+}
+
+.s3-drop-zone.active {
+    display: flex;
+}
+
+/* Dirty indicator on save button */
+#s3-save-btn.s3-dirty {
+    background: var(--color-accent-orange);
+    border-color: var(--color-accent-orange);
+}
+
+/* Modal small variant */
+.modal-content.modal-small {
+    max-width: 350px;
+}
+
+.form-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    margin-top: 1rem;
 }

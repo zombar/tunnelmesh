@@ -193,7 +193,7 @@ func TestUser_IsExpired_LastSeenTooOld(t *testing.T) {
 	user := User{
 		ID:       "abc123def456",
 		Name:     "Alice",
-		LastSeen: time.Now().Add(-31 * 24 * time.Hour), // Seen 31 days ago
+		LastSeen: time.Now().Add(-271 * 24 * time.Hour), // Seen 271 days ago (past 9 month default)
 	}
 
 	assert.True(t, user.IsExpired())
@@ -223,6 +223,13 @@ func TestUser_IsExpired_ServiceUserCanBeExplicitlyExpired(t *testing.T) {
 }
 
 func TestUserExpirationDays(t *testing.T) {
-	// Verify the constant value
-	assert.Equal(t, 30, UserExpirationDays)
+	// Verify the default value (9 months)
+	assert.Equal(t, 270, GetUserExpirationDays())
+
+	// Test setting custom value
+	SetUserExpirationDays(30)
+	assert.Equal(t, 30, GetUserExpirationDays())
+
+	// Restore default for other tests
+	SetUserExpirationDays(270)
 }

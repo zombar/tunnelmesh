@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 )
 
@@ -38,7 +39,9 @@ func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *aut
 
 // Create creates a new file share.
 // It creates the underlying bucket, sets up default permissions, and persists the share metadata.
-func (m *FileShareManager) Create(name, description, ownerID string) (*FileShare, error) {
+// If a bucket already exists (from a previously deleted share), it restores the tombstoned objects.
+// quotaBytes of 0 means unlimited (within global quota).
+func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes int64) (*FileShare, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -51,14 +54,17 @@ func (m *FileShareManager) Create(name, description, ownerID string) (*FileShare
 
 	bucketName := FileShareBucketPrefix + name
 
-	// Check if bucket already exists
+	// Check if bucket already exists (from a previously deleted share)
+	bucketExists := false
 	if _, err := m.store.HeadBucket(bucketName); err == nil {
-		return nil, fmt.Errorf("bucket %q already exists", bucketName)
-	}
-
-	// Create the bucket
-	if err := m.store.CreateBucket(bucketName, ownerID); err != nil {
-		return nil, fmt.Errorf("create bucket: %w", err)
+		bucketExists = true
+		// Restore the bucket (O(1) - clears bucket tombstone flag)
+		_ = m.store.UntombstoneBucket(bucketName)
+	} else {
+		// Create new bucket
+		if err := m.store.CreateBucket(bucketName, ownerID); err != nil {
+			return nil, fmt.Errorf("create bucket: %w", err)
+		}
 	}
 
 	// Create group binding: everyone -> bucket-read
@@ -75,21 +81,41 @@ func (m *FileShareManager) Create(name, description, ownerID string) (*FileShare
 	m.authorizer.Bindings.Add(ownerBinding)
 
 	// Create share record
+	now := time.Now().UTC()
 	share := &FileShare{
 		Name:        name,
 		Description: description,
 		Owner:       ownerID,
-		CreatedAt:   time.Now().UTC(),
+		CreatedAt:   now,
+		QuotaBytes:  quotaBytes,
+	}
+
+	// Set expiry if configured
+	if expiryDays := m.store.DefaultShareExpiryDays(); expiryDays > 0 {
+		share.ExpiresAt = now.AddDate(0, 0, expiryDays)
 	}
 	m.shares = append(m.shares, share)
 
-	// Persist
+	// Persist share metadata.
+	// Note: If persistence fails, the share is still functional in memory. The bucket
+	// and bindings have been created, but the share won't survive a restart.
+	// This is acceptable because:
+	// 1. The bucket data persists on disk via the Store
+	// 2. On restart, if the bucket exists but share metadata doesn't, an admin can
+	//    recreate the share with the same name - the existing bucket will be restored
+	// 3. Bindings are persisted separately by the caller (handleFileShareCreate)
+	// A full rollback would require deleting the bucket and bindings, which could
+	// leave the system in an inconsistent state if those operations also fail.
 	if m.systemStore != nil {
 		if err := m.systemStore.SaveFileShares(m.shares); err != nil {
-			// Note: Bindings and bucket are already created, just log the error
-			// In a real system, we might want to handle this more gracefully
+			log.Warn().Err(err).Str("share", name).Msg("failed to persist file share metadata")
 			return share, fmt.Errorf("persist share (share created but not persisted): %w", err)
 		}
+	}
+
+	// Log if we restored a previous share
+	if bucketExists {
+		log.Info().Str("share", name).Msg("restored file share with previous content")
 	}
 
 	return share, nil
@@ -115,18 +141,9 @@ func (m *FileShareManager) Delete(name string) error {
 
 	bucketName := FileShareBucketPrefix + name
 
-	// Delete the bucket (this will fail if not empty - that's intentional)
-	// In a real implementation, we might want to delete all objects first
-	if err := m.store.DeleteBucket(bucketName); err != nil && err != ErrBucketNotFound {
-		// Try to delete all objects first, then retry
-		objects, _, _, _ := m.store.ListObjects(bucketName, "", "", 1000)
-		for _, obj := range objects {
-			_ = m.store.DeleteObject(bucketName, obj.Key)
-		}
-		if err := m.store.DeleteBucket(bucketName); err != nil && err != ErrBucketNotFound {
-			return fmt.Errorf("delete bucket: %w", err)
-		}
-	}
+	// Tombstone the bucket (soft delete - allows restore on recreate)
+	// This is O(1) - all objects in a tombstoned bucket are treated as tombstoned
+	_ = m.store.TombstoneBucket(bucketName)
 
 	// Remove group bindings for this bucket
 	for _, b := range m.authorizer.GroupBindings.List() {
@@ -202,4 +219,66 @@ func (m *FileShareManager) IsProtectedBinding(binding *auth.RoleBinding) bool {
 	}
 
 	return share.Owner == binding.UserID
+}
+
+// IsProtectedGroupBinding checks if a group binding is a file share's "everyone" binding.
+func (m *FileShareManager) IsProtectedGroupBinding(binding *auth.GroupBinding) bool {
+	// Only bindings on file share buckets can be protected
+	if !strings.HasPrefix(binding.BucketScope, FileShareBucketPrefix) {
+		return false
+	}
+
+	// Check if this file share exists
+	shareName := strings.TrimPrefix(binding.BucketScope, FileShareBucketPrefix)
+	share := m.Get(shareName)
+	if share == nil {
+		return false
+	}
+
+	// The "everyone" group binding is protected
+	return binding.GroupName == auth.GroupEveryone
+}
+
+// TombstoneExpiredShareContents tombstones all objects in expired file shares.
+// Returns the number of objects tombstoned.
+func (m *FileShareManager) TombstoneExpiredShareContents() int {
+	m.mu.RLock()
+	expiredShares := make([]*FileShare, 0)
+	for _, s := range m.shares {
+		if s.IsExpired() {
+			expiredShares = append(expiredShares, s)
+		}
+	}
+	m.mu.RUnlock()
+
+	tombstonedCount := 0
+	for _, share := range expiredShares {
+		bucketName := FileShareBucketPrefix + share.Name
+
+		// Paginate through all objects in the bucket
+		marker := ""
+		for {
+			objects, isTruncated, nextMarker, err := m.store.ListObjects(bucketName, "", marker, 1000)
+			if err != nil {
+				break
+			}
+
+			for _, obj := range objects {
+				// Skip already tombstoned objects
+				if obj.IsTombstoned() {
+					continue
+				}
+				if err := m.store.TombstoneObject(bucketName, obj.Key); err == nil {
+					tombstonedCount++
+				}
+			}
+
+			if !isTruncated {
+				break
+			}
+			marker = nextMarker
+		}
+	}
+
+	return tombstonedCount
 }

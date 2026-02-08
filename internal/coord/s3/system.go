@@ -145,10 +145,20 @@ func (ss *SystemStore) LoadGroupBindings() ([]*auth.GroupBinding, error) {
 
 // FileShare represents a file sharing configuration backed by an S3 bucket.
 type FileShare struct {
-	Name        string    `json:"name"`        // Share name (bucket will be "fs+{name}")
-	Description string    `json:"description"` // Human-readable description
-	Owner       string    `json:"owner"`       // UserID of creator
-	CreatedAt   time.Time `json:"created_at"`
+	Name        string    `json:"name"`                  // Share name (bucket will be "fs+{name}")
+	Description string    `json:"description"`           // Human-readable description
+	Owner       string    `json:"owner"`                 // UserID of creator
+	CreatedAt   time.Time `json:"created_at"`            //
+	ExpiresAt   time.Time `json:"expires_at,omitempty"`  // When the share expires (0 = never)
+	QuotaBytes  int64     `json:"quota_bytes,omitempty"` // Per-share quota in bytes (0 = unlimited within global quota)
+}
+
+// IsExpired returns true if the share has expired.
+func (s *FileShare) IsExpired() bool {
+	if s.ExpiresAt.IsZero() {
+		return false
+	}
+	return time.Now().After(s.ExpiresAt)
 }
 
 // FileShareBucketPrefix is the prefix for file share bucket names.
@@ -276,9 +286,10 @@ func (ss *SystemStore) Exists(key string) bool {
 	return err == nil
 }
 
-// Delete removes an object from the system bucket.
+// Delete permanently removes an object from the system bucket.
+// Unlike user data, system configuration is not tombstoned.
 func (ss *SystemStore) Delete(key string) error {
-	return ss.store.DeleteObject(SystemBucket, key)
+	return ss.store.PurgeObject(SystemBucket, key)
 }
 
 // Raw returns the underlying store for advanced operations.

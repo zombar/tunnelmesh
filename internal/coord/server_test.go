@@ -974,6 +974,7 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 			Enabled: true,
 			DataDir: tempDir + "/s3",
 			Port:    9000,
+			MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
 		},
 	}
 
@@ -1045,6 +1046,7 @@ func newTestServerWithS3(t *testing.T) *Server {
 			Enabled: true,
 			DataDir: tempDir + "/s3",
 			Port:    9000,
+			MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
 		},
 	}
 	srv, err := NewServer(cfg)

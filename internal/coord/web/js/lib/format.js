@@ -74,7 +74,7 @@
     }
 
     /**
-     * Format timestamp as relative time
+     * Format timestamp as relative time (for past dates)
      * @param {string|Date} timestamp - ISO timestamp or Date object
      * @returns {string} Relative time like "5m ago" or "2h ago"
      */
@@ -88,6 +88,39 @@
         if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
         if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
         return date.toLocaleDateString();
+    }
+
+    /**
+     * Format expiry timestamp as relative time (for future dates)
+     * @param {string|Date} timestamp - ISO timestamp or Date object
+     * @returns {string} Relative time like "in 5d" or "in 3mo", or "Expired" if past
+     */
+    function formatExpiry(timestamp) {
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diffMs = date - now; // Future dates have positive diff
+        const diffSec = Math.floor(diffMs / 1000);
+
+        // Already expired
+        if (diffSec < 0) return 'Expired';
+
+        // Less than a day
+        if (diffSec < 86400) {
+            if (diffSec < 3600) return `in ${Math.floor(diffSec / 60)}m`;
+            return `in ${Math.floor(diffSec / 3600)}h`;
+        }
+
+        // Days
+        const days = Math.floor(diffSec / 86400);
+        if (days < 30) return `in ${days}d`;
+
+        // Months
+        const months = Math.floor(days / 30);
+        if (months < 12) return `in ${months}mo`;
+
+        // Years
+        const years = Math.floor(months / 12);
+        return `in ${years}y`;
     }
 
     /**
@@ -108,6 +141,7 @@
         formatLatency,
         formatLatencyCompact,
         formatLastSeen,
+        formatExpiry,
         formatNumber,
     };
 });

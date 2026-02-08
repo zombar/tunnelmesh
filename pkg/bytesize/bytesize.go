@@ -61,13 +61,13 @@ func Parse(s string) (int64, error) {
 	switch unit {
 	case "", "B":
 		multiplier = B
-	case "KB", "K":
+	case "KB", "K", "KI": // Ki = Kubernetes-style binary kibibyte
 		multiplier = KB
-	case "MB", "M":
+	case "MB", "M", "MI": // Mi = Kubernetes-style binary mebibyte
 		multiplier = MB
-	case "GB", "G":
+	case "GB", "G", "GI": // Gi = Kubernetes-style binary gibibyte
 		multiplier = GB
-	case "TB", "T":
+	case "TB", "T", "TI": // Ti = Kubernetes-style binary tebibyte
 		multiplier = TB
 	default:
 		return 0, fmt.Errorf("unknown unit: %q", matches[2])
@@ -198,4 +198,41 @@ func FormatRate(bytesPerSec int64) string {
 	}
 
 	return fmt.Sprintf("%d bps", bitsPerSec)
+}
+
+// Size is a byte size that can be unmarshaled from YAML as either
+// a number (bytes) or a string with units ("10Gi", "500Mi", "1TB").
+type Size int64
+
+// UnmarshalYAML implements yaml.Unmarshaler for Size.
+func (s *Size) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	// First try as a string
+	var str string
+	if err := unmarshal(&str); err == nil {
+		bytes, err := Parse(str)
+		if err != nil {
+			return fmt.Errorf("invalid size %q: %w", str, err)
+		}
+		*s = Size(bytes)
+		return nil
+	}
+
+	// Try as an integer (bytes)
+	var i int64
+	if err := unmarshal(&i); err == nil {
+		*s = Size(i)
+		return nil
+	}
+
+	return fmt.Errorf("size must be a number or string with units (e.g., 10Gi, 500Mi)")
+}
+
+// Bytes returns the size in bytes.
+func (s Size) Bytes() int64 {
+	return int64(s)
+}
+
+// String returns a human-readable representation.
+func (s Size) String() string {
+	return Format(int64(s))
 }

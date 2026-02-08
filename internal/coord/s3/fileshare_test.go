@@ -1,6 +1,8 @@
 package s3
 
 import (
+	"bytes"
+	"io"
 	"testing"
 	"time"
 
@@ -21,7 +23,7 @@ func TestFileShareManager_Create(t *testing.T) {
 	mgr := NewFileShareManager(store, systemStore, authorizer)
 
 	// Create a file share
-	share, err := mgr.Create("data", "Test data share", "user123")
+	share, err := mgr.Create("data", "Test data share", "user123", 0)
 	require.NoError(t, err)
 
 	assert.Equal(t, "data", share.Name)
@@ -43,7 +45,7 @@ func TestFileShareManager_Create_SetsPermissions(t *testing.T) {
 	authorizer := auth.NewAuthorizerWithGroups()
 	mgr := NewFileShareManager(store, systemStore, authorizer)
 
-	_, err = mgr.Create("docs", "Documentation", "alice")
+	_, err = mgr.Create("docs", "Documentation", "alice", 0)
 	require.NoError(t, err)
 
 	bucketName := FileShareBucketPrefix + "docs"
@@ -80,11 +82,11 @@ func TestFileShareManager_Create_DuplicateName(t *testing.T) {
 	authorizer := auth.NewAuthorizerWithGroups()
 	mgr := NewFileShareManager(store, systemStore, authorizer)
 
-	_, err = mgr.Create("data", "First share", "alice")
+	_, err = mgr.Create("data", "First share", "alice", 0)
 	require.NoError(t, err)
 
 	// Try to create share with same name
-	_, err = mgr.Create("data", "Duplicate", "bob")
+	_, err = mgr.Create("data", "Duplicate", "bob", 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
 }
@@ -98,22 +100,79 @@ func TestFileShareManager_Delete(t *testing.T) {
 	authorizer := auth.NewAuthorizerWithGroups()
 	mgr := NewFileShareManager(store, systemStore, authorizer)
 
-	_, err = mgr.Create("temp", "Temporary share", "alice")
+	_, err = mgr.Create("temp", "Temporary share", "alice", 0)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + "temp"
+
+	// Add some content
+	content := []byte("hello")
+	_, err = store.PutObject(bucketName, "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
 	// Delete the share
 	err = mgr.Delete("temp")
 	require.NoError(t, err)
 
-	// Verify bucket was deleted
-	_, err = store.HeadBucket(FileShareBucketPrefix + "temp")
-	assert.Equal(t, ErrBucketNotFound, err)
+	// Bucket is kept (for potential restore), but objects are tombstoned
+	_, err = store.HeadBucket(bucketName)
+	assert.NoError(t, err, "bucket should still exist for restore capability")
+
+	// Object should be tombstoned
+	meta, err := store.HeadObject(bucketName, "file.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
 
 	// Verify share is removed from list
 	shares := mgr.List()
 	for _, s := range shares {
 		assert.NotEqual(t, "temp", s.Name)
 	}
+}
+
+func TestFileShareManager_DeleteAndRecreate_RestoresContent(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create share with content
+	_, err = mgr.Create("docs", "Documents", "alice", 0)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + "docs"
+	testData := []byte("important data")
+	_, err = store.PutObject(bucketName, "readme.txt", bytes.NewReader(testData), int64(len(testData)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Delete the share (tombstones content)
+	err = mgr.Delete("docs")
+	require.NoError(t, err)
+
+	// Verify content is tombstoned
+	meta, err := store.HeadObject(bucketName, "readme.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned())
+
+	// Recreate with same name (should restore content)
+	_, err = mgr.Create("docs", "Restored docs", "bob", 0)
+	require.NoError(t, err)
+
+	// Content should be restored (untombstoned)
+	meta, err = store.HeadObject(bucketName, "readme.txt")
+	require.NoError(t, err)
+	assert.False(t, meta.IsTombstoned(), "object should be untombstoned after recreate")
+
+	// Content should still be readable
+	reader, _, err := store.GetObject(bucketName, "readme.txt")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+	content, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, "important data", string(content))
 }
 
 func TestFileShareManager_Delete_RemovesPermissions(t *testing.T) {
@@ -125,7 +184,7 @@ func TestFileShareManager_Delete_RemovesPermissions(t *testing.T) {
 	authorizer := auth.NewAuthorizerWithGroups()
 	mgr := NewFileShareManager(store, systemStore, authorizer)
 
-	_, err = mgr.Create("temp", "Temporary", "alice")
+	_, err = mgr.Create("temp", "Temporary", "alice", 0)
 	require.NoError(t, err)
 
 	bucketName := FileShareBucketPrefix + "temp"
@@ -158,7 +217,7 @@ func TestFileShareManager_Get(t *testing.T) {
 	authorizer := auth.NewAuthorizerWithGroups()
 	mgr := NewFileShareManager(store, systemStore, authorizer)
 
-	_, err = mgr.Create("myshare", "My share", "alice")
+	_, err = mgr.Create("myshare", "My share", "alice", 0)
 	require.NoError(t, err)
 
 	share := mgr.Get("myshare")
@@ -180,8 +239,8 @@ func TestFileShareManager_List(t *testing.T) {
 	authorizer := auth.NewAuthorizerWithGroups()
 	mgr := NewFileShareManager(store, systemStore, authorizer)
 
-	_, _ = mgr.Create("share1", "First", "alice")
-	_, _ = mgr.Create("share2", "Second", "bob")
+	_, _ = mgr.Create("share1", "First", "alice", 0)
+	_, _ = mgr.Create("share2", "Second", "bob", 0)
 
 	shares := mgr.List()
 	assert.Len(t, shares, 2)
@@ -197,7 +256,7 @@ func TestFileShareManager_Persistence(t *testing.T) {
 	authorizer := auth.NewAuthorizerWithGroups()
 	mgr := NewFileShareManager(store, systemStore, authorizer)
 
-	_, err = mgr.Create("persistent", "Should persist", "alice")
+	_, err = mgr.Create("persistent", "Should persist", "alice", 0)
 	require.NoError(t, err)
 
 	// Create new manager (simulating restart)
@@ -224,6 +283,87 @@ func TestFileShare_CreatedAt(t *testing.T) {
 	assert.False(t, share.CreatedAt.IsZero())
 }
 
+func TestFileShareManager_Create_SetsExpiry(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	// Set default expiry to 365 days
+	store.SetDefaultShareExpiryDays(365)
+
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	share, err := mgr.Create("data", "Test share", "alice", 0)
+	require.NoError(t, err)
+
+	// ExpiresAt should be set to approximately 365 days from now
+	assert.False(t, share.ExpiresAt.IsZero(), "ExpiresAt should be set")
+	expectedExpiry := time.Now().UTC().AddDate(0, 0, 365)
+	// Allow 1 minute tolerance for test timing
+	assert.WithinDuration(t, expectedExpiry, share.ExpiresAt, time.Minute)
+}
+
+func TestFileShare_IsExpired(t *testing.T) {
+	// Not expired - future date
+	future := &FileShare{
+		Name:      "future",
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	assert.False(t, future.IsExpired())
+
+	// Expired - past date
+	past := &FileShare{
+		Name:      "past",
+		ExpiresAt: time.Now().Add(-24 * time.Hour),
+	}
+	assert.True(t, past.IsExpired())
+
+	// Never expires - zero time
+	never := &FileShare{
+		Name: "never",
+	}
+	assert.False(t, never.IsExpired())
+}
+
+func TestFileShareManager_TombstoneExpiredShareContents(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a share and add some objects
+	share, err := mgr.Create("testshare", "Test share", "alice", 0)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + share.Name
+
+	// Add an object to the share's bucket
+	content := []byte("test content")
+	_, err = store.PutObject(bucketName, "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Manually expire the share
+	mgr.mu.Lock()
+	share.ExpiresAt = time.Now().Add(-24 * time.Hour)
+	mgr.mu.Unlock()
+
+	// Run tombstoning of expired share contents
+	count := mgr.TombstoneExpiredShareContents()
+	assert.Equal(t, 1, count, "should tombstone 1 object")
+
+	// Verify object is now tombstoned
+	obj, err := store.HeadObject(bucketName, "file.txt")
+	require.NoError(t, err)
+	assert.True(t, obj.IsTombstoned())
+}
+
 func TestFileShareManager_IsProtectedBinding(t *testing.T) {
 	store, err := NewStore(t.TempDir(), nil)
 	require.NoError(t, err)
@@ -233,7 +373,7 @@ func TestFileShareManager_IsProtectedBinding(t *testing.T) {
 	mgr := NewFileShareManager(store, systemStore, authorizer)
 
 	// Create a file share
-	_, err = mgr.Create("docs", "Documents", "alice")
+	_, err = mgr.Create("docs", "Documents", "alice", 0)
 	require.NoError(t, err)
 
 	tests := []struct {

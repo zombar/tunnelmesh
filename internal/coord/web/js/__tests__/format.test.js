@@ -9,6 +9,7 @@ const {
     formatLatency,
     formatLatencyCompact,
     formatLastSeen,
+    formatExpiry,
     formatNumber,
 } = format;
 
@@ -144,6 +145,33 @@ describe('formatLastSeen', () => {
         const result = formatLastSeen(twoDaysAgo.toISOString());
         // Should return a date string, not relative time
         expect(result).not.toContain('ago');
+    });
+});
+
+describe('formatExpiry', () => {
+    test('formats past dates as Expired', () => {
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        expect(formatExpiry(yesterday.toISOString())).toBe('Expired');
+    });
+
+    test('formats hours in future', () => {
+        const twoHoursFromNow = new Date(Date.now() + 2 * 60 * 60 * 1000);
+        expect(formatExpiry(twoHoursFromNow.toISOString())).toBe('in 2h');
+    });
+
+    test('formats days in future', () => {
+        const fiveDaysFromNow = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+        expect(formatExpiry(fiveDaysFromNow.toISOString())).toBe('in 5d');
+    });
+
+    test('formats months in future', () => {
+        const threeMonthsFromNow = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+        expect(formatExpiry(threeMonthsFromNow.toISOString())).toBe('in 3mo');
+    });
+
+    test('formats years in future', () => {
+        const twoYearsFromNow = new Date(Date.now() + 2 * 365 * 24 * 60 * 60 * 1000);
+        expect(formatExpiry(twoYearsFromNow.toISOString())).toBe('in 2y');
     });
 });
 

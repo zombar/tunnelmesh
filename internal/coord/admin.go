@@ -3,6 +3,7 @@ package coord
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/web"
 	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
@@ -300,6 +302,9 @@ func (s *Server) setupAdminRoutes() {
 	// Role binding management API
 	s.adminMux.HandleFunc("/api/bindings", s.handleBindings)
 	s.adminMux.HandleFunc("/api/bindings/", s.handleBindingByName)
+
+	// S3 proxy for explorer
+	s.adminMux.HandleFunc("/api/s3/", s.handleS3Proxy)
 
 	// Expose metrics on admin interface for Prometheus scraping via mesh IP
 	s.adminMux.Handle("/metrics", promhttp.Handler())
@@ -1018,6 +1023,7 @@ func (s *Server) handleSharesList(w http.ResponseWriter, _ *http.Request) {
 type ShareCreateRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	QuotaBytes  int64  `json:"quota_bytes,omitempty"` // Per-share quota in bytes (0 = unlimited within global quota)
 }
 
 // handleShareCreate creates a new file share.
@@ -1038,10 +1044,35 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate share name (DNS-safe: alphanumeric and hyphens, 1-63 chars)
+	if len(req.Name) > 63 {
+		s.jsonError(w, "name too long (max 63 characters)", http.StatusBadRequest)
+		return
+	}
+	for i, c := range req.Name {
+		isAlphaNum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		isValidHyphen := c == '-' && i > 0 && i < len(req.Name)-1
+		if !isAlphaNum && !isValidHyphen {
+			s.jsonError(w, "name must be alphanumeric with optional hyphens (not at start/end)", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Validate quota (must be non-negative and <= 1TB)
+	const maxQuotaBytes = 1024 * 1024 * 1024 * 1024 // 1TB
+	if req.QuotaBytes < 0 {
+		s.jsonError(w, "quota_bytes must be non-negative", http.StatusBadRequest)
+		return
+	}
+	if req.QuotaBytes > maxQuotaBytes {
+		s.jsonError(w, "quota_bytes exceeds maximum (1TB)", http.StatusBadRequest)
+		return
+	}
+
 	// Get owner from TLS client certificate if available
 	ownerID := s.getRequestOwner(r)
 
-	share, err := s.fileShareMgr.Create(req.Name, req.Description, ownerID)
+	share, err := s.fileShareMgr.Create(req.Name, req.Description, ownerID, req.QuotaBytes)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			s.jsonError(w, err.Error(), http.StatusConflict)
@@ -1127,6 +1158,7 @@ type UserInfo struct {
 	Groups    []string `json:"groups"`
 	Expired   bool     `json:"expired"`
 	LastSeen  string   `json:"last_seen,omitempty"`
+	ExpiresAt string   `json:"expires_at,omitempty"`
 	CreatedAt string   `json:"created_at,omitempty"`
 }
 
@@ -1165,6 +1197,11 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if !u.LastSeen.IsZero() {
 			info.LastSeen = u.LastSeen.Format(time.RFC3339)
+			// Calculate expiration date for human users (service users don't auto-expire)
+			if !u.IsService() {
+				expiresAt := u.LastSeen.Add(time.Duration(auth.GetUserExpirationDays()) * 24 * time.Hour)
+				info.ExpiresAt = expiresAt.Format(time.RFC3339)
+			}
 		}
 		if !u.CreatedAt.IsZero() {
 			info.CreatedAt = u.CreatedAt.Format(time.RFC3339)
@@ -1204,6 +1241,17 @@ type RoleBindingRequest struct {
 }
 
 // handleBindings handles GET (list) and POST (create) for user role bindings.
+// BindingInfo represents a role binding (user or group) for the UI.
+type BindingInfo struct {
+	Name         string `json:"name"`
+	UserID       string `json:"user_id,omitempty"`
+	GroupName    string `json:"group_name,omitempty"`
+	RoleName     string `json:"role_name"`
+	BucketScope  string `json:"bucket_scope,omitempty"`
+	ObjectPrefix string `json:"object_prefix,omitempty"`
+	Protected    bool   `json:"protected"`
+}
+
 func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 	if s.s3Authorizer == nil {
 		s.jsonError(w, "authorization not enabled", http.StatusServiceUnavailable)
@@ -1212,17 +1260,35 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		bindings := s.s3Authorizer.Bindings.List()
-		// Add protected flag to each binding for UI
-		type bindingWithProtected struct {
-			*auth.RoleBinding
-			Protected bool `json:"protected"`
-		}
-		result := make([]bindingWithProtected, len(bindings))
-		for i, b := range bindings {
+		// Collect both user and group bindings into a unified format
+		var result []BindingInfo
+
+		// Add user bindings
+		for _, b := range s.s3Authorizer.Bindings.List() {
 			protected := s.fileShareMgr != nil && s.fileShareMgr.IsProtectedBinding(b)
-			result[i] = bindingWithProtected{RoleBinding: b, Protected: protected}
+			result = append(result, BindingInfo{
+				Name:         b.Name,
+				UserID:       b.UserID,
+				RoleName:     b.RoleName,
+				BucketScope:  b.BucketScope,
+				ObjectPrefix: b.ObjectPrefix,
+				Protected:    protected,
+			})
 		}
+
+		// Add group bindings
+		for _, gb := range s.s3Authorizer.GroupBindings.List() {
+			protected := s.fileShareMgr != nil && s.fileShareMgr.IsProtectedGroupBinding(gb)
+			result = append(result, BindingInfo{
+				Name:         gb.Name,
+				GroupName:    gb.GroupName,
+				RoleName:     gb.RoleName,
+				BucketScope:  gb.BucketScope,
+				ObjectPrefix: gb.ObjectPrefix,
+				Protected:    protected,
+			})
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
 
@@ -1314,4 +1380,385 @@ func (s *Server) handleBindingByName(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// --- S3 Explorer API Handlers ---
+
+// S3ObjectInfo represents an S3 object for the explorer API.
+type S3ObjectInfo struct {
+	Key          string `json:"key"`
+	Size         int64  `json:"size"`
+	LastModified string `json:"last_modified"`
+	Expires      string `json:"expires,omitempty"`       // Optional expiration date
+	TombstonedAt string `json:"tombstoned_at,omitempty"` // When the object was deleted (tombstoned)
+	ContentType  string `json:"content_type,omitempty"`
+	IsPrefix     bool   `json:"is_prefix,omitempty"` // True for "folder" prefixes
+}
+
+// S3BucketInfo represents an S3 bucket for the explorer API.
+type S3BucketInfo struct {
+	Name       string `json:"name"`
+	CreatedAt  string `json:"created_at"`
+	Writable   bool   `json:"writable"`
+	UsedBytes  int64  `json:"used_bytes"`
+	QuotaBytes int64  `json:"quota_bytes,omitempty"` // Per-bucket quota (from file share, 0 = unlimited)
+}
+
+// S3QuotaInfo represents overall S3 storage quota for the explorer API.
+type S3QuotaInfo struct {
+	MaxBytes   int64 `json:"max_bytes"`
+	UsedBytes  int64 `json:"used_bytes"`
+	AvailBytes int64 `json:"avail_bytes"`
+}
+
+// S3BucketsResponse is the response for the buckets list endpoint.
+type S3BucketsResponse struct {
+	Buckets []S3BucketInfo `json:"buckets"`
+	Quota   S3QuotaInfo    `json:"quota"`
+}
+
+// validateS3Name validates a bucket or object key name to prevent path traversal.
+// This is the API-level validation that runs before any S3 store operations.
+// The s3.Store also has its own validateName function as defense-in-depth,
+// ensuring protection even if the API layer is bypassed or refactored.
+// Both functions perform identical checks; duplication is intentional for security.
+func validateS3Name(name string) error {
+	if name == "" {
+		return fmt.Errorf("name cannot be empty")
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("invalid name")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("path traversal not allowed")
+	}
+	// Check for absolute paths or parent directory references
+	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") {
+		return fmt.Errorf("absolute paths not allowed")
+	}
+	return nil
+}
+
+// handleS3Proxy routes S3 explorer API requests.
+//
+// Security: This endpoint is registered on adminMux which is only served over HTTPS
+// on the coordinator's mesh IP (via Server.setupAdminRoutes). It is NOT accessible
+// from the public internet. All requests are authenticated via mTLS - the client
+// must present a valid mesh certificate. The caller's identity is extracted from
+// the TLS client certificate for authorization decisions.
+func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
+	if s.s3Store == nil {
+		s.jsonError(w, "S3 storage not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Strip /api/s3 prefix
+	path := strings.TrimPrefix(r.URL.Path, "/api/s3")
+	path = strings.TrimPrefix(path, "/")
+
+	// Route: /api/s3/buckets
+	if path == "buckets" || path == "" {
+		s.handleS3ListBuckets(w, r)
+		return
+	}
+
+	// Route: /api/s3/buckets/{bucket}/objects/...
+	if strings.HasPrefix(path, "buckets/") {
+		parts := strings.SplitN(strings.TrimPrefix(path, "buckets/"), "/", 2)
+		bucket := parts[0]
+
+		// URL decode bucket name
+		if decoded, err := url.PathUnescape(bucket); err == nil {
+			bucket = decoded
+		}
+
+		// Validate bucket name
+		if err := validateS3Name(bucket); err != nil {
+			s.jsonError(w, "invalid bucket name: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if len(parts) == 1 || parts[1] == "" || parts[1] == "objects" {
+			// List objects in bucket
+			s.handleS3ListObjects(w, r, bucket)
+			return
+		}
+		if strings.HasPrefix(parts[1], "objects/") {
+			key := strings.TrimPrefix(parts[1], "objects/")
+
+			// URL decode object key
+			if decoded, err := url.PathUnescape(key); err == nil {
+				key = decoded
+			}
+
+			// Validate object key
+			if err := validateS3Name(key); err != nil {
+				s.jsonError(w, "invalid object key: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			s.handleS3Object(w, r, bucket, key)
+			return
+		}
+	}
+
+	s.jsonError(w, "not found", http.StatusNotFound)
+}
+
+// handleS3ListBuckets returns all buckets (admin view).
+func (s *Server) handleS3ListBuckets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	buckets, err := s.s3Store.ListBuckets()
+	if err != nil {
+		s.jsonError(w, "failed to list buckets", http.StatusInternalServerError)
+		return
+	}
+
+	// Get quota stats for per-bucket usage
+	quotaStats := s.s3Store.QuotaStats()
+
+	bucketInfos := make([]S3BucketInfo, 0, len(buckets))
+	for _, b := range buckets {
+		// System bucket is read-only (could be extended to check RBAC)
+		writable := b.Name != auth.SystemBucket
+		usedBytes := int64(0)
+		if quotaStats != nil {
+			usedBytes = quotaStats.PerBucket[b.Name]
+		}
+
+		// Look up per-bucket quota from file share if this is a file share bucket
+		var quotaBytes int64
+		if s.fileShareMgr != nil && strings.HasPrefix(b.Name, s3.FileShareBucketPrefix) {
+			shareName := strings.TrimPrefix(b.Name, s3.FileShareBucketPrefix)
+			if share := s.fileShareMgr.Get(shareName); share != nil {
+				quotaBytes = share.QuotaBytes
+			}
+		}
+
+		bucketInfos = append(bucketInfos, S3BucketInfo{
+			Name:       b.Name,
+			CreatedAt:  b.CreatedAt.Format(time.RFC3339),
+			Writable:   writable,
+			UsedBytes:  usedBytes,
+			QuotaBytes: quotaBytes,
+		})
+	}
+
+	// Build response with quota info
+	resp := S3BucketsResponse{
+		Buckets: bucketInfos,
+	}
+	if quotaStats != nil {
+		resp.Quota = S3QuotaInfo{
+			MaxBytes:   quotaStats.MaxBytes,
+			UsedBytes:  quotaStats.UsedBytes,
+			AvailBytes: quotaStats.AvailableBytes,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleS3ListObjects returns objects in a bucket with optional prefix/delimiter.
+func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, bucket string) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	prefix := r.URL.Query().Get("prefix")
+	delimiter := r.URL.Query().Get("delimiter")
+
+	objects, _, _, err := s.s3Store.ListObjects(bucket, prefix, "", 1000)
+	if err != nil {
+		switch err {
+		case s3.ErrBucketNotFound:
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		case s3.ErrAccessDenied:
+			s.jsonError(w, "access denied", http.StatusForbidden)
+		default:
+			s.jsonError(w, "failed to list objects", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	result := make([]S3ObjectInfo, 0)
+	prefixSet := make(map[string]bool)
+
+	for _, obj := range objects {
+		// Handle delimiter (folder grouping)
+		if delimiter != "" {
+			keyAfterPrefix := strings.TrimPrefix(obj.Key, prefix)
+			if idx := strings.Index(keyAfterPrefix, delimiter); idx >= 0 {
+				// This is a "folder" - add common prefix
+				commonPrefix := prefix + keyAfterPrefix[:idx+1]
+				if !prefixSet[commonPrefix] {
+					prefixSet[commonPrefix] = true
+					result = append(result, S3ObjectInfo{
+						Key:      commonPrefix,
+						IsPrefix: true,
+					})
+				}
+				continue
+			}
+		}
+
+		info := S3ObjectInfo{
+			Key:          obj.Key,
+			Size:         obj.Size,
+			LastModified: obj.LastModified.Format(time.RFC3339),
+			ContentType:  obj.ContentType,
+		}
+		if obj.Expires != nil {
+			info.Expires = obj.Expires.Format(time.RFC3339)
+		}
+		if obj.TombstonedAt != nil {
+			info.TombstonedAt = obj.TombstonedAt.Format(time.RFC3339)
+		}
+		result = append(result, info)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+// handleS3Object handles GET/PUT/DELETE for a specific object.
+func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleS3GetObject(w, bucket, key)
+	case http.MethodPut:
+		s.handleS3PutObject(w, r, bucket, key)
+	case http.MethodDelete:
+		s.handleS3DeleteObject(w, bucket, key)
+	case http.MethodHead:
+		s.handleS3HeadObject(w, bucket, key)
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleS3GetObject returns the object content.
+func (s *Server) handleS3GetObject(w http.ResponseWriter, bucket, key string) {
+	reader, meta, err := s.s3Store.GetObject(bucket, key)
+	if err != nil {
+		switch err {
+		case s3.ErrBucketNotFound:
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		case s3.ErrObjectNotFound:
+			s.jsonError(w, "object not found", http.StatusNotFound)
+		case s3.ErrAccessDenied:
+			s.jsonError(w, "access denied", http.StatusForbidden)
+		default:
+			s.jsonError(w, "failed to get object", http.StatusInternalServerError)
+		}
+		return
+	}
+	defer func() { _ = reader.Close() }()
+
+	w.Header().Set("Content-Type", meta.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	w.Header().Set("ETag", meta.ETag)
+	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
+
+	_, _ = io.Copy(w, reader)
+}
+
+// MaxS3ObjectSize is the maximum size for S3 object uploads (10MB).
+const MaxS3ObjectSize = 10 * 1024 * 1024
+
+// handleS3PutObject creates or updates an object.
+func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	// Check bucket write permission (could be extended to full RBAC)
+	if bucket == auth.SystemBucket {
+		s.jsonError(w, "bucket is read-only", http.StatusForbidden)
+		return
+	}
+
+	// Check if object is tombstoned (read-only)
+	if existingMeta, err := s.s3Store.HeadObject(bucket, key); err == nil && existingMeta.IsTombstoned() {
+		s.jsonError(w, "object is deleted and read-only", http.StatusForbidden)
+		return
+	}
+
+	contentType := r.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	// Limit request body size to prevent DoS
+	r.Body = http.MaxBytesReader(w, r.Body, MaxS3ObjectSize)
+
+	// Read body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		if err.Error() == "http: request body too large" {
+			s.jsonError(w, "object too large (max 10MB)", http.StatusRequestEntityTooLarge)
+			return
+		}
+		s.jsonError(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+
+	meta, err := s.s3Store.PutObject(bucket, key, bytes.NewReader(body), int64(len(body)), contentType, nil)
+	if err != nil {
+		s.jsonError(w, "failed to store object: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("ETag", meta.ETag)
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleS3DeleteObject deletes an object.
+func (s *Server) handleS3DeleteObject(w http.ResponseWriter, bucket, key string) {
+	// Check bucket write permission (could be extended to full RBAC)
+	if bucket == auth.SystemBucket {
+		s.jsonError(w, "bucket is read-only", http.StatusForbidden)
+		return
+	}
+
+	err := s.s3Store.DeleteObject(bucket, key)
+	if err != nil {
+		switch err {
+		case s3.ErrBucketNotFound:
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		case s3.ErrObjectNotFound:
+			s.jsonError(w, "object not found", http.StatusNotFound)
+		case s3.ErrAccessDenied:
+			s.jsonError(w, "access denied", http.StatusForbidden)
+		default:
+			s.jsonError(w, "failed to delete object", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleS3HeadObject returns object metadata.
+func (s *Server) handleS3HeadObject(w http.ResponseWriter, bucket, key string) {
+	meta, err := s.s3Store.HeadObject(bucket, key)
+	if err != nil {
+		switch err {
+		case s3.ErrBucketNotFound, s3.ErrObjectNotFound:
+			w.WriteHeader(http.StatusNotFound)
+		case s3.ErrAccessDenied:
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", meta.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	w.Header().Set("ETag", meta.ETag)
+	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
+	w.WriteHeader(http.StatusOK)
 }

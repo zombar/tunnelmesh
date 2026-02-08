@@ -15,8 +15,21 @@ import (
 // ServiceUserPrefix is the prefix for service user IDs.
 const ServiceUserPrefix = "svc:"
 
-// UserExpirationDays is the number of days after LastSeen when a user expires.
-const UserExpirationDays = 30
+// userExpirationDays is the number of days after LastSeen when a user expires.
+// Default is 270 (9 months). Set via SetUserExpirationDays.
+var userExpirationDays = 270
+
+// SetUserExpirationDays sets the number of days after LastSeen when a user expires.
+func SetUserExpirationDays(days int) {
+	if days > 0 {
+		userExpirationDays = days
+	}
+}
+
+// GetUserExpirationDays returns the current user expiration days setting.
+func GetUserExpirationDays() int {
+	return userExpirationDays
+}
 
 // User represents a TunnelMesh user identified by an ED25519 public key.
 type User struct {
@@ -55,7 +68,7 @@ func (u *User) IsExpired() bool {
 		return false // Never seen, not expired yet
 	}
 
-	expirationDuration := time.Duration(UserExpirationDays) * 24 * time.Hour
+	expirationDuration := time.Duration(userExpirationDays) * 24 * time.Hour
 	return time.Since(u.LastSeen) > expirationDuration
 }
 

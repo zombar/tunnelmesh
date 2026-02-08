@@ -16,9 +16,15 @@ import (
 
 // BucketMeta contains bucket metadata.
 type BucketMeta struct {
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
-	Owner     string    `json:"owner"` // User ID who created the bucket
+	Name         string     `json:"name"`
+	CreatedAt    time.Time  `json:"created_at"`
+	Owner        string     `json:"owner"`                   // User ID who created the bucket
+	TombstonedAt *time.Time `json:"tombstoned_at,omitempty"` // When bucket was soft-deleted
+}
+
+// IsTombstoned returns true if the bucket has been soft-deleted.
+func (bm *BucketMeta) IsTombstoned() bool {
+	return bm.TombstonedAt != nil
 }
 
 // ObjectMeta contains object metadata.
@@ -28,7 +34,14 @@ type ObjectMeta struct {
 	ContentType  string            `json:"content_type"`
 	ETag         string            `json:"etag"` // MD5 hash of content
 	LastModified time.Time         `json:"last_modified"`
-	Metadata     map[string]string `json:"metadata,omitempty"` // User-defined metadata
+	Expires      *time.Time        `json:"expires,omitempty"`       // Optional expiration date
+	TombstonedAt *time.Time        `json:"tombstoned_at,omitempty"` // When object was soft-deleted
+	Metadata     map[string]string `json:"metadata,omitempty"`      // User-defined metadata
+}
+
+// IsTombstoned returns true if the object has been soft-deleted.
+func (m *ObjectMeta) IsTombstoned() bool {
+	return m.TombstonedAt != nil
 }
 
 // Store provides file-based S3 storage.
@@ -43,9 +56,12 @@ type ObjectMeta struct {
 //	      meta/
 //	        {key}.json        # object metadata
 type Store struct {
-	dataDir string
-	quota   *QuotaManager
-	mu      sync.RWMutex
+	dataDir                 string
+	quota                   *QuotaManager
+	defaultObjectExpiryDays int // Days until objects expire (0 = never)
+	defaultShareExpiryDays  int // Days until file shares expire (0 = never)
+	tombstoneRetentionDays  int // Days to retain tombstoned objects before purging (0 = never purge)
+	mu                      sync.RWMutex
 }
 
 // NewStore creates a new S3 store with the given data directory.
@@ -76,6 +92,29 @@ func (s *Store) DataDir() string {
 	return s.dataDir
 }
 
+// SetDefaultObjectExpiryDays sets the default expiry for new objects in days.
+// A value of 0 means objects don't expire.
+func (s *Store) SetDefaultObjectExpiryDays(days int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaultObjectExpiryDays = days
+}
+
+// SetDefaultShareExpiryDays sets the default expiry for new file shares in days.
+// A value of 0 means shares don't expire.
+func (s *Store) SetDefaultShareExpiryDays(days int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaultShareExpiryDays = days
+}
+
+// DefaultShareExpiryDays returns the configured default share expiry in days.
+func (s *Store) DefaultShareExpiryDays() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.defaultShareExpiryDays
+}
+
 // QuotaStats returns current quota statistics, or nil if no quota is configured.
 func (s *Store) QuotaStats() *QuotaStats {
 	if s.quota == nil {
@@ -86,7 +125,12 @@ func (s *Store) QuotaStats() *QuotaStats {
 }
 
 // calculateQuotaUsage scans all objects and updates quota tracking.
+// This is called during initialization before the store is accessible to other
+// goroutines, but we hold the mutex for defense in depth and future-proofing.
 func (s *Store) calculateQuotaUsage() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
 	entries, err := os.ReadDir(bucketsDir)
 	if err != nil {
@@ -121,6 +165,27 @@ func (s *Store) calculateQuotaUsage() error {
 	return nil
 }
 
+// validateName validates a bucket or object key name to prevent path traversal.
+// This is a defense-in-depth measure that runs at the storage layer.
+// The admin.go also has validateS3Name which performs identical validation at
+// the API layer. Both functions are intentionally duplicated to ensure path
+// traversal protection even if one layer is bypassed or refactored.
+func validateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name cannot be empty")
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("invalid name")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("path traversal not allowed")
+	}
+	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") {
+		return fmt.Errorf("absolute paths not allowed")
+	}
+	return nil
+}
+
 // bucketPath returns the path to a bucket directory.
 func (s *Store) bucketPath(bucket string) string {
 	return filepath.Join(s.dataDir, "buckets", bucket)
@@ -143,6 +208,11 @@ func (s *Store) objectMetaPath(bucket, key string) string {
 
 // CreateBucket creates a new bucket.
 func (s *Store) CreateBucket(bucket, owner string) error {
+	// Validate bucket name (defense in depth)
+	if err := validateName(bucket); err != nil {
+		return fmt.Errorf("invalid bucket name: %w", err)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -210,6 +280,61 @@ func (s *Store) DeleteBucket(bucket string) error {
 	return nil
 }
 
+// TombstoneBucket marks a bucket as soft-deleted.
+// All objects in a tombstoned bucket are treated as tombstoned.
+func (s *Store) TombstoneBucket(bucket string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	meta, err := s.getBucketMeta(bucket)
+	if err != nil {
+		return err
+	}
+
+	// Already tombstoned
+	if meta.IsTombstoned() {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	meta.TombstonedAt = &now
+
+	return s.writeBucketMeta(bucket, meta)
+}
+
+// UntombstoneBucket restores a tombstoned bucket.
+func (s *Store) UntombstoneBucket(bucket string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	meta, err := s.getBucketMeta(bucket)
+	if err != nil {
+		return err
+	}
+
+	// Not tombstoned
+	if !meta.IsTombstoned() {
+		return nil
+	}
+
+	meta.TombstonedAt = nil
+
+	return s.writeBucketMeta(bucket, meta)
+}
+
+// writeBucketMeta writes bucket metadata (caller must hold lock).
+func (s *Store) writeBucketMeta(bucket string, meta *BucketMeta) error {
+	metaPath := s.bucketMetaPath(bucket)
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal bucket meta: %w", err)
+	}
+	if err := os.WriteFile(metaPath, data, 0644); err != nil {
+		return fmt.Errorf("write bucket meta: %w", err)
+	}
+	return nil
+}
+
 // HeadBucket checks if a bucket exists.
 func (s *Store) HeadBucket(bucket string) (*BucketMeta, error) {
 	s.mu.RLock()
@@ -270,6 +395,14 @@ func (s *Store) ListBuckets() ([]BucketMeta, error) {
 
 // PutObject writes an object to a bucket.
 func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, contentType string, metadata map[string]string) (*ObjectMeta, error) {
+	// Validate names (defense in depth)
+	if err := validateName(bucket); err != nil {
+		return nil, fmt.Errorf("invalid bucket name: %w", err)
+	}
+	if err := validateName(key); err != nil {
+		return nil, fmt.Errorf("invalid key: %w", err)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -332,13 +465,20 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 	etag := fmt.Sprintf("\"%s\"", hex.EncodeToString(hash.Sum(nil)))
 
 	// Write object metadata
+	now := time.Now().UTC()
 	objMeta := ObjectMeta{
 		Key:          key,
 		Size:         written,
 		ContentType:  contentType,
 		ETag:         etag,
-		LastModified: time.Now().UTC(),
+		LastModified: now,
 		Metadata:     metadata,
+	}
+
+	// Set expiry if configured (skip for system bucket - internal data doesn't expire)
+	if s.defaultObjectExpiryDays > 0 && bucket != SystemBucket {
+		expiry := now.AddDate(0, 0, s.defaultObjectExpiryDays)
+		objMeta.Expires = &expiry
 	}
 
 	metaData, err := json.MarshalIndent(objMeta, "", "  ")
@@ -355,6 +495,14 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 
 // GetObject retrieves an object from a bucket.
 func (s *Store) GetObject(bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
+	// Validate names (defense in depth)
+	if err := validateName(bucket); err != nil {
+		return nil, nil, fmt.Errorf("invalid bucket name: %w", err)
+	}
+	if err := validateName(key); err != nil {
+		return nil, nil, fmt.Errorf("invalid key: %w", err)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -387,12 +535,23 @@ func (s *Store) HeadObject(bucket, key string) (*ObjectMeta, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Check bucket exists
-	if _, err := s.getBucketMeta(bucket); err != nil {
+	// Check bucket exists and get tombstone state
+	bucketMeta, err := s.getBucketMeta(bucket)
+	if err != nil {
 		return nil, err
 	}
 
-	return s.getObjectMeta(bucket, key)
+	objMeta, err := s.getObjectMeta(bucket, key)
+	if err != nil {
+		return nil, err
+	}
+
+	// If bucket is tombstoned, mark object as tombstoned (virtually)
+	if bucketMeta.IsTombstoned() && objMeta.TombstonedAt == nil {
+		objMeta.TombstonedAt = bucketMeta.TombstonedAt
+	}
+
+	return objMeta, nil
 }
 
 // getObjectMeta reads object metadata (caller must hold lock).
@@ -415,8 +574,121 @@ func (s *Store) getObjectMeta(bucket, key string) (*ObjectMeta, error) {
 	return &meta, nil
 }
 
-// DeleteObject removes an object from a bucket.
+// DeleteObject soft-deletes an object by tombstoning it.
+// Tombstoned objects are read-only and will be purged after the retention period.
+// DeleteObject soft-deletes (tombstones) an object on first call.
+// If the object is already tombstoned, it permanently purges it.
+// This allows "delete twice to permanently remove" UX pattern.
 func (s *Store) DeleteObject(bucket, key string) error {
+	// Validate names (defense in depth)
+	if err := validateName(bucket); err != nil {
+		return fmt.Errorf("invalid bucket name: %w", err)
+	}
+	if err := validateName(key); err != nil {
+		return fmt.Errorf("invalid key: %w", err)
+	}
+
+	// Check if object or bucket is already tombstoned
+	bucketMeta, err := s.HeadBucket(bucket)
+	if err != nil {
+		return err
+	}
+
+	objMeta, err := s.HeadObject(bucket, key)
+	if err != nil {
+		return err
+	}
+
+	// If already tombstoned (object or bucket level), purge permanently
+	if objMeta.IsTombstoned() || bucketMeta.IsTombstoned() {
+		return s.PurgeObject(bucket, key)
+	}
+
+	// First delete: tombstone
+	return s.TombstoneObject(bucket, key)
+}
+
+// TombstoneObject marks an object as tombstoned (soft-deleted).
+// The object data is preserved but marked for cleanup after the retention period.
+func (s *Store) TombstoneObject(bucket, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Check bucket exists
+	if _, err := s.getBucketMeta(bucket); err != nil {
+		return err
+	}
+
+	// Get object metadata
+	meta, err := s.getObjectMeta(bucket, key)
+	if err != nil {
+		return err
+	}
+
+	// Already tombstoned
+	if meta.IsTombstoned() {
+		return nil
+	}
+
+	// Set tombstone timestamp
+	now := time.Now().UTC()
+	meta.TombstonedAt = &now
+
+	// Write updated metadata
+	metaPath := s.objectMetaPath(bucket, key)
+	metaData, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal object meta: %w", err)
+	}
+
+	if err := os.WriteFile(metaPath, metaData, 0644); err != nil {
+		return fmt.Errorf("write object meta: %w", err)
+	}
+
+	return nil
+}
+
+// UntombstoneObject restores a tombstoned object, making it accessible again.
+func (s *Store) UntombstoneObject(bucket, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Check bucket exists
+	if _, err := s.getBucketMeta(bucket); err != nil {
+		return err
+	}
+
+	// Get object metadata
+	meta, err := s.getObjectMeta(bucket, key)
+	if err != nil {
+		return err
+	}
+
+	// Not tombstoned
+	if !meta.IsTombstoned() {
+		return nil
+	}
+
+	// Clear tombstone timestamp
+	meta.TombstonedAt = nil
+
+	// Write updated metadata
+	metaPath := s.objectMetaPath(bucket, key)
+	metaData, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal object meta: %w", err)
+	}
+
+	if err := os.WriteFile(metaPath, metaData, 0644); err != nil {
+		return fmt.Errorf("write object meta: %w", err)
+	}
+
+	return nil
+}
+
+// PurgeObject permanently removes an object from a bucket.
+// This is used by the cleanup process for tombstoned objects past retention.
+func (s *Store) PurgeObject(bucket, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -453,6 +725,67 @@ func (s *Store) DeleteObject(bucket, key string) error {
 	return nil
 }
 
+// SetTombstoneRetentionDays sets the number of days to retain tombstoned objects before purging.
+func (s *Store) SetTombstoneRetentionDays(days int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tombstoneRetentionDays = days
+}
+
+// TombstoneRetentionDays returns the configured tombstone retention period in days.
+func (s *Store) TombstoneRetentionDays() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.tombstoneRetentionDays
+}
+
+// PurgeTombstonedObjects removes all tombstoned objects older than the retention period.
+// Returns the number of objects purged.
+func (s *Store) PurgeTombstonedObjects() int {
+	s.mu.RLock()
+	retentionDays := s.tombstoneRetentionDays
+	s.mu.RUnlock()
+
+	if retentionDays <= 0 {
+		return 0 // Disabled
+	}
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+	purgedCount := 0
+
+	// List all buckets
+	buckets, err := s.ListBuckets()
+	if err != nil {
+		return 0
+	}
+
+	for _, bucket := range buckets {
+		// Paginate through all objects in the bucket
+		marker := ""
+		for {
+			objects, isTruncated, nextMarker, err := s.ListObjects(bucket.Name, "", marker, 1000)
+			if err != nil {
+				break
+			}
+
+			for _, obj := range objects {
+				if obj.IsTombstoned() && obj.TombstonedAt.Before(cutoff) {
+					if err := s.PurgeObject(bucket.Name, obj.Key); err == nil {
+						purgedCount++
+					}
+				}
+			}
+
+			if !isTruncated {
+				break
+			}
+			marker = nextMarker
+		}
+	}
+
+	return purgedCount
+}
+
 // ListObjects lists objects in a bucket with optional prefix filter and pagination.
 // marker is the key to start after (exclusive) for pagination.
 // Returns (objects, isTruncated, nextMarker, error).
@@ -460,12 +793,27 @@ func (s *Store) ListObjects(bucket, prefix, marker string, maxKeys int) ([]Objec
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Check bucket exists
-	if _, err := s.getBucketMeta(bucket); err != nil {
+	// Check bucket exists and get tombstone state
+	bucketMeta, err := s.getBucketMeta(bucket)
+	if err != nil {
 		return nil, false, "", err
 	}
 
-	return s.listObjectsUnsafe(bucket, prefix, marker, maxKeys)
+	objects, isTruncated, nextMarker, err := s.listObjectsUnsafe(bucket, prefix, marker, maxKeys)
+	if err != nil {
+		return nil, false, "", err
+	}
+
+	// If bucket is tombstoned, mark all objects as tombstoned (virtually)
+	if bucketMeta.IsTombstoned() {
+		for i := range objects {
+			if objects[i].TombstonedAt == nil {
+				objects[i].TombstonedAt = bucketMeta.TombstonedAt
+			}
+		}
+	}
+
+	return objects, isTruncated, nextMarker, nil
 }
 
 // listObjectsUnsafe lists objects without lock (caller must hold lock).

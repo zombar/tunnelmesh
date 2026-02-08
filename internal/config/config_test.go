@@ -50,6 +50,87 @@ auth_token: "secret"
 	assert.Equal(t, []uint16{9443}, cfg.ServicePorts, "ServicePorts should default to [9443] for metrics")
 }
 
+func TestLoadServerConfig_S3ExpiryDefaults(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+listen: ":9000"
+auth_token: "secret"
+s3:
+  enabled: true
+  max_size: "10Gi"
+`
+	configPath := testutil.TempFile(t, dir, "server.yaml", content)
+
+	cfg, err := LoadServerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, 9125, cfg.S3.ObjectExpiryDays, "ObjectExpiryDays should default to 9125 (25 years)")
+	assert.Equal(t, 365, cfg.S3.ShareExpiryDays, "ShareExpiryDays should default to 365 (1 year)")
+}
+
+func TestLoadServerConfig_S3ExpiryCustom(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+listen: ":9000"
+auth_token: "secret"
+s3:
+  enabled: true
+  max_size: "10Gi"
+  object_expiry_days: 3650
+  share_expiry_days: 180
+`
+	configPath := testutil.TempFile(t, dir, "server.yaml", content)
+
+	cfg, err := LoadServerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3650, cfg.S3.ObjectExpiryDays, "ObjectExpiryDays should be customizable")
+	assert.Equal(t, 180, cfg.S3.ShareExpiryDays, "ShareExpiryDays should be customizable")
+}
+
+func TestLoadServerConfig_S3TombstoneDefaults(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+listen: ":9000"
+auth_token: "secret"
+s3:
+  enabled: true
+  max_size: "10Gi"
+`
+	configPath := testutil.TempFile(t, dir, "server.yaml", content)
+
+	cfg, err := LoadServerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, 90, cfg.S3.TombstoneRetentionDays, "TombstoneRetentionDays should default to 90")
+}
+
+func TestLoadServerConfig_S3TombstoneCustom(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	content := `
+listen: ":9000"
+auth_token: "secret"
+s3:
+  enabled: true
+  max_size: "10Gi"
+  tombstone_retention_days: 30
+`
+	configPath := testutil.TempFile(t, dir, "server.yaml", content)
+
+	cfg, err := LoadServerConfig(configPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, 30, cfg.S3.TombstoneRetentionDays, "TombstoneRetentionDays should be customizable")
+}
+
 func TestLoadServerConfig_FileNotFound(t *testing.T) {
 	_, err := LoadServerConfig("/nonexistent/path/config.yaml")
 	assert.Error(t, err)

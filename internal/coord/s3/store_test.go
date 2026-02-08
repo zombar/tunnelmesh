@@ -2,11 +2,13 @@ package s3
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -133,6 +135,35 @@ func TestStorePutObject(t *testing.T) {
 	assert.False(t, meta.LastModified.IsZero())
 }
 
+func TestStorePutObject_SetsExpiry(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Set default object expiry to 25 years (9125 days)
+	store.SetDefaultObjectExpiryDays(9125)
+
+	content := []byte("hello world")
+	meta, err := store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	require.NotNil(t, meta.Expires, "Expires should be set")
+	expectedExpiry := time.Now().UTC().AddDate(0, 0, 9125)
+	// Allow 1 minute tolerance for test timing
+	assert.WithinDuration(t, expectedExpiry, *meta.Expires, time.Minute)
+}
+
+func TestStorePutObject_NoExpiryWhenNotConfigured(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Don't set expiry - objects should have no expiry
+	content := []byte("hello world")
+	meta, err := store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	assert.Nil(t, meta.Expires, "Expires should not be set when not configured")
+}
+
 func TestStorePutObjectBucketNotFound(t *testing.T) {
 	store := newTestStore(t)
 
@@ -245,6 +276,23 @@ func TestStoreDeleteObject(t *testing.T) {
 	require.NoError(t, err)
 
 	err = store.DeleteObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	// Verify object is tombstoned (soft-deleted), not removed
+	meta, err := store.HeadObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
+}
+
+func TestStorePurgeObject(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	_, err := store.PutObject("test-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Purge actually removes the object
+	err = store.PurgeObject("test-bucket", "file.txt")
 	require.NoError(t, err)
 
 	// Verify object is gone
@@ -369,7 +417,7 @@ func newTestStore(t *testing.T) *Store {
 
 func TestStoreWithQuota(t *testing.T) {
 	tmpDir := t.TempDir()
-	quota := NewQuotaManager(1) // 1 GB limit
+	quota := NewQuotaManager(1 * 1024 * 1024 * 1024) // 1 Gi limit
 
 	store, err := NewStore(tmpDir, quota)
 	require.NoError(t, err)
@@ -385,10 +433,329 @@ func TestStoreWithQuota(t *testing.T) {
 	assert.Equal(t, int64(len(content)), stats.UsedBytes)
 	assert.Equal(t, int64(len(content)), stats.PerBucket["test-bucket"])
 
-	// Delete object should release quota
+	// Tombstone (soft delete) should NOT release quota yet
 	err = store.DeleteObject("test-bucket", "file.txt")
 	require.NoError(t, err)
 
 	stats = store.QuotaStats()
-	assert.Equal(t, int64(0), stats.UsedBytes)
+	assert.Equal(t, int64(len(content)), stats.UsedBytes, "tombstoned objects still use quota")
+
+	// Purge should release quota
+	err = store.PurgeObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	stats = store.QuotaStats()
+	assert.Equal(t, int64(0), stats.UsedBytes, "purged objects release quota")
+}
+
+// =========================================================================
+// Object Lifecycle Tests
+// =========================================================================
+
+func TestObjectLifecycle_ExpirySetting(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Set object expiry to 30 days
+	store.SetDefaultObjectExpiryDays(30)
+
+	content := []byte("test content")
+	meta, err := store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Verify expiry is set
+	require.NotNil(t, meta.Expires, "Expires should be set")
+	expectedExpiry := time.Now().UTC().AddDate(0, 0, 30)
+	assert.WithinDuration(t, expectedExpiry, *meta.Expires, time.Minute)
+}
+
+func TestObjectLifecycle_TombstonePreservesContent(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	content := []byte("important data")
+	_, err := store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Tombstone the object
+	err = store.TombstoneObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	// Verify object is tombstoned
+	meta, err := store.HeadObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned())
+
+	// Content should still be readable
+	reader, readMeta, err := store.GetObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+	assert.True(t, readMeta.IsTombstoned())
+
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, content, data)
+}
+
+func TestObjectLifecycle_TombstonedObjectInList(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Create two objects
+	_, err := store.PutObject("test-bucket", "live.txt", bytes.NewReader([]byte("live")), 4, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = store.PutObject("test-bucket", "dead.txt", bytes.NewReader([]byte("dead")), 4, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Tombstone one
+	err = store.TombstoneObject("test-bucket", "dead.txt")
+	require.NoError(t, err)
+
+	// Both should appear in list
+	objects, _, _, err := store.ListObjects("test-bucket", "", "", 0)
+	require.NoError(t, err)
+	assert.Len(t, objects, 2)
+
+	// Check tombstone flags
+	var liveObj, deadObj *ObjectMeta
+	for i := range objects {
+		switch objects[i].Key {
+		case "live.txt":
+			liveObj = &objects[i]
+		case "dead.txt":
+			deadObj = &objects[i]
+		}
+	}
+	require.NotNil(t, liveObj)
+	require.NotNil(t, deadObj)
+	assert.False(t, liveObj.IsTombstoned())
+	assert.True(t, deadObj.IsTombstoned())
+}
+
+func TestObjectLifecycle_PurgeRemovesCompletely(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	content := []byte("to be purged")
+	_, err := store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Tombstone first
+	err = store.TombstoneObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	// Then purge
+	err = store.PurgeObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	// Verify object is completely gone
+	_, err = store.HeadObject("test-bucket", "file.txt")
+	assert.ErrorIs(t, err, ErrObjectNotFound)
+
+	// Should not appear in list
+	objects, _, _, err := store.ListObjects("test-bucket", "", "", 0)
+	require.NoError(t, err)
+	assert.Empty(t, objects)
+}
+
+func TestObjectLifecycle_DoubleTombstoneIsNoop(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	_, err := store.PutObject("test-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Tombstone twice - should not error
+	err = store.TombstoneObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	meta1, _ := store.HeadObject("test-bucket", "file.txt")
+	tombstonedAt1 := meta1.TombstonedAt
+
+	err = store.TombstoneObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	meta2, _ := store.HeadObject("test-bucket", "file.txt")
+	// Timestamp should not change on second tombstone
+	assert.Equal(t, tombstonedAt1, meta2.TombstonedAt)
+}
+
+func TestObjectLifecycle_PurgeTombstonedObjects(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Create and tombstone some objects
+	_, err := store.PutObject("test-bucket", "old.txt", bytes.NewReader([]byte("old")), 3, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = store.PutObject("test-bucket", "new.txt", bytes.NewReader([]byte("new")), 3, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = store.PutObject("test-bucket", "live.txt", bytes.NewReader([]byte("live")), 4, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Tombstone old.txt and new.txt
+	err = store.TombstoneObject("test-bucket", "old.txt")
+	require.NoError(t, err)
+	err = store.TombstoneObject("test-bucket", "new.txt")
+	require.NoError(t, err)
+
+	// Manually backdate old.txt tombstone to 100 days ago
+	oldMeta, _ := store.HeadObject("test-bucket", "old.txt")
+	oldTime := time.Now().UTC().AddDate(0, 0, -100)
+	oldMeta.TombstonedAt = &oldTime
+	// Write the backdated metadata
+	metaPath := filepath.Join(store.dataDir, "buckets", "test-bucket", "meta", "old.txt.json")
+	metaData, _ := os.ReadFile(metaPath)
+	var meta ObjectMeta
+	_ = json.Unmarshal(metaData, &meta)
+	meta.TombstonedAt = &oldTime
+	updatedData, _ := json.MarshalIndent(meta, "", "  ")
+	_ = os.WriteFile(metaPath, updatedData, 0644)
+
+	// Set retention to 90 days and purge
+	store.SetTombstoneRetentionDays(90)
+	purged := store.PurgeTombstonedObjects()
+
+	// Should have purged 1 object (old.txt is > 90 days old)
+	assert.Equal(t, 1, purged)
+
+	// old.txt should be gone
+	_, err = store.HeadObject("test-bucket", "old.txt")
+	assert.ErrorIs(t, err, ErrObjectNotFound)
+
+	// new.txt should still exist (tombstoned < 90 days ago)
+	newMeta, err := store.HeadObject("test-bucket", "new.txt")
+	require.NoError(t, err)
+	assert.True(t, newMeta.IsTombstoned())
+
+	// live.txt should still exist (not tombstoned)
+	liveMeta, err := store.HeadObject("test-bucket", "live.txt")
+	require.NoError(t, err)
+	assert.False(t, liveMeta.IsTombstoned())
+}
+
+func TestObjectLifecycle_PurgeTombstonedObjectsDisabled(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	_, err := store.PutObject("test-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+	require.NoError(t, err)
+	err = store.TombstoneObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	// Retention days = 0 means disabled
+	store.SetTombstoneRetentionDays(0)
+	purged := store.PurgeTombstonedObjects()
+	assert.Equal(t, 0, purged)
+
+	// Object should still exist
+	_, err = store.HeadObject("test-bucket", "file.txt")
+	assert.NoError(t, err)
+}
+
+func TestBucketTombstone(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	// Create bucket with objects
+	err = store.CreateBucket("test-bucket", "alice")
+	require.NoError(t, err)
+
+	content := []byte("test content")
+	_, err = store.PutObject("test-bucket", "file1.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+	_, err = store.PutObject("test-bucket", "file2.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Tombstone the bucket
+	err = store.TombstoneBucket("test-bucket")
+	require.NoError(t, err)
+
+	// Bucket should be tombstoned
+	bucketMeta, err := store.HeadBucket("test-bucket")
+	require.NoError(t, err)
+	assert.True(t, bucketMeta.IsTombstoned())
+
+	// Objects should appear tombstoned via HeadObject
+	obj1, err := store.HeadObject("test-bucket", "file1.txt")
+	require.NoError(t, err)
+	assert.True(t, obj1.IsTombstoned(), "object should appear tombstoned when bucket is tombstoned")
+
+	// Objects should appear tombstoned in ListObjects
+	objects, _, _, err := store.ListObjects("test-bucket", "", "", 100)
+	require.NoError(t, err)
+	assert.Len(t, objects, 2)
+	for _, obj := range objects {
+		assert.True(t, obj.IsTombstoned(), "all objects should appear tombstoned")
+	}
+
+	// Untombstone the bucket
+	err = store.UntombstoneBucket("test-bucket")
+	require.NoError(t, err)
+
+	// Bucket should no longer be tombstoned
+	bucketMeta, err = store.HeadBucket("test-bucket")
+	require.NoError(t, err)
+	assert.False(t, bucketMeta.IsTombstoned())
+
+	// Objects should no longer appear tombstoned
+	obj1, err = store.HeadObject("test-bucket", "file1.txt")
+	require.NoError(t, err)
+	assert.False(t, obj1.IsTombstoned(), "object should not appear tombstoned after bucket untombstoned")
+}
+
+func TestDeleteTwiceToPurge(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	err = store.CreateBucket("test-bucket", "alice")
+	require.NoError(t, err)
+
+	content := []byte("delete me")
+	_, err = store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// First delete: should tombstone
+	err = store.DeleteObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	meta, err := store.HeadObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned(), "first delete should tombstone")
+
+	// Second delete: should purge
+	err = store.DeleteObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	// Object should be gone
+	_, err = store.HeadObject("test-bucket", "file.txt")
+	assert.Equal(t, ErrObjectNotFound, err, "second delete should purge")
+}
+
+func TestDeleteTwiceToPurge_BucketTombstoned(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	err = store.CreateBucket("test-bucket", "alice")
+	require.NoError(t, err)
+
+	content := []byte("delete me")
+	_, err = store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Tombstone the bucket (simulates file share deletion)
+	err = store.TombstoneBucket("test-bucket")
+	require.NoError(t, err)
+
+	// Object appears tombstoned via bucket
+	meta, err := store.HeadObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned())
+
+	// Delete should purge (since already tombstoned via bucket)
+	err = store.DeleteObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	// Object should be gone
+	_, err = store.HeadObject("test-bucket", "file.txt")
+	assert.Equal(t, ErrObjectNotFound, err, "delete of bucket-tombstoned object should purge")
 }

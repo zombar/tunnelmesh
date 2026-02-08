@@ -1,7 +1,9 @@
 package coord
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -355,4 +358,332 @@ func TestDownsampleHistory_Uniformity(t *testing.T) {
 			t.Errorf("point %d: got %f, expected %f", i, result[i].BytesSentRate, expectedValue)
 		}
 	}
+}
+
+// --- S3 Explorer API Tests ---
+
+func newTestServerWithS3AndBucket(t *testing.T) *Server {
+	t.Helper()
+	tempDir := t.TempDir()
+	cfg := &config.ServerConfig{
+		Listen:    ":0",
+		AuthToken: "test-token",
+		DataDir:   tempDir,
+		Admin:     config.AdminConfig{Enabled: true},
+		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
+		S3: config.S3Config{
+			Enabled: true,
+			DataDir: tempDir + "/s3",
+			Port:    9000,
+			MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
+		},
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+
+	// Create a test bucket
+	err = srv.s3Store.CreateBucket("test-bucket", "admin")
+	require.NoError(t, err)
+
+	return srv
+}
+
+func TestS3Proxy_NoS3Store(t *testing.T) {
+	srv := newTestServer(t)
+	// s3Store is nil
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+func TestS3Proxy_ListBuckets(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp S3BucketsResponse
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(t, err)
+	// Server creates system bucket automatically, plus our test bucket
+	require.Len(t, resp.Buckets, 2)
+
+	// Verify quota info is present
+	assert.Greater(t, resp.Quota.MaxBytes, int64(0))
+
+	// Find test bucket and verify it's writable
+	var testBucket *S3BucketInfo
+	for i := range resp.Buckets {
+		if resp.Buckets[i].Name == "test-bucket" {
+			testBucket = &resp.Buckets[i]
+			break
+		}
+	}
+	require.NotNil(t, testBucket)
+	assert.True(t, testBucket.Writable)
+}
+
+func TestS3Proxy_ListBuckets_SystemBucketReadOnly(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// System bucket is created automatically by the server
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp S3BucketsResponse
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(t, err)
+
+	// Find system bucket and verify it's read-only
+	var systemBucket *S3BucketInfo
+	for i := range resp.Buckets {
+		if resp.Buckets[i].Name == auth.SystemBucket {
+			systemBucket = &resp.Buckets[i]
+			break
+		}
+	}
+	require.NotNil(t, systemBucket)
+	assert.False(t, systemBucket.Writable)
+}
+
+func TestS3Proxy_ListObjects(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Add some objects
+	_, err := srv.s3Store.PutObject("test-bucket", "file1.txt", bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = srv.s3Store.PutObject("test-bucket", "folder/file2.txt", bytes.NewReader([]byte("world")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var objects []S3ObjectInfo
+	err = json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+	assert.Len(t, objects, 2)
+}
+
+func TestS3Proxy_ListObjects_WithDelimiter(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Add objects in a folder structure
+	_, err := srv.s3Store.PutObject("test-bucket", "file1.txt", bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = srv.s3Store.PutObject("test-bucket", "folder/file2.txt", bytes.NewReader([]byte("world")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects?delimiter=/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var objects []S3ObjectInfo
+	err = json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+
+	// Should have file1.txt and folder/ prefix
+	assert.Len(t, objects, 2)
+
+	// Check for prefix
+	var hasPrefix bool
+	for _, obj := range objects {
+		if obj.IsPrefix && obj.Key == "folder/" {
+			hasPrefix = true
+		}
+	}
+	assert.True(t, hasPrefix, "should have folder/ prefix")
+}
+
+func TestS3Proxy_GetObject(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Add an object
+	content := []byte("hello world")
+	_, err := srv.s3Store.PutObject("test-bucket", "test.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects/test.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "text/plain", rec.Header().Get("Content-Type"))
+
+	body, _ := io.ReadAll(rec.Body)
+	assert.Equal(t, content, body)
+}
+
+func TestS3Proxy_GetObject_NotFound(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects/nonexistent.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestS3Proxy_PutObject(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	content := []byte("new content")
+	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/test-bucket/objects/new.txt", bytes.NewReader(content))
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NotEmpty(t, rec.Header().Get("ETag"))
+
+	// Verify object was created
+	reader, _, err := srv.s3Store.GetObject("test-bucket", "new.txt")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+
+	data, _ := io.ReadAll(reader)
+	assert.Equal(t, content, data)
+}
+
+func TestS3Proxy_PutObject_SystemBucketForbidden(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// System bucket is created automatically by the server
+	content := []byte("malicious content")
+	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/"+auth.SystemBucket+"/objects/hack.txt", bytes.NewReader(content))
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestS3Proxy_DeleteObject(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Add an object
+	_, err := srv.s3Store.PutObject("test-bucket", "to-delete.txt", bytes.NewReader([]byte("bye")), 3, "text/plain", nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/s3/buckets/test-bucket/objects/to-delete.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+
+	// Verify object is tombstoned (soft-deleted), not removed
+	meta, err := srv.s3Store.HeadObject("test-bucket", "to-delete.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
+}
+
+func TestS3Proxy_DeleteObject_SystemBucketForbidden(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// System bucket is created automatically, add an object to it
+	_, err := srv.s3Store.PutObject(auth.SystemBucket, "protected.txt", bytes.NewReader([]byte("secret")), 6, "text/plain", nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/s3/buckets/"+auth.SystemBucket+"/objects/protected.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestS3Proxy_HeadObject(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Add an object
+	content := []byte("hello world")
+	_, err := srv.s3Store.PutObject("test-bucket", "test.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodHead, "/api/s3/buckets/test-bucket/objects/test.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "text/plain", rec.Header().Get("Content-Type"))
+	assert.Equal(t, "11", rec.Header().Get("Content-Length"))
+	assert.NotEmpty(t, rec.Header().Get("ETag"))
+}
+
+func TestS3Proxy_HeadObject_NotFound(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodHead, "/api/s3/buckets/test-bucket/objects/nonexistent.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestS3Proxy_NotFound(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/invalid/path", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestS3Proxy_PathTraversal(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	tests := []struct {
+		name         string
+		path         string
+		expectedCode int
+	}{
+		// URL-encoded path traversal attempts (bypass HTTP path cleaning)
+		{"bucket url-encoded ..", "/api/s3/buckets/%2e%2e/objects/passwd", http.StatusBadRequest},
+		{"key url-encoded ..", "/api/s3/buckets/test-bucket/objects/%2e%2e%2fetc%2fpasswd", http.StatusBadRequest},
+		// Backslash attempts
+		{"bucket with backslash", "/api/s3/buckets/..\\..\\etc/objects/passwd", http.StatusBadRequest},
+		// URL-encoded dotdot
+		{"bucket is dotdot", "/api/s3/buckets/%2e%2e/objects/test", http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			rec := httptest.NewRecorder()
+			srv.adminMux.ServeHTTP(rec, req)
+
+			// Should be rejected with BadRequest, not return file contents
+			assert.Equal(t, tt.expectedCode, rec.Code)
+		})
+	}
+}
+
+func TestS3Proxy_URLEncodedKey(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Create object with special chars in name
+	content := []byte("hello world")
+	_, err := srv.s3Store.PutObject("test-bucket", "file with spaces.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Access with URL-encoded key
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects/file%20with%20spaces.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "hello world", rec.Body.String())
 }

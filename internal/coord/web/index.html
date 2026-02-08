@@ -21,6 +21,7 @@
     <!-- Component classes -->
     <script src="js/visualizer.js"></script>
     <script src="js/map.js"></script>
+    <script src="js/s3explorer.js"></script>
 </head>
 <body>
     <div id="toast-container" class="toast-container"></div>
@@ -296,6 +297,112 @@
     <!-- Data Tab Content -->
     <div id="data-tab" class="tab-content">
     <main>
+        <!-- Object Viewer Section (GitHub-style file browser) -->
+        <section id="s3-section" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Object Viewer</h2>
+            </div>
+            <div class="collapsible-content">
+                <!-- Navigation bar with breadcrumb and actions -->
+                <div class="s3-nav" id="s3-nav">
+                    <div class="s3-breadcrumb" id="s3-breadcrumb"></div>
+                    <div class="s3-toolbar">
+                        <!-- Browse actions (shown when viewing folder) -->
+                        <div class="s3-browse-actions" id="s3-browse-actions">
+                            <button class="s3-btn" onclick="s3NewFile()" title="New file">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                                <span>New</span>
+                            </button>
+                            <button class="s3-btn" onclick="s3Upload()" title="Upload file">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
+                                <span>Upload</span>
+                            </button>
+                        </div>
+                        <!-- Selection actions (shown when items selected) -->
+                        <div class="s3-selection-actions" id="s3-selection-actions" style="display: none;">
+                            <button class="s3-btn" id="s3-rename-btn" onclick="s3Rename()" title="Rename">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                                <span>Rename</span>
+                            </button>
+                            <button class="s3-btn s3-btn-danger" onclick="s3DeleteSelected()" title="Delete selected">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                                <span>Delete</span>
+                            </button>
+                            <span class="s3-selection-count" id="s3-selection-count"></span>
+                        </div>
+                        <!-- File actions (shown when viewing file) -->
+                        <div class="s3-file-actions" id="s3-file-actions" style="display: none;">
+                            <label class="s3-autosave-label" title="Automatically save changes">
+                                <input type="checkbox" id="s3-autosave" onchange="s3ToggleAutosave(this.checked)">
+                                <span>Autosave</span>
+                            </label>
+                            <button class="s3-btn s3-btn-save" id="s3-save-btn" onclick="s3Save()" title="Save changes">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
+                                <span>Save</span>
+                            </button>
+                            <button class="s3-btn" onclick="s3Download()" title="Download file">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                                <span>Download</span>
+                            </button>
+                            <button class="s3-btn s3-btn-danger" id="s3-delete-btn" onclick="s3Delete()" title="Delete file">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                                <span>Delete</span>
+                            </button>
+                            <button class="s3-btn" onclick="s3CloseFile()" title="Close file">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                                <span>Close</span>
+                            </button>
+                        </div>
+                        <div class="s3-toolbar-spacer"></div>
+                        <button class="s3-btn s3-btn-icon" id="s3-fullscreen-btn" onclick="s3ToggleFullscreen()" title="Toggle fullscreen">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                        </button>
+                    </div>
+                </div>
+                <!-- Resizable content container -->
+                <div id="s3-content" class="s3-content">
+                    <!-- File listing (table view) -->
+                    <div id="s3-browser" class="s3-browser">
+                        <table id="s3-files">
+                            <thead>
+                                <tr>
+                                    <th class="s3-col-checkbox"></th>
+                                    <th class="s3-col-name">Name</th>
+                                    <th class="s3-col-size">Size</th>
+                                    <th class="s3-col-quota">Quota</th>
+                                    <th class="s3-col-modified">Last Modified</th>
+                                    <th class="s3-col-expires">Expires</th>
+                                </tr>
+                            </thead>
+                            <tbody id="s3-files-body"></tbody>
+                        </table>
+                        <div id="s3-empty" class="empty-state" style="display: none;">
+                            No files in this location.
+                        </div>
+                        <div id="s3-pagination" class="show-more-container" style="display: none;">
+                            <span id="s3-show-more"><button class="show-more-link" onclick="s3ShowMore()">show more (<span id="s3-shown-count">0</span> / <span id="s3-total-count">0</span>)</button></span><span id="s3-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="s3ShowLess()">show less</button></span>
+                        </div>
+                    </div>
+                    <!-- File viewer/editor (shown when file is selected) -->
+                    <div id="s3-viewer" class="s3-viewer" style="display: none;">
+                        <div class="s3-readonly-badge" id="s3-readonly-badge" style="display: none;">READ-ONLY</div>
+                        <div class="s3-editor-wrap">
+                            <div class="s3-line-numbers" id="s3-line-numbers"></div>
+                            <textarea class="s3-editor" id="s3-editor" spellcheck="false"></textarea>
+                        </div>
+                    </div>
+                    <!-- Image/binary preview -->
+                    <div id="s3-preview" class="s3-preview" style="display: none;"></div>
+                </div>
+                <!-- Resize handle -->
+                <div id="s3-resize-handle" class="resize-handle">
+                    <div class="resize-handle-grip"></div>
+                </div>
+                <!-- Drop zone overlay -->
+                <div class="s3-drop-zone" id="s3-drop-zone"></div>
+            </div>
+        </section>
+
         <section id="users-section">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Users</h2>
@@ -309,6 +416,7 @@
                             <th>Type</th>
                             <th>Groups</th>
                             <th>Last Seen</th>
+                            <th>Expires</th>
                             <th>Status</th>
                         </tr>
                     </thead>
@@ -316,6 +424,9 @@
                 </table>
                 <div id="no-users" class="empty-state" style="display: none;">
                     No users registered yet.
+                </div>
+                <div id="users-pagination" class="show-more-container" style="display: none;">
+                    <span id="users-show-more"><button class="show-more-link" onclick="showMoreUsers()">show more (<span id="users-shown-count">0</span> / <span id="users-total-count">0</span>)</button></span><span id="users-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessUsers()">show less</button></span>
                 </div>
             </div>
         </section>
@@ -332,7 +443,6 @@
                             <th>Name</th>
                             <th>Description</th>
                             <th>Members</th>
-                            <th>Built-in</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -340,6 +450,9 @@
                 </table>
                 <div id="no-groups" class="empty-state" style="display: none;">
                     No groups found.
+                </div>
+                <div id="groups-pagination" class="show-more-container" style="display: none;">
+                    <span id="groups-show-more"><button class="show-more-link" onclick="showMoreGroups()">show more (<span id="groups-shown-count">0</span> / <span id="groups-total-count">0</span>)</button></span><span id="groups-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessGroups()">show less</button></span>
                 </div>
             </div>
         </section>
@@ -356,7 +469,9 @@
                             <th>Name</th>
                             <th>Description</th>
                             <th>Owner</th>
+                            <th>Quota</th>
                             <th>Created</th>
+                            <th>Expires</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -364,6 +479,9 @@
                 </table>
                 <div id="no-shares" class="empty-state" style="display: none;">
                     No file shares yet. Create one to share files across the mesh.
+                </div>
+                <div id="shares-pagination" class="show-more-container" style="display: none;">
+                    <span id="shares-show-more"><button class="show-more-link" onclick="showMoreShares()">show more (<span id="shares-shown-count">0</span> / <span id="shares-total-count">0</span>)</button></span><span id="shares-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessShares()">show less</button></span>
                 </div>
             </div>
         </section>
@@ -389,10 +507,37 @@
                 <div id="no-bindings" class="empty-state" style="display: none;">
                     No role bindings configured.
                 </div>
+                <div id="bindings-pagination" class="show-more-container" style="display: none;">
+                    <span id="bindings-show-more"><button class="show-more-link" onclick="showMoreBindings()">show more (<span id="bindings-shown-count">0</span> / <span id="bindings-total-count">0</span>)</button></span><span id="bindings-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessBindings()">show less</button></span>
+                </div>
             </div>
         </section>
+
     </main>
     </div><!-- End Data Tab -->
+
+    <!-- S3 New Item Modal -->
+    <div id="s3-new-modal" class="modal" style="display: none;">
+        <div class="modal-content modal-small">
+            <div class="modal-header">
+                <h3 id="s3-new-modal-title">New File</h3>
+                <button class="modal-close" onclick="closeS3Modal('s3-new-modal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="s3-new-name">Name</label>
+                    <input type="text" id="s3-new-name" placeholder="e.g., config.yaml">
+                </div>
+                <div class="form-actions">
+                    <button class="btn-secondary" onclick="s3CreateFolder()">Create Folder</button>
+                    <button class="btn-primary" onclick="s3CreateFile()">Create File</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden file input for upload -->
+    <input type="file" id="s3-file-input" style="display: none;" multiple onchange="s3HandleFileSelect(event)">
 
     <!-- Modals (outside tabs) -->
 
@@ -433,6 +578,11 @@
                     <div class="form-group">
                         <label for="share-description">Description</label>
                         <input type="text" id="share-description" placeholder="Optional description">
+                    </div>
+                    <div class="form-group">
+                        <label for="share-quota">Quota (MB)</label>
+                        <input type="number" id="share-quota" placeholder="100 (default, 0 = unlimited)" min="0" step="100">
+                        <small class="form-hint">Maximum storage size for this share</small>
                     </div>
                     <button class="btn-primary" onclick="createShare()">Create Share</button>
                 </div>

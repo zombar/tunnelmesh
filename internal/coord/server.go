@@ -202,6 +202,11 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		log.Info().Msg("node location tracking enabled (uses external IP geolocation API)")
 	}
 
+	// Set user expiration days from config
+	if cfg.UserExpirationDays > 0 {
+		auth.SetUserExpirationDays(cfg.UserExpirationDays)
+	}
+
 	// Initialize WireGuard client store if enabled
 	if cfg.WireGuard.Enabled {
 		srv.wgStore = wireguard.NewStore(mesh.CIDR)
@@ -290,6 +295,39 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 	}()
 }
 
+// StartPeriodicCleanup starts the background cleanup goroutine for S3 storage.
+// It periodically purges tombstoned objects past their retention period and
+// tombstones content in expired file shares.
+func (s *Server) StartPeriodicCleanup(ctx context.Context) {
+	if s.s3Store == nil {
+		return
+	}
+
+	// Run cleanup every hour
+	ticker := time.NewTicker(1 * time.Hour)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// Purge tombstoned objects past retention period
+				if purged := s.s3Store.PurgeTombstonedObjects(); purged > 0 {
+					log.Info().Int("count", purged).Msg("purged tombstoned S3 objects")
+				}
+
+				// Tombstone content in expired file shares
+				if s.fileShareMgr != nil {
+					if tombstoned := s.fileShareMgr.TombstoneExpiredShareContents(); tombstoned > 0 {
+						log.Info().Int("count", tombstoned).Msg("tombstoned expired file share content")
+					}
+				}
+			}
+		}
+	}()
+}
+
 // SetVersion sets the server version for admin display.
 func (s *Server) SetVersion(version string) {
 	s.version = version
@@ -343,6 +381,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
+// NFSPort is the standard NFS port used for file share access.
+const NFSPort = 2049
+
 // getServicePorts returns the list of service ports the coordinator exposes.
 // These ports are pushed to peers so they can auto-allow access through the packet filter.
 func (s *Server) getServicePorts() []uint16 {
@@ -358,6 +399,11 @@ func (s *Server) getServicePorts() []uint16 {
 		ports = append(ports, uint16(s.cfg.S3.Port))
 	}
 
+	// NFS port (only when there are active file shares)
+	if s.fileShareMgr != nil && len(s.fileShareMgr.List()) > 0 {
+		ports = append(ports, NFSPort)
+	}
+
 	// Configured service ports (includes metrics port 9443 by default)
 	ports = append(ports, s.cfg.ServicePorts...)
 
@@ -366,11 +412,11 @@ func (s *Server) getServicePorts() []uint16 {
 
 // initS3Storage initializes the S3 storage subsystem.
 func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
-	// Create quota manager if limit is set
-	var quota *s3.QuotaManager
-	if cfg.S3.MaxSizeGB > 0 {
-		quota = s3.NewQuotaManager(cfg.S3.MaxSizeGB)
+	// Require max_size to be configured for quota enforcement
+	if cfg.S3.MaxSize.Bytes() <= 0 {
+		return fmt.Errorf("s3.max_size must be configured (e.g., 10Gi) for quota enforcement")
 	}
+	quota := s3.NewQuotaManager(cfg.S3.MaxSize.Bytes())
 
 	// Create store
 	store, err := s3.NewStore(cfg.S3.DataDir, quota)
@@ -378,6 +424,10 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 		return fmt.Errorf("create S3 store: %w", err)
 	}
 	s.s3Store = store
+
+	// Set expiry defaults from config
+	store.SetDefaultObjectExpiryDays(cfg.S3.ObjectExpiryDays)
+	store.SetDefaultShareExpiryDays(cfg.S3.ShareExpiryDays)
 
 	// Create authorizer with group support
 	s.s3Authorizer = auth.NewAuthorizerWithGroups()
@@ -452,7 +502,7 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	log.Info().
 		Str("data_dir", cfg.S3.DataDir).
 		Int("port", cfg.S3.Port).
-		Int("max_size_gb", cfg.S3.MaxSizeGB).
+		Str("max_size", cfg.S3.MaxSize.String()).
 		Msg("S3 storage initialized")
 
 	return nil
