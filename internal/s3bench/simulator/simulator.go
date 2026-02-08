@@ -282,7 +282,9 @@ func (s *Simulator) orchestrateMesh(ctx context.Context) error {
 			if err := s.meshOrch.JoinPeer(ctx, char); err != nil {
 				return fmt.Errorf("joining peer %s at T=0: %w", char.ID, err)
 			}
+			s.metricsLock.Lock()
 			s.metrics.PeerJoins++
+			s.metricsLock.Unlock()
 		}
 	}
 
@@ -302,7 +304,16 @@ func (s *Simulator) executeScenario(ctx context.Context) {
 		return
 	}
 
-	// Execute tasks with actual S3 operations
+	// Execute tasks with actual S3 operations using concurrent execution
+	maxConcurrent := s.config.MaxConcurrentUploads
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1 // Default to sequential if not set
+	}
+
+	// Create semaphore channel to limit concurrency
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+
 	lastTime := time.Duration(0)
 	for i := range s.tasks {
 		task := &s.tasks[i]
@@ -310,29 +321,53 @@ func (s *Simulator) executeScenario(ctx context.Context) {
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
+			// Wait for in-flight tasks to complete
+			wg.Wait()
 			return
 		default:
 		}
 
-		// Sleep to maintain timing between events
+		// Sleep to maintain timing between events (with cancellation support)
 		if task.RealTime > lastTime {
 			sleepDuration := task.RealTime - lastTime
-			time.Sleep(sleepDuration)
+			select {
+			case <-ctx.Done():
+				wg.Wait()
+				return
+			case <-time.After(sleepDuration):
+			}
 			lastTime = task.RealTime
 		}
 
-		// Execute the task
-		if err := s.executeTask(ctx, task); err != nil {
-			s.metricsLock.Lock()
-			s.metrics.TasksFailed++
-			s.metrics.Errors = append(s.metrics.Errors, fmt.Sprintf("Task %s failed: %v", task.TaskID, err))
-			s.metricsLock.Unlock()
-		} else {
-			s.metricsLock.Lock()
-			s.metrics.TasksCompleted++
-			s.metricsLock.Unlock()
+		// Acquire semaphore slot (blocks if at max concurrency)
+		select {
+		case <-ctx.Done():
+			wg.Wait()
+			return
+		case sem <- struct{}{}:
 		}
+
+		// Execute task concurrently
+		wg.Add(1)
+		go func(t *WorkloadTask) {
+			defer wg.Done()
+			defer func() { <-sem }() // Release semaphore slot
+
+			if err := s.executeTask(ctx, t); err != nil {
+				s.metricsLock.Lock()
+				s.metrics.TasksFailed++
+				s.metrics.Errors = append(s.metrics.Errors, fmt.Sprintf("Task %s failed: %v", t.TaskID, err))
+				s.metricsLock.Unlock()
+			} else {
+				s.metricsLock.Lock()
+				s.metrics.TasksCompleted++
+				s.metricsLock.Unlock()
+			}
+		}(task)
 	}
+
+	// Wait for all tasks to complete
+	wg.Wait()
 
 	// Execute adversary attempts - actually test RBAC
 	for characterID, attempts := range s.attempts {
@@ -524,7 +559,10 @@ func (s *Simulator) executeUploadHTTP(ctx context.Context, session *UserSession,
 
 	// Check response
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("HTTP PUT %s failed: %d (error reading response body: %w)", url, resp.StatusCode, readErr)
+		}
 		return fmt.Errorf("HTTP PUT %s failed: %d %s", url, resp.StatusCode, string(body))
 	}
 
@@ -570,7 +608,10 @@ func (s *Simulator) executeDeleteHTTP(ctx context.Context, session *UserSession,
 	}()
 
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("HTTP DELETE %s failed: %d (error reading response body: %w)", url, resp.StatusCode, readErr)
+		}
 		return fmt.Errorf("HTTP DELETE %s failed: %d %s", url, resp.StatusCode, string(body))
 	}
 
@@ -627,7 +668,10 @@ func (s *Simulator) executeDownloadHTTP(ctx context.Context, session *UserSessio
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("HTTP GET %s failed: %d (error reading response body: %w)", url, resp.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("HTTP GET %s failed: %d %s", url, resp.StatusCode, string(body))
 	}
 
