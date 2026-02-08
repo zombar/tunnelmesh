@@ -186,11 +186,11 @@ docker-up: docker-build
 	@echo ""
 	@echo "=== User Registration ==="
 	@if [ ! -f ~/.tunnelmesh/user.json ]; then \
-		echo "No user identity found. Run 'tunnelmesh user setup' to create one."; \
-	else \
-		echo "Registering user with mesh (before joining)..."; \
-		tunnelmesh user register --server http://localhost:8081 || true; \
+		echo "No user identity found. Setting up..."; \
+		tunnelmesh user setup; \
 	fi
+	@echo "Registering user with mesh..."
+	@tunnelmesh user register --server http://localhost:8081 || true
 	@echo ""
 	@echo "=== Join from this machine ==="
 	@read -p "Run 'sudo tunnelmesh join --context docker'? [Y/n] " answer; \
