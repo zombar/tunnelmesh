@@ -320,11 +320,10 @@
             const itemId = item.key || item.name;
             const isSelected = state.selectedItems.has(itemId);
             const rowClass = isSelected ? 's3-selected' : '';
-            // Only show checkboxes for writable buckets (and not for bucket items themselves)
-            const canSelect = state.writable && !item.isBucket;
-            const checkbox = canSelect
-                ? `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeHtml(itemId)}')" />`
-                : '';
+            // Show checkboxes for files/folders (not buckets), disabled for read-only
+            const checkbox = item.isBucket
+                ? ''
+                : `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} ${state.writable ? '' : 'disabled'} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeHtml(itemId)}')" />`;
 
             return `
                 <tr class="${rowClass}" onclick="${onclick}">
