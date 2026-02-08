@@ -5,6 +5,14 @@ set -e
 NODE_NAME="node-$(hostname)"
 export NODE_NAME
 
+# Random first names for user registration
+FIRST_NAMES=(
+    "Alice" "Bob" "Charlie" "Diana" "Eve" "Frank" "Grace" "Henry"
+    "Ivy" "Jack" "Kate" "Leo" "Mia" "Noah" "Olivia" "Paul"
+    "Quinn" "Ruby" "Sam" "Tara" "Uma" "Victor" "Wendy" "Xander"
+    "Yara" "Zoe" "Alex" "Beth" "Carl" "Dana" "Eli" "Fiona"
+)
+
 # European cities with coordinates (lat,lon,name)
 LOCATIONS=(
     "51.5074,-0.1278,London"
@@ -102,6 +110,25 @@ echo "search tunnelmesh" >> /etc/resolv.conf
 cat /etc/resolv.conf.backup >> /etc/resolv.conf
 echo "DNS configured:"
 cat /etc/resolv.conf
+
+# Set up user identity and schedule registration
+USER_JSON="/root/.tunnelmesh/user.json"
+if [ ! -f "$USER_JSON" ]; then
+    # Pick a random first name based on hostname hash
+    NAME_INDEX=$((HOSTNAME_HASH % ${#FIRST_NAMES[@]}))
+    USER_NAME="${FIRST_NAMES[$NAME_INDEX]}"
+    echo "Setting up user identity: $USER_NAME"
+    tunnelmesh user setup --name "$USER_NAME"
+fi
+
+# Register user in background after 10 minutes
+(
+    sleep 600  # Wait 10 minutes
+    echo ""
+    echo "=== Registering user with mesh ==="
+    tunnelmesh user register --server "$SERVER_URL" || echo "User registration failed (may already be registered)"
+) &
+echo "User registration scheduled in 10 minutes"
 
 # Give time for initial peer discovery (Go code handles jitter and fast retries)
 echo "Waiting for initial peer discovery..."

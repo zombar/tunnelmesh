@@ -184,19 +184,19 @@ docker-up: docker-build
 	@echo "TunnelMesh Docker environment started"
 	@echo "Use 'make docker-logs' to follow logs"
 	@echo ""
+	@echo "=== User Registration ==="
+	@if [ ! -f ~/.tunnelmesh/user.json ]; then \
+		echo "No user identity found. Run 'tunnelmesh user setup' to create one."; \
+	else \
+		echo "Registering user with mesh (before joining)..."; \
+		tunnelmesh user register --server http://localhost:8081 || true; \
+	fi
+	@echo ""
 	@echo "=== Join from this machine ==="
 	@read -p "Run 'sudo tunnelmesh join --context docker'? [Y/n] " answer; \
 	if [ "$$answer" != "n" ] && [ "$$answer" != "N" ]; then \
 		sudo tunnelmesh context rm docker 2>/dev/null || true; \
 		sudo tunnelmesh join --server http://localhost:8081 --token docker-test-token-123 --context docker; \
-		echo ""; \
-		echo "=== User Registration ==="; \
-		if [ ! -f ~/.tunnelmesh/user.json ]; then \
-			echo "No user identity found. Run 'tunnelmesh user setup' to create one."; \
-		else \
-			echo "Registering user with mesh..."; \
-			tunnelmesh user register || true; \
-		fi; \
 	fi
 
 docker-admin:
