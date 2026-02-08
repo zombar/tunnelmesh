@@ -301,6 +301,9 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("/api/bindings", s.handleBindings)
 	s.adminMux.HandleFunc("/api/bindings/", s.handleBindingByName)
 
+	// S3 proxy for explorer
+	s.adminMux.HandleFunc("/api/s3/", s.handleS3Proxy)
+
 	// Expose metrics on admin interface for Prometheus scraping via mesh IP
 	s.adminMux.Handle("/metrics", promhttp.Handler())
 
@@ -1127,6 +1130,7 @@ type UserInfo struct {
 	Groups    []string `json:"groups"`
 	Expired   bool     `json:"expired"`
 	LastSeen  string   `json:"last_seen,omitempty"`
+	ExpiresAt string   `json:"expires_at,omitempty"`
 	CreatedAt string   `json:"created_at,omitempty"`
 }
 
@@ -1165,6 +1169,11 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if !u.LastSeen.IsZero() {
 			info.LastSeen = u.LastSeen.Format(time.RFC3339)
+			// Calculate expiration date for human users (service users don't auto-expire)
+			if !u.IsService() {
+				expiresAt := u.LastSeen.Add(time.Duration(auth.UserExpirationDays) * 24 * time.Hour)
+				info.ExpiresAt = expiresAt.Format(time.RFC3339)
+			}
 		}
 		if !u.CreatedAt.IsZero() {
 			info.CreatedAt = u.CreatedAt.Format(time.RFC3339)
@@ -1314,4 +1323,218 @@ func (s *Server) handleBindingByName(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// --- S3 Explorer API Handlers ---
+
+// S3ObjectInfo represents an S3 object for the explorer API.
+type S3ObjectInfo struct {
+	Key          string `json:"key"`
+	Size         int64  `json:"size"`
+	LastModified string `json:"last_modified"`
+	ContentType  string `json:"content_type,omitempty"`
+	IsPrefix     bool   `json:"is_prefix,omitempty"` // True for "folder" prefixes
+}
+
+// S3BucketInfo represents an S3 bucket for the explorer API.
+type S3BucketInfo struct {
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+}
+
+// handleS3Proxy routes S3 explorer API requests.
+func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
+	if s.s3Store == nil {
+		s.jsonError(w, "S3 storage not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Strip /api/s3 prefix
+	path := strings.TrimPrefix(r.URL.Path, "/api/s3")
+	path = strings.TrimPrefix(path, "/")
+
+	// Route: /api/s3/buckets
+	if path == "buckets" || path == "" {
+		s.handleS3ListBuckets(w, r)
+		return
+	}
+
+	// Route: /api/s3/buckets/{bucket}/objects/...
+	if strings.HasPrefix(path, "buckets/") {
+		parts := strings.SplitN(strings.TrimPrefix(path, "buckets/"), "/", 2)
+		bucket := parts[0]
+		if len(parts) == 1 || parts[1] == "" || parts[1] == "objects" {
+			// List objects in bucket
+			s.handleS3ListObjects(w, r, bucket)
+			return
+		}
+		if strings.HasPrefix(parts[1], "objects/") {
+			key := strings.TrimPrefix(parts[1], "objects/")
+			s.handleS3Object(w, r, bucket, key)
+			return
+		}
+	}
+
+	s.jsonError(w, "not found", http.StatusNotFound)
+}
+
+// handleS3ListBuckets returns all buckets (admin view).
+func (s *Server) handleS3ListBuckets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	buckets, err := s.s3Store.ListBuckets()
+	if err != nil {
+		s.jsonError(w, "failed to list buckets", http.StatusInternalServerError)
+		return
+	}
+
+	result := make([]S3BucketInfo, 0, len(buckets))
+	for _, b := range buckets {
+		// Skip system bucket
+		if b.Name == "_tunnelmesh" {
+			continue
+		}
+		result = append(result, S3BucketInfo{
+			Name:      b.Name,
+			CreatedAt: b.CreatedAt.Format(time.RFC3339),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+// handleS3ListObjects returns objects in a bucket with optional prefix/delimiter.
+func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, bucket string) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	prefix := r.URL.Query().Get("prefix")
+	delimiter := r.URL.Query().Get("delimiter")
+
+	objects, _, _, err := s.s3Store.ListObjects(bucket, prefix, "", 1000)
+	if err != nil {
+		s.jsonError(w, "failed to list objects", http.StatusInternalServerError)
+		return
+	}
+
+	result := make([]S3ObjectInfo, 0)
+	prefixSet := make(map[string]bool)
+
+	for _, obj := range objects {
+		// Handle delimiter (folder grouping)
+		if delimiter != "" {
+			keyAfterPrefix := strings.TrimPrefix(obj.Key, prefix)
+			if idx := strings.Index(keyAfterPrefix, delimiter); idx >= 0 {
+				// This is a "folder" - add common prefix
+				commonPrefix := prefix + keyAfterPrefix[:idx+1]
+				if !prefixSet[commonPrefix] {
+					prefixSet[commonPrefix] = true
+					result = append(result, S3ObjectInfo{
+						Key:      commonPrefix,
+						IsPrefix: true,
+					})
+				}
+				continue
+			}
+		}
+
+		result = append(result, S3ObjectInfo{
+			Key:          obj.Key,
+			Size:         obj.Size,
+			LastModified: obj.LastModified.Format(time.RFC3339),
+			ContentType:  obj.ContentType,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+// handleS3Object handles GET/PUT/DELETE for a specific object.
+func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleS3GetObject(w, bucket, key)
+	case http.MethodPut:
+		s.handleS3PutObject(w, r, bucket, key)
+	case http.MethodDelete:
+		s.handleS3DeleteObject(w, bucket, key)
+	case http.MethodHead:
+		s.handleS3HeadObject(w, bucket, key)
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleS3GetObject returns the object content.
+func (s *Server) handleS3GetObject(w http.ResponseWriter, bucket, key string) {
+	reader, meta, err := s.s3Store.GetObject(bucket, key)
+	if err != nil {
+		s.jsonError(w, "object not found", http.StatusNotFound)
+		return
+	}
+	defer func() { _ = reader.Close() }()
+
+	w.Header().Set("Content-Type", meta.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	w.Header().Set("ETag", meta.ETag)
+	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
+
+	_, _ = io.Copy(w, reader)
+}
+
+// handleS3PutObject creates or updates an object.
+func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	contentType := r.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	// Read body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.jsonError(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+
+	meta, err := s.s3Store.PutObject(bucket, key, bytes.NewReader(body), int64(len(body)), contentType, nil)
+	if err != nil {
+		s.jsonError(w, "failed to store object: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("ETag", meta.ETag)
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleS3DeleteObject deletes an object.
+func (s *Server) handleS3DeleteObject(w http.ResponseWriter, bucket, key string) {
+	err := s.s3Store.DeleteObject(bucket, key)
+	if err != nil {
+		s.jsonError(w, "failed to delete object", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleS3HeadObject returns object metadata.
+func (s *Server) handleS3HeadObject(w http.ResponseWriter, bucket, key string) {
+	meta, err := s.s3Store.HeadObject(bucket, key)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", meta.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	w.Header().Set("ETag", meta.ETag)
+	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
+	w.WriteHeader(http.StatusOK)
 }

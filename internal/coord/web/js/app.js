@@ -2129,6 +2129,7 @@ function updateUsersTable(users) {
             <td><span class="status-badge ${u.is_service ? 'service' : 'user'}">${u.is_service ? 'Service' : 'User'}</span></td>
             <td>${u.groups ? u.groups.map(g => `<span class="group-badge">${escapeHtml(g)}</span>`).join(' ') : '-'}</td>
             <td>${u.last_seen ? formatLastSeen(u.last_seen) : '-'}</td>
+            <td>${u.is_service ? 'Never' : (u.expires_at ? formatLastSeen(u.expires_at) : '-')}</td>
             <td><span class="status-badge ${u.expired ? 'expired' : 'active'}">${u.expired ? 'Expired' : 'Active'}</span></td>
         </tr>
     `).join('');
@@ -2361,6 +2362,7 @@ function switchTab(tabName) {
         fetchGroups();
         fetchShares();
         fetchBindings();
+        initS3Explorer();
     }
 }
 window.switchTab = switchTab;
@@ -2498,3 +2500,79 @@ window.deleteBinding = deleteBinding;
 
 // Cleanup on page unload to prevent memory leaks
 window.addEventListener('beforeunload', cleanup);
+
+// =====================
+// S3 Explorer Integration
+// =====================
+
+let s3ExplorerInitialized = false;
+
+async function initS3Explorer() {
+    if (s3ExplorerInitialized) return;
+
+    // Check if S3 is available
+    try {
+        const resp = await fetch('api/s3/buckets');
+        if (resp.ok) {
+            document.getElementById('s3-section').style.display = 'block';
+            if (typeof TM !== 'undefined' && TM.s3explorer) {
+                await TM.s3explorer.init();
+                s3ExplorerInitialized = true;
+            }
+        }
+    } catch (err) {
+        // S3 not available, section stays hidden
+        console.log('S3 explorer not available:', err.message);
+    }
+}
+
+// S3 Explorer global handlers
+function s3NewFile() {
+    if (TM.s3explorer) TM.s3explorer.openNewFileModal();
+}
+window.s3NewFile = s3NewFile;
+
+function s3NewFolder() {
+    if (TM.s3explorer) TM.s3explorer.openNewFolderModal();
+}
+window.s3NewFolder = s3NewFolder;
+
+function s3Upload() {
+    if (TM.s3explorer) TM.s3explorer.openUploadDialog();
+}
+window.s3Upload = s3Upload;
+
+function s3Save() {
+    if (TM.s3explorer) TM.s3explorer.saveFile();
+}
+window.s3Save = s3Save;
+
+function s3Download() {
+    if (TM.s3explorer) TM.s3explorer.downloadFile();
+}
+window.s3Download = s3Download;
+
+function s3Delete() {
+    if (TM.s3explorer) TM.s3explorer.deleteFile();
+}
+window.s3Delete = s3Delete;
+
+function s3CreateFile() {
+    if (TM.s3explorer) TM.s3explorer.createFile();
+}
+window.s3CreateFile = s3CreateFile;
+
+function s3CreateFolder() {
+    if (TM.s3explorer) TM.s3explorer.createFolder();
+}
+window.s3CreateFolder = s3CreateFolder;
+
+function closeS3Modal(modalId) {
+    if (TM.s3explorer) TM.s3explorer.closeModal(modalId);
+}
+window.closeS3Modal = closeS3Modal;
+
+function s3HandleFileSelect(event) {
+    if (TM.s3explorer) TM.s3explorer.handleFileSelect(event);
+}
+window.s3HandleFileSelect = s3HandleFileSelect;

@@ -1594,3 +1594,336 @@ a.logs-container {
 #data-tab .section-header {
     border-bottom: 1px solid var(--color-border-primary);
 }
+
+/* =========================================================================
+   S3 Explorer Styles
+   ========================================================================= */
+
+#s3-section .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.s3-toolbar {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.s3-toolbar .btn-small {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+}
+
+/* Explorer container - two-panel layout */
+.s3-explorer {
+    display: flex;
+    height: 450px;
+    border: 1px solid var(--color-border-primary);
+    background: var(--color-bg-primary);
+    position: relative;
+}
+
+/* Left panel - Tree browser */
+.s3-tree-panel {
+    width: 260px;
+    min-width: 150px;
+    max-width: 500px;
+    border-right: 1px solid var(--color-border-primary);
+    overflow-y: auto;
+    background: var(--color-bg-secondary);
+}
+
+.s3-tree {
+    padding: 0.25rem 0;
+}
+
+.s3-empty-tree {
+    padding: 1rem;
+    color: var(--color-text-secondary);
+    text-align: center;
+    font-size: 0.8125rem;
+}
+
+/* Tree items */
+.s3-tree-item {
+    display: flex;
+    align-items: center;
+    padding: 0.3rem 0.5rem;
+    cursor: pointer;
+    font-size: 0.8125rem;
+    color: var(--color-text-primary);
+    border-left: 2px solid transparent;
+    transition: background 0.1s ease;
+    gap: 0.25rem;
+}
+
+.s3-tree-item:hover {
+    background: var(--color-bg-tertiary);
+}
+
+.s3-tree-item.selected {
+    background: var(--color-bg-tertiary);
+    border-left-color: var(--color-accent-blue);
+}
+
+.s3-tree-item.bucket {
+    font-weight: 600;
+}
+
+.s3-tree-arrow {
+    width: 1rem;
+    text-align: center;
+    font-size: 0.6rem;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+}
+
+.s3-tree-icon {
+    width: 1.25rem;
+    text-align: center;
+    font-size: 0.7rem;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+}
+
+.s3-tree-icon.bucket-icon::before {
+    content: '\1F4E6';
+}
+
+.s3-tree-icon.folder-icon::before {
+    content: '\1F4C1';
+}
+
+.s3-tree-icon.file-icon {
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.6rem;
+    color: var(--color-accent-blue);
+}
+
+.s3-tree-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.s3-tree-size {
+    font-size: 0.7rem;
+    color: var(--color-text-secondary);
+    margin-left: 0.25rem;
+    flex-shrink: 0;
+}
+
+.s3-tree-children {
+    margin-left: 0.75rem;
+}
+
+.s3-tree-empty {
+    padding: 0.25rem 0.5rem 0.25rem 2rem;
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    font-style: italic;
+}
+
+/* Resize handle */
+.s3-resize-handle {
+    width: 4px;
+    cursor: col-resize;
+    background: var(--color-border-primary);
+    transition: background 0.15s ease;
+    flex-shrink: 0;
+}
+
+.s3-resize-handle:hover,
+.s3-resize-handle:active {
+    background: var(--color-accent-blue);
+}
+
+/* Right panel - Content area */
+.s3-content-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.s3-content-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border-primary);
+    min-height: 36px;
+    gap: 0.5rem;
+}
+
+.s3-breadcrumb {
+    font-size: 0.8125rem;
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+
+.s3-breadcrumb .breadcrumb-bucket {
+    color: var(--color-accent-blue);
+    font-weight: 600;
+}
+
+.s3-breadcrumb .breadcrumb-part {
+    color: var(--color-text-primary);
+}
+
+.s3-content-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+.s3-content-actions .btn-small {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.75rem;
+}
+
+/* Editor container with line numbers */
+.s3-editor-container {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+.s3-line-numbers {
+    width: 3rem;
+    background: var(--color-bg-secondary);
+    border-right: 1px solid var(--color-border-primary);
+    padding: 0.5rem 0;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    color: var(--color-text-secondary);
+    text-align: right;
+    overflow: hidden;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.s3-line-numbers div {
+    padding-right: 0.5rem;
+    height: 1.125rem;
+}
+
+.s3-editor {
+    flex: 1;
+    resize: none;
+    border: none;
+    outline: none;
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    padding: 0.5rem;
+    overflow: auto;
+    tab-size: 4;
+    white-space: pre;
+}
+
+.s3-editor:focus {
+    outline: none;
+}
+
+/* Preview container for binary/image files */
+.s3-preview {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: var(--color-bg-primary);
+    overflow: auto;
+}
+
+.s3-preview img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+.s3-binary-info {
+    text-align: center;
+    color: var(--color-text-secondary);
+}
+
+.s3-binary-icon {
+    font-size: 3rem;
+    margin-bottom: 0.5rem;
+}
+
+.s3-binary-name {
+    font-size: 1rem;
+    color: var(--color-text-primary);
+    margin-bottom: 0.25rem;
+}
+
+.s3-binary-hint {
+    font-size: 0.8rem;
+}
+
+/* Empty state */
+.s3-empty-state {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+}
+
+/* Drop zone overlay */
+.s3-drop-zone {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(88, 166, 255, 0.1);
+    border: 2px dashed var(--color-accent-blue);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    pointer-events: none;
+}
+
+.s3-drop-zone.active {
+    display: flex;
+}
+
+.s3-drop-zone-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--color-accent-blue);
+    font-size: 1rem;
+}
+
+.s3-drop-icon {
+    font-size: 2rem;
+    font-weight: bold;
+}
+
+/* Dirty indicator on save button */
+#s3-save-btn.s3-dirty {
+    background: var(--color-accent-orange);
+    border-color: var(--color-accent-orange);
+}
+
+/* Modal small variant */
+.modal-content.modal-small {
+    max-width: 350px;
+}
