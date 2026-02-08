@@ -291,9 +291,45 @@ func runUserRegister(cmd *cobra.Command, args []string) error {
 
 	identity, err := auth.LoadUserIdentity(identityPath)
 	if os.IsNotExist(err) {
-		return fmt.Errorf("no identity found. Run 'tunnelmesh user setup' first")
-	}
-	if err != nil {
+		// No identity exists - run setup first
+		fmt.Println("No user identity found. Setting up...")
+		fmt.Println()
+
+		// Prompt for name
+		fmt.Print("Enter your display name: ")
+		reader := bufio.NewReader(os.Stdin)
+		userName, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("read name: %w", err)
+		}
+		userName = strings.TrimSpace(userName)
+
+		// Generate mnemonic
+		mnemonic, err := auth.GenerateMnemonic()
+		if err != nil {
+			return fmt.Errorf("generate mnemonic: %w", err)
+		}
+
+		// Create identity
+		identity, err = auth.NewUserIdentity(mnemonic, userName)
+		if err != nil {
+			return fmt.Errorf("create identity: %w", err)
+		}
+
+		// Save identity
+		if err := identity.Save(identityPath); err != nil {
+			return fmt.Errorf("save identity: %w", err)
+		}
+
+		fmt.Println()
+		fmt.Println("Identity created successfully!")
+		fmt.Printf("User ID: %s\n", identity.User.ID)
+		fmt.Println()
+		fmt.Println("IMPORTANT: Save your recovery phrase in a safe place:")
+		fmt.Println()
+		fmt.Printf("  %s\n", mnemonic)
+		fmt.Println()
+	} else if err != nil {
 		return fmt.Errorf("load identity: %w", err)
 	}
 

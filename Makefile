@@ -185,11 +185,6 @@ docker-up: docker-build
 	@echo "Use 'make docker-logs' to follow logs"
 	@echo ""
 	@echo "=== User Registration ==="
-	@if [ ! -f ~/.tunnelmesh/user.json ]; then \
-		echo "No user identity found. Setting up..."; \
-		tunnelmesh user setup; \
-	fi
-	@echo "Registering user with mesh..."
 	@tunnelmesh user register --server http://localhost:8081 || true
 	@echo ""
 	@echo "=== Join from this machine ==="
