@@ -1,8 +1,9 @@
 groups:
-  - name: tunnelmesh-warnings
+  # Warning-level alerts (early indicators, non-urgent)
+  - name: warnings
     rules:
-      # Early warning: Elevated packet drops
-      - alert: TunnelMeshElevatedPacketDrops
+      # Mesh: Elevated packet drops
+      - alert: ElevatedPacketDrops
         expr: sum(rate(tunnelmesh_dropped_no_route_total[5m])) > 1 or sum(rate(tunnelmesh_dropped_no_tunnel_total[5m])) > 1
         for: 2m
         labels:
@@ -12,8 +13,8 @@ groups:
           summary: "Elevated packet drops detected"
           description: "Packet drop rate exceeds 1/s for 2 minutes"
 
-      # Early warning: Reconnection attempts increasing
-      - alert: TunnelMeshReconnectionAttempts
+      # Mesh: Reconnection attempts increasing
+      - alert: ReconnectionAttempts
         expr: sum(rate(tunnelmesh_reconnects_total[5m])) > 0.1
         for: 3m
         labels:
@@ -23,8 +24,8 @@ groups:
           summary: "Frequent reconnection attempts"
           description: "Reconnection rate indicates unstable connections"
 
-      # Early warning: Some peers disconnected
-      - alert: TunnelMeshPeerDisconnected
+      # Mesh: Some peers disconnected
+      - alert: PeerDisconnected
         expr: count(tunnelmesh_connection_state == 0) > 0
         for: 5m
         labels:
@@ -34,8 +35,8 @@ groups:
           summary: "Peer(s) disconnected"
           description: "One or more peers have been disconnected for 5+ minutes"
 
-      # Early warning: Tunnel health degraded
-      - alert: TunnelMeshUnhealthyTunnels
+      # Mesh: Tunnel health degraded
+      - alert: UnhealthyTunnels
         expr: (sum(tunnelmesh_active_tunnels) - sum(tunnelmesh_healthy_tunnels)) > 2
         for: 3m
         labels:
@@ -45,8 +46,8 @@ groups:
           summary: "Unhealthy tunnels detected"
           description: "Multiple tunnels are active but not healthy"
 
-      # Early warning: Forwarder errors occurring
-      - alert: TunnelMeshForwarderErrors
+      # Mesh: Forwarder errors occurring
+      - alert: ForwarderErrors
         expr: sum(rate(tunnelmesh_forwarder_errors_total[5m])) > 0.1
         for: 2m
         labels:
@@ -56,8 +57,8 @@ groups:
           summary: "Forwarder errors detected"
           description: "Forwarder error rate is elevated"
 
-      # Early warning: Elevated packet filter drops (per source peer)
-      - alert: TunnelMeshElevatedFilteredDrops
+      # Mesh: Elevated packet filter drops (per source peer)
+      - alert: ElevatedFilteredDrops
         expr: sum by (peer, source_peer) (rate(tunnelmesh_dropped_filtered_total[5m])) > 10
         for: 2m
         labels:
@@ -67,8 +68,8 @@ groups:
           summary: "High packet filter drop rate on {{ $labels.peer }}"
           description: "Packet filter blocking >10 packets/s from source '{{ $labels.source_peer }}' on {{ $labels.peer }} - possible attack or misconfiguration"
 
-      # Early warning: Multiple source peers being blocked
-      - alert: TunnelMeshMultipleSourcesBlocked
+      # Mesh: Multiple source peers being blocked
+      - alert: MultipleSourcesBlocked
         expr: count by (peer) (rate(tunnelmesh_dropped_filtered_total[5m]) > 1) > 3
         for: 5m
         labels:
@@ -78,8 +79,8 @@ groups:
           summary: "Multiple source peers being blocked on {{ $labels.peer }}"
           description: "Packets from more than 3 source peers are being blocked - review filter rules"
 
-      # Early warning: No filter rules with default-deny mode
-      - alert: TunnelMeshNoFilterRules
+      # Mesh: No filter rules with default-deny mode
+      - alert: NoFilterRules
         expr: tunnelmesh_filter_default_deny == 1 and sum by (peer) (tunnelmesh_filter_rules_total) == 0
         for: 10m
         labels:
@@ -89,125 +90,8 @@ groups:
           summary: "Default-deny filter with no allow rules on {{ $labels.peer }}"
           description: "Packet filter is in default-deny mode but has no allow rules - all traffic is being blocked"
 
-  - name: tunnelmesh-critical
-    rules:
-      # Critical: Multiple peers disconnected
-      - alert: TunnelMeshMultiplePeersDown
-        expr: count(tunnelmesh_connection_state == 0) >= 3
-        for: 3m
-        labels:
-          severity: critical
-          category: mesh
-        annotations:
-          summary: "Multiple peers disconnected"
-          description: "3+ peers are currently disconnected for 3+ minutes - mesh connectivity severely impacted"
-
-      # Critical: High error rate
-      - alert: TunnelMeshHighErrorRate
-        expr: sum(rate(tunnelmesh_forwarder_errors_total[1m])) > 1
-        for: 1m
-        labels:
-          severity: critical
-          category: mesh
-        annotations:
-          summary: "High forwarder error rate"
-          description: "Forwarder errors exceeding 1/s - service is degraded"
-
-      # Critical: Significant packet loss
-      - alert: TunnelMeshSignificantPacketLoss
-        expr: (sum(rate(tunnelmesh_dropped_no_route_total[1m])) + sum(rate(tunnelmesh_dropped_no_tunnel_total[1m]))) / (sum(rate(tunnelmesh_packets_sent_total[1m])) + 1) > 0.05
-        for: 2m
-        labels:
-          severity: critical
-          category: mesh
-        annotations:
-          summary: "Significant packet loss detected"
-          description: "Packet drop rate exceeds 5% of total traffic"
-
-      # Critical: No healthy tunnels for a peer
-      - alert: TunnelMeshNoHealthyTunnels
-        expr: tunnelmesh_active_tunnels > 0 and tunnelmesh_healthy_tunnels == 0
-        for: 2m
-        labels:
-          severity: critical
-          category: mesh
-        annotations:
-          summary: "Peer has no healthy tunnels"
-          description: "Active tunnels exist but none are healthy - connectivity impaired"
-
-      # Critical: Relay connection lost (affects NAT traversal)
-      - alert: TunnelMeshRelayDisconnected
-        expr: tunnelmesh_relay_connected == 0
-        for: 3m
-        labels:
-          severity: critical
-          category: mesh
-        annotations:
-          summary: "Relay connection lost"
-          description: "Peer lost connection to relay server for 3+ minutes - NAT traversal may fail"
-
-  - name: tunnelmesh-page
-    rules:
-      # Page: All tunnels down
-      - alert: TunnelMeshAllTunnelsDown
-        expr: sum(tunnelmesh_active_tunnels) == 0 and count(tunnelmesh_peer_info) > 1
-        for: 30s
-        labels:
-          severity: page
-          category: mesh
-        annotations:
-          summary: "All mesh tunnels are down"
-          description: "Complete mesh network failure - no active tunnels between any peers"
-
-      # Page: Majority of peers unreachable
-      - alert: TunnelMeshMajorOutage
-        expr: count(tunnelmesh_connection_state == 0) / count(tunnelmesh_connection_state) > 0.5
-        for: 1m
-        labels:
-          severity: page
-          category: mesh
-        annotations:
-          summary: "Majority of peers unreachable"
-          description: "Over 50% of peers are disconnected - major outage"
-
-      # Page: Complete relay failure (when relay is configured)
-      - alert: TunnelMeshRelayCompleteFailure
-        expr: count(tunnelmesh_relay_connected == 0) == count(tunnelmesh_relay_connected) and count(tunnelmesh_relay_connected) > 0
-        for: 1m
-        labels:
-          severity: page
-          category: mesh
-        annotations:
-          summary: "All peers lost relay connection"
-          description: "Complete relay server failure - NAT traversal unavailable for all peers"
-
-      # Page: No peers responding (scrape failure or complete outage)
-      - alert: TunnelMeshNoPeersResponding
-        expr: absent(tunnelmesh_peer_info)
-        for: 2m
-        labels:
-          severity: page
-          category: mesh
-        annotations:
-          summary: "No TunnelMesh peers responding"
-          description: "Cannot reach any TunnelMesh peer metrics - possible complete network outage"
-
-      # Page: WireGuard concentrator down (if enabled)
-      - alert: TunnelMeshWireGuardDown
-        expr: tunnelmesh_wireguard_enabled == 1 and tunnelmesh_wireguard_device_running == 0
-        for: 1m
-        labels:
-          severity: page
-          category: mesh
-        annotations:
-          summary: "WireGuard concentrator device down"
-          description: "WireGuard is enabled but the device is not running"
-
-  # S3 Storage Alerts
-  - name: tunnelmesh-s3
-    rules:
-      # Warning: Quota approaching limit
-      - alert: TunnelMeshS3QuotaWarning
+      # Data: S3 quota approaching limit
+      - alert: S3QuotaWarning
         expr: tunnelmesh_s3_quota_used_percent > 75
         for: 5m
         labels:
@@ -217,8 +101,8 @@ groups:
           summary: "S3 storage quota approaching limit"
           description: "S3 storage is {{ $value }}% full (warning at 75%)"
 
-      # Warning: Elevated error rate
-      - alert: TunnelMeshS3ElevatedErrors
+      # Data: Elevated S3 error rate
+      - alert: S3ElevatedErrors
         expr: sum(rate(tunnelmesh_s3_requests_total{status=~"error|quota_exceeded"}[5m])) > 0.1
         for: 3m
         labels:
@@ -228,59 +112,9 @@ groups:
           summary: "Elevated S3 error rate"
           description: "S3 error rate exceeds 0.1/s for 3 minutes"
 
-      # Critical: Quota critical level
-      - alert: TunnelMeshS3QuotaCritical
-        expr: tunnelmesh_s3_quota_used_percent > 85
-        for: 2m
-        labels:
-          severity: critical
-          category: data
-        annotations:
-          summary: "S3 storage quota critical"
-          description: "S3 storage is {{ $value }}% full (critical at 85%)"
-
-      # Critical: High error rate
-      - alert: TunnelMeshS3HighErrorRate
-        expr: sum(rate(tunnelmesh_s3_requests_total{status=~"error"}[5m])) / sum(rate(tunnelmesh_s3_requests_total[5m])) > 0.1
-        for: 2m
-        labels:
-          severity: critical
-          category: data
-        annotations:
-          summary: "High S3 error rate"
-          description: "{{ $value | humanizePercentage }} of S3 requests are failing"
-
-      # Page: S3 service down
-      - alert: TunnelMeshS3Down
-        expr: absent(tunnelmesh_s3_requests_total) or sum(rate(tunnelmesh_s3_requests_total[1m])) == 0
-        for: 2m
-        labels:
-          severity: page
-          category: data
-        annotations:
-          summary: "S3 service down or not receiving requests"
-          description: "No S3 metrics reported for 2 minutes"
-
-      # Page: Quota near full - immediate action required
-      - alert: TunnelMeshS3QuotaNearFull
-        expr: tunnelmesh_s3_quota_used_percent > 92
-        for: 1m
-        labels:
-          severity: page
-          category: data
-        annotations:
-          summary: "S3 storage quota near full - immediate action required"
-          description: "S3 storage is {{ $value }}% full (>92%) - uploads will fail soon"
-
-  # Security & Auth Alerts
-  # NOTE: Auth metrics (tunnelmesh_auth_attempts_total, tunnelmesh_authz_checks_total,
-  # tunnelmesh_authz_denied_total) will be implemented in a follow-up PR.
-  # The alerts below are commented out until those metrics are available.
-  - name: tunnelmesh-security
-    rules:
       # TODO: Uncomment when auth metrics are implemented
-      # # Warning: Elevated auth failures
-      # - alert: TunnelMeshElevatedAuthFailures
+      # # Security: Elevated auth failures
+      # - alert: ElevatedAuthFailures
       #   expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[5m])) > 0.5
       #   for: 3m
       #   labels:
@@ -291,8 +125,8 @@ groups:
       #     description: "Auth failure rate exceeds 0.5/s - possible credential issues or attack"
 
       # TODO: Uncomment when auth metrics are implemented
-      # # Warning: Elevated access denials
-      # - alert: TunnelMeshElevatedAccessDenials
+      # # Security: Elevated access denials
+      # - alert: ElevatedAccessDenials
       #   expr: sum(rate(tunnelmesh_authz_checks_total{result="denied"}[5m])) > 1
       #   for: 5m
       #   labels:
@@ -303,8 +137,8 @@ groups:
       #     description: "Users frequently accessing resources they don't have permissions for"
 
       # TODO: Uncomment when auth metrics are implemented
-      # # Warning: User repeatedly denied
-      # - alert: TunnelMeshUserAccessDenied
+      # # Security: User repeatedly denied
+      # - alert: UserAccessDenied
       #   expr: sum(rate(tunnelmesh_authz_denied_total[5m])) by (user, bucket) > 0.1
       #   for: 5m
       #   labels:
@@ -314,20 +148,88 @@ groups:
       #     summary: "User repeatedly denied access"
       #     description: "User {{ $labels.user }} denied access to bucket {{ $labels.bucket }} - check permissions"
 
-      # TODO: Uncomment when auth metrics are implemented
-      # # Critical: High auth failure rate
-      # - alert: TunnelMeshHighAuthFailureRate
-      #   expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[5m])) / sum(rate(tunnelmesh_auth_attempts_total[5m])) > 0.5
-      #   for: 2m
-      #   labels:
-      #     severity: critical
-      #     category: security
-      #   annotations:
-      #     summary: "High authentication failure rate"
-      #     description: "{{ $value | humanizePercentage }} of auth attempts failing - possible attack or config issue"
+  # Critical-level alerts (service degradation, requires intervention)
+  - name: critical
+    rules:
+      # Mesh: Multiple peers disconnected
+      - alert: MultiplePeersDown
+        expr: count(tunnelmesh_connection_state == 0) >= 3
+        for: 3m
+        labels:
+          severity: critical
+          category: mesh
+        annotations:
+          summary: "Multiple peers disconnected"
+          description: "3+ peers are currently disconnected for 3+ minutes - mesh connectivity severely impacted"
 
-      # Critical: S3 access denied spike
-      - alert: TunnelMeshS3AccessDeniedSpike
+      # Mesh: High error rate
+      - alert: HighErrorRate
+        expr: sum(rate(tunnelmesh_forwarder_errors_total[1m])) > 1
+        for: 1m
+        labels:
+          severity: critical
+          category: mesh
+        annotations:
+          summary: "High forwarder error rate"
+          description: "Forwarder errors exceeding 1/s - service is degraded"
+
+      # Mesh: Significant packet loss
+      - alert: SignificantPacketLoss
+        expr: (sum(rate(tunnelmesh_dropped_no_route_total[1m])) + sum(rate(tunnelmesh_dropped_no_tunnel_total[1m]))) / (sum(rate(tunnelmesh_packets_sent_total[1m])) + 1) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          category: mesh
+        annotations:
+          summary: "Significant packet loss detected"
+          description: "Packet drop rate exceeds 5% of total traffic"
+
+      # Mesh: No healthy tunnels for a peer
+      - alert: NoHealthyTunnels
+        expr: tunnelmesh_active_tunnels > 0 and tunnelmesh_healthy_tunnels == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: mesh
+        annotations:
+          summary: "Peer has no healthy tunnels"
+          description: "Active tunnels exist but none are healthy - connectivity impaired"
+
+      # Mesh: Relay connection lost (affects NAT traversal)
+      - alert: RelayDisconnected
+        expr: tunnelmesh_relay_connected == 0
+        for: 3m
+        labels:
+          severity: critical
+          category: mesh
+        annotations:
+          summary: "Relay connection lost"
+          description: "Peer lost connection to relay server for 3+ minutes - NAT traversal may fail"
+
+      # Data: S3 quota critical level
+      - alert: S3QuotaCritical
+        expr: tunnelmesh_s3_quota_used_percent > 85
+        for: 2m
+        labels:
+          severity: critical
+          category: data
+        annotations:
+          summary: "S3 storage quota critical"
+          description: "S3 storage is {{ $value }}% full (critical at 85%)"
+
+      # Data: High S3 error rate
+      - alert: S3HighErrorRate
+        expr: sum(rate(tunnelmesh_s3_requests_total{status=~"error"}[5m])) / sum(rate(tunnelmesh_s3_requests_total[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          category: data
+        annotations:
+          summary: "High S3 error rate"
+          description: "{{ $value | humanizePercentage }} of S3 requests are failing"
+
+      # Security: S3 access denied spike
+      - alert: S3AccessDeniedSpike
         expr: sum(rate(tunnelmesh_s3_requests_total{status="access_denied"}[5m])) > 5
         for: 2m
         labels:
@@ -338,8 +240,100 @@ groups:
           description: "Access denied rate exceeds 5/s - possible permissions misconfiguration or attack"
 
       # TODO: Uncomment when auth metrics are implemented
-      # # Page: Possible brute force attack
-      # - alert: TunnelMeshPossibleBruteForce
+      # # Security: High auth failure rate
+      # - alert: HighAuthFailureRate
+      #   expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[5m])) / sum(rate(tunnelmesh_auth_attempts_total[5m])) > 0.5
+      #   for: 2m
+      #   labels:
+      #     severity: critical
+      #     category: security
+      #   annotations:
+      #     summary: "High authentication failure rate"
+      #     description: "{{ $value | humanizePercentage }} of auth attempts failing - possible attack or config issue"
+
+  # Page-level alerts (immediate action required, service outage)
+  - name: page
+    rules:
+      # Mesh: All tunnels down
+      - alert: AllTunnelsDown
+        expr: sum(tunnelmesh_active_tunnels) == 0 and count(tunnelmesh_peer_info) > 1
+        for: 30s
+        labels:
+          severity: page
+          category: mesh
+        annotations:
+          summary: "All mesh tunnels are down"
+          description: "Complete mesh network failure - no active tunnels between any peers"
+
+      # Mesh: Majority of peers unreachable
+      - alert: MajorOutage
+        expr: count(tunnelmesh_connection_state == 0) / count(tunnelmesh_connection_state) > 0.5
+        for: 1m
+        labels:
+          severity: page
+          category: mesh
+        annotations:
+          summary: "Majority of peers unreachable"
+          description: "Over 50% of peers are disconnected - major outage"
+
+      # Mesh: Complete relay failure (when relay is configured)
+      - alert: RelayCompleteFailure
+        expr: count(tunnelmesh_relay_connected == 0) == count(tunnelmesh_relay_connected) and count(tunnelmesh_relay_connected) > 0
+        for: 1m
+        labels:
+          severity: page
+          category: mesh
+        annotations:
+          summary: "All peers lost relay connection"
+          description: "Complete relay server failure - NAT traversal unavailable for all peers"
+
+      # Mesh: No peers responding (scrape failure or complete outage)
+      - alert: NoPeersResponding
+        expr: absent(tunnelmesh_peer_info)
+        for: 2m
+        labels:
+          severity: page
+          category: mesh
+        annotations:
+          summary: "No TunnelMesh peers responding"
+          description: "Cannot reach any TunnelMesh peer metrics - possible complete network outage"
+
+      # Mesh: WireGuard concentrator down (if enabled)
+      - alert: WireGuardDown
+        expr: tunnelmesh_wireguard_enabled == 1 and tunnelmesh_wireguard_device_running == 0
+        for: 1m
+        labels:
+          severity: page
+          category: mesh
+        annotations:
+          summary: "WireGuard concentrator device down"
+          description: "WireGuard is enabled but the device is not running"
+
+      # Data: S3 service down
+      - alert: S3Down
+        expr: absent(tunnelmesh_s3_requests_total) or sum(rate(tunnelmesh_s3_requests_total[1m])) == 0
+        for: 2m
+        labels:
+          severity: page
+          category: data
+        annotations:
+          summary: "S3 service down or not receiving requests"
+          description: "No S3 metrics reported for 2 minutes"
+
+      # Data: S3 quota near full - immediate action required
+      - alert: S3QuotaNearFull
+        expr: tunnelmesh_s3_quota_used_percent > 92
+        for: 1m
+        labels:
+          severity: page
+          category: data
+        annotations:
+          summary: "S3 storage quota near full - immediate action required"
+          description: "S3 storage is {{ $value }}% full (>92%) - uploads will fail soon"
+
+      # TODO: Uncomment when auth metrics are implemented
+      # # Security: Possible brute force attack
+      # - alert: PossibleBruteForce
       #   expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[1m])) > 10
       #   for: 30s
       #   labels:
