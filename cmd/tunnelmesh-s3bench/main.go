@@ -263,6 +263,7 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		ExpiryOverride:       expiryOverride,
 		AdversaryAttempts:    adversaryAttempts,
 		MaxConcurrentUploads: maxConcurrentUploads,
+		UserManager:          userMgr, // Pass user manager for actual S3 operations
 		WorkflowTestsEnabled: map[simulator.WorkflowType]bool{
 			simulator.WorkflowDeletion:    testDeletion,
 			simulator.WorkflowExpiration:  testExpiration,
