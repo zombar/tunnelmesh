@@ -1285,3 +1285,150 @@ func TestVersioning_NoVersionsForNewObject(t *testing.T) {
 	assert.Len(t, versions, 1)
 	assert.True(t, versions[0].IsCurrent)
 }
+
+// Concurrent access tests - run with -race flag
+
+func TestConcurrent_PutObject(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	const numGoroutines = 10
+	const numWrites = 5
+
+	done := make(chan bool, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(workerID int) {
+			for j := 0; j < numWrites; j++ {
+				content := []byte(strings.Repeat("x", 1000+workerID*100+j*10))
+				key := "shared-key.txt" // All workers write to same key
+				_, err := store.PutObject("test-bucket", key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+				if err != nil {
+					t.Errorf("worker %d write %d failed: %v", workerID, j, err)
+				}
+			}
+			done <- true
+		}(i)
+	}
+
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+
+	// Verify object still readable
+	reader, meta, err := store.GetObject("test-bucket", "shared-key.txt")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+	assert.True(t, meta.Size > 0)
+}
+
+func TestConcurrent_ReadWhileGC(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Create some objects with versions
+	for i := 0; i < 5; i++ {
+		content := []byte(strings.Repeat("y", 1000+i*100))
+		_, err := store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	done := make(chan bool, 2)
+
+	// Concurrent GC
+	go func() {
+		for i := 0; i < 3; i++ {
+			store.RunGarbageCollection()
+		}
+		done <- true
+	}()
+
+	// Concurrent reads
+	go func() {
+		for i := 0; i < 10; i++ {
+			reader, _, err := store.GetObject("test-bucket", "file.txt")
+			if err == nil {
+				_, _ = io.ReadAll(reader)
+				_ = reader.Close()
+			}
+		}
+		done <- true
+	}()
+
+	<-done
+	<-done
+
+	// Verify object still accessible after concurrent operations
+	reader, _, err := store.GetObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+}
+
+func TestConcurrent_MultipleKeys(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	const numGoroutines = 10
+	done := make(chan bool, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(workerID int) {
+			key := strings.Repeat("k", workerID+1) + ".txt"
+			for j := 0; j < 5; j++ {
+				content := []byte(strings.Repeat("z", 500+j*50))
+				_, err := store.PutObject("test-bucket", key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+				if err != nil {
+					t.Errorf("worker %d failed: %v", workerID, err)
+				}
+			}
+			done <- true
+		}(i)
+	}
+
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+
+	// Verify all keys exist
+	objects, _, _, err := store.ListObjects("test-bucket", "", "", 100)
+	require.NoError(t, err)
+	assert.Equal(t, numGoroutines, len(objects))
+}
+
+func TestStreamingRead_LargeFile(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Create a file larger than a single chunk (target ~4KB, max 64KB)
+	// Use 200KB to ensure multiple chunks
+	content := make([]byte, 200*1024)
+	for i := range content {
+		content[i] = byte(i % 256)
+	}
+
+	_, err := store.PutObject("test-bucket", "large.bin", bytes.NewReader(content), int64(len(content)), "application/octet-stream", nil)
+	require.NoError(t, err)
+
+	// Read back and verify streaming works correctly
+	reader, meta, err := store.GetObject("test-bucket", "large.bin")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+
+	assert.Equal(t, int64(len(content)), meta.Size)
+
+	// Read in small chunks to test streaming
+	readContent := make([]byte, 0, len(content))
+	buf := make([]byte, 1024) // 1KB buffer
+	for {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			readContent = append(readContent, buf[:n]...)
+		}
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, content, readContent)
+}

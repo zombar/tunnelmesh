@@ -1457,7 +1457,10 @@ type GCStats struct {
 //   - Expired versions according to retention policy
 //   - Orphaned chunks not referenced by any object
 //
-// This is safe to run while the store is in use, but may be slow for large stores.
+// Uses a phased approach to minimize lock contention:
+//   - Phase 1: Prune expired versions (Lock per object, brief)
+//   - Phase 2: Rebuild reference set after pruning (RLock only)
+//   - Phase 3: Delete orphaned chunks (no Store lock, CAS has its own)
 func (s *Store) RunGarbageCollection() GCStats {
 	stats := GCStats{}
 
@@ -1465,42 +1468,44 @@ func (s *Store) RunGarbageCollection() GCStats {
 		return stats // No CAS, no GC needed
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Record start time to avoid deleting chunks created during GC
+	gcStartTime := time.Now()
 
 	// Phase 1: Prune expired versions across all buckets
+	// This uses the original per-object pruning which is safe for concurrent access
+	s.pruneAllExpiredVersionsSimple(&stats)
+
+	// Phase 2: Build reference set AFTER pruning (read-only)
+	// This ensures we capture the current state after version deletion
+	referencedChunks := s.buildChunkReferenceSet()
+
+	// Phase 3: Delete orphaned chunks (not in reference set)
+	// CAS has its own locking; we don't need Store lock here
+	s.deleteOrphanedChunks(&stats, referencedChunks, gcStartTime)
+
+	// Update quota if tracking
+	if s.quota != nil {
+		s.mu.Lock()
+		_ = s.calculateQuotaUsage()
+		s.mu.Unlock()
+	}
+
+	return stats
+}
+
+// buildChunkReferenceSet scans all objects and versions to find referenced chunks.
+// Uses RLock to allow concurrent reads during the scan.
+func (s *Store) buildChunkReferenceSet() map[string]struct{} {
+	referencedChunks := make(map[string]struct{})
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
 	bucketEntries, err := os.ReadDir(bucketsDir)
 	if err != nil {
-		return stats
+		return referencedChunks
 	}
-
-	for _, bucketEntry := range bucketEntries {
-		if !bucketEntry.IsDir() {
-			continue
-		}
-		bucket := bucketEntry.Name()
-		stats.BucketsProcessed++
-
-		// Find all objects in this bucket
-		metaDir := filepath.Join(bucketsDir, bucket, "meta")
-		metaEntries, _ := os.ReadDir(metaDir)
-
-		for _, metaEntry := range metaEntries {
-			if metaEntry.IsDir() || filepath.Ext(metaEntry.Name()) != ".json" {
-				continue
-			}
-			stats.ObjectsScanned++
-
-			// Extract key from filename
-			key := strings.TrimSuffix(metaEntry.Name(), ".json")
-			pruned := s.pruneExpiredVersions(bucket, key)
-			stats.VersionsPruned += pruned
-		}
-	}
-
-	// Phase 2: Build global chunk reference set
-	referencedChunks := make(map[string]struct{})
 
 	for _, bucketEntry := range bucketEntries {
 		if !bucketEntry.IsDir() {
@@ -1515,8 +1520,12 @@ func (s *Store) RunGarbageCollection() GCStats {
 			if metaEntry.IsDir() || filepath.Ext(metaEntry.Name()) != ".json" {
 				continue
 			}
+
 			metaPath := filepath.Join(metaDir, metaEntry.Name())
-			data, _ := os.ReadFile(metaPath)
+			data, err := os.ReadFile(metaPath)
+			if err != nil {
+				continue
+			}
 			var meta ObjectMeta
 			if json.Unmarshal(data, &meta) == nil {
 				for _, h := range meta.Chunks {
@@ -1542,10 +1551,61 @@ func (s *Store) RunGarbageCollection() GCStats {
 		})
 	}
 
-	// Phase 3: Delete orphaned chunks
+	return referencedChunks
+}
+
+// pruneAllExpiredVersionsSimple prunes expired versions across all buckets.
+// Takes brief write locks per object to minimize contention.
+// Uses the standard pruneExpiredVersions which handles chunk cleanup safely.
+func (s *Store) pruneAllExpiredVersionsSimple(stats *GCStats) {
+	bucketsDir := filepath.Join(s.dataDir, "buckets")
+	bucketEntries, err := os.ReadDir(bucketsDir)
+	if err != nil {
+		return
+	}
+
+	for _, bucketEntry := range bucketEntries {
+		if !bucketEntry.IsDir() {
+			continue
+		}
+		bucket := bucketEntry.Name()
+		stats.BucketsProcessed++
+
+		// Find all objects in this bucket
+		metaDir := filepath.Join(bucketsDir, bucket, "meta")
+		metaEntries, _ := os.ReadDir(metaDir)
+
+		for _, metaEntry := range metaEntries {
+			if metaEntry.IsDir() || filepath.Ext(metaEntry.Name()) != ".json" {
+				continue
+			}
+			stats.ObjectsScanned++
+
+			// Extract key from filename
+			key := strings.TrimSuffix(metaEntry.Name(), ".json")
+
+			// Brief lock for this object's pruning
+			s.mu.Lock()
+			pruned := s.pruneExpiredVersions(bucket, key)
+			s.mu.Unlock()
+
+			stats.VersionsPruned += pruned
+		}
+	}
+}
+
+// deleteOrphanedChunks deletes chunks not in the reference set.
+// Uses CAS's own locking; doesn't need Store lock.
+// Skips chunks created after gcStartTime to avoid races.
+func (s *Store) deleteOrphanedChunks(stats *GCStats, referencedChunks map[string]struct{}, gcStartTime time.Time) {
 	chunksDir := filepath.Join(s.dataDir, "chunks")
 	_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
+			return nil
+		}
+
+		// Skip chunks created after GC started (race protection)
+		if info.ModTime().After(gcStartTime) {
 			return nil
 		}
 
@@ -1553,19 +1613,13 @@ func (s *Store) RunGarbageCollection() GCStats {
 		hash := filepath.Base(path)
 		if _, referenced := referencedChunks[hash]; !referenced {
 			stats.BytesReclaimed += info.Size()
-			if os.Remove(path) == nil {
+			// CAS.DeleteChunk has its own locking
+			if s.cas.DeleteChunk(hash) == nil {
 				stats.ChunksDeleted++
 			}
 		}
 		return nil
 	})
-
-	// Update quota if tracking
-	if s.quota != nil {
-		_ = s.calculateQuotaUsage()
-	}
-
-	return stats
 }
 
 // ListVersions returns all versions of an object.
@@ -1670,7 +1724,63 @@ func (s *Store) GetObjectVersion(bucket, key, versionID string) (io.ReadCloser, 
 	return s.getObjectContent(bucket, key, &meta)
 }
 
+// chunkReader implements io.ReadCloser for streaming chunk reads.
+// It reads chunks on-demand from CAS, avoiding loading entire files into memory.
+type chunkReader struct {
+	cas       *CAS
+	chunks    []string // Ordered list of chunk hashes
+	chunkIdx  int      // Current chunk index
+	chunkData []byte   // Current chunk data
+	chunkPos  int      // Position within current chunk
+}
+
+// newChunkReader creates a streaming reader for the given chunks.
+func newChunkReader(cas *CAS, chunks []string) *chunkReader {
+	return &chunkReader{
+		cas:    cas,
+		chunks: chunks,
+	}
+}
+
+// Read implements io.Reader, fetching chunks on demand.
+func (r *chunkReader) Read(p []byte) (n int, err error) {
+	for n < len(p) {
+		// If we've exhausted current chunk, load the next one
+		if r.chunkPos >= len(r.chunkData) {
+			if r.chunkIdx >= len(r.chunks) {
+				// No more chunks
+				if n > 0 {
+					return n, nil
+				}
+				return 0, io.EOF
+			}
+
+			// Load next chunk
+			r.chunkData, err = r.cas.ReadChunk(r.chunks[r.chunkIdx])
+			if err != nil {
+				return n, fmt.Errorf("read chunk %s: %w", r.chunks[r.chunkIdx], err)
+			}
+			r.chunkIdx++
+			r.chunkPos = 0
+		}
+
+		// Copy from current chunk to output buffer
+		copied := copy(p[n:], r.chunkData[r.chunkPos:])
+		r.chunkPos += copied
+		n += copied
+	}
+	return n, nil
+}
+
+// Close implements io.Closer.
+func (r *chunkReader) Close() error {
+	// Release chunk data for GC
+	r.chunkData = nil
+	return nil
+}
+
 // getObjectContent returns the content of an object by reading its chunks from CAS.
+// Uses streaming to avoid loading entire files into memory.
 func (s *Store) getObjectContent(bucket, key string, meta *ObjectMeta) (io.ReadCloser, *ObjectMeta, error) {
 	if s.cas == nil {
 		return nil, nil, fmt.Errorf("CAS not initialized")
@@ -1681,15 +1791,7 @@ func (s *Store) getObjectContent(bucket, key string, meta *ObjectMeta) (io.ReadC
 		return io.NopCloser(bytes.NewReader(nil)), meta, nil
 	}
 
-	var content bytes.Buffer
-	for _, hash := range meta.Chunks {
-		chunk, err := s.cas.ReadChunk(hash)
-		if err != nil {
-			return nil, nil, fmt.Errorf("read chunk %s: %w", hash, err)
-		}
-		content.Write(chunk)
-	}
-	return io.NopCloser(&content), meta, nil
+	return newChunkReader(s.cas, meta.Chunks), meta, nil
 }
 
 // RestoreVersion makes a previous version the current version.
