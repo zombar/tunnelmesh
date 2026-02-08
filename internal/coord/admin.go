@@ -1246,7 +1246,8 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 // getRequestOwner extracts the owner identity from the request.
-// It returns the peer name from the TLS client certificate, or empty string if unavailable.
+// It returns the peer name from the TLS client certificate, or looks up the peer
+// by their mesh IP if no certificate is available (browser access from within mesh).
 // Callers should validate the returned value before using it for ownership.
 func (s *Server) getRequestOwner(r *http.Request) string {
 	// Get peer name from TLS client certificate
@@ -1258,8 +1259,35 @@ func (s *Server) getRequestOwner(r *http.Request) string {
 		}
 		return cn
 	}
-	// No client certificate - return empty string
-	// Callers must handle this case explicitly
+
+	// No client certificate - try to identify by mesh IP
+	// This handles browser access from within the mesh where the browser
+	// doesn't have a client certificate but the request originates from a peer
+	if peerName := s.getPeerByRemoteAddr(r.RemoteAddr); peerName != "" {
+		return peerName
+	}
+
+	return ""
+}
+
+// getPeerByRemoteAddr looks up a peer by their mesh IP address.
+// Returns the peer name if found, empty string otherwise.
+func (s *Server) getPeerByRemoteAddr(remoteAddr string) string {
+	// Extract IP from "ip:port" format
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		// Maybe it's just an IP without port
+		host = remoteAddr
+	}
+
+	s.peersMu.RLock()
+	defer s.peersMu.RUnlock()
+
+	for _, info := range s.peers {
+		if info.peer.MeshIP == host {
+			return info.peer.Name
+		}
+	}
 	return ""
 }
 

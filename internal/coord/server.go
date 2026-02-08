@@ -1162,6 +1162,9 @@ func (s *Server) StartAdminServer(addr string, tlsCert *tls.Certificate) error {
 		s.adminServer.TLSConfig = &tls.Config{
 			Certificates: []tls.Certificate{*tlsCert},
 			MinVersion:   tls.VersionTLS12,
+			// Request client certs for user identification, but don't require them
+			// This allows getRequestOwner() to identify users for operations like share creation
+			ClientAuth: tls.RequestClientCert,
 		}
 		log.Info().Str("addr", addr).Msg("starting admin server (HTTPS)")
 		go func() {
