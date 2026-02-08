@@ -223,3 +223,80 @@ func TestFileShare_CreatedAt(t *testing.T) {
 	}
 	assert.False(t, share.CreatedAt.IsZero())
 }
+
+func TestFileShareManager_IsProtectedBinding(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a file share
+	_, err = mgr.Create("docs", "Documents", "alice")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name      string
+		binding   *auth.RoleBinding
+		protected bool
+	}{
+		{
+			name: "owner admin binding is protected",
+			binding: &auth.RoleBinding{
+				Name:        "test1",
+				UserID:      "alice",
+				RoleName:    auth.RoleBucketAdmin,
+				BucketScope: "fs+docs",
+			},
+			protected: true,
+		},
+		{
+			name: "non-owner admin binding is not protected",
+			binding: &auth.RoleBinding{
+				Name:        "test2",
+				UserID:      "bob",
+				RoleName:    auth.RoleBucketAdmin,
+				BucketScope: "fs+docs",
+			},
+			protected: false,
+		},
+		{
+			name: "owner read binding is not protected",
+			binding: &auth.RoleBinding{
+				Name:        "test3",
+				UserID:      "alice",
+				RoleName:    auth.RoleBucketRead,
+				BucketScope: "fs+docs",
+			},
+			protected: false,
+		},
+		{
+			name: "regular bucket admin is not protected",
+			binding: &auth.RoleBinding{
+				Name:        "test4",
+				UserID:      "alice",
+				RoleName:    auth.RoleBucketAdmin,
+				BucketScope: "regular-bucket",
+			},
+			protected: false,
+		},
+		{
+			name: "non-existent share is not protected",
+			binding: &auth.RoleBinding{
+				Name:        "test5",
+				UserID:      "alice",
+				RoleName:    auth.RoleBucketAdmin,
+				BucketScope: "fs+nonexistent",
+			},
+			protected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := mgr.IsProtectedBinding(tt.binding)
+			assert.Equal(t, tt.protected, result)
+		})
+	}
+}

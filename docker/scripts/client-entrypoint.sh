@@ -121,14 +121,14 @@ if [ ! -f "$USER_JSON" ]; then
     tunnelmesh user setup --name "$USER_NAME"
 fi
 
-# Register user in background after 10 minutes
+# Register user in background after 1 minute
 (
-    sleep 600  # Wait 10 minutes
+    sleep 60  # Wait 1 minute
     echo ""
     echo "=== Registering user with mesh ==="
     tunnelmesh user register --server "$SERVER_URL" || echo "User registration failed (may already be registered)"
 ) &
-echo "User registration scheduled in 10 minutes"
+echo "User registration scheduled in 1 minute"
 
 # Give time for initial peer discovery (Go code handles jitter and fast retries)
 echo "Waiting for initial peer discovery..."

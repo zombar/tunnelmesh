@@ -2300,6 +2300,7 @@ async function createShare() {
             showToast(`File share "${name}" created`, 'success');
             closeShareModal();
             fetchShares();
+            fetchBindings(); // Refresh bindings since share creation adds admin binding
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to create share', 'error');
@@ -2318,6 +2319,7 @@ async function deleteShare(name) {
         if (resp.ok) {
             showToast(`File share "${name}" deleted`, 'success');
             fetchShares();
+            fetchBindings(); // Refresh bindings since share deletion removes bindings
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to delete share', 'error');
@@ -2396,7 +2398,9 @@ function renderBindings(bindings) {
             <td>${escapeHtml(b.bucket_scope || 'All')}</td>
             <td>${escapeHtml(b.object_prefix || '-')}</td>
             <td>
-                <button class="btn-small btn-danger" onclick="deleteBinding('${escapeHtml(b.name)}')">Delete</button>
+                ${b.protected
+                    ? '<span class="text-muted" title="File share owner binding">Protected</span>'
+                    : `<button class="btn-small btn-danger" onclick="deleteBinding('${escapeHtml(b.name)}')">Delete</button>`}
             </td>
         </tr>
     `).join('');
