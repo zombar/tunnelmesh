@@ -923,6 +923,8 @@ tr:nth-child(10) .obscured-ip { --stipple-seed: 5.6; }
     font-size: 0.75rem;
     cursor: pointer;
     padding: 0;
+    display: inline;
+    vertical-align: baseline;
 }
 
 .show-more-link:hover {
@@ -1709,6 +1711,31 @@ a.logs-container {
     color: #fff;
 }
 
+/* Resizable content container */
+.s3-content {
+    max-height: 300px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* Discreet scrollbar for s3 content */
+.s3-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.s3-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.s3-content::-webkit-scrollbar-thumb {
+    background: var(--color-border-primary);
+    border-radius: 3px;
+}
+
+.s3-content::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-secondary);
+}
+
 /* File browser table */
 .s3-browser {
     position: relative;
@@ -1796,8 +1823,7 @@ a.logs-container {
 
 .s3-editor-wrap {
     display: flex;
-    max-height: 500px;
-    overflow: hidden;
+    min-height: 200px;
 }
 
 .s3-line-numbers {

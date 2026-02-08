@@ -339,34 +339,41 @@
                         </div>
                     </div>
                 </div>
-                <!-- File listing (table view) -->
-                <div id="s3-browser" class="s3-browser">
-                    <table id="s3-files">
-                        <thead>
-                            <tr>
-                                <th class="s3-col-name">Name</th>
-                                <th class="s3-col-size">Size</th>
-                                <th class="s3-col-modified">Last Modified</th>
-                            </tr>
-                        </thead>
-                        <tbody id="s3-files-body"></tbody>
-                    </table>
-                    <div id="s3-empty" class="empty-state" style="display: none;">
-                        No files in this location.
+                <!-- Resizable content container -->
+                <div id="s3-content" class="s3-content">
+                    <!-- File listing (table view) -->
+                    <div id="s3-browser" class="s3-browser">
+                        <table id="s3-files">
+                            <thead>
+                                <tr>
+                                    <th class="s3-col-name">Name</th>
+                                    <th class="s3-col-size">Size</th>
+                                    <th class="s3-col-modified">Last Modified</th>
+                                </tr>
+                            </thead>
+                            <tbody id="s3-files-body"></tbody>
+                        </table>
+                        <div id="s3-empty" class="empty-state" style="display: none;">
+                            No files in this location.
+                        </div>
+                        <div id="s3-pagination" class="show-more-container" style="display: none;">
+                            <span id="s3-show-more"><button class="show-more-link" onclick="s3ShowMore()">show more (<span id="s3-shown-count">0</span> / <span id="s3-total-count">0</span>)</button></span><span id="s3-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="s3ShowLess()">show less</button></span>
+                        </div>
                     </div>
-                    <div id="s3-pagination" class="show-more-container" style="display: none;">
-                        <span id="s3-show-more"><button class="show-more-link" onclick="s3ShowMore()">show more (<span id="s3-shown-count">0</span> / <span id="s3-total-count">0</span>)</button></span><span id="s3-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="s3ShowLess()">show less</button></span>
+                    <!-- File viewer/editor (shown when file is selected) -->
+                    <div id="s3-viewer" class="s3-viewer" style="display: none;">
+                        <div class="s3-editor-wrap">
+                            <div class="s3-line-numbers" id="s3-line-numbers"></div>
+                            <textarea class="s3-editor" id="s3-editor" spellcheck="false"></textarea>
+                        </div>
                     </div>
+                    <!-- Image/binary preview -->
+                    <div id="s3-preview" class="s3-preview" style="display: none;"></div>
                 </div>
-                <!-- File viewer/editor (shown when file is selected) -->
-                <div id="s3-viewer" class="s3-viewer" style="display: none;">
-                    <div class="s3-editor-wrap">
-                        <div class="s3-line-numbers" id="s3-line-numbers"></div>
-                        <textarea class="s3-editor" id="s3-editor" spellcheck="false"></textarea>
-                    </div>
+                <!-- Resize handle -->
+                <div id="s3-resize-handle" class="resize-handle">
+                    <div class="resize-handle-grip"></div>
                 </div>
-                <!-- Image/binary preview -->
-                <div id="s3-preview" class="s3-preview" style="display: none;"></div>
                 <!-- Drop zone overlay -->
                 <div class="s3-drop-zone" id="s3-drop-zone"></div>
             </div>
