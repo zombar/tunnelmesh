@@ -408,7 +408,7 @@
 
             // Check if content is binary
             if (isBinaryContent(content)) {
-                showToast('Binary file - use Download to view', 'info');
+                showToast('Binary file - not for human eyes', 'info');
                 state.currentFile = null;
                 // Stay in browser view
                 if (browser) browser.style.display = 'block';
