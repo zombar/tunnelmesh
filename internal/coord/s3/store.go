@@ -4,11 +4,12 @@ package s3
 import (
 	"bytes"
 	"crypto/md5"
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -173,65 +174,30 @@ func (s *Store) QuotaStats() *QuotaStats {
 	return &stats
 }
 
-// calculateQuotaUsage scans all objects and updates quota tracking.
-// For CAS-enabled stores, this calculates the total size of all chunks.
+// calculateQuotaUsage scans all chunks and updates quota tracking.
 // This is called during initialization before the store is accessible to other
 // goroutines, but we hold the mutex for defense in depth and future-proofing.
 func (s *Store) calculateQuotaUsage() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// For CAS-enabled stores, calculate total chunk storage size
-	// Chunks are shared across all buckets, so we track total storage
-	if s.cas != nil {
-		chunksDir := filepath.Join(s.dataDir, "chunks")
-		var totalSize int64
-		_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return nil
-			}
-			totalSize += info.Size()
-			return nil
-		})
-		// Set as "_chunks" bucket for internal tracking
-		if totalSize > 0 {
-			s.quota.SetUsed("_chunks", totalSize)
-		}
+	if s.cas == nil {
 		return nil
 	}
 
-	// Legacy: scan objects directory (for non-CAS stores)
-	bucketsDir := filepath.Join(s.dataDir, "buckets")
-	entries, err := os.ReadDir(bucketsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
+	// Calculate total chunk storage size (shared across all buckets)
+	chunksDir := filepath.Join(s.dataDir, "chunks")
+	var totalSize int64
+	_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
 			return nil
 		}
-		return err
+		totalSize += info.Size()
+		return nil
+	})
+	if totalSize > 0 {
+		s.quota.SetUsed("_chunks", totalSize)
 	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		bucket := entry.Name()
-		var bucketSize int64
-
-		// Sum all object sizes in this bucket
-		objectsDir := filepath.Join(bucketsDir, bucket, "objects")
-		_ = filepath.Walk(objectsDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return nil
-			}
-			bucketSize += info.Size()
-			return nil
-		})
-
-		if bucketSize > 0 {
-			s.quota.SetUsed(bucket, bucketSize)
-		}
-	}
-
 	return nil
 }
 
@@ -248,6 +214,18 @@ func validateName(name string) error {
 	if strings.ContainsRune(name, 0) {
 		return fmt.Errorf("null bytes not allowed")
 	}
+
+	// Use filepath.Clean to normalize and detect traversal attempts
+	// This handles Unicode lookalikes and URL-encoded sequences
+	cleanPath := filepath.Clean(name)
+	if cleanPath != name && cleanPath != filepath.ToSlash(name) {
+		// Path was modified by Clean - likely contains traversal
+		if strings.Contains(cleanPath, "..") {
+			return fmt.Errorf("path traversal not allowed")
+		}
+	}
+
+	// Explicit checks for common traversal patterns
 	if name == "." || name == ".." {
 		return fmt.Errorf("invalid name")
 	}
@@ -262,7 +240,7 @@ func validateName(name string) error {
 		}
 	}
 	// Block absolute paths
-	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") {
+	if filepath.IsAbs(name) || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") {
 		return fmt.Errorf("absolute paths not allowed")
 	}
 	// Block relative paths starting with "./" or ".\"
@@ -633,7 +611,6 @@ func (s *Store) GetObject(bucket, key string) (io.ReadCloser, *ObjectMeta, error
 		return nil, nil, err
 	}
 
-	// Get object content (handles both CAS and legacy storage)
 	return s.getObjectContent(bucket, key, meta)
 }
 
@@ -1056,8 +1033,12 @@ func (s *Store) SetVersionRetentionPolicy(policy VersionRetentionPolicy) {
 
 // generateVersionID creates a unique, sortable version ID.
 // Format: {unixNano}-{random6hex}
+// Uses crypto/rand for unpredictable random component.
 func generateVersionID() string {
-	return fmt.Sprintf("%d-%06x", time.Now().UnixNano(), rand.Intn(0xFFFFFF))
+	var randomBytes [4]byte
+	_, _ = cryptorand.Read(randomBytes[:])
+	randomInt := binary.BigEndian.Uint32(randomBytes[:]) & 0xFFFFFF
+	return fmt.Sprintf("%d-%06x", time.Now().UnixNano(), randomInt)
 }
 
 // versionDir returns the path to an object's version directory.
@@ -1081,10 +1062,10 @@ func (s *Store) archiveCurrentVersion(bucket, key string) error {
 		return err
 	}
 
-	// Generate version ID if not present (legacy objects)
+	// Generate version ID if not present (defensive - all new objects have IDs)
 	versionID := meta.VersionID
 	if versionID == "" {
-		versionID = fmt.Sprintf("%d-%06x", meta.LastModified.UnixNano(), rand.Intn(0xFFFFFF))
+		versionID = generateVersionID()
 		meta.VersionID = versionID
 	}
 
@@ -1298,11 +1279,11 @@ func (s *Store) isChunkReferencedGlobally(hash string) bool {
 			metaPath := filepath.Join(metaDir, metaEntry.Name())
 			data, err := os.ReadFile(metaPath)
 			if err != nil {
-				continue
+				return true // Assume referenced on read error to prevent data loss
 			}
 			var meta ObjectMeta
 			if err := json.Unmarshal(data, &meta); err != nil {
-				continue
+				return true // Assume referenced on parse error to prevent data loss
 			}
 			for _, h := range meta.Chunks {
 				if h == hash {
@@ -1313,25 +1294,33 @@ func (s *Store) isChunkReferencedGlobally(hash string) bool {
 
 		// Check all versions directory
 		versionsDir := filepath.Join(bucketsDir, bucket, "versions")
+		found := false
+		parseError := false
 		_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
 				return nil
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
-				return nil
+				parseError = true
+				return filepath.SkipAll
 			}
 			var meta ObjectMeta
 			if err := json.Unmarshal(data, &meta); err != nil {
-				return nil
+				parseError = true
+				return filepath.SkipAll
 			}
 			for _, h := range meta.Chunks {
 				if h == hash {
-					return filepath.SkipAll // Found - stop walking
+					found = true
+					return filepath.SkipAll
 				}
 			}
 			return nil
 		})
+		if found || parseError {
+			return true // Found or error - assume referenced
+		}
 	}
 
 	return false
@@ -1387,6 +1376,83 @@ func (s *Store) isChunkReferenced(hash, bucket, key, excludeVersionID string) bo
 	}
 
 	return false
+}
+
+// CASStats holds statistics about content-addressed storage.
+type CASStats struct {
+	ChunkCount   int   // Total number of chunks
+	ChunkBytes   int64 // Total bytes in chunks (after dedup)
+	LogicalBytes int64 // Logical bytes (sum of object sizes, before dedup)
+	VersionCount int   // Total number of versions
+	ObjectCount  int   // Total number of current objects
+}
+
+// GetCASStats returns statistics about content-addressed storage.
+// This scans the chunks directory and all object metadata.
+func (s *Store) GetCASStats() CASStats {
+	stats := CASStats{}
+
+	if s.cas == nil {
+		return stats
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Count chunks and their sizes
+	chunksDir := filepath.Join(s.dataDir, "chunks")
+	_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		stats.ChunkCount++
+		stats.ChunkBytes += info.Size()
+		return nil
+	})
+
+	// Scan all buckets for objects and versions
+	bucketsDir := filepath.Join(s.dataDir, "buckets")
+	bucketEntries, err := os.ReadDir(bucketsDir)
+	if err != nil {
+		return stats
+	}
+
+	for _, bucketEntry := range bucketEntries {
+		if !bucketEntry.IsDir() {
+			continue
+		}
+		bucket := bucketEntry.Name()
+
+		// Count current objects and their logical sizes
+		metaDir := filepath.Join(bucketsDir, bucket, "meta")
+		_ = filepath.Walk(metaDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
+			}
+			stats.ObjectCount++
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			var meta ObjectMeta
+			if json.Unmarshal(data, &meta) == nil {
+				stats.LogicalBytes += meta.Size
+			}
+			return nil
+		})
+
+		// Count versions
+		versionsDir := filepath.Join(bucketsDir, bucket, "versions")
+		_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
+			}
+			stats.VersionCount++
+			return nil
+		})
+	}
+
+	return stats
 }
 
 // GCStats holds statistics from a garbage collection run.

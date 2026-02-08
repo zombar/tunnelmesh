@@ -32,6 +32,20 @@ type S3Metrics struct {
 
 	// User metrics
 	RegisteredUsers prometheus.Gauge // tunnelmesh_s3_registered_users
+
+	// CAS/Chunking metrics
+	ChunksTotal       prometheus.Gauge // tunnelmesh_s3_chunks_total
+	ChunkStorageBytes prometheus.Gauge // tunnelmesh_s3_chunk_storage_bytes (actual on-disk after dedup)
+	LogicalBytes      prometheus.Gauge // tunnelmesh_s3_logical_bytes (total without dedup)
+	DedupRatio        prometheus.Gauge // tunnelmesh_s3_dedup_ratio (logical/physical, >1 means savings)
+	VersionsTotal     prometheus.Gauge // tunnelmesh_s3_versions_total
+
+	// GC metrics (counters for cumulative totals)
+	GCRunsTotal       prometheus.Counter   // tunnelmesh_s3_gc_runs_total
+	GCVersionsPruned  prometheus.Counter   // tunnelmesh_s3_gc_versions_pruned_total
+	GCChunksDeleted   prometheus.Counter   // tunnelmesh_s3_gc_chunks_deleted_total
+	GCBytesReclaimed  prometheus.Counter   // tunnelmesh_s3_gc_bytes_reclaimed_total
+	GCDurationSeconds prometheus.Histogram // tunnelmesh_s3_gc_duration_seconds
 }
 
 // InitS3Metrics initializes all S3 metrics.
@@ -92,6 +106,59 @@ func InitS3Metrics(registry prometheus.Registerer) *S3Metrics {
 				Name: "tunnelmesh_s3_registered_users",
 				Help: "Number of registered S3 users",
 			}),
+
+			// CAS/Chunking metrics
+			ChunksTotal: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_chunks_total",
+				Help: "Total number of content-addressed chunks",
+			}),
+
+			ChunkStorageBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_chunk_storage_bytes",
+				Help: "Actual bytes stored in chunks (after deduplication)",
+			}),
+
+			LogicalBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_logical_bytes",
+				Help: "Logical bytes stored (before deduplication)",
+			}),
+
+			DedupRatio: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_dedup_ratio",
+				Help: "Deduplication ratio (logical/physical bytes, >1 means space savings)",
+			}),
+
+			VersionsTotal: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_versions_total",
+				Help: "Total number of object versions",
+			}),
+
+			// GC metrics
+			GCRunsTotal: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_gc_runs_total",
+				Help: "Total number of garbage collection runs",
+			}),
+
+			GCVersionsPruned: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_gc_versions_pruned_total",
+				Help: "Total number of versions pruned by garbage collection",
+			}),
+
+			GCChunksDeleted: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_gc_chunks_deleted_total",
+				Help: "Total number of orphaned chunks deleted by garbage collection",
+			}),
+
+			GCBytesReclaimed: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_gc_bytes_reclaimed_total",
+				Help: "Total bytes reclaimed by garbage collection",
+			}),
+
+			GCDurationSeconds: promauto.With(registry).NewHistogram(prometheus.HistogramOpts{
+				Name:    "tunnelmesh_s3_gc_duration_seconds",
+				Help:    "Garbage collection duration in seconds",
+				Buckets: []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120},
+			}),
 		}
 	})
 
@@ -137,4 +204,29 @@ func (m *S3Metrics) UpdateStorageMetrics(buckets, objects int, storageBytes, quo
 // SetRegisteredUsers updates the registered users gauge.
 func (m *S3Metrics) SetRegisteredUsers(count int) {
 	m.RegisteredUsers.Set(float64(count))
+}
+
+// UpdateCASMetrics updates content-addressed storage metrics.
+func (m *S3Metrics) UpdateCASMetrics(chunks int, chunkBytes, logicalBytes int64, versions int) {
+	m.ChunksTotal.Set(float64(chunks))
+	m.ChunkStorageBytes.Set(float64(chunkBytes))
+	m.LogicalBytes.Set(float64(logicalBytes))
+	m.VersionsTotal.Set(float64(versions))
+
+	// Calculate dedup ratio (logical/physical)
+	// A ratio > 1 means we're saving space through deduplication
+	if chunkBytes > 0 {
+		m.DedupRatio.Set(float64(logicalBytes) / float64(chunkBytes))
+	} else {
+		m.DedupRatio.Set(1.0)
+	}
+}
+
+// RecordGCRun records garbage collection metrics.
+func (m *S3Metrics) RecordGCRun(versionsPruned, chunksDeleted int, bytesReclaimed int64, durationSeconds float64) {
+	m.GCRunsTotal.Inc()
+	m.GCVersionsPruned.Add(float64(versionsPruned))
+	m.GCChunksDeleted.Add(float64(chunksDeleted))
+	m.GCBytesReclaimed.Add(float64(bytesReclaimed))
+	m.GCDurationSeconds.Observe(durationSeconds)
 }

@@ -218,12 +218,13 @@ func (c *CAS) deriveChunkKey(hash string) ([32]byte, error) {
 	return key, nil
 }
 
-// deriveNonce derives a deterministic nonce from the content hash.
-// This enables convergent encryption where same content produces same ciphertext.
+// deriveNonce derives a deterministic nonce from the master key and content hash.
+// This enables convergent encryption where same content produces same ciphertext,
+// while keeping nonces unpredictable to attackers who don't know the master key.
 func (c *CAS) deriveNonce(hash string) ([24]byte, error) {
 	var nonce [24]byte
-	// Use HKDF with different info string to derive nonce
-	hkdfReader := hkdf.New(sha256.New, []byte(hash), nil, []byte("tunnelmesh-s3-nonce"))
+	// Derive nonce from masterKey || hash to keep nonces secret
+	hkdfReader := hkdf.New(sha256.New, append(c.masterKey[:], []byte(hash)...), nil, []byte("tunnelmesh-s3-nonce"))
 	if _, err := io.ReadFull(hkdfReader, nonce[:]); err != nil {
 		return nonce, fmt.Errorf("derive nonce: %w", err)
 	}

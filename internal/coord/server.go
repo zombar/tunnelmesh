@@ -304,6 +304,7 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 //   - Purges tombstoned objects past their retention period
 //   - Tombstones content in expired file shares
 //   - Runs garbage collection on versions and orphaned chunks
+//   - Updates CAS metrics (dedup ratio, chunk count, etc.)
 func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 	if s.s3Store == nil {
 		return
@@ -313,6 +314,10 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Hour)
 	go func() {
 		defer ticker.Stop()
+
+		// Update metrics on startup
+		s.updateCASMetrics()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -331,7 +336,10 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 				}
 
 				// Run garbage collection on versions and orphaned chunks
+				gcStart := time.Now()
 				gcStats := s.s3Store.RunGarbageCollection()
+				gcDuration := time.Since(gcStart).Seconds()
+
 				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 {
 					log.Info().
 						Int("versions_pruned", gcStats.VersionsPruned).
@@ -340,9 +348,34 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 						Int("objects_scanned", gcStats.ObjectsScanned).
 						Msg("S3 garbage collection completed")
 				}
+
+				// Record GC metrics
+				if metrics := s3.GetS3Metrics(); metrics != nil {
+					metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
+				}
+
+				// Update CAS metrics after GC
+				s.updateCASMetrics()
 			}
 		}
 	}()
+}
+
+// updateCASMetrics collects and updates CAS/chunking metrics.
+func (s *Server) updateCASMetrics() {
+	if s.s3Store == nil {
+		return
+	}
+
+	casStats := s.s3Store.GetCASStats()
+	if metrics := s3.GetS3Metrics(); metrics != nil {
+		metrics.UpdateCASMetrics(
+			casStats.ChunkCount,
+			casStats.ChunkBytes,
+			casStats.LogicalBytes,
+			casStats.VersionCount,
+		)
+	}
 }
 
 // SetVersion sets the server version for admin display.
@@ -576,6 +609,8 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 // - all_service_users group gets system role on _tunnelmesh bucket
 // - all_admin_users group gets admin role (unscoped)
 func (s *Server) ensureBuiltinGroupBindings() {
+	modified := false
+
 	// Check if bindings already exist
 	serviceBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllServiceUsers)
 	if len(serviceBindings) == 0 {
@@ -584,6 +619,7 @@ func (s *Server) ensureBuiltinGroupBindings() {
 			auth.RoleSystem,
 			"", // Unscoped, but RoleSystem only applies to _tunnelmesh
 		))
+		modified = true
 	}
 
 	adminBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllAdminUsers)
@@ -593,6 +629,14 @@ func (s *Server) ensureBuiltinGroupBindings() {
 			auth.RoleAdmin,
 			"", // Unscoped - admin has access to all buckets
 		))
+		modified = true
+	}
+
+	// Persist if we added any bindings
+	if modified && s.s3SystemStore != nil {
+		if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
+			log.Warn().Err(err).Msg("failed to persist builtin group bindings")
+		}
 	}
 }
 
