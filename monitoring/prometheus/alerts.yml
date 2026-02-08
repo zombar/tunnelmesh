@@ -91,6 +91,7 @@ groups:
           description: "Packet filter is in default-deny mode but has no allow rules - all traffic is being blocked"
 
       # Data: S3 quota approaching limit
+      # Threshold: 75% provides 25% buffer for users to react before critical level
       - alert: S3QuotaWarning
         expr: tunnelmesh_s3_quota_used_percent > 75
         for: 5m
@@ -102,6 +103,7 @@ groups:
           description: "S3 storage is {{ $value }}% full (warning at 75%)"
 
       # Data: Elevated S3 error rate
+      # Threshold: 0.1/s (6/min) indicates intermittent issues; 3min duration filters transient spikes
       - alert: S3ElevatedErrors
         expr: sum(rate(tunnelmesh_s3_requests_total{status=~"error|quota_exceeded"}[5m])) > 0.1
         for: 3m
@@ -207,6 +209,7 @@ groups:
           description: "Peer lost connection to relay server for 3+ minutes - NAT traversal may fail"
 
       # Data: S3 quota critical level
+      # Threshold: 85% leaves 15% buffer; action required to prevent quota exhaustion
       - alert: S3QuotaCritical
         expr: tunnelmesh_s3_quota_used_percent > 85
         for: 2m
@@ -218,6 +221,7 @@ groups:
           description: "S3 storage is {{ $value }}% full (critical at 85%)"
 
       # Data: High S3 error rate
+      # Threshold: >10% error rate indicates service degradation; 2min duration confirms persistent issue
       - alert: S3HighErrorRate
         expr: sum(rate(tunnelmesh_s3_requests_total{status=~"error"}[5m])) / sum(rate(tunnelmesh_s3_requests_total[5m])) > 0.1
         for: 2m
@@ -310,6 +314,7 @@ groups:
           description: "WireGuard is enabled but the device is not running"
 
       # Data: S3 service down
+      # Note: Also triggers when idle; consider changing to `absent()` only if false positives occur
       - alert: S3Down
         expr: absent(tunnelmesh_s3_requests_total) or sum(rate(tunnelmesh_s3_requests_total[1m])) == 0
         for: 2m
@@ -321,6 +326,7 @@ groups:
           description: "No S3 metrics reported for 2 minutes"
 
       # Data: S3 quota near full - immediate action required
+      # Threshold: 92% leaves only 8% buffer; under high load this could fill in minutes
       - alert: S3QuotaNearFull
         expr: tunnelmesh_s3_quota_used_percent > 92
         for: 1m

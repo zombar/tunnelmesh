@@ -24,8 +24,9 @@ func (r *statusRecorder) WriteHeader(code int) {
 	if !r.wroteHeader {
 		r.status = code
 		r.wroteHeader = true
+		r.ResponseWriter.WriteHeader(code)
 	}
-	r.ResponseWriter.WriteHeader(code)
+	// Subsequent calls are silently ignored to prevent "http: superfluous response.WriteHeader call" warnings
 }
 
 // getStatus returns the recorded status, defaulting to 200 if WriteHeader was never called.

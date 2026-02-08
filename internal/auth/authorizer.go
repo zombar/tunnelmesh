@@ -3,6 +3,7 @@ package auth
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/logging/audit"
 )
@@ -17,7 +18,7 @@ type Authorizer struct {
 	GroupBindings *GroupBindingStore // Optional: for group-based authorization
 	roles         map[string]*Role   // role name -> role
 	mu            sync.RWMutex
-	auditLogger   *audit.Logger // Optional: for security audit logging
+	auditLogger   atomic.Pointer[audit.Logger] // Optional: for security audit logging (lock-free)
 }
 
 // NewAuthorizer creates a new authorizer with built-in roles.
@@ -67,12 +68,8 @@ func (a *Authorizer) Authorize(userID, verb, resource, bucketName, objectKey str
 		allowed = a.checkGroupBindings(userID, verb, resource, bucketName, objectKey)
 	}
 
-	// Log authorization decision for security audit
-	a.mu.RLock()
-	logger := a.auditLogger
-	a.mu.RUnlock()
-
-	if logger != nil {
+	// Log authorization decision for security audit (lock-free read)
+	if logger := a.auditLogger.Load(); logger != nil {
 		result := "allowed"
 		reason := ""
 		if !allowed {
@@ -225,10 +222,9 @@ func (a *Authorizer) GetRole(name string) *Role {
 
 // SetAuditLogger sets the audit logger for security event logging.
 // This is optional - if not set, no audit logging will occur.
+// Safe for concurrent use (lock-free atomic operation).
 func (a *Authorizer) SetAuditLogger(logger *audit.Logger) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.auditLogger = logger
+	a.auditLogger.Store(logger)
 }
 
 // GetAllowedPrefixes returns all object prefixes a user can access in a bucket.
