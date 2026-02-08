@@ -2503,6 +2503,12 @@ async function fetchBindings() {
         const resp = await fetch('api/bindings');
         if (!resp.ok) return;
         const bindings = await resp.json();
+        // Sort by user/group name
+        (bindings || []).sort((a, b) => {
+            const aName = (a.user_id || a.group_name || '').toLowerCase();
+            const bName = (b.user_id || b.group_name || '').toLowerCase();
+            return aName.localeCompare(bName);
+        });
         state.currentBindings = bindings || [];
         renderBindingsTable();
     } catch (err) {
