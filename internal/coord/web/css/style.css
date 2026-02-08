@@ -1917,15 +1917,20 @@ a.logs-container {
     max-width: 700px;
 }
 
-/* Wide modal variant for tables */
+/* Wide modal variant for tables - fixed header, scrolling body */
 .modal-content.modal-wide {
     min-width: 700px;
     max-width: 900px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
-/* Table body variant - no padding for full-width tables */
+/* Table body variant - no padding, scrollable for fixed header */
 .modal-body-table {
     padding: 0;
+    overflow-y: auto;
+    max-height: 60vh;
 }
 
 /* Text alignment utilities */
@@ -1985,7 +1990,7 @@ a.logs-container {
     margin-top: 2px;
 }
 
-/* Square icon buttons for version actions */
+/* Square icon buttons for version actions - square corners */
 .s3-version-btn {
     width: 28px;
     height: 28px;
@@ -1994,6 +1999,7 @@ a.logs-container {
     align-items: center;
     justify-content: center;
     margin-right: 0;
+    border-radius: 0;
 }
 
 .s3-version-btn:disabled {
