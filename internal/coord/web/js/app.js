@@ -2114,7 +2114,7 @@ function initPanelResize(handle, container) {
         if (!isResizing) return;
         const delta = e.clientY - startY;
         const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + delta));
-        container.style.maxHeight = `${newHeight}px`;
+        container.style.height = `${newHeight}px`;
     });
 
     document.addEventListener('mouseup', () => {
@@ -2143,7 +2143,7 @@ function initPanelResize(handle, container) {
             if (!isResizing) return;
             const delta = e.touches[0].clientY - startY;
             const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + delta));
-            container.style.maxHeight = `${newHeight}px`;
+            container.style.height = `${newHeight}px`;
         },
         { passive: true },
     );
