@@ -212,7 +212,10 @@ func (s *Simulator) GenerateScenario(ctx context.Context) error {
 
 		// Filter based on enabled workflow types
 		for _, wf := range allWorkflows {
-			if enabled, ok := s.config.WorkflowTestsEnabled[wf.Type]; !ok || enabled {
+			// If WorkflowTestsEnabled is nil, include all workflows
+			if s.config.WorkflowTestsEnabled == nil {
+				s.workflows = append(s.workflows, wf)
+			} else if enabled, ok := s.config.WorkflowTestsEnabled[wf.Type]; !ok || enabled {
 				s.workflows = append(s.workflows, wf)
 			}
 		}

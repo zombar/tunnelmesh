@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sort"
 	"time"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/documents"
@@ -272,13 +273,8 @@ func generateRandomID(length int) string {
 
 // sortTasksByTime sorts tasks by real time (in-place).
 func sortTasksByTime(tasks []WorkloadTask) {
-	// Simple bubble sort for now (can optimize later if needed)
-	n := len(tasks)
-	for i := 0; i < n-1; i++ {
-		for j := 0; j < n-i-1; j++ {
-			if tasks[j].RealTime > tasks[j+1].RealTime {
-				tasks[j], tasks[j+1] = tasks[j+1], tasks[j]
-			}
-		}
-	}
+	// Sort by real time using efficient O(n log n) algorithm
+	sort.Slice(tasks, func(i, j int) bool {
+		return tasks[i].RealTime < tasks[j].RealTime
+	})
 }

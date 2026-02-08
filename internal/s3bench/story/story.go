@@ -2,6 +2,7 @@
 package story
 
 import (
+	"math"
 	"time"
 )
 
@@ -192,7 +193,19 @@ func ScaledDuration(storyDuration time.Duration, timeScale float64) time.Duratio
 	if timeScale <= 0 {
 		timeScale = 1.0
 	}
-	return time.Duration(float64(storyDuration) / timeScale)
+
+	// Calculate scaled duration with overflow protection
+	scaled := float64(storyDuration) / timeScale
+
+	// Check for overflow (time.Duration is int64)
+	if scaled > float64(math.MaxInt64) {
+		return time.Duration(math.MaxInt64)
+	}
+	if scaled < float64(math.MinInt64) {
+		return time.Duration(math.MinInt64)
+	}
+
+	return time.Duration(scaled)
 }
 
 // Context provides contextual information for document generation.
