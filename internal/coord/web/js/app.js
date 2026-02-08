@@ -2464,8 +2464,15 @@ function switchTab(tabName) {
         content.classList.toggle('active', content.id === tabName + '-tab');
     });
 
-    // Load data for the active tab
-    if (tabName === 'data') {
+    // Handle tab-specific initialization
+    if (tabName === 'mesh') {
+        // Defer visualizer resize until after DOM updates to get correct dimensions
+        requestAnimationFrame(() => {
+            if (state.visualizer) {
+                state.visualizer.resize();
+            }
+        });
+    } else if (tabName === 'data') {
         fetchUsers();
         fetchGroups();
         fetchShares();
