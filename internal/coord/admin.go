@@ -1058,9 +1058,14 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Validate quota (must be non-negative)
+	// Validate quota (must be non-negative and <= 1TB)
+	const maxQuotaBytes = 1024 * 1024 * 1024 * 1024 // 1TB
 	if req.QuotaBytes < 0 {
 		s.jsonError(w, "quota_bytes must be non-negative", http.StatusBadRequest)
+		return
+	}
+	if req.QuotaBytes > maxQuotaBytes {
+		s.jsonError(w, "quota_bytes exceeds maximum (1TB)", http.StatusBadRequest)
 		return
 	}
 
@@ -1413,6 +1418,10 @@ type S3BucketsResponse struct {
 }
 
 // validateS3Name validates a bucket or object key name to prevent path traversal.
+// This is the API-level validation that runs before any S3 store operations.
+// The s3.Store also has its own validateName function as defense-in-depth,
+// ensuring protection even if the API layer is bypassed or refactored.
+// Both functions perform identical checks; duplication is intentional for security.
 func validateS3Name(name string) error {
 	if name == "" {
 		return fmt.Errorf("name cannot be empty")
@@ -1431,6 +1440,12 @@ func validateS3Name(name string) error {
 }
 
 // handleS3Proxy routes S3 explorer API requests.
+//
+// Security: This endpoint is registered on adminMux which is only served over HTTPS
+// on the coordinator's mesh IP (via Server.setupAdminRoutes). It is NOT accessible
+// from the public internet. All requests are authenticated via mTLS - the client
+// must present a valid mesh certificate. The caller's identity is extracted from
+// the TLS client certificate for authorization decisions.
 func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 	if s.s3Store == nil {
 		s.jsonError(w, "S3 storage not enabled", http.StatusServiceUnavailable)

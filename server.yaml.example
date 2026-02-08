@@ -66,6 +66,9 @@ s3:
   max_size: "10Gi"             # Storage quota (required, e.g., 10Gi, 500Mi, 1Ti)
   # data_dir: "/var/lib/tunnelmesh/s3"  # Storage directory
   # port: 9000                 # S3 API port
+  # object_expiry_days: 9125   # Days until objects expire (default: 25 years)
+  # share_expiry_days: 365     # Days until file shares expire (default: 1 year)
+  # tombstone_retention_days: 90  # Days to keep deleted items before purge (default: 90)
 
 # -----------------------------------------------------------------------------
 # Packet Filter (Global Rules)

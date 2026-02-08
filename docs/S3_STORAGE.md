@@ -30,6 +30,9 @@ s3:
 | `max_size` | - | Storage quota (required, e.g., `10Gi`, `500Mi`, `1Ti`) |
 | `data_dir` | `{data_dir}/s3` | Directory for object storage |
 | `port` | `9000` | Port for S3 API (mesh IP only) |
+| `object_expiry_days` | `9125` | Days until objects auto-expire (25 years) |
+| `share_expiry_days` | `365` | Days until file shares expire (1 year) |
+| `tombstone_retention_days` | `90` | Days to keep soft-deleted items before purge |
 
 ### Size Format
 
@@ -129,6 +132,56 @@ _tunnelmesh/
 
 This bucket is only accessible to service users with the `system` role.
 
+## File Shares
+
+File shares are user-accessible storage areas backed by S3 buckets. They provide an easy way to share files across the mesh with automatic permission management.
+
+### Creating File Shares
+
+File shares can be created via the admin panel's Data tab or the API:
+
+```bash
+# Via API
+curl -X POST https://coordinator.tunnelmesh/api/shares \
+  -H "Content-Type: application/json" \
+  -d '{"name": "team-files", "description": "Shared team files", "quota_bytes": 10737418240}'
+```
+
+### Share Properties
+
+| Property | Description |
+|----------|-------------|
+| Name | DNS-safe identifier (alphanumeric + hyphens, max 63 chars) |
+| Description | Optional description |
+| Quota | Per-share storage limit (0 = unlimited, max 1TB) |
+| Owner | Creator gets bucket-admin role automatically |
+| Expires | Auto-set based on `share_expiry_days` config |
+
+### Default Permissions
+
+When a file share is created:
+- The creator becomes the owner with `bucket-admin` role
+- All mesh users (`everyone` group) get `bucket-read` access
+- Additional permissions can be granted via role bindings
+
+### Accessing Share Contents
+
+File shares are backed by S3 buckets with a `shares-` prefix:
+
+```bash
+# List share contents via S3 API
+aws s3 ls s3://shares-team-files/ --endpoint-url https://coord.tunnelmesh:9000
+```
+
+Or browse them in the admin panel's S3 Explorer.
+
+### Soft Delete (Tombstoning)
+
+Deleted file shares are tombstoned rather than immediately removed:
+- Share data is retained for `tombstone_retention_days` (default: 90)
+- Recreating a share with the same name restores the previous content
+- After the retention period, data is permanently purged
+
 ## Using with AWS CLI
 
 Configure the AWS CLI to use your mesh S3:
@@ -188,7 +241,7 @@ response = s3.list_buckets()
 
 ## Storage Quotas
 
-When `max_size_gb` is configured, the service enforces storage limits:
+When `max_size` is configured, the service enforces storage limits:
 
 - Object uploads are rejected if quota would be exceeded
 - Quota is tracked per-bucket and total

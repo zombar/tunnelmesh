@@ -166,7 +166,10 @@ func (s *Store) calculateQuotaUsage() error {
 }
 
 // validateName validates a bucket or object key name to prevent path traversal.
-// This is a defense-in-depth measure; API-level validation should also be applied.
+// This is a defense-in-depth measure that runs at the storage layer.
+// The admin.go also has validateS3Name which performs identical validation at
+// the API layer. Both functions are intentionally duplicated to ensure path
+// traversal protection even if one layer is bypassed or refactored.
 func validateName(name string) error {
 	if name == "" {
 		return fmt.Errorf("name cannot be empty")

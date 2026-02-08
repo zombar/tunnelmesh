@@ -96,11 +96,19 @@ func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes 
 	}
 	m.shares = append(m.shares, share)
 
-	// Persist
+	// Persist share metadata.
+	// Note: If persistence fails, the share is still functional in memory. The bucket
+	// and bindings have been created, but the share won't survive a restart.
+	// This is acceptable because:
+	// 1. The bucket data persists on disk via the Store
+	// 2. On restart, if the bucket exists but share metadata doesn't, an admin can
+	//    recreate the share with the same name - the existing bucket will be restored
+	// 3. Bindings are persisted separately by the caller (handleFileShareCreate)
+	// A full rollback would require deleting the bucket and bindings, which could
+	// leave the system in an inconsistent state if those operations also fail.
 	if m.systemStore != nil {
 		if err := m.systemStore.SaveFileShares(m.shares); err != nil {
-			// Note: Bindings and bucket are already created, just log the error
-			// In a real system, we might want to handle this more gracefully
+			log.Warn().Err(err).Str("share", name).Msg("failed to persist file share metadata")
 			return share, fmt.Errorf("persist share (share created but not persisted): %w", err)
 		}
 	}
