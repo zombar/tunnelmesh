@@ -2723,3 +2723,13 @@ function s3DeleteSelected() {
     if (TM.s3explorer) TM.s3explorer.deleteSelected();
 }
 window.s3DeleteSelected = s3DeleteSelected;
+
+function s3ToggleAutosave(enabled) {
+    if (TM.s3explorer) TM.s3explorer.setAutosave(enabled);
+}
+window.s3ToggleAutosave = s3ToggleAutosave;
+
+function s3ToggleFullscreen() {
+    if (TM.s3explorer) TM.s3explorer.toggleFullscreen();
+}
+window.s3ToggleFullscreen = s3ToggleFullscreen;
