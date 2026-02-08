@@ -1855,34 +1855,32 @@ a.logs-container {
     height: 100%;
     display: flex;
     flex-direction: column;
+    position: relative;
 }
 
 .s3-editor-wrap {
     display: flex;
     flex: 1;
     min-height: 0;
-    position: relative;
 }
 
 .s3-readonly-badge {
     position: absolute;
-    top: 1rem;
+    top: 0.75rem;
     left: 50%;
     transform: translateX(-50%);
     background: transparent;
-    border: 2px solid var(--color-accent-orange);
+    border: 1px solid var(--color-accent-orange);
     color: var(--color-accent-orange);
-    padding: 0.4rem 1.2rem;
-    font-family: 'Courier New', monospace;
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.2em;
+    padding: 0.25rem 0.75rem;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.15em;
     text-transform: uppercase;
     border-radius: 2px;
     pointer-events: none;
     z-index: 10;
-    text-shadow: 0 0 8px rgba(210, 153, 34, 0.4);
-    box-shadow: 0 0 12px rgba(210, 153, 34, 0.2);
 }
 
 .s3-line-numbers {
