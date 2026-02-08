@@ -362,6 +362,12 @@
         // Store items for pagination
         state.currentItems = items;
 
+        // Toggle quota column visibility (only show for bucket list, not files)
+        const quotaCol = document.querySelector('.s3-col-quota');
+        if (quotaCol) {
+            quotaCol.style.display = state.currentBucket ? 'none' : '';
+        }
+
         // Always render breadcrumb for navigation
         renderBreadcrumb();
 
@@ -399,12 +405,14 @@
                     : `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} ${state.writable && !isTombstoned ? '' : 'disabled'} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeHtml(itemId)}')" />`;
                 const tombstoneBadge = isTombstoned ? '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
 
+                // Only show quota column for bucket list (not when inside a bucket)
+                const quotaCell = state.currentBucket ? '' : `<td>${item.quota ? formatBytes(item.quota) : '-'}</td>`;
                 return `
                 <tr class="${rowClass}" onclick="${onclick}">
                     <td>${checkbox}</td>
                     <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span>${tombstoneBadge}</div></td>
                     <td>${item.size !== null ? formatBytes(item.size) : '-'}</td>
-                    <td>${item.quota ? formatBytes(item.quota) : '-'}</td>
+                    ${quotaCell}
                     <td>${formatDate(item.lastModified)}</td>
                     <td>${formatExpiry(item.expires)}</td>
                 </tr>
