@@ -2,6 +2,7 @@ package s3
 
 import (
 	"bytes"
+	"io"
 	"testing"
 	"time"
 
@@ -102,19 +103,76 @@ func TestFileShareManager_Delete(t *testing.T) {
 	_, err = mgr.Create("temp", "Temporary share", "alice", 0)
 	require.NoError(t, err)
 
+	bucketName := FileShareBucketPrefix + "temp"
+
+	// Add some content
+	content := []byte("hello")
+	_, err = store.PutObject(bucketName, "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
 	// Delete the share
 	err = mgr.Delete("temp")
 	require.NoError(t, err)
 
-	// Verify bucket was deleted
-	_, err = store.HeadBucket(FileShareBucketPrefix + "temp")
-	assert.Equal(t, ErrBucketNotFound, err)
+	// Bucket is kept (for potential restore), but objects are tombstoned
+	_, err = store.HeadBucket(bucketName)
+	assert.NoError(t, err, "bucket should still exist for restore capability")
+
+	// Object should be tombstoned
+	meta, err := store.HeadObject(bucketName, "file.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
 
 	// Verify share is removed from list
 	shares := mgr.List()
 	for _, s := range shares {
 		assert.NotEqual(t, "temp", s.Name)
 	}
+}
+
+func TestFileShareManager_DeleteAndRecreate_RestoresContent(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create share with content
+	_, err = mgr.Create("docs", "Documents", "alice", 0)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + "docs"
+	testData := []byte("important data")
+	_, err = store.PutObject(bucketName, "readme.txt", bytes.NewReader(testData), int64(len(testData)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Delete the share (tombstones content)
+	err = mgr.Delete("docs")
+	require.NoError(t, err)
+
+	// Verify content is tombstoned
+	meta, err := store.HeadObject(bucketName, "readme.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned())
+
+	// Recreate with same name (should restore content)
+	_, err = mgr.Create("docs", "Restored docs", "bob", 0)
+	require.NoError(t, err)
+
+	// Content should be restored (untombstoned)
+	meta, err = store.HeadObject(bucketName, "readme.txt")
+	require.NoError(t, err)
+	assert.False(t, meta.IsTombstoned(), "object should be untombstoned after recreate")
+
+	// Content should still be readable
+	reader, _, err := store.GetObject(bucketName, "readme.txt")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+	content, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, "important data", string(content))
 }
 
 func TestFileShareManager_Delete_RemovesPermissions(t *testing.T) {

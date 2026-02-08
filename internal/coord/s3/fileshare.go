@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 )
 
@@ -38,6 +39,7 @@ func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *aut
 
 // Create creates a new file share.
 // It creates the underlying bucket, sets up default permissions, and persists the share metadata.
+// If a bucket already exists (from a previously deleted share), it restores the tombstoned objects.
 // quotaBytes of 0 means unlimited (within global quota).
 func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes int64) (*FileShare, error) {
 	m.mu.Lock()
@@ -52,14 +54,17 @@ func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes 
 
 	bucketName := FileShareBucketPrefix + name
 
-	// Check if bucket already exists
+	// Check if bucket already exists (from a previously deleted share)
+	bucketExists := false
 	if _, err := m.store.HeadBucket(bucketName); err == nil {
-		return nil, fmt.Errorf("bucket %q already exists", bucketName)
-	}
-
-	// Create the bucket
-	if err := m.store.CreateBucket(bucketName, ownerID); err != nil {
-		return nil, fmt.Errorf("create bucket: %w", err)
+		bucketExists = true
+		// Restore tombstoned objects
+		_, _ = m.store.UntombstoneBucket(bucketName)
+	} else {
+		// Create new bucket
+		if err := m.store.CreateBucket(bucketName, ownerID); err != nil {
+			return nil, fmt.Errorf("create bucket: %w", err)
+		}
 	}
 
 	// Create group binding: everyone -> bucket-read
@@ -100,6 +105,11 @@ func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes 
 		}
 	}
 
+	// Log if we restored a previous share
+	if bucketExists {
+		log.Info().Str("share", name).Msg("restored file share with previous content")
+	}
+
 	return share, nil
 }
 
@@ -123,16 +133,11 @@ func (m *FileShareManager) Delete(name string) error {
 
 	bucketName := FileShareBucketPrefix + name
 
-	// Delete the bucket (this will fail if not empty - that's intentional)
-	// Purge (permanently delete) all objects before deleting bucket
-	if err := m.store.DeleteBucket(bucketName); err != nil && err != ErrBucketNotFound {
-		// Purge all objects first (not tombstone - we're deleting the whole share)
-		objects, _, _, _ := m.store.ListObjects(bucketName, "", "", 1000)
-		for _, obj := range objects {
-			_ = m.store.PurgeObject(bucketName, obj.Key)
-		}
-		if err := m.store.DeleteBucket(bucketName); err != nil && err != ErrBucketNotFound {
-			return fmt.Errorf("delete bucket: %w", err)
+	// Tombstone all objects in the bucket (soft delete - allows restore on recreate)
+	objects, _, _, _ := m.store.ListObjects(bucketName, "", "", 10000)
+	for _, obj := range objects {
+		if !obj.IsTombstoned() {
+			_ = m.store.TombstoneObject(bucketName, obj.Key)
 		}
 	}
 

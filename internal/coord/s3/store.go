@@ -501,6 +501,65 @@ func (s *Store) TombstoneObject(bucket, key string) error {
 	return nil
 }
 
+// UntombstoneObject restores a tombstoned object, making it accessible again.
+func (s *Store) UntombstoneObject(bucket, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Check bucket exists
+	if _, err := s.getBucketMeta(bucket); err != nil {
+		return err
+	}
+
+	// Get object metadata
+	meta, err := s.getObjectMeta(bucket, key)
+	if err != nil {
+		return err
+	}
+
+	// Not tombstoned
+	if !meta.IsTombstoned() {
+		return nil
+	}
+
+	// Clear tombstone timestamp
+	meta.TombstonedAt = nil
+
+	// Write updated metadata
+	metaPath := s.objectMetaPath(bucket, key)
+	metaData, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal object meta: %w", err)
+	}
+
+	if err := os.WriteFile(metaPath, metaData, 0644); err != nil {
+		return fmt.Errorf("write object meta: %w", err)
+	}
+
+	return nil
+}
+
+// UntombstoneBucket restores all tombstoned objects in a bucket.
+// Returns the number of objects restored.
+func (s *Store) UntombstoneBucket(bucket string) (int, error) {
+	// First list all objects (including tombstoned)
+	objects, _, _, err := s.ListObjects(bucket, "", "", 10000)
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, obj := range objects {
+		if obj.IsTombstoned() {
+			if err := s.UntombstoneObject(bucket, obj.Key); err != nil {
+				return count, err
+			}
+			count++
+		}
+	}
+	return count, nil
+}
+
 // PurgeObject permanently removes an object from a bucket.
 // This is used by the cleanup process for tombstoned objects past retention.
 func (s *Store) PurgeObject(bucket, key string) error {

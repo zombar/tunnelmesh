@@ -458,6 +458,7 @@
         const selectionActions = document.getElementById('s3-selection-actions');
         const fileActions = document.getElementById('s3-file-actions');
         const saveBtn = document.getElementById('s3-save-btn');
+        const deleteBtn = document.getElementById('s3-delete-btn');
         const readonlyBadge = document.getElementById('s3-readonly-badge');
 
         const fileName = key.split('/').pop();
@@ -489,6 +490,7 @@
             }
             if (fileActions) fileActions.style.display = 'flex';
             if (saveBtn) saveBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
+            if (deleteBtn) deleteBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
             return;
         }
 
@@ -507,6 +509,7 @@
             if (preview) preview.style.display = 'none';
             if (fileActions) fileActions.style.display = 'flex';
             if (saveBtn) saveBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
+            if (deleteBtn) deleteBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
             if (readonlyBadge) readonlyBadge.style.display = isReadOnly ? 'block' : 'none';
 
             if (editor) {
