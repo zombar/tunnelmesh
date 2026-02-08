@@ -819,14 +819,14 @@
 
             // S3 rename = GET + PUT + DELETE (no native copy support)
             // First get the file content
-            const getResp = await fetch(`/api/s3/${state.currentBucket}/${encodeURIComponent(oldKey)}`);
+            const getResp = await fetch(`api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(oldKey)}`);
             if (!getResp.ok) {
                 throw new Error(`Failed to read file: ${getResp.status}`);
             }
             const content = await getResp.blob();
 
             // Put to new key
-            const putResp = await fetch(`/api/s3/${state.currentBucket}/${encodeURIComponent(newKey)}`, {
+            const putResp = await fetch(`api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(newKey)}`, {
                 method: 'PUT',
                 body: content,
             });
@@ -835,7 +835,7 @@
             }
 
             // Delete old key
-            const deleteResp = await fetch(`/api/s3/${state.currentBucket}/${encodeURIComponent(oldKey)}`, {
+            const deleteResp = await fetch(`api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(oldKey)}`, {
                 method: 'DELETE',
             });
             if (!deleteResp.ok) {
