@@ -2394,7 +2394,9 @@ window.closeShareModal = closeShareModal;
 async function createShare() {
     const name = document.getElementById('share-name').value.trim();
     const description = document.getElementById('share-description').value.trim();
-    const quotaMB = parseInt(document.getElementById('share-quota').value) || 0;
+    const quotaValue = document.getElementById('share-quota').value.trim();
+    // Default to 100 MB if empty, but allow explicit 0 for unlimited
+    const quotaMB = quotaValue === '' ? 100 : (parseInt(quotaValue) || 0);
 
     if (!name) {
         showToast('Share name is required', 'error');
