@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/nfs"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
 	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
@@ -85,6 +86,8 @@ type Server struct {
 	s3Credentials *s3.CredentialStore  // S3 credential store
 	s3SystemStore *s3.SystemStore      // System bucket accessor
 	fileShareMgr  *s3.FileShareManager // File share manager
+	// NFS server
+	nfsServer *nfs.Server // NFS server for file shares
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -571,6 +574,44 @@ func (s *Server) StartS3Server(addr string, tlsCert *tls.Certificate) error {
 				log.Error().Err(err).Msg("S3 server error")
 			}
 		}()
+	}
+
+	return nil
+}
+
+// StartNFSServer starts the NFS server on the specified address.
+// This should be called after join_mesh completes to bind to the mesh IP.
+func (s *Server) StartNFSServer(addr string, tlsCert *tls.Certificate) error {
+	if s.s3Store == nil || s.fileShareMgr == nil {
+		return fmt.Errorf("S3 storage not initialized")
+	}
+
+	// Create NFS password store
+	passwords := nfs.NewPasswordStore()
+
+	// Create TLS config if certificate provided
+	var tlsConfig *tls.Config
+	if tlsCert != nil {
+		tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{*tlsCert},
+			MinVersion:   tls.VersionTLS12,
+		}
+	}
+
+	// Create and start NFS server
+	s.nfsServer = nfs.NewServer(
+		s.s3Store,
+		s.fileShareMgr,
+		s.s3Authorizer,
+		passwords,
+		nfs.Config{
+			Address:   addr,
+			TLSConfig: tlsConfig,
+		},
+	)
+
+	if err := s.nfsServer.Start(); err != nil {
+		return fmt.Errorf("start NFS server: %w", err)
 	}
 
 	return nil

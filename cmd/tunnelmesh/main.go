@@ -443,6 +443,14 @@ func runServeFromService(ctx context.Context, configPath string) error {
 				if err := srv.StartAdminServer(adminAddr, tlsCert); err != nil {
 					log.Error().Err(err).Msg("failed to start admin server")
 				}
+
+				// Start NFS server if S3 is enabled
+				if cfg.S3.Enabled {
+					nfsAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", coord.NFSPort))
+					if err := srv.StartNFSServer(nfsAddr, tlsCert); err != nil {
+						log.Error().Err(err).Msg("failed to start NFS server")
+					}
+				}
 			}
 		}
 
@@ -644,6 +652,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 				adminAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", cfg.Admin.Port))
 				if err := srv.StartAdminServer(adminAddr, tlsCert); err != nil {
 					log.Error().Err(err).Msg("failed to start admin server")
+				}
+
+				// Start NFS server if S3 is enabled
+				if cfg.S3.Enabled {
+					nfsAddr := net.JoinHostPort(meshIP, fmt.Sprintf("%d", coord.NFSPort))
+					if err := srv.StartNFSServer(nfsAddr, tlsCert); err != nil {
+						log.Error().Err(err).Msg("failed to start NFS server")
+					}
 				}
 			}
 		}

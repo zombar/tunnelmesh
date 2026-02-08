@@ -1278,7 +1278,7 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 
 		// Add group bindings
 		for _, gb := range s.s3Authorizer.GroupBindings.List() {
-			protected := s.fileShareMgr != nil && s.fileShareMgr.IsProtectedGroupBinding(gb)
+			protected := s.isProtectedGroupBinding(gb)
 			result = append(result, BindingInfo{
 				Name:         gb.Name,
 				GroupName:    gb.GroupName,
@@ -1353,33 +1353,76 @@ func (s *Server) handleBindingByName(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(binding)
 
 	case http.MethodDelete:
+		// Try user binding first
 		binding := s.s3Authorizer.Bindings.Get(bindingName)
-		if binding == nil {
-			s.jsonError(w, "binding not found", http.StatusNotFound)
-			return
-		}
-
-		// Check if this is a protected file share owner binding
-		if s.fileShareMgr != nil && s.fileShareMgr.IsProtectedBinding(binding) {
-			s.jsonError(w, "cannot delete file share owner binding; delete the file share instead", http.StatusForbidden)
-			return
-		}
-
-		s.s3Authorizer.Bindings.Remove(bindingName)
-
-		// Persist
-		if s.s3SystemStore != nil {
-			if err := s.s3SystemStore.SaveBindings(s.s3Authorizer.Bindings.List()); err != nil {
-				log.Warn().Err(err).Msg("failed to persist bindings")
+		if binding != nil {
+			// Check if this is a protected file share owner binding
+			if s.fileShareMgr != nil && s.fileShareMgr.IsProtectedBinding(binding) {
+				s.jsonError(w, "cannot delete file share owner binding; delete the file share instead", http.StatusForbidden)
+				return
 			}
+
+			s.s3Authorizer.Bindings.Remove(bindingName)
+
+			// Persist
+			if s.s3SystemStore != nil {
+				if err := s.s3SystemStore.SaveBindings(s.s3Authorizer.Bindings.List()); err != nil {
+					log.Warn().Err(err).Msg("failed to persist bindings")
+				}
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+		// Try group binding
+		groupBinding := s.s3Authorizer.GroupBindings.Get(bindingName)
+		if groupBinding != nil {
+			// Check if this is a protected group binding
+			if s.isProtectedGroupBinding(groupBinding) {
+				s.jsonError(w, "cannot delete built-in or file share group binding", http.StatusForbidden)
+				return
+			}
+
+			s.s3Authorizer.GroupBindings.Remove(bindingName)
+
+			// Persist
+			if s.s3SystemStore != nil {
+				if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
+					log.Warn().Err(err).Msg("failed to persist group bindings")
+				}
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+			return
+		}
+
+		s.jsonError(w, "binding not found", http.StatusNotFound)
 
 	default:
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// isProtectedGroupBinding checks if a group binding is protected from deletion.
+// Bindings for built-in groups and file share bindings are protected.
+func (s *Server) isProtectedGroupBinding(gb *auth.GroupBinding) bool {
+	// Check if the group is a built-in group (protected by RBAC)
+	if s.s3Authorizer != nil {
+		group := s.s3Authorizer.Groups.Get(gb.GroupName)
+		if group != nil && group.Builtin {
+			return true
+		}
+	}
+
+	// File share bindings are also protected
+	if s.fileShareMgr != nil && s.fileShareMgr.IsProtectedGroupBinding(gb) {
+		return true
+	}
+
+	return false
 }
 
 // --- S3 Explorer API Handlers ---

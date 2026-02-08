@@ -82,6 +82,13 @@ func (gbs *GroupBindingStore) Remove(name string) {
 	delete(gbs.bindings, name)
 }
 
+// Get returns a group binding by name, or nil if not found.
+func (gbs *GroupBindingStore) Get(name string) *GroupBinding {
+	gbs.mu.RLock()
+	defer gbs.mu.RUnlock()
+	return gbs.bindings[name]
+}
+
 // GetForGroup returns all bindings for a group.
 func (gbs *GroupBindingStore) GetForGroup(groupName string) []*GroupBinding {
 	gbs.mu.RLock()
