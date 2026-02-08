@@ -24,6 +24,7 @@ pre-commit:
 pre-push:
   parallel: true
   commands:
-    test:
-      run: go test -short -race ./...
-      fail_text: "Tests failed"
+    # Tests removed from pre-push - run via CI or manually with `make test`
+    # test:
+    #   run: go test -short -race ./...
+    #   fail_text: "Tests failed"
