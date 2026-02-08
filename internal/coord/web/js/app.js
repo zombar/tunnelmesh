@@ -2528,14 +2528,9 @@ async function initS3Explorer() {
 
 // S3 Explorer global handlers
 function s3NewFile() {
-    if (TM.s3explorer) TM.s3explorer.openNewFileModal();
+    if (TM.s3explorer) TM.s3explorer.openNewModal();
 }
 window.s3NewFile = s3NewFile;
-
-function s3NewFolder() {
-    if (TM.s3explorer) TM.s3explorer.openNewFolderModal();
-}
-window.s3NewFolder = s3NewFolder;
 
 function s3Upload() {
     if (TM.s3explorer) TM.s3explorer.openUploadDialog();
@@ -2556,6 +2551,11 @@ function s3Delete() {
     if (TM.s3explorer) TM.s3explorer.deleteFile();
 }
 window.s3Delete = s3Delete;
+
+function s3CloseFile() {
+    if (TM.s3explorer) TM.s3explorer.closeFile();
+}
+window.s3CloseFile = s3CloseFile;
 
 function s3CreateFile() {
     if (TM.s3explorer) TM.s3explorer.createFile();

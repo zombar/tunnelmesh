@@ -297,6 +297,56 @@
     <!-- Data Tab Content -->
     <div id="data-tab" class="tab-content">
     <main>
+        <!-- S3 Explorer Section (GitHub-style file browser) -->
+        <section id="s3-section" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>S3 Explorer</h2>
+                <div class="s3-actions" id="s3-header-actions">
+                    <button class="btn-small" onclick="event.stopPropagation(); s3NewFile();">+ New</button>
+                    <button class="btn-small" onclick="event.stopPropagation(); s3Upload();">Upload</button>
+                </div>
+            </div>
+            <div class="collapsible-content">
+                <!-- Navigation bar with breadcrumb -->
+                <div class="s3-nav" id="s3-nav">
+                    <div class="s3-breadcrumb" id="s3-breadcrumb"></div>
+                    <div class="s3-file-actions" id="s3-file-actions" style="display: none;">
+                        <button class="btn-small btn-primary" id="s3-save-btn" onclick="s3Save()">Save</button>
+                        <button class="btn-small" onclick="s3Download()">Download</button>
+                        <button class="btn-small btn-danger" onclick="s3Delete()">Delete</button>
+                        <button class="btn-small" onclick="s3CloseFile()">Close</button>
+                    </div>
+                </div>
+                <!-- File listing (table view) -->
+                <div id="s3-browser" class="s3-browser">
+                    <table id="s3-files">
+                        <thead>
+                            <tr>
+                                <th class="s3-col-name">Name</th>
+                                <th class="s3-col-size">Size</th>
+                                <th class="s3-col-modified">Last Modified</th>
+                            </tr>
+                        </thead>
+                        <tbody id="s3-files-body"></tbody>
+                    </table>
+                    <div id="s3-empty" class="empty-state" style="display: none;">
+                        No files in this location.
+                    </div>
+                </div>
+                <!-- File viewer/editor (shown when file is selected) -->
+                <div id="s3-viewer" class="s3-viewer" style="display: none;">
+                    <div class="s3-editor-wrap">
+                        <div class="s3-line-numbers" id="s3-line-numbers"></div>
+                        <textarea class="s3-editor" id="s3-editor" spellcheck="false"></textarea>
+                    </div>
+                </div>
+                <!-- Image/binary preview -->
+                <div id="s3-preview" class="s3-preview" style="display: none;"></div>
+                <!-- Drop zone overlay -->
+                <div class="s3-drop-zone" id="s3-drop-zone"></div>
+            </div>
+        </section>
+
         <section id="users-section">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Users</h2>
@@ -394,86 +444,25 @@
             </div>
         </section>
 
-        <!-- S3 Explorer Section -->
-        <section id="s3-section" style="display: none;">
-            <div class="section-header section-toggle" onclick="toggleSection(this)">
-                <h2>S3 Explorer</h2>
-                <div class="s3-toolbar">
-                    <button class="btn-small" onclick="event.stopPropagation(); s3NewFile();">+ New File</button>
-                    <button class="btn-small" onclick="event.stopPropagation(); s3NewFolder();">+ Folder</button>
-                    <button class="btn-small" onclick="event.stopPropagation(); s3Upload();">Upload</button>
-                </div>
-            </div>
-            <div class="collapsible-content">
-                <div class="s3-explorer" id="s3-explorer">
-                    <!-- Left: Tree panel -->
-                    <div class="s3-tree-panel" id="s3-tree-panel">
-                        <div class="s3-tree" id="s3-tree"></div>
-                    </div>
-                    <!-- Resize handle -->
-                    <div class="s3-resize-handle" id="s3-resize-handle"></div>
-                    <!-- Right: Editor panel -->
-                    <div class="s3-content-panel" id="s3-content-panel">
-                        <div class="s3-content-header" id="s3-content-header">
-                            <div class="s3-breadcrumb" id="s3-breadcrumb"></div>
-                            <div class="s3-content-actions" id="s3-content-actions" style="display: none;">
-                                <button class="btn-small btn-primary" id="s3-save-btn" onclick="s3Save()">Save</button>
-                                <button class="btn-small" onclick="s3Download()">Download</button>
-                                <button class="btn-small btn-danger" onclick="s3Delete()">Delete</button>
-                            </div>
-                        </div>
-                        <div class="s3-editor-container" id="s3-editor-container" style="display: none;">
-                            <div class="s3-line-numbers" id="s3-line-numbers"></div>
-                            <textarea class="s3-editor" id="s3-editor" spellcheck="false"></textarea>
-                        </div>
-                        <div class="s3-preview" id="s3-preview" style="display: none;"></div>
-                        <div class="s3-empty-state" id="s3-empty-state">
-                            Select a file to view or edit
-                        </div>
-                    </div>
-                    <!-- Drop zone overlay -->
-                    <div class="s3-drop-zone" id="s3-drop-zone">
-                        <div class="s3-drop-zone-content">
-                            <span class="s3-drop-icon">+</span>
-                            <span>Drop files here to upload</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
     </main>
     </div><!-- End Data Tab -->
 
-    <!-- S3 New File Modal -->
-    <div id="s3-new-file-modal" class="modal" style="display: none;">
+    <!-- S3 New Item Modal -->
+    <div id="s3-new-modal" class="modal" style="display: none;">
         <div class="modal-content modal-small">
             <div class="modal-header">
-                <h3>New File</h3>
-                <button class="modal-close" onclick="closeS3Modal('s3-new-file-modal')">&times;</button>
+                <h3 id="s3-new-modal-title">New File</h3>
+                <button class="modal-close" onclick="closeS3Modal('s3-new-modal')">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label for="s3-new-file-name">File Name</label>
-                    <input type="text" id="s3-new-file-name" placeholder="e.g., config.yaml">
+                    <label for="s3-new-name">Name</label>
+                    <input type="text" id="s3-new-name" placeholder="e.g., config.yaml">
                 </div>
-                <button class="btn-primary" onclick="s3CreateFile()">Create</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- S3 New Folder Modal -->
-    <div id="s3-new-folder-modal" class="modal" style="display: none;">
-        <div class="modal-content modal-small">
-            <div class="modal-header">
-                <h3>New Folder</h3>
-                <button class="modal-close" onclick="closeS3Modal('s3-new-folder-modal')">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="form-group">
-                    <label for="s3-new-folder-name">Folder Name</label>
-                    <input type="text" id="s3-new-folder-name" placeholder="e.g., projects">
+                <div class="form-actions">
+                    <button class="btn-secondary" onclick="s3CreateFolder()">Create Folder</button>
+                    <button class="btn-primary" onclick="s3CreateFile()">Create File</button>
                 </div>
-                <button class="btn-primary" onclick="s3CreateFolder()">Create</button>
             </div>
         </div>
     </div>
