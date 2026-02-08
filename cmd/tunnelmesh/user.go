@@ -101,6 +101,17 @@ Examples:
 	registerCmd.Flags().String("server", "", "Server URL to register with (bypasses context)")
 	userCmd.AddCommand(registerCmd)
 
+	// Rename subcommand
+	renameCmd := &cobra.Command{
+		Use:   "rename <name>",
+		Short: "Change your display name",
+		Long:  `Update your display name locally and re-register with the mesh to sync it.`,
+		Args:  cobra.ExactArgs(1),
+		RunE:  runUserRename,
+	}
+	renameCmd.Flags().String("server", "", "Server URL to register with (bypasses context)")
+	userCmd.AddCommand(renameCmd)
+
 	return userCmd
 }
 
@@ -159,6 +170,38 @@ func runUserSetup(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Name:    %s\n", identity.User.Name)
 	}
 	fmt.Printf("Saved:   %s\n", identityPath)
+
+	return nil
+}
+
+func runUserRename(cmd *cobra.Command, args []string) error {
+	newName := args[0]
+
+	// Load identity
+	identityPath, err := defaultIdentityPath()
+	if err != nil {
+		return fmt.Errorf("get identity path: %w", err)
+	}
+
+	identity, err := auth.LoadUserIdentity(identityPath)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("no identity found. Run 'tunnelmesh user setup' first")
+	}
+	if err != nil {
+		return fmt.Errorf("load identity: %w", err)
+	}
+
+	oldName := identity.User.Name
+	identity.User.Name = newName
+
+	// Save updated identity
+	if err := identity.Save(identityPath); err != nil {
+		return fmt.Errorf("save identity: %w", err)
+	}
+
+	fmt.Printf("Renamed: %s -> %s\n", oldName, newName)
+	fmt.Println()
+	fmt.Println("Run 'tunnelmesh user register' to sync with the mesh.")
 
 	return nil
 }
