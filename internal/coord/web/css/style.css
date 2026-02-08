@@ -1764,9 +1764,8 @@ a.logs-container {
 }
 
 .s3-icon {
-    width: 1rem;
-    text-align: center;
     flex-shrink: 0;
+    vertical-align: middle;
 }
 
 .s3-icon-folder {
@@ -1871,7 +1870,7 @@ a.logs-container {
 }
 
 .s3-binary-icon {
-    font-size: 3rem;
+    color: var(--color-text-secondary);
     margin-bottom: 0.75rem;
 }
 

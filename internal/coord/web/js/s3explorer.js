@@ -285,8 +285,8 @@
 
         tbody.innerHTML = items.map(item => {
             const icon = item.isFolder
-                ? '<span class="s3-icon s3-icon-folder">&#128193;</span>'
-                : '<span class="s3-icon s3-icon-file">&#128196;</span>';
+                ? '<svg class="s3-icon s3-icon-folder" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>'
+                : '<svg class="s3-icon s3-icon-file" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>';
             const nameClass = item.isFolder ? 's3-name s3-name-folder' : 's3-name';
             const onclick = item.isBucket
                 ? `TM.s3explorer.navigateTo('${escapeHtml(item.name)}', '')`
@@ -356,7 +356,7 @@
                 preview.style.display = 'flex';
                 preview.innerHTML = `
                     <div class="s3-binary-info">
-                        <div class="s3-binary-icon">&#128196;</div>
+                        <svg class="s3-binary-icon" width="48" height="48" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
                         <div class="s3-binary-name">${escapeHtml(fileName)}</div>
                         <div class="s3-binary-hint">Binary file - click Download to view</div>
                     </div>
