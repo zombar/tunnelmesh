@@ -16,11 +16,32 @@ import (
 // Run with: go test ./internal/s3bench/simulator -run=TestStressAlienInvasion -v -timeout=10m
 // Skip with: go test -short (stress test will be skipped)
 func TestStressAlienInvasion(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping 5-minute stress test in short mode (use -short to skip)")
-	}
-
 	ctx := context.Background()
+
+	// Configure test based on short mode
+	var (
+		timeScale         float64
+		adversaryAttempts int
+		testName          string
+		targetOps         string
+		targetDuration    string
+	)
+
+	if testing.Short() {
+		// Quick smoke test: 72h in ~12 seconds
+		timeScale = 21600.0
+		adversaryAttempts = 10
+		testName = "12-SECOND SMOKE TEST"
+		targetOps = "~500 operations"
+		targetDuration = "12 seconds"
+	} else {
+		// Full stress test: 72h in 5 minutes
+		timeScale = 864.0
+		adversaryAttempts = 100
+		testName = "5-MINUTE HIGH-INTENSITY S3 STRESS TEST"
+		targetOps = "~10,000 operations"
+		targetDuration = "5 minutes"
+	}
 
 	// Create temporary storage
 	tempDir := t.TempDir()
@@ -41,7 +62,7 @@ func TestStressAlienInvasion(t *testing.T) {
 	}
 	shareManager := s3.NewFileShareManager(store, systemStore, authorizer)
 
-	// Create story with increased document counts (4-6 versions = ~10K operations)
+	// Create story with increased document counts (4-6 versions)
 	story := &scenarios.AlienInvasion{}
 
 	// Create user manager
@@ -55,15 +76,14 @@ func TestStressAlienInvasion(t *testing.T) {
 		}
 	}()
 
-	// Configure simulator for high intensity (10K documents over 5 minutes)
-	// 864x time scale = 72h story in 5 minutes
+	// Configure simulator
 	config := SimulatorConfig{
 		Story:                story,
-		TimeScale:            864.0, // 72h in 5 minutes
+		TimeScale:            timeScale,
 		EnableMesh:           false,
 		EnableAdversary:      true,
 		EnableWorkflows:      true,
-		AdversaryAttempts:    100,
+		AdversaryAttempts:    adversaryAttempts,
 		MaxConcurrentUploads: 20,
 		UserManager:          userMgr,
 		WorkflowTestsEnabled: map[WorkflowType]bool{
@@ -83,11 +103,11 @@ func TestStressAlienInvasion(t *testing.T) {
 
 	// Run stress test
 	t.Log("=======================================================")
-	t.Log("   5-MINUTE HIGH-INTENSITY S3 STRESS TEST")
+	t.Logf("   %s", testName)
 	t.Log("=======================================================")
 	t.Logf("Story: %s", story.Name())
-	t.Logf("Time scale: %.0fx (72h story compressed to 5 minutes)", config.TimeScale)
-	t.Log("Target: ~10,000 operations (uploads, updates, deletes)")
+	t.Logf("Time scale: %.0fx (72h story compressed to %s)", config.TimeScale, targetDuration)
+	t.Logf("Target: %s (uploads, updates, deletes)", targetOps)
 	t.Log("")
 
 	startTime := time.Now()
@@ -103,7 +123,7 @@ func TestStressAlienInvasion(t *testing.T) {
 	t.Log("=======================================================")
 	t.Log("              STRESS TEST RESULTS")
 	t.Log("=======================================================")
-	t.Logf("Duration: %v (target: 5 minutes)", duration)
+	t.Logf("Duration: %v (target: %s)", duration, targetDuration)
 	t.Logf("Story Duration: %v (scaled from 72h)", metrics.StoryDuration)
 	t.Log("")
 	t.Log("Operations:")
@@ -146,7 +166,8 @@ func TestStressAlienInvasion(t *testing.T) {
 			float64(metrics.TasksCompleted)*100/float64(metrics.TasksGenerated))
 	}
 
-	if metrics.TasksGenerated < 8000 {
+	// Only check task count in full mode
+	if !testing.Short() && metrics.TasksGenerated < 8000 {
 		t.Logf("NOTE: Generated %d tasks (target: 10K). Close to target!", metrics.TasksGenerated)
 	}
 
@@ -170,11 +191,21 @@ func TestStressAlienInvasion(t *testing.T) {
 		}
 	}
 
-	// Verify timing is reasonable (should be close to 5 minutes)
-	if duration < 4*time.Minute {
-		t.Logf("NOTE: Completed faster than expected (%v < 4min). Good performance!", duration)
-	} else if duration > 6*time.Minute {
-		t.Errorf("Duration %v exceeded target range (should be 4-6 minutes)", duration)
+	// Verify timing is reasonable based on mode
+	if testing.Short() {
+		// Short mode: should complete in 10-20 seconds
+		if duration < 8*time.Second {
+			t.Logf("NOTE: Completed faster than expected (%v < 8s). Good performance!", duration)
+		} else if duration > 25*time.Second {
+			t.Errorf("Duration %v exceeded target range (should be 10-20 seconds)", duration)
+		}
+	} else {
+		// Full mode: should complete in 4-6 minutes
+		if duration < 4*time.Minute {
+			t.Logf("NOTE: Completed faster than expected (%v < 4min). Good performance!", duration)
+		} else if duration > 6*time.Minute {
+			t.Errorf("Duration %v exceeded target range (should be 4-6 minutes)", duration)
+		}
 	}
 
 	t.Logf("\n✅ Stress test completed successfully!")
