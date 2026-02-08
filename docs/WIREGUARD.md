@@ -81,7 +81,7 @@ wireguard:
 
 ### 2. Add a Client via Admin Panel
 
-1. Access admin dashboard: `https://this.tunnelmesh/`
+1. Access admin dashboard: `https://this.tm/`
 2. Navigate to **WireGuard** section
 3. Click **Add Client**
 4. Enter client name (e.g., "iPhone", "Work-Laptop")
@@ -170,17 +170,17 @@ Clients can also be managed programmatically:
 ```bash
 # List clients
 curl -H "Authorization: Bearer $TOKEN" \
-  https://this.tunnelmesh/api/v1/wireguard/clients
+  https://this.tm/api/v1/wireguard/clients
 
 # Add client
 curl -X POST -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name": "my-phone"}' \
-  https://this.tunnelmesh/api/v1/wireguard/clients
+  https://this.tm/api/v1/wireguard/clients
 
 # Delete client
 curl -X DELETE -H "Authorization: Bearer $TOKEN" \
-  https://this.tunnelmesh/api/v1/wireguard/clients/CLIENT_ID
+  https://this.tm/api/v1/wireguard/clients/CLIENT_ID
 ```
 
 ---

@@ -151,6 +151,7 @@ type FileShare struct {
 	CreatedAt   time.Time `json:"created_at"`            //
 	ExpiresAt   time.Time `json:"expires_at,omitempty"`  // When the share expires (0 = never)
 	QuotaBytes  int64     `json:"quota_bytes,omitempty"` // Per-share quota in bytes (0 = unlimited within global quota)
+	GuestRead   bool      `json:"guest_read"`            // Allow all mesh users to read (default: true)
 }
 
 // IsExpired returns true if the share has expired.

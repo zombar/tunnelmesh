@@ -35,6 +35,8 @@ For a complete step-by-step setup guide including downloading releases, configur
 - **[Getting Started Guide](docs/GETTING_STARTED.md)** - Installation, configuration, contexts, and running as a service
 - **[CLI Reference](docs/CLI.md)** - Complete command-line reference including context management
 - **[WireGuard Integration](docs/WIREGUARD.md)** - Connect mobile devices and standard WireGuard clients
+- **[S3 Storage](docs/S3_STORAGE.md)** - S3-compatible object storage and file shares
+- **[NFS File Sharing](docs/NFS.md)** - Mount file shares as network drives
 - **[Docker Deployment](docs/DOCKER.md)** - Running TunnelMesh in containers for development and production
 - **[Cloud Deployment](docs/CLOUD_DEPLOYMENT.md)** - Deploy to DigitalOcean with Terraform (includes deployment scenarios)
 - **[Benchmarking & Stress Testing](docs/BENCHMARKING.md)** - Measure throughput, latency, and chaos testing
@@ -123,7 +125,7 @@ Standard WireGuard clients on mobile devices can connect to the mesh via a WireG
 
 ### Admin Interface
 
-The admin interface is **only accessible from within the mesh** via HTTPS on the coordinator's mesh IP. Access it at `https://this.tunnelmesh/` from any mesh peer.
+The admin interface is **only accessible from within the mesh** via HTTPS on the coordinator's mesh IP. Access it at `https://this.tm/` from any mesh peer.
 
 When you run `tunnelmesh join`, the mesh CA certificate is automatically fetched and you'll be prompted to install it in your system trust store. This allows HTTPS connections to mesh services without browser warnings.
 

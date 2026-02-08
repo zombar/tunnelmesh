@@ -37,11 +37,18 @@ func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *aut
 	return mgr
 }
 
+// FileShareOptions contains optional settings for creating a file share.
+type FileShareOptions struct {
+	ExpiresAt    time.Time // When the share expires (zero = use default or never)
+	GuestRead    bool      // Allow all mesh users to read (default: true if not specified)
+	GuestReadSet bool      // Whether GuestRead was explicitly set
+}
+
 // Create creates a new file share.
 // It creates the underlying bucket, sets up default permissions, and persists the share metadata.
 // If a bucket already exists (from a previously deleted share), it restores the tombstoned objects.
 // quotaBytes of 0 means unlimited (within global quota).
-func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes int64) (*FileShare, error) {
+func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes int64, opts *FileShareOptions) (*FileShare, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -67,14 +74,23 @@ func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes 
 		}
 	}
 
-	// Create group binding: everyone -> bucket-read
-	everyoneBinding := &auth.GroupBinding{
-		Name:        fmt.Sprintf("everyone-%s-read", name),
-		GroupName:   auth.GroupEveryone,
-		RoleName:    auth.RoleBucketRead,
-		BucketScope: bucketName,
+	// Determine if guest read should be enabled
+	// Default is true unless explicitly disabled
+	guestRead := true
+	if opts != nil && opts.GuestReadSet {
+		guestRead = opts.GuestRead
 	}
-	m.authorizer.GroupBindings.Add(everyoneBinding)
+
+	// Create group binding: everyone -> bucket-read (only if guest read is enabled)
+	if guestRead {
+		everyoneBinding := &auth.GroupBinding{
+			Name:        fmt.Sprintf("everyone-%s-read", name),
+			GroupName:   auth.GroupEveryone,
+			RoleName:    auth.RoleBucketRead,
+			BucketScope: bucketName,
+		}
+		m.authorizer.GroupBindings.Add(everyoneBinding)
+	}
 
 	// Create role binding: owner -> bucket-admin
 	ownerBinding := auth.NewRoleBinding(ownerID, auth.RoleBucketAdmin, bucketName)
@@ -88,10 +104,13 @@ func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes 
 		Owner:       ownerID,
 		CreatedAt:   now,
 		QuotaBytes:  quotaBytes,
+		GuestRead:   guestRead,
 	}
 
-	// Set expiry if configured
-	if expiryDays := m.store.DefaultShareExpiryDays(); expiryDays > 0 {
+	// Set expiry from opts or use default
+	if opts != nil && !opts.ExpiresAt.IsZero() {
+		share.ExpiresAt = opts.ExpiresAt
+	} else if expiryDays := m.store.DefaultShareExpiryDays(); expiryDays > 0 {
 		share.ExpiresAt = now.AddDate(0, 0, expiryDays)
 	}
 	m.shares = append(m.shares, share)

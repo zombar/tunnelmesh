@@ -2,6 +2,8 @@
 
 TunnelMesh includes an S3-compatible object storage service that runs on the coordinator. This provides mesh-only accessible storage for shared files, configurations, and internal coordinator state.
 
+File shares can also be mounted as network drives via NFS - see the [NFS documentation](NFS.md).
+
 ## Overview
 
 The S3 storage service:
@@ -43,7 +45,7 @@ The `max_size` option accepts Kubernetes-style size notation:
 
 ## API Endpoints
 
-The S3 API is available at `https://coord.tunnelmesh:9000` (or your configured port).
+The S3 API is available at `https://this.tm:9000` (or your configured port).
 
 ### Supported Operations
 
@@ -142,7 +144,7 @@ File shares can be created via the admin panel's Data tab or the API:
 
 ```bash
 # Via API
-curl -X POST https://coordinator.tunnelmesh/api/shares \
+curl -X POST https://this.tm/api/shares \
   -H "Content-Type: application/json" \
   -d '{"name": "team-files", "description": "Shared team files", "quota_bytes": 10737418240}'
 ```
@@ -155,25 +157,34 @@ curl -X POST https://coordinator.tunnelmesh/api/shares \
 | Description | Optional description |
 | Quota | Per-share storage limit (0 = unlimited, max 1TB) |
 | Owner | Creator gets bucket-admin role automatically |
-| Expires | Auto-set based on `share_expiry_days` config |
+| Expires | Configurable expiry date (or use default from `share_expiry_days`) |
+| Guest Read | Allow all mesh users to read (default: true) |
 
 ### Default Permissions
 
 When a file share is created:
 - The creator becomes the owner with `bucket-admin` role
-- All mesh users (`everyone` group) get `bucket-read` access
-- Additional permissions can be granted via role bindings
+- If "Guest Read" is enabled (default): all mesh users (`everyone` group) get `bucket-read` access
+- If "Guest Read" is disabled: access is controlled entirely via RBAC bindings
+- Additional permissions can be granted via role bindings in the Data tab
 
 ### Accessing Share Contents
 
-File shares are backed by S3 buckets with a `shares-` prefix:
+File shares are backed by S3 buckets with a `fs+` prefix. Access them via:
 
+**S3 API:**
 ```bash
-# List share contents via S3 API
-aws s3 ls s3://shares-team-files/ --endpoint-url https://coord.tunnelmesh:9000
+aws s3 ls s3://fs+team-files/ --endpoint-url https://this.tm:9000
 ```
 
-Or browse them in the admin panel's S3 Explorer.
+**NFS Mount:**
+```bash
+sudo mount -t nfs this.tm:/team-files /mnt/team-files
+```
+
+**S3 Explorer:** Browse in the admin panel's Data tab.
+
+See the [NFS documentation](NFS.md) for detailed mount instructions.
 
 ### Soft Delete (Tombstoning)
 
@@ -192,7 +203,7 @@ aws configure --profile tunnelmesh
 # Enter your access key and secret key
 
 # Set endpoint
-export AWS_ENDPOINT_URL=https://coord.tunnelmesh:9000
+export AWS_ENDPOINT_URL=https://this.tm:9000
 
 # List buckets
 aws s3 ls --profile tunnelmesh --endpoint-url $AWS_ENDPOINT_URL
@@ -219,7 +230,7 @@ cfg, _ := config.LoadDefaultConfig(context.TODO(),
 )
 
 client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-    o.BaseEndpoint = aws.String("https://coord.tunnelmesh:9000")
+    o.BaseEndpoint = aws.String("https://this.tm:9000")
     o.UsePathStyle = true
 })
 ```
@@ -230,7 +241,7 @@ client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 import boto3
 
 s3 = boto3.client('s3',
-    endpoint_url='https://coord.tunnelmesh:9000',
+    endpoint_url='https://this.tm:9000',
     aws_access_key_id='ACCESS_KEY',
     aws_secret_access_key='SECRET_KEY',
 )

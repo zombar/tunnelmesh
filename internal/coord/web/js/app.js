@@ -2401,6 +2401,8 @@ function openShareModal() {
     document.getElementById('share-name').value = '';
     document.getElementById('share-description').value = '';
     document.getElementById('share-quota').value = '';
+    document.getElementById('share-expires').value = '';
+    document.getElementById('share-guest-read').checked = true;
     document.getElementById('share-name').focus();
 }
 window.openShareModal = openShareModal;
@@ -2414,6 +2416,8 @@ async function createShare() {
     const name = document.getElementById('share-name').value.trim();
     const description = document.getElementById('share-description').value.trim();
     const quotaValue = document.getElementById('share-quota').value.trim();
+    const expiresValue = document.getElementById('share-expires').value;
+    const guestRead = document.getElementById('share-guest-read').checked;
     // Default to 100 MB if empty, but allow explicit 0 for unlimited
     const quotaMB = quotaValue === '' ? 100 : parseInt(quotaValue, 10) || 0;
 
@@ -2425,11 +2429,17 @@ async function createShare() {
     // Convert MB to bytes (0 means unlimited)
     const quota_bytes = quotaMB > 0 ? quotaMB * 1024 * 1024 : 0;
 
+    // Build request body
+    const body = { name, description, quota_bytes, guest_read: guestRead };
+    if (expiresValue) {
+        body.expires_at = expiresValue; // Send as YYYY-MM-DD, backend will parse
+    }
+
     try {
         const resp = await fetch('api/shares', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, description, quota_bytes }),
+            body: JSON.stringify(body),
         });
 
         if (resp.ok) {

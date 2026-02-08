@@ -1024,6 +1024,8 @@ type ShareCreateRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	QuotaBytes  int64  `json:"quota_bytes,omitempty"` // Per-share quota in bytes (0 = unlimited within global quota)
+	ExpiresAt   string `json:"expires_at,omitempty"`  // ISO 8601 date when share expires (empty = use default)
+	GuestRead   *bool  `json:"guest_read,omitempty"`  // Allow all mesh users to read (nil = true, false = owner only)
 }
 
 // handleShareCreate creates a new file share.
@@ -1072,7 +1074,32 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 	// Get owner from TLS client certificate if available
 	ownerID := s.getRequestOwner(r)
 
-	share, err := s.fileShareMgr.Create(req.Name, req.Description, ownerID, req.QuotaBytes)
+	// Build share options
+	opts := &s3.FileShareOptions{}
+	if req.ExpiresAt != "" {
+		expiresAt, err := time.Parse(time.RFC3339, req.ExpiresAt)
+		if err != nil {
+			// Try parsing as date-only (YYYY-MM-DD)
+			expiresAt, err = time.Parse("2006-01-02", req.ExpiresAt)
+			if err != nil {
+				s.jsonError(w, "invalid expires_at format (use ISO 8601)", http.StatusBadRequest)
+				return
+			}
+			// Set to end of day in UTC
+			expiresAt = expiresAt.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+		}
+		if expiresAt.Before(time.Now()) {
+			s.jsonError(w, "expires_at must be in the future", http.StatusBadRequest)
+			return
+		}
+		opts.ExpiresAt = expiresAt.UTC()
+	}
+	if req.GuestRead != nil {
+		opts.GuestRead = *req.GuestRead
+		opts.GuestReadSet = true
+	}
+
+	share, err := s.fileShareMgr.Create(req.Name, req.Description, ownerID, req.QuotaBytes, opts)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			s.jsonError(w, err.Error(), http.StatusConflict)
