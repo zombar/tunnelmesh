@@ -14,7 +14,7 @@ const {
 // Import utilities from TM modules
 const { escapeHtml } = TM.utils;
 const { formatBytes, formatRate, formatLatency, formatLastSeen, formatExpiry } = TM.format;
-const { createPaginationController, updatePaginationUI } = TM.pagination;
+const { createPaginationController } = TM.pagination;
 const { createSparklineSVG } = TM.table;
 const { createModalController } = TM.modal;
 

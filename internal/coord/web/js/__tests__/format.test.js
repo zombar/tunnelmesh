@@ -9,6 +9,8 @@ const {
     formatLatency,
     formatLatencyCompact,
     formatLastSeen,
+    formatRelativeTime,
+    formatDateTime,
     formatExpiry,
     formatNumber,
 } = format;
@@ -186,5 +188,68 @@ describe('formatNumber', () => {
         const result = formatNumber(1000);
         expect(typeof result).toBe('string');
         expect(result.length).toBeGreaterThan(0);
+    });
+});
+
+describe('formatRelativeTime', () => {
+    test('handles null and undefined', () => {
+        expect(formatRelativeTime(null)).toBe('-');
+        expect(formatRelativeTime(undefined)).toBe('-');
+    });
+
+    test('formats just now', () => {
+        const justNow = new Date();
+        expect(formatRelativeTime(justNow.toISOString())).toBe('Just now');
+    });
+
+    test('formats minutes ago', () => {
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+        expect(formatRelativeTime(fiveMinutesAgo.toISOString())).toBe('5 minutes ago');
+
+        const oneMinuteAgo = new Date(Date.now() - 60 * 1000);
+        expect(formatRelativeTime(oneMinuteAgo.toISOString())).toBe('1 minute ago');
+    });
+
+    test('formats hours ago', () => {
+        const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+        expect(formatRelativeTime(threeHoursAgo.toISOString())).toBe('3 hours ago');
+
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+        expect(formatRelativeTime(oneHourAgo.toISOString())).toBe('1 hour ago');
+    });
+
+    test('formats yesterday', () => {
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        expect(formatRelativeTime(yesterday.toISOString())).toBe('Yesterday');
+    });
+
+    test('formats days ago', () => {
+        const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+        expect(formatRelativeTime(fiveDaysAgo.toISOString())).toBe('5 days ago');
+    });
+
+    test('formats months ago', () => {
+        const twoMonthsAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+        expect(formatRelativeTime(twoMonthsAgo.toISOString())).toBe('2 months ago');
+    });
+
+    test('formats years ago', () => {
+        const twoYearsAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000);
+        expect(formatRelativeTime(twoYearsAgo.toISOString())).toBe('2 years ago');
+    });
+});
+
+describe('formatDateTime', () => {
+    test('handles null and undefined', () => {
+        expect(formatDateTime(null)).toBe('-');
+        expect(formatDateTime(undefined)).toBe('-');
+    });
+
+    test('formats date with time', () => {
+        const date = new Date('2026-02-08T17:30:00Z');
+        const result = formatDateTime(date.toISOString());
+        // Should contain month, day, year, and time elements
+        expect(typeof result).toBe('string');
+        expect(result.length).toBeGreaterThan(10);
     });
 });

@@ -97,11 +97,11 @@
     function escapeJsString(str) {
         if (!str) return '';
         return str
-            .replace(/\\/g, '\\\\')  // Escape backslashes first
-            .replace(/'/g, "\\'")    // Escape single quotes
-            .replace(/"/g, '\\"')    // Escape double quotes
-            .replace(/\n/g, '\\n')   // Escape newlines
-            .replace(/\r/g, '\\r');  // Escape carriage returns
+            .replace(/\\/g, '\\\\') // Escape backslashes first
+            .replace(/'/g, "\\'") // Escape single quotes
+            .replace(/"/g, '\\"') // Escape double quotes
+            .replace(/\n/g, '\\n') // Escape newlines
+            .replace(/\r/g, '\\r'); // Escape carriage returns
     }
 
     function formatBytes(bytes) {
@@ -124,6 +124,26 @@
         if (diffDays > 0 && diffDays < 7) return `${diffDays} days ago`;
 
         return d.toLocaleDateString();
+    }
+
+    // Format date for version history - shows relative time + readable timestamp
+    // Uses shared TM.format utilities for DRY code
+    function formatVersionDate(isoDate) {
+        if (!isoDate) return '-';
+
+        // Use shared format utilities if available
+        let relative, timestamp;
+        if (typeof TM !== 'undefined' && TM.format) {
+            relative = TM.format.formatRelativeTime(isoDate);
+            timestamp = TM.format.formatDateTime(isoDate);
+        } else {
+            // Fallback for standalone use
+            const d = new Date(isoDate);
+            relative = d.toLocaleDateString();
+            timestamp = d.toLocaleString();
+        }
+
+        return `<span class="s3-version-relative">${relative}</span><span class="s3-version-timestamp">${timestamp}</span>`;
     }
 
     // Use formatExpiry from TM.format utility
@@ -260,18 +280,6 @@
             throw new Error(err.error || `Failed to restore: ${resp.status}`);
         }
         return await resp.json();
-    }
-
-    async function getObjectVersion(bucket, key, versionId) {
-        const resp = await fetch(
-            `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}?versionId=${encodeURIComponent(versionId)}`,
-        );
-        if (!resp.ok) throw new Error(`Failed to get version: ${resp.status}`);
-        return {
-            content: await resp.text(),
-            contentType: resp.headers.get('Content-Type'),
-            size: parseInt(resp.headers.get('Content-Length'), 10) || 0,
-        };
     }
 
     // =========================================================================
@@ -525,7 +533,7 @@
         const fileName = key.split('/').pop();
         // Check if file is tombstoned from cached items
         const item = state.currentItems.find((i) => i.key === key);
-        const isTombstoned = item && item.tombstonedAt;
+        const isTombstoned = item?.tombstonedAt;
         const isReadOnly = !state.writable || isTombstoned;
 
         // Clear selection when opening file
@@ -862,22 +870,43 @@
 
         // Populate version list
         const tbody = document.getElementById('s3-version-list');
+        const canRestore = state.writable; // Can only restore if bucket is writable
+
         tbody.innerHTML = versions
             .map((v) => {
                 const currentBadge = v.is_current ? '<span class="s3-badge s3-badge-current">Current</span>' : '';
-                const restoreBtn = v.is_current
-                    ? ''
-                    : `<button class="btn btn-sm btn-secondary" onclick="TM.s3explorer.restoreVersionAndRefresh('${escapeJsString(v.version_id)}')">Restore</button>`;
-                const downloadBtn = `<button class="btn btn-sm btn-secondary" onclick="TM.s3explorer.downloadVersion('${escapeJsString(v.version_id)}')">Download</button>`;
+                // Square icon buttons with tooltips
+                const downloadBtn = `<button class="btn-icon s3-version-btn" title="Download this version" onclick="TM.s3explorer.downloadVersion('${escapeJsString(v.version_id)}')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                    </svg>
+                </button>`;
+
+                let restoreBtn = '';
+                if (!v.is_current) {
+                    if (canRestore) {
+                        restoreBtn = `<button class="btn-icon s3-version-btn" title="Restore this version" onclick="TM.s3explorer.restoreVersionAndRefresh('${escapeJsString(v.version_id)}')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
+                            </svg>
+                        </button>`;
+                    } else {
+                        restoreBtn = `<button class="btn-icon s3-version-btn" title="Cannot restore (read-only)" disabled>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
+                            </svg>
+                        </button>`;
+                    }
+                }
 
                 return `
                     <tr class="${v.is_current ? 's3-version-current' : ''}">
                         <td>
-                            <div class="s3-version-id">${escapeHtml(v.version_id.slice(0, 20))}...</div>
+                            <div class="s3-version-id">${escapeHtml(v.version_id.slice(0, 16))}...</div>
                             ${currentBadge}
                         </td>
                         <td>${formatBytes(v.size)}</td>
-                        <td>${formatDate(v.last_modified)}</td>
+                        <td class="s3-version-date">${formatVersionDate(v.last_modified)}</td>
                         <td class="s3-version-actions">
                             ${downloadBtn}
                             ${restoreBtn}
