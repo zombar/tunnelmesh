@@ -1938,6 +1938,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Cache DOM elements first
     initDOMCache();
 
+    // Initialize tab navigation
+    initTabs();
+
     // Initialize visualizer
     initVisualizer();
 
@@ -1996,6 +1999,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (shareModal) {
         shareModal.addEventListener('click', (e) => {
             if (e.target === shareModal) closeShareModal();
+        });
+    }
+
+    // Setup background click for binding modal
+    const bindingModal = document.getElementById('binding-modal');
+    if (bindingModal) {
+        bindingModal.addEventListener('click', (e) => {
+            if (e.target === bindingModal) closeBindingModal();
         });
     }
 
@@ -2304,6 +2315,170 @@ async function deleteShare(name) {
     }
 }
 window.deleteShare = deleteShare;
+
+// =====================
+// Tab Navigation
+// =====================
+
+function initTabs() {
+    const tabs = document.querySelectorAll('#main-tabs .tab');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const tabName = tab.dataset.tab;
+            switchTab(tabName);
+        });
+    });
+}
+
+function switchTab(tabName) {
+    // Update tab buttons
+    document.querySelectorAll('#main-tabs .tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === tabName);
+    });
+
+    // Update tab content
+    document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.toggle('active', content.id === tabName + '-tab');
+    });
+
+    // Load data for the active tab
+    if (tabName === 'data') {
+        fetchUsers();
+        fetchGroups();
+        fetchShares();
+        fetchBindings();
+    }
+}
+window.switchTab = switchTab;
+
+// =====================
+// Role Bindings
+// =====================
+
+async function fetchBindings() {
+    try {
+        const resp = await fetch('api/bindings');
+        if (!resp.ok) return;
+        const bindings = await resp.json();
+        renderBindings(bindings);
+    } catch (err) {
+        console.error('Failed to fetch bindings:', err);
+    }
+}
+
+function renderBindings(bindings) {
+    const tbody = document.getElementById('bindings-body');
+    const emptyState = document.getElementById('no-bindings');
+
+    if (!bindings || bindings.length === 0) {
+        tbody.innerHTML = '';
+        emptyState.style.display = 'block';
+        return;
+    }
+
+    emptyState.style.display = 'none';
+    tbody.innerHTML = bindings.map(b => `
+        <tr>
+            <td>${escapeHtml(b.user_id || b.group_name || '-')}</td>
+            <td>${escapeHtml(b.role_name)}</td>
+            <td>${escapeHtml(b.bucket_scope || 'All')}</td>
+            <td>${escapeHtml(b.object_prefix || '-')}</td>
+            <td>
+                <button class="btn-small btn-danger" onclick="deleteBinding('${escapeHtml(b.name)}')">Delete</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function openBindingModal() {
+    document.getElementById('binding-modal').style.display = 'flex';
+    document.getElementById('binding-bucket').value = '';
+    document.getElementById('binding-prefix').value = '';
+
+    // Populate user dropdown
+    populateBindingUsers();
+}
+window.openBindingModal = openBindingModal;
+
+async function populateBindingUsers() {
+    const select = document.getElementById('binding-user');
+    select.innerHTML = '<option value="">Select a user...</option>';
+
+    try {
+        const resp = await fetch('api/users');
+        if (resp.ok) {
+            const users = await resp.json();
+            users.forEach(u => {
+                const opt = document.createElement('option');
+                opt.value = u.id;
+                opt.textContent = u.name || u.id;
+                select.appendChild(opt);
+            });
+        }
+    } catch (err) {
+        console.error('Failed to fetch users for binding:', err);
+    }
+}
+
+function closeBindingModal() {
+    document.getElementById('binding-modal').style.display = 'none';
+}
+window.closeBindingModal = closeBindingModal;
+
+async function createBinding() {
+    const userId = document.getElementById('binding-user').value;
+    const roleName = document.getElementById('binding-role').value;
+    const bucketScope = document.getElementById('binding-bucket').value.trim();
+    const objectPrefix = document.getElementById('binding-prefix').value.trim();
+
+    if (!userId) {
+        showToast('User is required', 'error');
+        return;
+    }
+
+    try {
+        const resp = await fetch('api/bindings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user_id: userId,
+                role_name: roleName,
+                bucket_scope: bucketScope,
+                object_prefix: objectPrefix
+            })
+        });
+
+        if (resp.ok) {
+            showToast('Role binding created', 'success');
+            closeBindingModal();
+            fetchBindings();
+        } else {
+            const data = await resp.json();
+            showToast(data.error || 'Failed to create binding', 'error');
+        }
+    } catch (err) {
+        showToast('Failed to create binding: ' + err.message, 'error');
+    }
+}
+window.createBinding = createBinding;
+
+async function deleteBinding(name) {
+    if (!confirm('Delete this role binding?')) return;
+
+    try {
+        const resp = await fetch(`api/bindings/${name}`, { method: 'DELETE' });
+        if (resp.ok) {
+            showToast('Role binding deleted', 'success');
+            fetchBindings();
+        } else {
+            const data = await resp.json();
+            showToast(data.error || 'Failed to delete binding', 'error');
+        }
+    } catch (err) {
+        showToast('Failed to delete binding: ' + err.message, 'error');
+    }
+}
+window.deleteBinding = deleteBinding;
 
 // Cleanup on page unload to prevent memory leaks
 window.addEventListener('beforeunload', cleanup);
