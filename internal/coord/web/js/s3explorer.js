@@ -272,6 +272,9 @@
             }).filter(item => item.name && item.name !== '.folder');
         }
 
+        // Always render breadcrumb for navigation
+        renderBreadcrumb();
+
         if (items.length === 0) {
             tbody.innerHTML = '';
             if (empty) empty.style.display = 'block';
@@ -299,8 +302,6 @@
                 </tr>
             `;
         }).join('');
-
-        renderBreadcrumb();
     }
 
     async function openFile(bucket, key) {
