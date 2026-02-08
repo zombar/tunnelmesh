@@ -72,20 +72,14 @@ func TestStressAlienInvasion(t *testing.T) {
 	// Create story with increased document counts (4-6 versions)
 	story := &scenarios.AlienInvasion{}
 
-	// Phase 1: Optionally enable HTTP testing (set USE_HTTP=1 to test full network stack)
-	useHTTP := os.Getenv("USE_HTTP") == "1"
-	var httpServer *httptest.Server
-	var httpEndpoint string
-
-	if useHTTP {
-		// Create S3 HTTP server with mock authorizer for testing (allows all authenticated requests)
-		mockAuth := &mockHTTPAuthorizer{credentials: credentials, authorizer: authorizer}
-		s3Server := s3.NewServer(store, mockAuth, nil)
-		httpServer = httptest.NewServer(s3Server.Handler())
-		httpEndpoint = httpServer.URL
-		t.Logf("HTTP server started at %s (testing full network stack)", httpEndpoint)
-		defer httpServer.Close()
-	}
+	// Phase 1: HTTP Server Testing (default: enabled)
+	// Create S3 HTTP server with mock authorizer for testing (allows all authenticated requests)
+	mockAuth := &mockHTTPAuthorizer{credentials: credentials, authorizer: authorizer}
+	s3Server := s3.NewServer(store, mockAuth, nil)
+	httpServer := httptest.NewServer(s3Server.Handler())
+	httpEndpoint := httpServer.URL
+	t.Logf("HTTP server started at %s (testing full network stack)", httpEndpoint)
+	defer httpServer.Close()
 
 	// Phase 2: Optionally enable TUN loopback testing (set USE_TUN=1)
 	useTUN := os.Getenv("USE_TUN") == "1"
@@ -105,10 +99,7 @@ func TestStressAlienInvasion(t *testing.T) {
 	}
 
 	// Create user manager
-	endpoint := "http://localhost:8080"
-	if useHTTP {
-		endpoint = httpEndpoint
-	}
+	endpoint := httpEndpoint
 	userMgr := NewUserManager(store, credentials, authorizer, shareManager, story)
 	if err := userMgr.Setup(ctx, endpoint); err != nil {
 		t.Fatalf("Setting up users: %v", err)
@@ -128,7 +119,7 @@ func TestStressAlienInvasion(t *testing.T) {
 		EnableWorkflows:      true,
 		AdversaryAttempts:    adversaryAttempts,
 		MaxConcurrentUploads: 20,
-		UseHTTP:              useHTTP,      // Phase 1: HTTP testing
+		UseHTTP:              true,         // Phase 1: HTTP testing (default)
 		HTTPEndpoint:         httpEndpoint, // Phase 1: HTTP endpoint
 		UserManager:          userMgr,
 		WorkflowTestsEnabled: map[WorkflowType]bool{

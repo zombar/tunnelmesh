@@ -55,6 +55,7 @@ func DefaultConfig(s story.Story) SimulatorConfig {
 		EnableWorkflows:      true,
 		AdversaryAttempts:    50,
 		MaxConcurrentUploads: 10,
+		UseHTTP:              true, // Test full HTTP + RBAC stack by default
 		WorkflowTestsEnabled: map[WorkflowType]bool{
 			WorkflowDeletion:    true,
 			WorkflowExpiration:  true,

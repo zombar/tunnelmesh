@@ -12,11 +12,12 @@ The S3 benchmark can test different layers of the network stack to ensure realis
 
 **Purpose**: Test the HTTP + RBAC layer instead of bypassing it with direct Store calls.
 
-**Status**: Implemented and working
+**Status**: Implemented and **enabled by default**
 
 **Usage**:
 ```bash
-USE_HTTP=1 go test ./internal/s3bench/simulator -run=TestStress -v
+# HTTP testing is enabled by default (no flag needed)
+go test ./internal/s3bench/simulator -run=TestStress -v
 ```
 
 **What it tests**:
@@ -159,9 +160,9 @@ docker-compose -f docker/docker-compose.benchmark.yml down
 
 | Layer | Test Coverage | Status |
 |-------|--------------|--------|
-| Direct Store Access | Default mode (no flags) | ✅ Working |
-| HTTP Server + RBAC | `USE_HTTP=1` | ✅ Working |
+| HTTP Server + RBAC | **Default mode** (enabled by default) | ✅ Working |
 | TUN Device I/O | `USE_TUN=1` (requires root) | ✅ Working |
+| Direct Store Access | `UseHTTP: false` in config | ✅ Available |
 | UDP Transport + Noise | Phase 3 (not implemented) | ⏳ Future |
 | Full P2P Mesh | Phase 3 (not implemented) | ⏳ Future |
 
