@@ -7,6 +7,14 @@ const (
 	RoleBucketAdmin = "bucket-admin" // Create/delete buckets, full object access
 	RoleBucketWrite = "bucket-write" // Read buckets, read/write objects
 	RoleBucketRead  = "bucket-read"  // Read-only access
+	RolePanelViewer = "panel-viewer" // View UI panels (scoped by PanelScope)
+)
+
+// Resource types for authorization
+const (
+	ResourceBuckets = "buckets"
+	ResourceObjects = "objects"
+	ResourcePanels  = "panels"
 )
 
 // Role defines a set of permissions.
@@ -92,6 +100,13 @@ func BuiltinRoles() []Role {
 			Rules: []Rule{
 				{Verbs: []string{"get", "list"}, Resources: []string{"buckets"}},
 				{Verbs: []string{"get", "list"}, Resources: []string{"objects"}},
+			},
+		},
+		{
+			Name:    RolePanelViewer,
+			Builtin: true,
+			Rules: []Rule{
+				{Verbs: []string{"view"}, Resources: []string{"panels"}},
 			},
 		},
 	}

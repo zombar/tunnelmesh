@@ -28,20 +28,46 @@ const MAX_CONTENT_WIDTH = 2200;
 const MIN_CONTENT_HEIGHT = 350;
 const MAX_CONTENT_HEIGHT = 500;
 
-// Colors matching dashboard theme - simplified uniform styling
+// Helper to read CSS variables with fallback
+function getCSSVar(name, fallback) {
+    if (typeof getComputedStyle === 'undefined') return fallback;
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value || fallback;
+}
+
+// Colors matching dashboard theme - read from CSS variables for consistency
+// Uses CSS variables from :root in style.css with fallbacks for compatibility
 const COLORS = {
-    background: '#0d1117',
-    cardFill: '#21262d',
+    get background() {
+        return getCSSVar('--color-bg-primary', '#0d1117');
+    },
+    get cardFill() {
+        return getCSSVar('--color-bg-tertiary', '#21262d');
+    },
     cardStroke: '#484f58', // Light grey stroke for all nodes
-    text: '#e6edf3',
-    textDim: '#8b949e',
-    connection: '#30363d',
-    connectionHighlight: '#58a6ff',
+    get text() {
+        return getCSSVar('--color-text-primary', '#e6edf3');
+    },
+    get textDim() {
+        return getCSSVar('--color-text-secondary', '#8b949e');
+    },
+    get connection() {
+        return getCSSVar('--color-border-primary', '#30363d');
+    },
+    get connectionHighlight() {
+        return getCSSVar('--color-accent-blue', '#58a6ff');
+    },
     exitConnection: '#f0a500', // Golden color for exit path connections
     // Transport type badge colors
-    transportSSH: '#3fb950', // Green
-    transportUDP: '#58a6ff', // Blue
-    transportRelay: '#d29922', // Orange/amber
+    get transportSSH() {
+        return getCSSVar('--color-accent-green', '#3fb950');
+    },
+    get transportUDP() {
+        return getCSSVar('--color-accent-blue', '#58a6ff');
+    },
+    get transportRelay() {
+        return getCSSVar('--color-accent-orange', '#d29922');
+    },
 };
 
 // =============================================================================

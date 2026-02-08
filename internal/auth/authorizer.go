@@ -16,6 +16,7 @@ type Authorizer struct {
 	Bindings      *BindingStore
 	Groups        *GroupStore        // Optional: for group-based authorization
 	GroupBindings *GroupBindingStore // Optional: for group-based authorization
+	PanelRegistry *PanelRegistry     // Panel definitions and registry
 	roles         map[string]*Role   // role name -> role
 	mu            sync.RWMutex
 	auditLogger   atomic.Pointer[audit.Logger] // Optional: for security audit logging (lock-free)
@@ -29,8 +30,9 @@ func NewAuthorizer() *Authorizer {
 // NewAuthorizerWithRoles creates an authorizer with custom roles.
 func NewAuthorizerWithRoles(roles []Role) *Authorizer {
 	auth := &Authorizer{
-		Bindings: NewBindingStore(),
-		roles:    make(map[string]*Role),
+		Bindings:      NewBindingStore(),
+		PanelRegistry: NewPanelRegistry(),
+		roles:         make(map[string]*Role),
 	}
 
 	// Add built-in roles first
@@ -279,6 +281,103 @@ func (a *Authorizer) GetAllowedPrefixes(userID, bucketName string) []string {
 	result := make([]string, 0, len(prefixes))
 	for prefix := range prefixes {
 		result = append(result, prefix)
+	}
+	return result
+}
+
+// CanAccessPanel checks if a user can view a panel.
+// Returns true if: panel is public, user is admin, or user has panel-viewer binding.
+func (a *Authorizer) CanAccessPanel(userID, panelID string) bool {
+	// Check if panel is public (no auth required)
+	if a.PanelRegistry != nil {
+		if panel := a.PanelRegistry.Get(panelID); panel != nil && panel.Public {
+			return true
+		}
+	}
+
+	// Admin always has access
+	if a.IsAdmin(userID) {
+		return true
+	}
+
+	// Check direct user bindings for panel-viewer role
+	for _, binding := range a.Bindings.GetForUser(userID) {
+		if binding.RoleName == RolePanelViewer && binding.AppliesToPanel(panelID) {
+			return true
+		}
+		// Admin role also grants all panel access
+		if binding.RoleName == RoleAdmin {
+			return true
+		}
+	}
+
+	// Check group bindings if groups are enabled
+	if a.Groups != nil && a.GroupBindings != nil {
+		for _, groupName := range a.Groups.GetGroupsForUser(userID) {
+			for _, binding := range a.GroupBindings.GetForGroup(groupName) {
+				if binding.RoleName == RolePanelViewer && binding.AppliesToPanel(panelID) {
+					return true
+				}
+				// Admin role also grants all panel access
+				if binding.RoleName == RoleAdmin {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// GetAccessiblePanels returns all panel IDs a user can access.
+func (a *Authorizer) GetAccessiblePanels(userID string) []string {
+	if a.PanelRegistry == nil {
+		return nil
+	}
+
+	// Admin gets all panels
+	if a.IsAdmin(userID) {
+		return a.PanelRegistry.ListIDs()
+	}
+
+	// Collect accessible panels
+	accessible := make(map[string]bool)
+
+	// Add public panels
+	for _, panel := range a.PanelRegistry.ListPublic() {
+		accessible[panel.ID] = true
+	}
+
+	// Check direct user bindings
+	for _, binding := range a.Bindings.GetForUser(userID) {
+		if binding.RoleName == RolePanelViewer {
+			if binding.PanelScope == "" {
+				// Unrestricted panel access - return all panels
+				return a.PanelRegistry.ListIDs()
+			}
+			accessible[binding.PanelScope] = true
+		}
+	}
+
+	// Check group bindings if groups are enabled
+	if a.Groups != nil && a.GroupBindings != nil {
+		for _, groupName := range a.Groups.GetGroupsForUser(userID) {
+			for _, binding := range a.GroupBindings.GetForGroup(groupName) {
+				if binding.RoleName == RolePanelViewer {
+					if binding.PanelScope == "" {
+						// Unrestricted panel access - return all panels
+						return a.PanelRegistry.ListIDs()
+					}
+					accessible[binding.PanelScope] = true
+				}
+			}
+		}
+	}
+
+	// Convert map to slice
+	result := make([]string, 0, len(accessible))
+	for panelID := range accessible {
+		result = append(result, panelID)
 	}
 	return result
 }

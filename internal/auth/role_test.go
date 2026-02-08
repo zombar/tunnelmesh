@@ -9,8 +9,8 @@ import (
 func TestBuiltinRoles(t *testing.T) {
 	roles := BuiltinRoles()
 
-	// Should have 5 built-in roles
-	assert.Len(t, roles, 5)
+	// Should have 6 built-in roles
+	assert.Len(t, roles, 6)
 
 	// Verify each role exists
 	roleNames := make(map[string]bool)
@@ -23,6 +23,7 @@ func TestBuiltinRoles(t *testing.T) {
 	assert.True(t, roleNames[RoleBucketAdmin])
 	assert.True(t, roleNames[RoleBucketWrite])
 	assert.True(t, roleNames[RoleBucketRead])
+	assert.True(t, roleNames[RolePanelViewer])
 }
 
 func TestRoleMatches(t *testing.T) {

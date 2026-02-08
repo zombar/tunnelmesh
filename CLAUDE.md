@@ -92,6 +92,88 @@ After implementing a feature or fix:
 4. **Create branch**: Push to a feature branch
 5. **Create PR**: Open pull request against `main`
 
+## UI Panel System
+
+The web dashboard uses an extensible panel system with RBAC-based visibility control.
+
+### Panel Architecture
+
+**Backend (`internal/auth/panel.go`)**:
+- `PanelRegistry`: Dynamic panel registration with 13 built-in panels
+- `PanelDefinition`: Panel metadata (id, name, tab, category, public, external)
+- Panels can be marked as **public** (visible without authentication)
+- External plugins can register panels via the API
+
+**Frontend (`internal/coord/web/js/lib/panel.js`)**:
+- UMD module for browser + Bun test compatibility
+- Permission loading via `/api/user/permissions`
+- Fail-secure: API errors result in no panel access
+- External panel support via iframe + postMessage protocol
+
+### Panel Permissions
+
+Access control via existing RBAC system:
+1. **Public flag**: If `panel.Public == true`, anyone can view
+2. **Admin role**: Full access to all panels
+3. **RoleBinding**: `role=panel-viewer, panel_scope=<panelID>`
+4. **GroupBinding**: Same pattern, applied to groups
+
+**Default groups**:
+- `everyone`: visualizer, map, charts, s3, shares
+- `all_admin_users`: peers, logs, wireguard, filter, dns, users, groups, bindings
+
+### Built-in Panel IDs
+
+| Tab  | Panels                                                |
+|------|-------------------------------------------------------|
+| mesh | visualizer, map, charts, peers, logs, wireguard, filter, dns |
+| data | s3, shares, users, groups, bindings                   |
+
+### CSS Design Tokens
+
+All styling uses CSS variables in `internal/coord/web/css/style.css`:
+
+```css
+--panel-border-radius: 0px;   /* Sharp corners throughout */
+--btn-border-radius: 0px;
+--modal-border-radius: 0px;
+--input-border-radius: 0px;
+
+/* Visualizer colors (for canvas rendering) */
+--viz-node-online, --viz-node-offline, --viz-node-coordinator
+--viz-edge-online, --viz-edge-offline, --viz-label-text
+```
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/user/permissions` | Current user's accessible panels |
+| GET | `/api/panels` | List all panels (filter: `?external=true`) |
+| POST | `/api/panels` | Register external panel (admin only) |
+| PATCH | `/api/panels/{id}` | Update panel metadata (admin only) |
+| DELETE | `/api/panels/{id}` | Unregister external panel (admin only) |
+
+### External Panel Development
+
+External panels are loaded via iframe with postMessage:
+
+```javascript
+// Plugin -> Dashboard
+window.parent.postMessage({
+    type: 'tunnelmesh:panel:ready',
+    panelId: 'my-plugin'
+}, '*');
+
+// Dashboard -> Plugin (on load)
+{
+    type: 'tunnelmesh:init',
+    panelId: 'my-plugin',
+    theme: 'dark',
+    user: { id: '...', isAdmin: false }
+}
+```
+
 ## Skills
 
 Three specialized skill files are available in `.claude/skills/`:

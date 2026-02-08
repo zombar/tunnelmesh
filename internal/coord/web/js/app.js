@@ -2013,10 +2013,154 @@ function onFilterPeerChange() {
 }
 window.onFilterPeerChange = onFilterPeerChange;
 
+// Register built-in panels with the panel system
+function registerBuiltinPanels() {
+    if (!TM.panel) return;
+
+    const panels = [
+        {
+            id: 'visualizer',
+            sectionId: 'visualizer-section',
+            tab: 'mesh',
+            title: 'Network Topology',
+            category: 'network',
+            collapsible: true,
+            sortOrder: 10,
+        },
+        {
+            id: 'map',
+            sectionId: 'map-section',
+            tab: 'mesh',
+            title: 'Node Locations',
+            category: 'network',
+            collapsible: true,
+            sortOrder: 20,
+        },
+        {
+            id: 'charts',
+            sectionId: 'charts-section',
+            tab: 'mesh',
+            title: 'Network Activity',
+            category: 'network',
+            collapsible: true,
+            sortOrder: 30,
+        },
+        {
+            id: 'peers',
+            sectionId: 'peers-section',
+            tab: 'mesh',
+            title: 'Connected Peers',
+            category: 'network',
+            collapsible: true,
+            sortOrder: 40,
+        },
+        {
+            id: 'logs',
+            sectionId: 'logs-section',
+            tab: 'mesh',
+            title: 'Peer Logs',
+            category: 'monitoring',
+            collapsible: true,
+            resizable: true,
+            sortOrder: 50,
+        },
+        {
+            id: 'wireguard',
+            sectionId: 'wireguard-section',
+            tab: 'mesh',
+            title: 'WireGuard Peers',
+            category: 'network',
+            hasActionButton: true,
+            sortOrder: 60,
+        },
+        {
+            id: 'filter',
+            sectionId: 'filter-section',
+            tab: 'mesh',
+            title: 'Packet Filter',
+            category: 'admin',
+            hasActionButton: true,
+            sortOrder: 70,
+        },
+        { id: 'dns', sectionId: 'dns-section', tab: 'mesh', title: 'DNS Records', category: 'network', sortOrder: 80 },
+        {
+            id: 's3',
+            sectionId: 's3-section',
+            tab: 'data',
+            title: 'Object Viewer',
+            category: 'storage',
+            resizable: true,
+            sortOrder: 10,
+        },
+        {
+            id: 'shares',
+            sectionId: 'shares-section',
+            tab: 'data',
+            title: 'Shares',
+            category: 'storage',
+            hasActionButton: true,
+            sortOrder: 20,
+        },
+        { id: 'users', sectionId: 'users-section', tab: 'data', title: 'Users', category: 'admin', sortOrder: 30 },
+        {
+            id: 'groups',
+            sectionId: 'groups-section',
+            tab: 'data',
+            title: 'Groups',
+            category: 'admin',
+            hasActionButton: true,
+            sortOrder: 40,
+        },
+        {
+            id: 'bindings',
+            sectionId: 'bindings-section',
+            tab: 'data',
+            title: 'Role Bindings',
+            category: 'admin',
+            hasActionButton: true,
+            sortOrder: 50,
+        },
+    ];
+
+    panels.forEach((p) => {
+        try {
+            TM.panel.registerPanel(p);
+        } catch (err) {
+            console.warn(`Failed to register panel ${p.id}:`, err);
+        }
+    });
+}
+
+// Load external panels from API
+async function loadExternalPanels() {
+    if (!TM.panel) return;
+
+    try {
+        const resp = await fetch('/api/panels?external=true');
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.panels) {
+                for (const p of data.panels) {
+                    TM.panel.registerExternalPanel(p);
+                }
+            }
+        }
+    } catch (err) {
+        console.warn('Failed to load external panels:', err);
+    }
+}
+
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // Cache DOM elements first
     initDOMCache();
+
+    // Register panels and initialize panel system
+    registerBuiltinPanels();
+    await loadExternalPanels();
+    if (TM.panel) {
+        await TM.panel.init();
+    }
 
     // Initialize tab navigation
     initTabs();
