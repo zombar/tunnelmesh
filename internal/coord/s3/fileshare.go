@@ -58,8 +58,8 @@ func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes 
 	bucketExists := false
 	if _, err := m.store.HeadBucket(bucketName); err == nil {
 		bucketExists = true
-		// Restore tombstoned objects
-		_, _ = m.store.UntombstoneBucket(bucketName)
+		// Restore the bucket (O(1) - clears bucket tombstone flag)
+		_ = m.store.UntombstoneBucket(bucketName)
 	} else {
 		// Create new bucket
 		if err := m.store.CreateBucket(bucketName, ownerID); err != nil {
@@ -133,13 +133,9 @@ func (m *FileShareManager) Delete(name string) error {
 
 	bucketName := FileShareBucketPrefix + name
 
-	// Tombstone all objects in the bucket (soft delete - allows restore on recreate)
-	objects, _, _, _ := m.store.ListObjects(bucketName, "", "", 10000)
-	for _, obj := range objects {
-		if !obj.IsTombstoned() {
-			_ = m.store.TombstoneObject(bucketName, obj.Key)
-		}
-	}
+	// Tombstone the bucket (soft delete - allows restore on recreate)
+	// This is O(1) - all objects in a tombstoned bucket are treated as tombstoned
+	_ = m.store.TombstoneBucket(bucketName)
 
 	// Remove group bindings for this bucket
 	for _, b := range m.authorizer.GroupBindings.List() {
