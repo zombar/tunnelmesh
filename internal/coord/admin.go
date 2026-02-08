@@ -1340,6 +1340,7 @@ type S3ObjectInfo struct {
 type S3BucketInfo struct {
 	Name      string `json:"name"`
 	CreatedAt string `json:"created_at"`
+	Writable  bool   `json:"writable"`
 }
 
 // handleS3Proxy routes S3 explorer API requests.
@@ -1393,13 +1394,12 @@ func (s *Server) handleS3ListBuckets(w http.ResponseWriter, r *http.Request) {
 
 	result := make([]S3BucketInfo, 0, len(buckets))
 	for _, b := range buckets {
-		// Skip system bucket
-		if b.Name == "_tunnelmesh" {
-			continue
-		}
+		// System bucket is read-only (could be extended to check RBAC)
+		writable := b.Name != auth.SystemBucket
 		result = append(result, S3BucketInfo{
 			Name:      b.Name,
 			CreatedAt: b.CreatedAt.Format(time.RFC3339),
+			Writable:  writable,
 		})
 	}
 
@@ -1491,6 +1491,12 @@ func (s *Server) handleS3GetObject(w http.ResponseWriter, bucket, key string) {
 
 // handleS3PutObject creates or updates an object.
 func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	// Check bucket write permission (could be extended to full RBAC)
+	if bucket == auth.SystemBucket {
+		s.jsonError(w, "bucket is read-only", http.StatusForbidden)
+		return
+	}
+
 	contentType := r.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/octet-stream"
@@ -1515,6 +1521,12 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 
 // handleS3DeleteObject deletes an object.
 func (s *Server) handleS3DeleteObject(w http.ResponseWriter, bucket, key string) {
+	// Check bucket write permission (could be extended to full RBAC)
+	if bucket == auth.SystemBucket {
+		s.jsonError(w, "bucket is read-only", http.StatusForbidden)
+		return
+	}
+
 	err := s.s3Store.DeleteObject(bucket, key)
 	if err != nil {
 		s.jsonError(w, "failed to delete object", http.StatusInternalServerError)

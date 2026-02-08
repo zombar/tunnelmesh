@@ -29,6 +29,8 @@
         visibleCount: PAGE_SIZE,
         // Selection
         selectedItems: new Set(),  // Set of item keys/names
+        // Permissions
+        writable: true,       // Whether current bucket is writable
     };
 
     // Text file extensions
@@ -183,9 +185,9 @@
 
         // Root (buckets view)
         if (!state.currentBucket) {
-            html = '<span class="s3-breadcrumb-item current">Buckets</span>';
+            html = '<span class="s3-breadcrumb-item current">All</span>';
         } else {
-            html = '<span class="s3-breadcrumb-item" onclick="TM.s3explorer.navigateTo(null, \'\')">Buckets</span>';
+            html = '<span class="s3-breadcrumb-item" onclick="TM.s3explorer.navigateTo(null, \'\')">All</span>';
             html += '<span class="s3-breadcrumb-sep">/</span>';
 
             // Bucket
@@ -237,8 +239,8 @@
         if (viewer) viewer.style.display = 'none';
         if (preview) preview.style.display = 'none';
         if (browser) browser.style.display = 'block';
-        // Show browse actions, hide file actions
-        if (browseActions) browseActions.style.display = 'flex';
+        // Show browse actions (hide for read-only buckets), hide file actions
+        if (browseActions) browseActions.style.display = state.writable ? 'flex' : 'none';
         if (fileActions) fileActions.style.display = 'none';
 
         // Clear current file
@@ -318,10 +320,15 @@
             const itemId = item.key || item.name;
             const isSelected = state.selectedItems.has(itemId);
             const rowClass = isSelected ? 's3-selected' : '';
+            // Only show checkboxes for writable buckets (and not for bucket items themselves)
+            const canSelect = state.writable && !item.isBucket;
+            const checkbox = canSelect
+                ? `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeHtml(itemId)}')" />`
+                : '';
 
             return `
                 <tr class="${rowClass}" onclick="${onclick}">
-                    <td><input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeHtml(itemId)}')" /></td>
+                    <td>${checkbox}</td>
                     <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span></div></td>
                     <td>${item.size !== null ? formatBytes(item.size) : '-'}</td>
                     <td>${formatDate(item.lastModified)}</td>
@@ -374,8 +381,11 @@
         const browseActions = document.getElementById('s3-browse-actions');
         const selectionActions = document.getElementById('s3-selection-actions');
         const fileActions = document.getElementById('s3-file-actions');
+        const saveBtn = document.getElementById('s3-save-btn');
+        const readonlyBadge = document.getElementById('s3-readonly-badge');
 
         const fileName = key.split('/').pop();
+        const isReadOnly = !state.writable;
 
         // Clear selection when opening file
         state.selectedItems.clear();
@@ -399,6 +409,7 @@
                 preview.innerHTML = `<img src="api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}" alt="${escapeHtml(fileName)}">`;
             }
             if (fileActions) fileActions.style.display = 'flex';
+            if (saveBtn) saveBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
             return;
         }
 
@@ -412,7 +423,7 @@
                 state.currentFile = null;
                 // Stay in browser view
                 if (browser) browser.style.display = 'block';
-                if (browseActions) browseActions.style.display = 'flex';
+                if (browseActions && state.writable) browseActions.style.display = 'flex';
                 return;
             }
 
@@ -421,10 +432,12 @@
             if (viewer) viewer.style.display = 'block';
             if (preview) preview.style.display = 'none';
             if (fileActions) fileActions.style.display = 'flex';
+            if (saveBtn) saveBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
+            if (readonlyBadge) readonlyBadge.style.display = isReadOnly ? 'block' : 'none';
 
             if (editor) {
                 editor.value = content;
-                editor.readOnly = false;
+                editor.readOnly = isReadOnly;
             }
             updateLineNumbers();
         } catch (err) {
@@ -500,6 +513,10 @@
         state.currentPath = path;
         state.currentFile = null;
         state.isDirty = false;
+
+        // Look up writable state from bucket info
+        const bucketInfo = state.buckets.find(b => b.name === bucket);
+        state.writable = bucketInfo ? bucketInfo.writable : true;
 
         await renderFileListing();
     }
