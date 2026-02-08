@@ -1861,6 +1861,7 @@ a.logs-container {
     display: flex;
     flex-direction: column;
     position: relative;
+    overflow: hidden;
 }
 
 .s3-editor-wrap {
@@ -1924,6 +1925,7 @@ a.logs-container {
     overflow: auto;
     tab-size: 4;
     white-space: pre;
+    caret-shape: block;
 }
 
 .s3-editor:focus {
