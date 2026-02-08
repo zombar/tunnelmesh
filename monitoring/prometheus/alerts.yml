@@ -7,6 +7,7 @@ groups:
         for: 2m
         labels:
           severity: warning
+          category: mesh
         annotations:
           summary: "Elevated packet drops detected"
           description: "Packet drop rate exceeds 1/s for 2 minutes"
@@ -17,6 +18,7 @@ groups:
         for: 3m
         labels:
           severity: warning
+          category: mesh
         annotations:
           summary: "Frequent reconnection attempts"
           description: "Reconnection rate indicates unstable connections"
@@ -27,6 +29,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: mesh
         annotations:
           summary: "Peer(s) disconnected"
           description: "One or more peers have been disconnected for 5+ minutes"
@@ -37,6 +40,7 @@ groups:
         for: 3m
         labels:
           severity: warning
+          category: mesh
         annotations:
           summary: "Unhealthy tunnels detected"
           description: "Multiple tunnels are active but not healthy"
@@ -47,6 +51,7 @@ groups:
         for: 2m
         labels:
           severity: warning
+          category: mesh
         annotations:
           summary: "Forwarder errors detected"
           description: "Forwarder error rate is elevated"
@@ -57,6 +62,7 @@ groups:
         for: 2m
         labels:
           severity: warning
+          category: mesh
         annotations:
           summary: "High packet filter drop rate on {{ $labels.peer }}"
           description: "Packet filter blocking >10 packets/s from source '{{ $labels.source_peer }}' on {{ $labels.peer }} - possible attack or misconfiguration"
@@ -67,6 +73,7 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: mesh
         annotations:
           summary: "Multiple source peers being blocked on {{ $labels.peer }}"
           description: "Packets from more than 3 source peers are being blocked - review filter rules"
@@ -77,6 +84,7 @@ groups:
         for: 10m
         labels:
           severity: warning
+          category: mesh
         annotations:
           summary: "Default-deny filter with no allow rules on {{ $labels.peer }}"
           description: "Packet filter is in default-deny mode but has no allow rules - all traffic is being blocked"
@@ -89,6 +97,7 @@ groups:
         for: 3m
         labels:
           severity: critical
+          category: mesh
         annotations:
           summary: "Multiple peers disconnected"
           description: "3+ peers are currently disconnected for 3+ minutes - mesh connectivity severely impacted"
@@ -99,6 +108,7 @@ groups:
         for: 1m
         labels:
           severity: critical
+          category: mesh
         annotations:
           summary: "High forwarder error rate"
           description: "Forwarder errors exceeding 1/s - service is degraded"
@@ -109,6 +119,7 @@ groups:
         for: 2m
         labels:
           severity: critical
+          category: mesh
         annotations:
           summary: "Significant packet loss detected"
           description: "Packet drop rate exceeds 5% of total traffic"
@@ -119,6 +130,7 @@ groups:
         for: 2m
         labels:
           severity: critical
+          category: mesh
         annotations:
           summary: "Peer has no healthy tunnels"
           description: "Active tunnels exist but none are healthy - connectivity impaired"
@@ -129,6 +141,7 @@ groups:
         for: 3m
         labels:
           severity: critical
+          category: mesh
         annotations:
           summary: "Relay connection lost"
           description: "Peer lost connection to relay server for 3+ minutes - NAT traversal may fail"
@@ -141,6 +154,7 @@ groups:
         for: 30s
         labels:
           severity: page
+          category: mesh
         annotations:
           summary: "All mesh tunnels are down"
           description: "Complete mesh network failure - no active tunnels between any peers"
@@ -151,6 +165,7 @@ groups:
         for: 1m
         labels:
           severity: page
+          category: mesh
         annotations:
           summary: "Majority of peers unreachable"
           description: "Over 50% of peers are disconnected - major outage"
@@ -161,6 +176,7 @@ groups:
         for: 1m
         labels:
           severity: page
+          category: mesh
         annotations:
           summary: "All peers lost relay connection"
           description: "Complete relay server failure - NAT traversal unavailable for all peers"
@@ -171,6 +187,7 @@ groups:
         for: 2m
         labels:
           severity: page
+          category: mesh
         annotations:
           summary: "No TunnelMesh peers responding"
           description: "Cannot reach any TunnelMesh peer metrics - possible complete network outage"
@@ -181,6 +198,145 @@ groups:
         for: 1m
         labels:
           severity: page
+          category: mesh
         annotations:
           summary: "WireGuard concentrator device down"
           description: "WireGuard is enabled but the device is not running"
+
+  # S3 Storage Alerts
+  - name: tunnelmesh-s3
+    rules:
+      # Warning: Quota approaching limit
+      - alert: TunnelMeshS3QuotaWarning
+        expr: tunnelmesh_s3_quota_used_percent > 75
+        for: 5m
+        labels:
+          severity: warning
+          category: data
+        annotations:
+          summary: "S3 storage quota approaching limit"
+          description: "S3 storage is {{ $value }}% full (warning at 75%)"
+
+      # Warning: Elevated error rate
+      - alert: TunnelMeshS3ElevatedErrors
+        expr: sum(rate(tunnelmesh_s3_requests_total{status=~"error|quota_exceeded"}[5m])) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+          category: data
+        annotations:
+          summary: "Elevated S3 error rate"
+          description: "S3 error rate exceeds 0.1/s for 3 minutes"
+
+      # Critical: Quota critical level
+      - alert: TunnelMeshS3QuotaCritical
+        expr: tunnelmesh_s3_quota_used_percent > 90
+        for: 2m
+        labels:
+          severity: critical
+          category: data
+        annotations:
+          summary: "S3 storage quota critical"
+          description: "S3 storage is {{ $value }}% full (critical at 90%)"
+
+      # Critical: High error rate
+      - alert: TunnelMeshS3HighErrorRate
+        expr: sum(rate(tunnelmesh_s3_requests_total{status=~"error"}[5m])) / sum(rate(tunnelmesh_s3_requests_total[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          category: data
+        annotations:
+          summary: "High S3 error rate"
+          description: "{{ $value | humanizePercentage }} of S3 requests are failing"
+
+      # Page: S3 service down
+      - alert: TunnelMeshS3Down
+        expr: absent(tunnelmesh_s3_requests_total) or sum(rate(tunnelmesh_s3_requests_total[1m])) == 0
+        for: 2m
+        labels:
+          severity: page
+          category: data
+        annotations:
+          summary: "S3 service down or not receiving requests"
+          description: "No S3 metrics reported for 2 minutes"
+
+      # Page: Quota completely full
+      - alert: TunnelMeshS3QuotaFull
+        expr: tunnelmesh_s3_quota_used_percent >= 100
+        for: 30s
+        labels:
+          severity: page
+          category: data
+        annotations:
+          summary: "S3 storage quota completely full"
+          description: "S3 storage has reached 100% of quota - all uploads will fail"
+
+  # Security & Auth Alerts
+  - name: tunnelmesh-security
+    rules:
+      # Warning: Elevated auth failures
+      - alert: TunnelMeshElevatedAuthFailures
+        expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[5m])) > 0.5
+        for: 3m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "Elevated authentication failures"
+          description: "Auth failure rate exceeds 0.5/s - possible credential issues or attack"
+
+      # Warning: Elevated access denials
+      - alert: TunnelMeshElevatedAccessDenials
+        expr: sum(rate(tunnelmesh_authz_checks_total{result="denied"}[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "Elevated authorization denials"
+          description: "Users frequently accessing resources they don't have permissions for"
+
+      # Warning: User repeatedly denied
+      - alert: TunnelMeshUserAccessDenied
+        expr: sum(rate(tunnelmesh_authz_denied_total[5m])) by (user, bucket) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "User repeatedly denied access"
+          description: "User {{ $labels.user }} denied access to bucket {{ $labels.bucket }} - check permissions"
+
+      # Critical: High auth failure rate
+      - alert: TunnelMeshHighAuthFailureRate
+        expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[5m])) / sum(rate(tunnelmesh_auth_attempts_total[5m])) > 0.5
+        for: 2m
+        labels:
+          severity: critical
+          category: security
+        annotations:
+          summary: "High authentication failure rate"
+          description: "{{ $value | humanizePercentage }} of auth attempts failing - possible attack or config issue"
+
+      # Critical: S3 access denied spike
+      - alert: TunnelMeshS3AccessDeniedSpike
+        expr: sum(rate(tunnelmesh_s3_requests_total{status="access_denied"}[5m])) > 5
+        for: 2m
+        labels:
+          severity: critical
+          category: security
+        annotations:
+          summary: "Spike in S3 access denied responses"
+          description: "Access denied rate exceeds 5/s - possible permissions misconfiguration or attack"
+
+      # Page: Possible brute force attack
+      - alert: TunnelMeshPossibleBruteForce
+        expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[1m])) > 10
+        for: 30s
+        labels:
+          severity: page
+          category: security
+        annotations:
+          summary: "Possible brute force attack"
+          description: "Auth failure rate exceeds 10/s - possible credential brute force attack"
