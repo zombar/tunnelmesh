@@ -1758,6 +1758,15 @@ a.logs-container {
     height: calc(100vh - 90px) !important;
 }
 
+.s3-fullscreen .section-toggle {
+    pointer-events: none;
+    cursor: default;
+}
+
+.s3-fullscreen .section-toggle::after {
+    display: none;
+}
+
 /* Resizable content container */
 .s3-content {
     height: 320px;
