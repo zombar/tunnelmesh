@@ -212,6 +212,24 @@ func (m *FileShareManager) IsProtectedBinding(binding *auth.RoleBinding) bool {
 	return share.Owner == binding.UserID
 }
 
+// IsProtectedGroupBinding checks if a group binding is a file share's "everyone" binding.
+func (m *FileShareManager) IsProtectedGroupBinding(binding *auth.GroupBinding) bool {
+	// Only bindings on file share buckets can be protected
+	if !strings.HasPrefix(binding.BucketScope, FileShareBucketPrefix) {
+		return false
+	}
+
+	// Check if this file share exists
+	shareName := strings.TrimPrefix(binding.BucketScope, FileShareBucketPrefix)
+	share := m.Get(shareName)
+	if share == nil {
+		return false
+	}
+
+	// The "everyone" group binding is protected
+	return binding.GroupName == auth.GroupEveryone
+}
+
 // TombstoneExpiredShareContents tombstones all objects in expired file shares.
 // Returns the number of objects tombstoned.
 func (m *FileShareManager) TombstoneExpiredShareContents() int {

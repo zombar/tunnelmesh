@@ -1215,6 +1215,17 @@ type RoleBindingRequest struct {
 }
 
 // handleBindings handles GET (list) and POST (create) for user role bindings.
+// BindingInfo represents a role binding (user or group) for the UI.
+type BindingInfo struct {
+	Name         string `json:"name"`
+	UserID       string `json:"user_id,omitempty"`
+	GroupName    string `json:"group_name,omitempty"`
+	RoleName     string `json:"role_name"`
+	BucketScope  string `json:"bucket_scope,omitempty"`
+	ObjectPrefix string `json:"object_prefix,omitempty"`
+	Protected    bool   `json:"protected"`
+}
+
 func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 	if s.s3Authorizer == nil {
 		s.jsonError(w, "authorization not enabled", http.StatusServiceUnavailable)
@@ -1223,17 +1234,35 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		bindings := s.s3Authorizer.Bindings.List()
-		// Add protected flag to each binding for UI
-		type bindingWithProtected struct {
-			*auth.RoleBinding
-			Protected bool `json:"protected"`
-		}
-		result := make([]bindingWithProtected, len(bindings))
-		for i, b := range bindings {
+		// Collect both user and group bindings into a unified format
+		var result []BindingInfo
+
+		// Add user bindings
+		for _, b := range s.s3Authorizer.Bindings.List() {
 			protected := s.fileShareMgr != nil && s.fileShareMgr.IsProtectedBinding(b)
-			result[i] = bindingWithProtected{RoleBinding: b, Protected: protected}
+			result = append(result, BindingInfo{
+				Name:         b.Name,
+				UserID:       b.UserID,
+				RoleName:     b.RoleName,
+				BucketScope:  b.BucketScope,
+				ObjectPrefix: b.ObjectPrefix,
+				Protected:    protected,
+			})
 		}
+
+		// Add group bindings
+		for _, gb := range s.s3Authorizer.GroupBindings.List() {
+			protected := s.fileShareMgr != nil && s.fileShareMgr.IsProtectedGroupBinding(gb)
+			result = append(result, BindingInfo{
+				Name:         gb.Name,
+				GroupName:    gb.GroupName,
+				RoleName:     gb.RoleName,
+				BucketScope:  gb.BucketScope,
+				ObjectPrefix: gb.ObjectPrefix,
+				Protected:    protected,
+			})
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
 
