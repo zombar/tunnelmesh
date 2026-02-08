@@ -40,6 +40,10 @@ func NewS3Filesystem(store *s3.Store, bucket, prefix string, readOnly bool) *S3F
 func (f *S3Filesystem) normalizePath(path string) string {
 	path = filepath.Clean(path)
 	path = strings.TrimPrefix(path, "/")
+	// filepath.Clean returns "." for empty path
+	if path == "." {
+		path = ""
+	}
 	if f.prefix != "" {
 		if path == "" {
 			return f.prefix
