@@ -68,14 +68,18 @@ func (a *Authorizer) Authorize(userID, verb, resource, bucketName, objectKey str
 	}
 
 	// Log authorization decision for security audit
-	if a.auditLogger != nil {
+	a.mu.RLock()
+	logger := a.auditLogger
+	a.mu.RUnlock()
+
+	if logger != nil {
 		result := "allowed"
 		reason := ""
 		if !allowed {
 			result = "denied"
 			reason = "no matching role binding"
 		}
-		a.auditLogger.LogAuthz(userID, verb, resource, bucketName, objectKey, result, reason)
+		logger.LogAuthz(userID, verb, resource, bucketName, objectKey, result, reason)
 	}
 
 	return allowed
