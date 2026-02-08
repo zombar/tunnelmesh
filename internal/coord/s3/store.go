@@ -28,8 +28,14 @@ type ObjectMeta struct {
 	ContentType  string            `json:"content_type"`
 	ETag         string            `json:"etag"` // MD5 hash of content
 	LastModified time.Time         `json:"last_modified"`
-	Expires      *time.Time        `json:"expires,omitempty"`  // Optional expiration date
-	Metadata     map[string]string `json:"metadata,omitempty"` // User-defined metadata
+	Expires      *time.Time        `json:"expires,omitempty"`       // Optional expiration date
+	TombstonedAt *time.Time        `json:"tombstoned_at,omitempty"` // When object was soft-deleted
+	Metadata     map[string]string `json:"metadata,omitempty"`      // User-defined metadata
+}
+
+// IsTombstoned returns true if the object has been soft-deleted.
+func (m *ObjectMeta) IsTombstoned() bool {
+	return m.TombstonedAt != nil
 }
 
 // Store provides file-based S3 storage.
@@ -48,6 +54,7 @@ type Store struct {
 	quota                   *QuotaManager
 	defaultObjectExpiryDays int // Days until objects expire (0 = never)
 	defaultShareExpiryDays  int // Days until file shares expire (0 = never)
+	tombstoneRetentionDays  int // Days to retain tombstoned objects before purging (0 = never purge)
 	mu                      sync.RWMutex
 }
 
@@ -448,8 +455,55 @@ func (s *Store) getObjectMeta(bucket, key string) (*ObjectMeta, error) {
 	return &meta, nil
 }
 
-// DeleteObject removes an object from a bucket.
+// DeleteObject soft-deletes an object by tombstoning it.
+// Tombstoned objects are read-only and will be purged after the retention period.
 func (s *Store) DeleteObject(bucket, key string) error {
+	return s.TombstoneObject(bucket, key)
+}
+
+// TombstoneObject marks an object as tombstoned (soft-deleted).
+// The object data is preserved but marked for cleanup after the retention period.
+func (s *Store) TombstoneObject(bucket, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Check bucket exists
+	if _, err := s.getBucketMeta(bucket); err != nil {
+		return err
+	}
+
+	// Get object metadata
+	meta, err := s.getObjectMeta(bucket, key)
+	if err != nil {
+		return err
+	}
+
+	// Already tombstoned
+	if meta.IsTombstoned() {
+		return nil
+	}
+
+	// Set tombstone timestamp
+	now := time.Now().UTC()
+	meta.TombstonedAt = &now
+
+	// Write updated metadata
+	metaPath := s.objectMetaPath(bucket, key)
+	metaData, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal object meta: %w", err)
+	}
+
+	if err := os.WriteFile(metaPath, metaData, 0644); err != nil {
+		return fmt.Errorf("write object meta: %w", err)
+	}
+
+	return nil
+}
+
+// PurgeObject permanently removes an object from a bucket.
+// This is used by the cleanup process for tombstoned objects past retention.
+func (s *Store) PurgeObject(bucket, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -484,6 +538,50 @@ func (s *Store) DeleteObject(bucket, key string) error {
 	}
 
 	return nil
+}
+
+// SetTombstoneRetentionDays sets the number of days to retain tombstoned objects before purging.
+func (s *Store) SetTombstoneRetentionDays(days int) {
+	s.tombstoneRetentionDays = days
+}
+
+// TombstoneRetentionDays returns the configured tombstone retention period in days.
+func (s *Store) TombstoneRetentionDays() int {
+	return s.tombstoneRetentionDays
+}
+
+// PurgeTombstonedObjects removes all tombstoned objects older than the retention period.
+// Returns the number of objects purged.
+func (s *Store) PurgeTombstonedObjects() int {
+	if s.tombstoneRetentionDays <= 0 {
+		return 0 // Disabled
+	}
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -s.tombstoneRetentionDays)
+	purgedCount := 0
+
+	// List all buckets
+	buckets, err := s.ListBuckets()
+	if err != nil {
+		return 0
+	}
+
+	for _, bucket := range buckets {
+		objects, _, _, err := s.ListObjects(bucket.Name, "", "", 0)
+		if err != nil {
+			continue
+		}
+
+		for _, obj := range objects {
+			if obj.IsTombstoned() && obj.TombstonedAt.Before(cutoff) {
+				if err := s.PurgeObject(bucket.Name, obj.Key); err == nil {
+					purgedCount++
+				}
+			}
+		}
+	}
+
+	return purgedCount
 }
 
 // ListObjects lists objects in a bucket with optional prefix filter and pagination.

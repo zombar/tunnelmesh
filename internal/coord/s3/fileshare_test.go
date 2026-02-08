@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -245,6 +246,64 @@ func TestFileShareManager_Create_SetsExpiry(t *testing.T) {
 	expectedExpiry := time.Now().UTC().AddDate(0, 0, 365)
 	// Allow 1 minute tolerance for test timing
 	assert.WithinDuration(t, expectedExpiry, share.ExpiresAt, time.Minute)
+}
+
+func TestFileShare_IsExpired(t *testing.T) {
+	// Not expired - future date
+	future := &FileShare{
+		Name:      "future",
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	assert.False(t, future.IsExpired())
+
+	// Expired - past date
+	past := &FileShare{
+		Name:      "past",
+		ExpiresAt: time.Now().Add(-24 * time.Hour),
+	}
+	assert.True(t, past.IsExpired())
+
+	// Never expires - zero time
+	never := &FileShare{
+		Name: "never",
+	}
+	assert.False(t, never.IsExpired())
+}
+
+func TestFileShareManager_TombstoneExpiredShareContents(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a share and add some objects
+	share, err := mgr.Create("testshare", "Test share", "alice", 0)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + share.Name
+
+	// Add an object to the share's bucket
+	content := []byte("test content")
+	_, err = store.PutObject(bucketName, "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Manually expire the share
+	mgr.mu.Lock()
+	share.ExpiresAt = time.Now().Add(-24 * time.Hour)
+	mgr.mu.Unlock()
+
+	// Run tombstoning of expired share contents
+	count := mgr.TombstoneExpiredShareContents()
+	assert.Equal(t, 1, count, "should tombstone 1 object")
+
+	// Verify object is now tombstoned
+	obj, err := store.HeadObject(bucketName, "file.txt")
+	require.NoError(t, err)
+	assert.True(t, obj.IsTombstoned())
 }
 
 func TestFileShareManager_IsProtectedBinding(t *testing.T) {

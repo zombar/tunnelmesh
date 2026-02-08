@@ -584,9 +584,10 @@ func TestS3Proxy_DeleteObject(t *testing.T) {
 
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 
-	// Verify object was deleted
-	_, _, err = srv.s3Store.GetObject("test-bucket", "to-delete.txt")
-	assert.Error(t, err)
+	// Verify object is tombstoned (soft-deleted), not removed
+	meta, err := srv.s3Store.HeadObject("test-bucket", "to-delete.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
 }
 
 func TestS3Proxy_DeleteObject_SystemBucketForbidden(t *testing.T) {

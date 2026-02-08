@@ -341,6 +341,7 @@
                             quota: null,
                             lastModified: obj.last_modified,
                             expires: obj.expires,
+                            tombstonedAt: obj.tombstoned_at,
                         };
                     }
                 })
@@ -370,6 +371,7 @@
                 const icon = item.isFolder
                     ? '<svg class="s3-icon s3-icon-folder" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>'
                     : '<svg class="s3-icon s3-icon-file" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>';
+                const isTombstoned = Boolean(item.tombstonedAt);
                 const nameClass = item.isFolder ? 's3-name s3-name-folder' : 's3-name';
                 const onclick = item.isBucket
                     ? `TM.s3explorer.navigateTo('${escapeHtml(item.name)}', '')`
@@ -378,16 +380,18 @@
                       : `TM.s3explorer.openFile('${escapeHtml(state.currentBucket)}', '${escapeHtml(item.key)}')`;
                 const itemId = item.key || item.name;
                 const isSelected = state.selectedItems.has(itemId);
-                const rowClass = isSelected ? 's3-selected' : '';
-                // Show checkboxes for files/folders (not buckets), disabled for read-only
+                let rowClass = isSelected ? 's3-selected' : '';
+                if (isTombstoned) rowClass += ' s3-tombstoned';
+                // Show checkboxes for files/folders (not buckets), disabled for read-only or tombstoned
                 const checkbox = item.isBucket
                     ? ''
-                    : `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} ${state.writable ? '' : 'disabled'} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeHtml(itemId)}')" />`;
+                    : `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} ${state.writable && !isTombstoned ? '' : 'disabled'} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeHtml(itemId)}')" />`;
+                const tombstoneBadge = isTombstoned ? '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
 
                 return `
                 <tr class="${rowClass}" onclick="${onclick}">
                     <td>${checkbox}</td>
-                    <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span></div></td>
+                    <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span>${tombstoneBadge}</div></td>
                     <td>${item.size !== null ? formatBytes(item.size) : '-'}</td>
                     <td>${item.quota ? formatBytes(item.quota) : '-'}</td>
                     <td>${formatDate(item.lastModified)}</td>
@@ -446,7 +450,10 @@
         const readonlyBadge = document.getElementById('s3-readonly-badge');
 
         const fileName = key.split('/').pop();
-        const isReadOnly = !state.writable;
+        // Check if file is tombstoned from cached items
+        const item = state.currentItems.find((i) => i.key === key);
+        const isTombstoned = item && item.tombstonedAt;
+        const isReadOnly = !state.writable || isTombstoned;
 
         // Clear selection when opening file
         state.selectedItems.clear();

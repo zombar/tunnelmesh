@@ -41,12 +41,13 @@ type WireGuardServerConfig struct {
 
 // S3Config holds configuration for the S3-compatible storage service.
 type S3Config struct {
-	Enabled          bool          `yaml:"enabled"`            // Enable S3 storage (default: false)
-	DataDir          string        `yaml:"data_dir"`           // Storage directory for S3 objects (default: {data_dir}/s3)
-	MaxSize          bytesize.Size `yaml:"max_size"`           // Maximum storage size (e.g., "10Gi", "500Mi") - required
-	Port             int           `yaml:"port"`               // S3 API port (default: 9000)
-	ObjectExpiryDays int           `yaml:"object_expiry_days"` // Days until objects expire (default: 9125 = 25 years)
-	ShareExpiryDays  int           `yaml:"share_expiry_days"`  // Days until file shares expire (default: 365 = 1 year)
+	Enabled                bool          `yaml:"enabled"`                  // Enable S3 storage (default: false)
+	DataDir                string        `yaml:"data_dir"`                 // Storage directory for S3 objects (default: {data_dir}/s3)
+	MaxSize                bytesize.Size `yaml:"max_size"`                 // Maximum storage size (e.g., "10Gi", "500Mi") - required
+	Port                   int           `yaml:"port"`                     // S3 API port (default: 9000)
+	ObjectExpiryDays       int           `yaml:"object_expiry_days"`       // Days until objects expire (default: 9125 = 25 years)
+	ShareExpiryDays        int           `yaml:"share_expiry_days"`        // Days until file shares expire (default: 365 = 1 year)
+	TombstoneRetentionDays int           `yaml:"tombstone_retention_days"` // Days to keep tombstoned items before deletion (default: 90)
 }
 
 // WireGuardPeerConfig holds configuration for the WireGuard concentrator mode.
@@ -253,6 +254,9 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 		}
 		if cfg.S3.ShareExpiryDays == 0 {
 			cfg.S3.ShareExpiryDays = 365 // Default: 1 year
+		}
+		if cfg.S3.TombstoneRetentionDays == 0 {
+			cfg.S3.TombstoneRetentionDays = 90 // Default: 90 days
 		}
 	}
 

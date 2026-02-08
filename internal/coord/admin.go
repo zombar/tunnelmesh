@@ -1334,7 +1334,8 @@ type S3ObjectInfo struct {
 	Key          string `json:"key"`
 	Size         int64  `json:"size"`
 	LastModified string `json:"last_modified"`
-	Expires      string `json:"expires,omitempty"` // Optional expiration date
+	Expires      string `json:"expires,omitempty"`       // Optional expiration date
+	TombstonedAt string `json:"tombstoned_at,omitempty"` // When the object was deleted (tombstoned)
 	ContentType  string `json:"content_type,omitempty"`
 	IsPrefix     bool   `json:"is_prefix,omitempty"` // True for "folder" prefixes
 }
@@ -1502,6 +1503,9 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 		if obj.Expires != nil {
 			info.Expires = obj.Expires.Format(time.RFC3339)
 		}
+		if obj.TombstonedAt != nil {
+			info.TombstonedAt = obj.TombstonedAt.Format(time.RFC3339)
+		}
 		result = append(result, info)
 	}
 
@@ -1547,6 +1551,12 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// Check bucket write permission (could be extended to full RBAC)
 	if bucket == auth.SystemBucket {
 		s.jsonError(w, "bucket is read-only", http.StatusForbidden)
+		return
+	}
+
+	// Check if object is tombstoned (read-only)
+	if existingMeta, err := s.s3Store.HeadObject(bucket, key); err == nil && existingMeta.IsTombstoned() {
+		s.jsonError(w, "object is deleted and read-only", http.StatusForbidden)
 		return
 	}
 

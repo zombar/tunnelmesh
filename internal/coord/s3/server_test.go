@@ -294,9 +294,10 @@ func TestDeleteObject(t *testing.T) {
 
 	assert.Equal(t, http.StatusNoContent, w.Code)
 
-	// Verify object is gone
-	_, err = store.HeadObject("my-bucket", "file.txt")
-	assert.ErrorIs(t, err, ErrObjectNotFound)
+	// Verify object is tombstoned (soft-deleted), not removed
+	meta, err := store.HeadObject("my-bucket", "file.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
 }
 
 func TestDeleteObjectNotFound(t *testing.T) {

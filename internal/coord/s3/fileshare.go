@@ -124,12 +124,12 @@ func (m *FileShareManager) Delete(name string) error {
 	bucketName := FileShareBucketPrefix + name
 
 	// Delete the bucket (this will fail if not empty - that's intentional)
-	// In a real implementation, we might want to delete all objects first
+	// Purge (permanently delete) all objects before deleting bucket
 	if err := m.store.DeleteBucket(bucketName); err != nil && err != ErrBucketNotFound {
-		// Try to delete all objects first, then retry
+		// Purge all objects first (not tombstone - we're deleting the whole share)
 		objects, _, _, _ := m.store.ListObjects(bucketName, "", "", 1000)
 		for _, obj := range objects {
-			_ = m.store.DeleteObject(bucketName, obj.Key)
+			_ = m.store.PurgeObject(bucketName, obj.Key)
 		}
 		if err := m.store.DeleteBucket(bucketName); err != nil && err != ErrBucketNotFound {
 			return fmt.Errorf("delete bucket: %w", err)
@@ -210,4 +210,38 @@ func (m *FileShareManager) IsProtectedBinding(binding *auth.RoleBinding) bool {
 	}
 
 	return share.Owner == binding.UserID
+}
+
+// TombstoneExpiredShareContents tombstones all objects in expired file shares.
+// Returns the number of objects tombstoned.
+func (m *FileShareManager) TombstoneExpiredShareContents() int {
+	m.mu.RLock()
+	expiredShares := make([]*FileShare, 0)
+	for _, s := range m.shares {
+		if s.IsExpired() {
+			expiredShares = append(expiredShares, s)
+		}
+	}
+	m.mu.RUnlock()
+
+	tombstonedCount := 0
+	for _, share := range expiredShares {
+		bucketName := FileShareBucketPrefix + share.Name
+		objects, _, _, err := m.store.ListObjects(bucketName, "", "", 1000)
+		if err != nil {
+			continue
+		}
+
+		for _, obj := range objects {
+			// Skip already tombstoned objects
+			if obj.IsTombstoned() {
+				continue
+			}
+			if err := m.store.TombstoneObject(bucketName, obj.Key); err == nil {
+				tombstonedCount++
+			}
+		}
+	}
+
+	return tombstonedCount
 }

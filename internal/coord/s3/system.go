@@ -153,6 +153,14 @@ type FileShare struct {
 	QuotaBytes  int64     `json:"quota_bytes,omitempty"` // Per-share quota in bytes (0 = unlimited within global quota)
 }
 
+// IsExpired returns true if the share has expired.
+func (s *FileShare) IsExpired() bool {
+	if s.ExpiresAt.IsZero() {
+		return false
+	}
+	return time.Now().After(s.ExpiresAt)
+}
+
 // FileShareBucketPrefix is the prefix for file share bucket names.
 const FileShareBucketPrefix = "fs+"
 
@@ -278,9 +286,10 @@ func (ss *SystemStore) Exists(key string) bool {
 	return err == nil
 }
 
-// Delete removes an object from the system bucket.
+// Delete permanently removes an object from the system bucket.
+// Unlike user data, system configuration is not tombstoned.
 func (ss *SystemStore) Delete(key string) error {
-	return ss.store.DeleteObject(SystemBucket, key)
+	return ss.store.PurgeObject(SystemBucket, key)
 }
 
 // Raw returns the underlying store for advanced operations.

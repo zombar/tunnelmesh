@@ -1868,6 +1868,28 @@ a.logs-container {
     background: var(--color-bg-tertiary);
 }
 
+#s3-files tbody tr.s3-tombstoned {
+    opacity: 0.5;
+}
+
+#s3-files tbody tr.s3-tombstoned:hover {
+    opacity: 0.7;
+}
+
+.s3-badge {
+    font-size: 0.65rem;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    margin-left: 0.5rem;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.s3-badge-deleted {
+    background: var(--color-danger-bg, #f8d7da);
+    color: var(--color-danger, #dc3545);
+}
+
 .s3-selection-actions {
     display: flex;
     align-items: center;
