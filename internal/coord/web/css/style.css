@@ -419,7 +419,7 @@ main {
 }
 
 #peers-section, #dns-section, #wireguard-section, #filter-section,
-#users-section, #groups-section, #shares-section {
+#users-section, #groups-section, #shares-section, #bindings-section {
     background: var(--color-bg-primary);
     padding: 0;
     border: 1px solid var(--color-border-primary);
@@ -427,7 +427,7 @@ main {
 }
 
 #peers-section h2, #dns-section h2, #wireguard-section h2, #filter-section h2,
-#users-section h2, #groups-section h2, #shares-section h2 {
+#users-section h2, #groups-section h2, #shares-section h2, #bindings-section h2 {
     font-size: 1rem;
     font-weight: 600;
     padding: 1rem;
@@ -457,7 +457,8 @@ main {
 #filter-section .section-header h2,
 #users-section .section-header h2,
 #groups-section .section-header h2,
-#shares-section .section-header h2 {
+#shares-section .section-header h2,
+#bindings-section .section-header h2 {
     border-bottom: none;
 }
 
@@ -1467,16 +1468,21 @@ a.logs-container {
     padding: 0.75rem 1rem;
 }
 
-/* Filter section uses square corners for all interactive elements */
+/* Filter and Data sections use square corners for all interactive elements */
 #filter-section .btn-primary,
 #filter-section .btn-danger,
-#filter-section select {
+#filter-section select,
+#data-tab .btn-primary,
+#data-tab .btn-danger,
+#data-tab .btn-small {
     border-radius: 0;
 }
 
 #filter-section .btn-primary:focus,
 #filter-section .btn-danger:focus,
-#filter-section select:focus {
+#filter-section select:focus,
+#data-tab .btn-primary:focus,
+#data-tab .btn-danger:focus {
     box-shadow: none;
 }
 
@@ -1538,30 +1544,32 @@ a.logs-container {
     box-shadow: 0 0 0 2px var(--color-focus-ring);
 }
 
-/* Filter modal styling - square corners to match filter section */
-#filter-modal .modal-content {
+/* All modals - consistent sharp corner styling */
+.modal .modal-content {
     border-radius: 0;
 }
 
-#filter-modal .form-group input,
-#filter-modal .form-group select {
+.modal .form-group input,
+.modal .form-group select {
     border-radius: 0;
 }
 
-#filter-modal .form-group input:focus,
-#filter-modal .form-group select:focus {
+.modal .form-group input:focus,
+.modal .form-group select:focus {
     box-shadow: none;
 }
 
-#filter-modal .btn-primary {
+.modal .btn-primary,
+.modal .btn-danger {
     border-radius: 0;
 }
 
-#filter-modal .btn-primary:focus {
+.modal .btn-primary:focus,
+.modal .btn-danger:focus {
     box-shadow: none;
 }
 
-#filter-modal .form-hint {
+.modal .form-hint {
     display: block;
     margin-top: 0.25rem;
     font-size: 0.75rem;
@@ -1576,4 +1584,13 @@ a.logs-container {
     border-bottom: 1px solid rgba(210, 153, 34, 0.3);
     color: #d29922;
     font-size: 0.8rem;
+}
+
+/* Data tab section styling */
+#data-tab section {
+    border-radius: 0;
+}
+
+#data-tab .section-header {
+    border-bottom: 1px solid var(--color-border-primary);
 }
