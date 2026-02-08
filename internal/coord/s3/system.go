@@ -145,10 +145,11 @@ func (ss *SystemStore) LoadGroupBindings() ([]*auth.GroupBinding, error) {
 
 // FileShare represents a file sharing configuration backed by an S3 bucket.
 type FileShare struct {
-	Name        string    `json:"name"`        // Share name (bucket will be "fs+{name}")
-	Description string    `json:"description"` // Human-readable description
-	Owner       string    `json:"owner"`       // UserID of creator
-	CreatedAt   time.Time `json:"created_at"`
+	Name        string    `json:"name"`                  // Share name (bucket will be "fs+{name}")
+	Description string    `json:"description"`           // Human-readable description
+	Owner       string    `json:"owner"`                 // UserID of creator
+	CreatedAt   time.Time `json:"created_at"`            //
+	ExpiresAt   time.Time `json:"expires_at,omitempty"`  // When the share expires (0 = never)
 	QuotaBytes  int64     `json:"quota_bytes,omitempty"` // Per-share quota in bytes (0 = unlimited within global quota)
 }
 

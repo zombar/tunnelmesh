@@ -44,9 +44,11 @@ type ObjectMeta struct {
 //	      meta/
 //	        {key}.json        # object metadata
 type Store struct {
-	dataDir string
-	quota   *QuotaManager
-	mu      sync.RWMutex
+	dataDir                 string
+	quota                   *QuotaManager
+	defaultObjectExpiryDays int // Days until objects expire (0 = never)
+	defaultShareExpiryDays  int // Days until file shares expire (0 = never)
+	mu                      sync.RWMutex
 }
 
 // NewStore creates a new S3 store with the given data directory.
@@ -75,6 +77,29 @@ func NewStore(dataDir string, quota *QuotaManager) (*Store, error) {
 // DataDir returns the data directory path.
 func (s *Store) DataDir() string {
 	return s.dataDir
+}
+
+// SetDefaultObjectExpiryDays sets the default expiry for new objects in days.
+// A value of 0 means objects don't expire.
+func (s *Store) SetDefaultObjectExpiryDays(days int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaultObjectExpiryDays = days
+}
+
+// SetDefaultShareExpiryDays sets the default expiry for new file shares in days.
+// A value of 0 means shares don't expire.
+func (s *Store) SetDefaultShareExpiryDays(days int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaultShareExpiryDays = days
+}
+
+// DefaultShareExpiryDays returns the configured default share expiry in days.
+func (s *Store) DefaultShareExpiryDays() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.defaultShareExpiryDays
 }
 
 // QuotaStats returns current quota statistics, or nil if no quota is configured.
@@ -333,13 +358,20 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 	etag := fmt.Sprintf("\"%s\"", hex.EncodeToString(hash.Sum(nil)))
 
 	// Write object metadata
+	now := time.Now().UTC()
 	objMeta := ObjectMeta{
 		Key:          key,
 		Size:         written,
 		ContentType:  contentType,
 		ETag:         etag,
-		LastModified: time.Now().UTC(),
+		LastModified: now,
 		Metadata:     metadata,
+	}
+
+	// Set expiry if configured
+	if s.defaultObjectExpiryDays > 0 {
+		expiry := now.AddDate(0, 0, s.defaultObjectExpiryDays)
+		objMeta.Expires = &expiry
 	}
 
 	metaData, err := json.MarshalIndent(objMeta, "", "  ")

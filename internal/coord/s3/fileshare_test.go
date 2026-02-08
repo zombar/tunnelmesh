@@ -224,6 +224,29 @@ func TestFileShare_CreatedAt(t *testing.T) {
 	assert.False(t, share.CreatedAt.IsZero())
 }
 
+func TestFileShareManager_Create_SetsExpiry(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	// Set default expiry to 365 days
+	store.SetDefaultShareExpiryDays(365)
+
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	share, err := mgr.Create("data", "Test share", "alice", 0)
+	require.NoError(t, err)
+
+	// ExpiresAt should be set to approximately 365 days from now
+	assert.False(t, share.ExpiresAt.IsZero(), "ExpiresAt should be set")
+	expectedExpiry := time.Now().UTC().AddDate(0, 0, 365)
+	// Allow 1 minute tolerance for test timing
+	assert.WithinDuration(t, expectedExpiry, share.ExpiresAt, time.Minute)
+}
+
 func TestFileShareManager_IsProtectedBinding(t *testing.T) {
 	store, err := NewStore(t.TempDir(), nil)
 	require.NoError(t, err)

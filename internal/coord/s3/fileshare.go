@@ -76,12 +76,18 @@ func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes 
 	m.authorizer.Bindings.Add(ownerBinding)
 
 	// Create share record
+	now := time.Now().UTC()
 	share := &FileShare{
 		Name:        name,
 		Description: description,
 		Owner:       ownerID,
-		CreatedAt:   time.Now().UTC(),
+		CreatedAt:   now,
 		QuotaBytes:  quotaBytes,
+	}
+
+	// Set expiry if configured
+	if expiryDays := m.store.DefaultShareExpiryDays(); expiryDays > 0 {
+		share.ExpiresAt = now.AddDate(0, 0, expiryDays)
 	}
 	m.shares = append(m.shares, share)
 

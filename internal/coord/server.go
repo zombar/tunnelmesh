@@ -384,6 +384,10 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	}
 	s.s3Store = store
 
+	// Set expiry defaults from config
+	store.SetDefaultObjectExpiryDays(cfg.S3.ObjectExpiryDays)
+	store.SetDefaultShareExpiryDays(cfg.S3.ShareExpiryDays)
+
 	// Create authorizer with group support
 	s.s3Authorizer = auth.NewAuthorizerWithGroups()
 

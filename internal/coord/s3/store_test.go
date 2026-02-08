@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -131,6 +132,35 @@ func TestStorePutObject(t *testing.T) {
 	assert.Equal(t, "text/plain", meta.ContentType)
 	assert.NotEmpty(t, meta.ETag)
 	assert.False(t, meta.LastModified.IsZero())
+}
+
+func TestStorePutObject_SetsExpiry(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Set default object expiry to 25 years (9125 days)
+	store.SetDefaultObjectExpiryDays(9125)
+
+	content := []byte("hello world")
+	meta, err := store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	require.NotNil(t, meta.Expires, "Expires should be set")
+	expectedExpiry := time.Now().UTC().AddDate(0, 0, 9125)
+	// Allow 1 minute tolerance for test timing
+	assert.WithinDuration(t, expectedExpiry, *meta.Expires, time.Minute)
+}
+
+func TestStorePutObject_NoExpiryWhenNotConfigured(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Don't set expiry - objects should have no expiry
+	content := []byte("hello world")
+	meta, err := store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	assert.Nil(t, meta.Expires, "Expires should not be set when not configured")
 }
 
 func TestStorePutObjectBucketNotFound(t *testing.T) {
