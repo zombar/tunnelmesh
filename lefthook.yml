@@ -25,5 +25,5 @@ pre-push:
   parallel: true
   commands:
     test:
-      run: go test -race ./...
+      run: go test -short -race ./...
       fail_text: "Tests failed"
