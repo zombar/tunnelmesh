@@ -1145,7 +1145,7 @@ footer {
 }
 
 .section-toggle.collapsed::after {
-    transform: rotate(-90deg);
+    transform: rotate(90deg);
 }
 
 .section-toggle:hover::after {
