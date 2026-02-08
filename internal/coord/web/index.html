@@ -354,6 +354,9 @@
                     <div id="s3-empty" class="empty-state" style="display: none;">
                         No files in this location.
                     </div>
+                    <div id="s3-pagination" class="show-more-container" style="display: none;">
+                        <span id="s3-show-more"><button class="show-more-link" onclick="s3ShowMore()">show more (<span id="s3-shown-count">0</span> / <span id="s3-total-count">0</span>)</button></span><span id="s3-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="s3ShowLess()">show less</button></span>
+                    </div>
                 </div>
                 <!-- File viewer/editor (shown when file is selected) -->
                 <div id="s3-viewer" class="s3-viewer" style="display: none;">
@@ -391,6 +394,9 @@
                 <div id="no-users" class="empty-state" style="display: none;">
                     No users registered yet.
                 </div>
+                <div id="users-pagination" class="show-more-container" style="display: none;">
+                    <span id="users-show-more"><button class="show-more-link" onclick="showMoreUsers()">show more (<span id="users-shown-count">0</span> / <span id="users-total-count">0</span>)</button></span><span id="users-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessUsers()">show less</button></span>
+                </div>
             </div>
         </section>
 
@@ -414,6 +420,9 @@
                 </table>
                 <div id="no-groups" class="empty-state" style="display: none;">
                     No groups found.
+                </div>
+                <div id="groups-pagination" class="show-more-container" style="display: none;">
+                    <span id="groups-show-more"><button class="show-more-link" onclick="showMoreGroups()">show more (<span id="groups-shown-count">0</span> / <span id="groups-total-count">0</span>)</button></span><span id="groups-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessGroups()">show less</button></span>
                 </div>
             </div>
         </section>
@@ -439,6 +448,9 @@
                 <div id="no-shares" class="empty-state" style="display: none;">
                     No file shares yet. Create one to share files across the mesh.
                 </div>
+                <div id="shares-pagination" class="show-more-container" style="display: none;">
+                    <span id="shares-show-more"><button class="show-more-link" onclick="showMoreShares()">show more (<span id="shares-shown-count">0</span> / <span id="shares-total-count">0</span>)</button></span><span id="shares-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessShares()">show less</button></span>
+                </div>
             </div>
         </section>
 
@@ -462,6 +474,9 @@
                 </table>
                 <div id="no-bindings" class="empty-state" style="display: none;">
                     No role bindings configured.
+                </div>
+                <div id="bindings-pagination" class="show-more-container" style="display: none;">
+                    <span id="bindings-show-more"><button class="show-more-link" onclick="showMoreBindings()">show more (<span id="bindings-shown-count">0</span> / <span id="bindings-total-count">0</span>)</button></span><span id="bindings-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessBindings()">show less</button></span>
                 </div>
             </div>
         </section>

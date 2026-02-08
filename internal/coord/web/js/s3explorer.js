@@ -15,6 +15,8 @@
     // State
     // =========================================================================
 
+    const PAGE_SIZE = 7;
+
     const state = {
         buckets: [],
         currentBucket: null,
@@ -22,6 +24,9 @@
         currentFile: null,    // { bucket, key, content, contentType }
         isDirty: false,
         originalContent: '',
+        // Pagination
+        currentItems: [],     // All items in current view
+        visibleCount: PAGE_SIZE,
     };
 
     // Text file extensions
@@ -214,7 +219,7 @@
         container.innerHTML = html;
     }
 
-    async function renderFileListing() {
+    async function renderFileListing(resetPagination = true) {
         const tbody = document.getElementById('s3-files-body');
         const browser = document.getElementById('s3-browser');
         const viewer = document.getElementById('s3-viewer');
@@ -222,6 +227,7 @@
         const empty = document.getElementById('s3-empty');
         const browseActions = document.getElementById('s3-browse-actions');
         const fileActions = document.getElementById('s3-file-actions');
+        const paginationEl = document.getElementById('s3-pagination');
 
         if (!tbody) return;
 
@@ -236,6 +242,11 @@
         // Clear current file
         state.currentFile = null;
         state.isDirty = false;
+
+        // Reset pagination when navigating to new folder
+        if (resetPagination) {
+            state.visibleCount = PAGE_SIZE;
+        }
 
         let items = [];
 
@@ -272,18 +283,25 @@
             }).filter(item => item.name && item.name !== '.folder');
         }
 
+        // Store items for pagination
+        state.currentItems = items;
+
         // Always render breadcrumb for navigation
         renderBreadcrumb();
 
         if (items.length === 0) {
             tbody.innerHTML = '';
             if (empty) empty.style.display = 'block';
+            if (paginationEl) paginationEl.style.display = 'none';
             return;
         }
 
         if (empty) empty.style.display = 'none';
 
-        tbody.innerHTML = items.map(item => {
+        // Only show visible items
+        const visibleItems = items.slice(0, state.visibleCount);
+
+        tbody.innerHTML = visibleItems.map(item => {
             const icon = item.isFolder
                 ? '<svg class="s3-icon s3-icon-folder" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>'
                 : '<svg class="s3-icon s3-icon-file" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>';
@@ -302,6 +320,39 @@
                 </tr>
             `;
         }).join('');
+
+        // Update pagination UI
+        updateS3Pagination();
+    }
+
+    function updateS3Pagination() {
+        const paginationEl = document.getElementById('s3-pagination');
+        if (!paginationEl) return;
+
+        const total = state.currentItems.length;
+        const shown = Math.min(state.visibleCount, total);
+        const hasMore = total > state.visibleCount;
+        const canShowLess = state.visibleCount > PAGE_SIZE;
+
+        if (hasMore || canShowLess) {
+            paginationEl.style.display = 'block';
+            document.getElementById('s3-show-more').style.display = hasMore ? 'inline' : 'none';
+            document.getElementById('s3-show-less').style.display = canShowLess ? 'inline' : 'none';
+            document.getElementById('s3-shown-count').textContent = shown;
+            document.getElementById('s3-total-count').textContent = total;
+        } else {
+            paginationEl.style.display = 'none';
+        }
+    }
+
+    function showMore() {
+        state.visibleCount += PAGE_SIZE;
+        renderFileListing(false);
+    }
+
+    function showLess() {
+        state.visibleCount = PAGE_SIZE;
+        renderFileListing(false);
     }
 
     async function openFile(bucket, key) {
@@ -694,5 +745,7 @@
         openUploadDialog,
         handleFileSelect,
         refresh: renderFileListing,
+        showMore,
+        showLess,
     };
 });

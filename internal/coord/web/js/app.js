@@ -14,7 +14,7 @@ const {
 // Import utilities from TM modules
 const { escapeHtml } = TM.utils;
 const { formatBytes, formatRate, formatLatency, formatLastSeen } = TM.format;
-const { createPaginationController } = TM.pagination;
+const { createPaginationController, updatePaginationUI } = TM.pagination;
 const { createSparklineSVG } = TM.table;
 const { createModalController } = TM.modal;
 
@@ -63,8 +63,16 @@ const state = {
     peersVisibleCount: ROWS_PER_PAGE,
     dnsVisibleCount: ROWS_PER_PAGE,
     wgVisibleCount: ROWS_PER_PAGE,
+    usersVisibleCount: ROWS_PER_PAGE,
+    groupsVisibleCount: ROWS_PER_PAGE,
+    sharesVisibleCount: ROWS_PER_PAGE,
+    bindingsVisibleCount: ROWS_PER_PAGE,
     currentPeers: [], // Store current peers data for pagination
     currentDnsRecords: [], // Store current DNS records for pagination
+    currentUsers: [],
+    currentGroups: [],
+    currentShares: [],
+    currentBindings: [],
     // Alerts state
     alertsEnabled: false,
     peerAlerts: {}, // { peerName: { warning: count, critical: count, page: count } }
@@ -401,12 +409,69 @@ const wgPagination = createPaginationController({
     onRender: () => updateWGClientsTable(),
 });
 
+const usersPagination = createPaginationController({
+    pageSize: ROWS_PER_PAGE,
+    getItems: () => state.currentUsers,
+    getVisibleCount: () => state.usersVisibleCount,
+    setVisibleCount: (n) => { state.usersVisibleCount = n; },
+    onRender: () => renderUsersTable(),
+});
+
+const groupsPagination = createPaginationController({
+    pageSize: ROWS_PER_PAGE,
+    getItems: () => state.currentGroups,
+    getVisibleCount: () => state.groupsVisibleCount,
+    setVisibleCount: (n) => { state.groupsVisibleCount = n; },
+    onRender: () => renderGroupsTable(),
+});
+
+const sharesPagination = createPaginationController({
+    pageSize: ROWS_PER_PAGE,
+    getItems: () => state.currentShares,
+    getVisibleCount: () => state.sharesVisibleCount,
+    setVisibleCount: (n) => { state.sharesVisibleCount = n; },
+    onRender: () => renderSharesTable(),
+});
+
+const bindingsPagination = createPaginationController({
+    pageSize: ROWS_PER_PAGE,
+    getItems: () => state.currentBindings,
+    getVisibleCount: () => state.bindingsVisibleCount,
+    setVisibleCount: (n) => { state.bindingsVisibleCount = n; },
+    onRender: () => renderBindingsTable(),
+});
+
+// Helper to update pagination UI for a section
+function updateSectionPagination(prefix, controller) {
+    const uiState = controller.getUIState();
+    const paginationEl = document.getElementById(`${prefix}-pagination`);
+    if (!paginationEl) return;
+    if (uiState.isEmpty) {
+        paginationEl.style.display = 'none';
+        return;
+    }
+    paginationEl.style.display = (uiState.hasMore || uiState.canShowLess) ? 'block' : 'none';
+    document.getElementById(`${prefix}-show-more`).style.display = uiState.hasMore ? 'inline' : 'none';
+    document.getElementById(`${prefix}-show-less`).style.display = uiState.canShowLess ? 'inline' : 'none';
+    document.getElementById(`${prefix}-shown-count`).textContent = uiState.shown;
+    document.getElementById(`${prefix}-total-count`).textContent = uiState.total;
+}
+
 // Expose pagination functions for HTML onclick handlers
 window.showMorePeers = () => peersPagination.showMore();
 window.showLessPeers = () => peersPagination.showLess();
 window.showMoreDns = () => dnsPagination.showMore();
 window.showLessDns = () => dnsPagination.showLess();
 window.showMoreWg = () => wgPagination.showMore();
+window.showLessWg = () => wgPagination.showLess();
+window.showMoreUsers = () => usersPagination.showMore();
+window.showLessUsers = () => usersPagination.showLess();
+window.showMoreGroups = () => groupsPagination.showMore();
+window.showLessGroups = () => groupsPagination.showLess();
+window.showMoreShares = () => sharesPagination.showMore();
+window.showLessShares = () => sharesPagination.showLess();
+window.showMoreBindings = () => bindingsPagination.showMore();
+window.showLessBindings = () => bindingsPagination.showLess();
 window.showLessWg = () => wgPagination.showLess();
 
 // Modal controllers (initialized with element IDs, resolved lazily)
@@ -2104,25 +2169,29 @@ async function fetchUsers() {
         const resp = await fetch('api/users');
         if (resp.ok) {
             const users = await resp.json();
-            updateUsersTable(users);
+            state.currentUsers = users || [];
+            renderUsersTable();
         }
     } catch (err) {
         console.error('Failed to fetch users:', err);
     }
 }
 
-function updateUsersTable(users) {
+function renderUsersTable() {
     const tbody = document.getElementById('users-body');
     const noUsers = document.getElementById('no-users');
+    const users = state.currentUsers;
 
     if (!users || users.length === 0) {
         tbody.innerHTML = '';
         noUsers.style.display = 'block';
+        document.getElementById('users-pagination').style.display = 'none';
         return;
     }
 
     noUsers.style.display = 'none';
-    tbody.innerHTML = users.map(u => `
+    const visibleUsers = usersPagination.getVisibleItems();
+    tbody.innerHTML = visibleUsers.map(u => `
         <tr>
             <td>${escapeHtml(u.name || '-')}</td>
             <td><code>${escapeHtml(u.id)}</code></td>
@@ -2133,6 +2202,14 @@ function updateUsersTable(users) {
             <td><span class="status-badge ${u.expired ? 'expired' : 'active'}">${u.expired ? 'Expired' : 'Active'}</span></td>
         </tr>
     `).join('');
+
+    updateSectionPagination('users', usersPagination);
+}
+
+// Alias for backward compat
+function updateUsersTable(users) {
+    state.currentUsers = users || [];
+    renderUsersTable();
 }
 
 async function fetchGroups() {
@@ -2140,25 +2217,29 @@ async function fetchGroups() {
         const resp = await fetch('api/groups');
         if (resp.ok) {
             const groups = await resp.json();
-            updateGroupsTable(groups);
+            state.currentGroups = groups || [];
+            renderGroupsTable();
         }
     } catch (err) {
         console.error('Failed to fetch groups:', err);
     }
 }
 
-function updateGroupsTable(groups) {
+function renderGroupsTable() {
     const tbody = document.getElementById('groups-body');
     const noGroups = document.getElementById('no-groups');
+    const groups = state.currentGroups;
 
     if (!groups || groups.length === 0) {
         tbody.innerHTML = '';
         noGroups.style.display = 'block';
+        document.getElementById('groups-pagination').style.display = 'none';
         return;
     }
 
     noGroups.style.display = 'none';
-    tbody.innerHTML = groups.map(g => `
+    const visibleGroups = groupsPagination.getVisibleItems();
+    tbody.innerHTML = visibleGroups.map(g => `
         <tr>
             <td><strong>${escapeHtml(g.name)}</strong></td>
             <td>${escapeHtml(g.description || '-')}</td>
@@ -2169,6 +2250,13 @@ function updateGroupsTable(groups) {
             </td>
         </tr>
     `).join('');
+
+    updateSectionPagination('groups', groupsPagination);
+}
+
+function updateGroupsTable(groups) {
+    state.currentGroups = groups || [];
+    renderGroupsTable();
 }
 
 function openGroupModal() {
@@ -2237,25 +2325,29 @@ async function fetchShares() {
         const resp = await fetch('api/shares');
         if (resp.ok) {
             const shares = await resp.json();
-            updateSharesTable(shares);
+            state.currentShares = shares || [];
+            renderSharesTable();
         }
     } catch (err) {
         console.error('Failed to fetch shares:', err);
     }
 }
 
-function updateSharesTable(shares) {
+function renderSharesTable() {
     const tbody = document.getElementById('shares-body');
     const noShares = document.getElementById('no-shares');
+    const shares = state.currentShares;
 
     if (!shares || shares.length === 0) {
         tbody.innerHTML = '';
         noShares.style.display = 'block';
+        document.getElementById('shares-pagination').style.display = 'none';
         return;
     }
 
     noShares.style.display = 'none';
-    tbody.innerHTML = shares.map(s => `
+    const visibleShares = sharesPagination.getVisibleItems();
+    tbody.innerHTML = visibleShares.map(s => `
         <tr>
             <td><strong>${escapeHtml(s.name)}</strong></td>
             <td>${escapeHtml(s.description || '-')}</td>
@@ -2266,6 +2358,13 @@ function updateSharesTable(shares) {
             </td>
         </tr>
     `).join('');
+
+    updateSectionPagination('shares', sharesPagination);
+}
+
+function updateSharesTable(shares) {
+    state.currentShares = shares || [];
+    renderSharesTable();
 }
 
 function openShareModal() {
@@ -2376,24 +2475,28 @@ async function fetchBindings() {
         const resp = await fetch('api/bindings');
         if (!resp.ok) return;
         const bindings = await resp.json();
-        renderBindings(bindings);
+        state.currentBindings = bindings || [];
+        renderBindingsTable();
     } catch (err) {
         console.error('Failed to fetch bindings:', err);
     }
 }
 
-function renderBindings(bindings) {
+function renderBindingsTable() {
     const tbody = document.getElementById('bindings-body');
     const emptyState = document.getElementById('no-bindings');
+    const bindings = state.currentBindings;
 
     if (!bindings || bindings.length === 0) {
         tbody.innerHTML = '';
         emptyState.style.display = 'block';
+        document.getElementById('bindings-pagination').style.display = 'none';
         return;
     }
 
     emptyState.style.display = 'none';
-    tbody.innerHTML = bindings.map(b => `
+    const visibleBindings = bindingsPagination.getVisibleItems();
+    tbody.innerHTML = visibleBindings.map(b => `
         <tr>
             <td>${escapeHtml(b.user_id || b.group_name || '-')}</td>
             <td>${escapeHtml(b.role_name)}</td>
@@ -2406,6 +2509,14 @@ function renderBindings(bindings) {
             </td>
         </tr>
     `).join('');
+
+    updateSectionPagination('bindings', bindingsPagination);
+}
+
+// Alias for backward compat
+function renderBindings(bindings) {
+    state.currentBindings = bindings || [];
+    renderBindingsTable();
 }
 
 function openBindingModal() {
@@ -2576,3 +2687,13 @@ function s3HandleFileSelect(event) {
     if (TM.s3explorer) TM.s3explorer.handleFileSelect(event);
 }
 window.s3HandleFileSelect = s3HandleFileSelect;
+
+function s3ShowMore() {
+    if (TM.s3explorer) TM.s3explorer.showMore();
+}
+window.s3ShowMore = s3ShowMore;
+
+function s3ShowLess() {
+    if (TM.s3explorer) TM.s3explorer.showLess();
+}
+window.s3ShowLess = s3ShowLess;
