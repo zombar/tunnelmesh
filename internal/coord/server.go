@@ -381,6 +381,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
+// NFSPort is the standard NFS port used for file share access.
+const NFSPort = 2049
+
 // getServicePorts returns the list of service ports the coordinator exposes.
 // These ports are pushed to peers so they can auto-allow access through the packet filter.
 func (s *Server) getServicePorts() []uint16 {
@@ -394,6 +397,11 @@ func (s *Server) getServicePorts() []uint16 {
 	// S3 port (if enabled)
 	if s.cfg.S3.Enabled && s.cfg.S3.Port > 0 {
 		ports = append(ports, uint16(s.cfg.S3.Port))
+	}
+
+	// NFS port (only when there are active file shares)
+	if s.fileShareMgr != nil && len(s.fileShareMgr.List()) > 0 {
+		ports = append(ports, NFSPort)
 	}
 
 	// Configured service ports (includes metrics port 9443 by default)
