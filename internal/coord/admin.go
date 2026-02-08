@@ -1341,6 +1341,20 @@ type S3BucketInfo struct {
 	Name      string `json:"name"`
 	CreatedAt string `json:"created_at"`
 	Writable  bool   `json:"writable"`
+	UsedBytes int64  `json:"used_bytes"`
+}
+
+// S3QuotaInfo represents overall S3 storage quota for the explorer API.
+type S3QuotaInfo struct {
+	MaxBytes   int64 `json:"max_bytes"`
+	UsedBytes  int64 `json:"used_bytes"`
+	AvailBytes int64 `json:"avail_bytes"`
+}
+
+// S3BucketsResponse is the response for the buckets list endpoint.
+type S3BucketsResponse struct {
+	Buckets []S3BucketInfo `json:"buckets"`
+	Quota   S3QuotaInfo    `json:"quota"`
 }
 
 // handleS3Proxy routes S3 explorer API requests.
@@ -1392,19 +1406,39 @@ func (s *Server) handleS3ListBuckets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := make([]S3BucketInfo, 0, len(buckets))
+	// Get quota stats for per-bucket usage
+	quotaStats := s.s3Store.QuotaStats()
+
+	bucketInfos := make([]S3BucketInfo, 0, len(buckets))
 	for _, b := range buckets {
 		// System bucket is read-only (could be extended to check RBAC)
 		writable := b.Name != auth.SystemBucket
-		result = append(result, S3BucketInfo{
+		usedBytes := int64(0)
+		if quotaStats != nil {
+			usedBytes = quotaStats.PerBucket[b.Name]
+		}
+		bucketInfos = append(bucketInfos, S3BucketInfo{
 			Name:      b.Name,
 			CreatedAt: b.CreatedAt.Format(time.RFC3339),
 			Writable:  writable,
+			UsedBytes: usedBytes,
 		})
 	}
 
+	// Build response with quota info
+	resp := S3BucketsResponse{
+		Buckets: bucketInfos,
+	}
+	if quotaStats != nil {
+		resp.Quota = S3QuotaInfo{
+			MaxBytes:   quotaStats.MaxBytes,
+			UsedBytes:  quotaStats.UsedBytes,
+			AvailBytes: quotaStats.AvailableBytes,
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleS3ListObjects returns objects in a bucket with optional prefix/delimiter.

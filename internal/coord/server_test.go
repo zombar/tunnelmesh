@@ -971,9 +971,10 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 		AuthToken: "test-token",
 		DataDir:   tempDir,
 		S3: config.S3Config{
-			Enabled: true,
-			DataDir: tempDir + "/s3",
-			Port:    9000,
+			Enabled:   true,
+			DataDir:   tempDir + "/s3",
+			Port:      9000,
+			MaxSizeGB: 1, // Required for quota enforcement
 		},
 	}
 
@@ -1042,9 +1043,10 @@ func newTestServerWithS3(t *testing.T) *Server {
 		Admin:     config.AdminConfig{Enabled: true},
 		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
 		S3: config.S3Config{
-			Enabled: true,
-			DataDir: tempDir + "/s3",
-			Port:    9000,
+			Enabled:   true,
+			DataDir:   tempDir + "/s3",
+			Port:      9000,
+			MaxSizeGB: 1, // Required for quota enforcement
 		},
 	}
 	srv, err := NewServer(cfg)

@@ -372,9 +372,10 @@ func newTestServerWithS3AndBucket(t *testing.T) *Server {
 		Admin:     config.AdminConfig{Enabled: true},
 		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
 		S3: config.S3Config{
-			Enabled: true,
-			DataDir: tempDir + "/s3",
-			Port:    9000,
+			Enabled:   true,
+			DataDir:   tempDir + "/s3",
+			Port:      9000,
+			MaxSizeGB: 1, // Required for quota enforcement
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -407,17 +408,20 @@ func TestS3Proxy_ListBuckets(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var buckets []S3BucketInfo
-	err := json.NewDecoder(rec.Body).Decode(&buckets)
+	var resp S3BucketsResponse
+	err := json.NewDecoder(rec.Body).Decode(&resp)
 	require.NoError(t, err)
 	// Server creates system bucket automatically, plus our test bucket
-	require.Len(t, buckets, 2)
+	require.Len(t, resp.Buckets, 2)
+
+	// Verify quota info is present
+	assert.Greater(t, resp.Quota.MaxBytes, int64(0))
 
 	// Find test bucket and verify it's writable
 	var testBucket *S3BucketInfo
-	for i := range buckets {
-		if buckets[i].Name == "test-bucket" {
-			testBucket = &buckets[i]
+	for i := range resp.Buckets {
+		if resp.Buckets[i].Name == "test-bucket" {
+			testBucket = &resp.Buckets[i]
 			break
 		}
 	}
@@ -435,15 +439,15 @@ func TestS3Proxy_ListBuckets_SystemBucketReadOnly(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var buckets []S3BucketInfo
-	err := json.NewDecoder(rec.Body).Decode(&buckets)
+	var resp S3BucketsResponse
+	err := json.NewDecoder(rec.Body).Decode(&resp)
 	require.NoError(t, err)
 
 	// Find system bucket and verify it's read-only
 	var systemBucket *S3BucketInfo
-	for i := range buckets {
-		if buckets[i].Name == auth.SystemBucket {
-			systemBucket = &buckets[i]
+	for i := range resp.Buckets {
+		if resp.Buckets[i].Name == auth.SystemBucket {
+			systemBucket = &resp.Buckets[i]
 			break
 		}
 	}

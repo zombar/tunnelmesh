@@ -366,11 +366,11 @@ func (s *Server) getServicePorts() []uint16 {
 
 // initS3Storage initializes the S3 storage subsystem.
 func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
-	// Create quota manager if limit is set
-	var quota *s3.QuotaManager
-	if cfg.S3.MaxSizeGB > 0 {
-		quota = s3.NewQuotaManager(cfg.S3.MaxSizeGB)
+	// Require max_size_gb to be configured for quota enforcement
+	if cfg.S3.MaxSizeGB <= 0 {
+		return fmt.Errorf("s3.max_size_gb must be configured (required for quota enforcement)")
 	}
+	quota := s3.NewQuotaManager(cfg.S3.MaxSizeGB)
 
 	// Create store
 	store, err := s3.NewStore(cfg.S3.DataDir, quota)

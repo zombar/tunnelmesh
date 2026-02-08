@@ -35,6 +35,8 @@
         autosave: false,
         autosaveTimer: null,
         isFullscreen: false,
+        // Quota info
+        quota: null,
     };
 
     // Text file extensions
@@ -130,8 +132,11 @@
     async function fetchBuckets() {
         try {
             const resp = await fetch('api/s3/buckets');
-            if (!resp.ok) return [];
-            return await resp.json();
+            if (!resp.ok) return { buckets: [], quota: null };
+            const data = await resp.json();
+            // Store quota info in state
+            state.quota = data.quota || null;
+            return data.buckets || [];
         } catch (err) {
             console.error('Failed to fetch buckets:', err);
             return [];
@@ -268,8 +273,9 @@
                 name: b.name,
                 isFolder: true,
                 isBucket: true,
-                size: null,
-                lastModified: b.created_at
+                size: b.used_bytes || 0,
+                lastModified: b.created_at,
+                writable: b.writable
             }));
         } else {
             // Show objects in current path
