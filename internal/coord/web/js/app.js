@@ -2083,84 +2083,17 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Logs panel resize handle
+    // Panel resize handles
     if (dom.logsResizeHandle && dom.logsContainer) {
-        initLogsResize();
+        initPanelResize(dom.logsResizeHandle, dom.logsContainer);
     }
-
-    // S3 panel resize handle
     if (dom.s3ResizeHandle && dom.s3Content) {
-        initS3Resize();
+        initPanelResize(dom.s3ResizeHandle, dom.s3Content);
     }
 });
 
-// Initialize logs panel resize functionality
-function initLogsResize() {
-    const handle = dom.logsResizeHandle;
-    const container = dom.logsContainer;
-    const MIN_HEIGHT = 100;
-    const MAX_HEIGHT = 800;
-
-    let isResizing = false;
-    let startY = 0;
-    let startHeight = 0;
-
-    handle.addEventListener('mousedown', (e) => {
-        isResizing = true;
-        startY = e.clientY;
-        startHeight = container.offsetHeight;
-        document.body.style.cursor = 'ns-resize';
-        document.body.style.userSelect = 'none';
-        e.preventDefault();
-    });
-
-    document.addEventListener('mousemove', (e) => {
-        if (!isResizing) return;
-        const delta = e.clientY - startY;
-        const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + delta));
-        container.style.maxHeight = `${newHeight}px`;
-    });
-
-    document.addEventListener('mouseup', () => {
-        if (isResizing) {
-            isResizing = false;
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-        }
-    });
-
-    // Touch support for mobile
-    handle.addEventListener(
-        'touchstart',
-        (e) => {
-            isResizing = true;
-            startY = e.touches[0].clientY;
-            startHeight = container.offsetHeight;
-            e.preventDefault();
-        },
-        { passive: false },
-    );
-
-    document.addEventListener(
-        'touchmove',
-        (e) => {
-            if (!isResizing) return;
-            const delta = e.touches[0].clientY - startY;
-            const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + delta));
-            container.style.maxHeight = `${newHeight}px`;
-        },
-        { passive: true },
-    );
-
-    document.addEventListener('touchend', () => {
-        isResizing = false;
-    });
-}
-
-// Initialize S3 panel resize functionality
-function initS3Resize() {
-    const handle = dom.s3ResizeHandle;
-    const container = dom.s3Content;
+// Initialize panel resize functionality (shared by logs and S3 panels)
+function initPanelResize(handle, container) {
     const MIN_HEIGHT = 100;
     const MAX_HEIGHT = 800;
 
