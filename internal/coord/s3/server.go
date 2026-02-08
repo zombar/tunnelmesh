@@ -13,14 +13,27 @@ import (
 )
 
 // statusRecorder wraps http.ResponseWriter to capture the HTTP status code.
+// Note: Not thread-safe. Must only be used within a single request handler.
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
+	if !r.wroteHeader {
+		r.status = code
+		r.wroteHeader = true
+	}
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// getStatus returns the recorded status, defaulting to 200 if WriteHeader was never called.
+func (r *statusRecorder) getStatus() int {
+	if r.status == 0 {
+		return http.StatusOK
+	}
+	return r.status
 }
 
 // classifyS3Status converts HTTP status code to metric status string.
@@ -381,11 +394,11 @@ func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket st
 // getObject handles GET /{bucket}/{key}.
 func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	startTime := time.Now()
-	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+	rec := &statusRecorder{ResponseWriter: w}
 	defer func() {
 		if s.metrics != nil {
 			duration := time.Since(startTime).Seconds()
-			status := classifyS3Status(rec.status)
+			status := classifyS3Status(rec.getStatus())
 			s.metrics.RecordRequest("GetObject", status, duration)
 		}
 	}()
@@ -433,11 +446,11 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key s
 // putObject handles PUT /{bucket}/{key}.
 func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	startTime := time.Now()
-	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+	rec := &statusRecorder{ResponseWriter: w}
 	defer func() {
 		if s.metrics != nil {
 			duration := time.Since(startTime).Seconds()
-			status := classifyS3Status(rec.status)
+			status := classifyS3Status(rec.getStatus())
 			s.metrics.RecordRequest("PutObject", status, duration)
 		}
 	}()

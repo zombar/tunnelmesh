@@ -273,51 +273,58 @@ groups:
           description: "S3 storage is {{ $value }}% full (>92%) - uploads will fail soon"
 
   # Security & Auth Alerts
+  # NOTE: Auth metrics (tunnelmesh_auth_attempts_total, tunnelmesh_authz_checks_total,
+  # tunnelmesh_authz_denied_total) will be implemented in a follow-up PR.
+  # The alerts below are commented out until those metrics are available.
   - name: tunnelmesh-security
     rules:
-      # Warning: Elevated auth failures
-      - alert: TunnelMeshElevatedAuthFailures
-        expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[5m])) > 0.5
-        for: 3m
-        labels:
-          severity: warning
-          category: security
-        annotations:
-          summary: "Elevated authentication failures"
-          description: "Auth failure rate exceeds 0.5/s - possible credential issues or attack"
+      # TODO: Uncomment when auth metrics are implemented
+      # # Warning: Elevated auth failures
+      # - alert: TunnelMeshElevatedAuthFailures
+      #   expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[5m])) > 0.5
+      #   for: 3m
+      #   labels:
+      #     severity: warning
+      #     category: security
+      #   annotations:
+      #     summary: "Elevated authentication failures"
+      #     description: "Auth failure rate exceeds 0.5/s - possible credential issues or attack"
 
-      # Warning: Elevated access denials
-      - alert: TunnelMeshElevatedAccessDenials
-        expr: sum(rate(tunnelmesh_authz_checks_total{result="denied"}[5m])) > 1
-        for: 5m
-        labels:
-          severity: warning
-          category: security
-        annotations:
-          summary: "Elevated authorization denials"
-          description: "Users frequently accessing resources they don't have permissions for"
+      # TODO: Uncomment when auth metrics are implemented
+      # # Warning: Elevated access denials
+      # - alert: TunnelMeshElevatedAccessDenials
+      #   expr: sum(rate(tunnelmesh_authz_checks_total{result="denied"}[5m])) > 1
+      #   for: 5m
+      #   labels:
+      #     severity: warning
+      #     category: security
+      #   annotations:
+      #     summary: "Elevated authorization denials"
+      #     description: "Users frequently accessing resources they don't have permissions for"
 
-      # Warning: User repeatedly denied
-      - alert: TunnelMeshUserAccessDenied
-        expr: sum(rate(tunnelmesh_authz_denied_total[5m])) by (user, bucket) > 0.1
-        for: 5m
-        labels:
-          severity: warning
-          category: security
-        annotations:
-          summary: "User repeatedly denied access"
-          description: "User {{ $labels.user }} denied access to bucket {{ $labels.bucket }} - check permissions"
+      # TODO: Uncomment when auth metrics are implemented
+      # # Warning: User repeatedly denied
+      # - alert: TunnelMeshUserAccessDenied
+      #   expr: sum(rate(tunnelmesh_authz_denied_total[5m])) by (user, bucket) > 0.1
+      #   for: 5m
+      #   labels:
+      #     severity: warning
+      #     category: security
+      #   annotations:
+      #     summary: "User repeatedly denied access"
+      #     description: "User {{ $labels.user }} denied access to bucket {{ $labels.bucket }} - check permissions"
 
-      # Critical: High auth failure rate
-      - alert: TunnelMeshHighAuthFailureRate
-        expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[5m])) / sum(rate(tunnelmesh_auth_attempts_total[5m])) > 0.5
-        for: 2m
-        labels:
-          severity: critical
-          category: security
-        annotations:
-          summary: "High authentication failure rate"
-          description: "{{ $value | humanizePercentage }} of auth attempts failing - possible attack or config issue"
+      # TODO: Uncomment when auth metrics are implemented
+      # # Critical: High auth failure rate
+      # - alert: TunnelMeshHighAuthFailureRate
+      #   expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[5m])) / sum(rate(tunnelmesh_auth_attempts_total[5m])) > 0.5
+      #   for: 2m
+      #   labels:
+      #     severity: critical
+      #     category: security
+      #   annotations:
+      #     summary: "High authentication failure rate"
+      #     description: "{{ $value | humanizePercentage }} of auth attempts failing - possible attack or config issue"
 
       # Critical: S3 access denied spike
       - alert: TunnelMeshS3AccessDeniedSpike
@@ -330,13 +337,14 @@ groups:
           summary: "Spike in S3 access denied responses"
           description: "Access denied rate exceeds 5/s - possible permissions misconfiguration or attack"
 
-      # Page: Possible brute force attack
-      - alert: TunnelMeshPossibleBruteForce
-        expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[1m])) > 10
-        for: 30s
-        labels:
-          severity: page
-          category: security
-        annotations:
-          summary: "Possible brute force attack"
-          description: "Auth failure rate exceeds 10/s - possible credential brute force attack"
+      # TODO: Uncomment when auth metrics are implemented
+      # # Page: Possible brute force attack
+      # - alert: TunnelMeshPossibleBruteForce
+      #   expr: sum(rate(tunnelmesh_auth_attempts_total{result!="success"}[1m])) > 10
+      #   for: 30s
+      #   labels:
+      #     severity: page
+      #     category: security
+      #   annotations:
+      #     summary: "Possible brute force attack"
+      #     description: "Auth failure rate exceeds 10/s - possible credential brute force attack"
