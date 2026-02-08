@@ -422,6 +422,8 @@ class NodeVisualizer {
         this.canvas.style.width = `${rect.width}px`;
         this.canvas.style.height = `${rect.height}px`;
 
+        // Reset transform before scaling to avoid cumulative scaling on tab switches
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
         this.ctx.scale(dpr, dpr);
 
         // Calculate content dimensions based on canvas size (with min/max bounds)
