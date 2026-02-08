@@ -109,9 +109,24 @@
 
         if (diffDays === 0) return 'Today';
         if (diffDays === 1) return 'Yesterday';
-        if (diffDays < 7) return `${diffDays} days ago`;
+        if (diffDays > 0 && diffDays < 7) return `${diffDays} days ago`;
 
         return d.toLocaleDateString();
+    }
+
+    function formatExpiry(isoDate) {
+        if (!isoDate) return '-';
+        const d = new Date(isoDate);
+        const now = new Date();
+        const diffMs = d - now;
+        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+        if (diffDays < 0) return 'Expired';
+        if (diffDays === 0) return 'Today';
+        if (diffDays === 1) return 'Tomorrow';
+        if (diffDays < 30) return `in ${diffDays}d`;
+        if (diffDays < 365) return `in ${Math.floor(diffDays / 30)}mo`;
+        return `in ${Math.floor(diffDays / 365)}y`;
     }
 
     function getExtension(filename) {
@@ -395,7 +410,7 @@
                     <td>${item.size !== null ? formatBytes(item.size) : '-'}</td>
                     <td>${item.quota ? formatBytes(item.quota) : '-'}</td>
                     <td>${formatDate(item.lastModified)}</td>
-                    <td>${formatDate(item.expires)}</td>
+                    <td>${formatExpiry(item.expires)}</td>
                 </tr>
             `;
             })

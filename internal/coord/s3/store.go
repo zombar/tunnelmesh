@@ -375,8 +375,8 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 		Metadata:     metadata,
 	}
 
-	// Set expiry if configured
-	if s.defaultObjectExpiryDays > 0 {
+	// Set expiry if configured (skip for system bucket - internal data doesn't expire)
+	if s.defaultObjectExpiryDays > 0 && bucket != SystemBucket {
 		expiry := now.AddDate(0, 0, s.defaultObjectExpiryDays)
 		objMeta.Expires = &expiry
 	}
