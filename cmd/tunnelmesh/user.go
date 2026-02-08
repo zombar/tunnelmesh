@@ -122,6 +122,17 @@ func runUserSetup(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Prompt for name if not provided via flag
+	if userName == "" {
+		fmt.Print("Enter your display name: ")
+		reader := bufio.NewReader(os.Stdin)
+		name, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("read name: %w", err)
+		}
+		userName = strings.TrimSpace(name)
+	}
+
 	// Generate mnemonic
 	mnemonic, err := auth.GenerateMnemonic()
 	if err != nil {
@@ -186,6 +197,16 @@ func runUserRecover(cmd *cobra.Command, args []string) error {
 	// Validate mnemonic
 	if err := auth.ValidateMnemonic(mnemonic); err != nil {
 		return fmt.Errorf("invalid recovery phrase: %w", err)
+	}
+
+	// Prompt for name if not provided via flag
+	if userName == "" {
+		fmt.Print("Enter your display name: ")
+		name, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("read name: %w", err)
+		}
+		userName = strings.TrimSpace(name)
 	}
 
 	// Create identity

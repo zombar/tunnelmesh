@@ -2099,6 +2099,18 @@ async function checkUserManagement() {
     }
 }
 
+async function fetchUsers() {
+    try {
+        const resp = await fetch('api/users');
+        if (resp.ok) {
+            const users = await resp.json();
+            updateUsersTable(users);
+        }
+    } catch (err) {
+        console.error('Failed to fetch users:', err);
+    }
+}
+
 function updateUsersTable(users) {
     const tbody = document.getElementById('users-body');
     const noUsers = document.getElementById('no-users');
@@ -2112,8 +2124,8 @@ function updateUsersTable(users) {
     noUsers.style.display = 'none';
     tbody.innerHTML = users.map(u => `
         <tr>
-            <td><code>${escapeHtml(u.id)}</code></td>
             <td>${escapeHtml(u.name || '-')}</td>
+            <td><code>${escapeHtml(u.id)}</code></td>
             <td><span class="status-badge ${u.is_service ? 'service' : 'user'}">${u.is_service ? 'Service' : 'User'}</span></td>
             <td>${u.groups ? u.groups.map(g => `<span class="group-badge">${escapeHtml(g)}</span>`).join(' ') : '-'}</td>
             <td>${u.last_seen ? formatLastSeen(u.last_seen) : '-'}</td>
