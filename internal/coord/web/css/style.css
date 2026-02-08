@@ -455,6 +455,7 @@ main {
 /* Override h2 styles when inside section-header (has button beside it) */
 #wireguard-section .section-header h2,
 #filter-section .section-header h2,
+#s3-section .section-header h2,
 #users-section .section-header h2,
 #groups-section .section-header h2,
 #shares-section .section-header h2,
