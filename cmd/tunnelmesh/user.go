@@ -496,12 +496,17 @@ func runUserRegister(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("save registration: %w", err)
 	}
 
-	// Update context with registration info (if using a context)
-	if activeCtx != nil {
-		store, _ := context.Load()
-		activeCtx.UserID = regResp.UserID
-		activeCtx.RegistrationPath = regPath
-		store.Add(*activeCtx)
+	// Update context with registration info
+	// Even with --server flag, update active context if one exists
+	store, _ := context.Load()
+	ctxToUpdate := activeCtx
+	if ctxToUpdate == nil {
+		ctxToUpdate = store.GetActive()
+	}
+	if ctxToUpdate != nil {
+		ctxToUpdate.UserID = regResp.UserID
+		ctxToUpdate.RegistrationPath = regPath
+		store.Add(*ctxToUpdate)
 		if err := store.Save(); err != nil {
 			fmt.Printf("Warning: failed to update context store: %v\n", err)
 		}
