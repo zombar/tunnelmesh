@@ -41,6 +41,17 @@
         </div>
     </header>
 
+    <nav id="main-tabs">
+        <div class="tab-container">
+            <button class="tab active" data-tab="mesh">Mesh</button>
+            <span class="tab-separator">|</span>
+            <button class="tab" data-tab="data">Data</button>
+        </div>
+    </nav>
+
+    <!-- Mesh Tab Content -->
+    <div id="mesh-tab" class="tab-content active">
+
     <section id="alerts-section" style="display: none;">
         <div class="alert-tiles">
             <a class="alert-tile warning clickable-card" id="alert-tile-warning" href="/prometheus/alerts">
@@ -279,8 +290,13 @@
                 </div>
             </div>
         </section>
+    </main>
+    </div><!-- End Mesh Tab -->
 
-        <section id="users-section" style="display: none;">
+    <!-- Data Tab Content -->
+    <div id="data-tab" class="tab-content">
+    <main>
+        <section id="users-section">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Users</h2>
             </div>
@@ -304,7 +320,7 @@
             </div>
         </section>
 
-        <section id="groups-section" style="display: none;">
+        <section id="groups-section">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Groups</h2>
                 <button id="add-group-btn" class="btn-primary" onclick="event.stopPropagation(); openGroupModal();">+ Add Group</button>
@@ -328,7 +344,7 @@
             </div>
         </section>
 
-        <section id="shares-section" style="display: none;">
+        <section id="shares-section">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>File Shares</h2>
                 <button id="add-share-btn" class="btn-primary" onclick="event.stopPropagation(); openShareModal();">+ New Share</button>
@@ -351,6 +367,34 @@
                 </div>
             </div>
         </section>
+
+        <section id="bindings-section">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Role Bindings</h2>
+                <button id="add-binding-btn" class="btn-primary" onclick="event.stopPropagation(); openBindingModal();">+ Add Binding</button>
+            </div>
+            <div class="collapsible-content">
+                <table id="bindings">
+                    <thead>
+                        <tr>
+                            <th>User/Group</th>
+                            <th>Role</th>
+                            <th>Bucket Scope</th>
+                            <th>Object Prefix</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="bindings-body"></tbody>
+                </table>
+                <div id="no-bindings" class="empty-state" style="display: none;">
+                    No role bindings configured.
+                </div>
+            </div>
+        </section>
+    </main>
+    </div><!-- End Data Tab -->
+
+    <!-- Modals (outside tabs) -->
 
         <!-- Group Modal -->
         <div id="group-modal" class="modal" style="display: none;">
@@ -435,7 +479,43 @@
                 </div>
             </div>
         </div>
-    </main>
+
+        <!-- Binding Modal -->
+        <div id="binding-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Add Role Binding</h3>
+                    <button class="modal-close" onclick="closeBindingModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="binding-user">User ID</label>
+                        <select id="binding-user">
+                            <option value="">Select a user...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="binding-role">Role</label>
+                        <select id="binding-role">
+                            <option value="bucket-read">Read Only</option>
+                            <option value="bucket-write">Read/Write</option>
+                            <option value="bucket-admin">Admin</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="binding-bucket">Bucket Scope (optional)</label>
+                        <input type="text" id="binding-bucket" placeholder="e.g., fs+documents">
+                        <small class="form-hint">Leave empty to apply to all buckets</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="binding-prefix">Object Prefix (optional)</label>
+                        <input type="text" id="binding-prefix" placeholder="e.g., projects/teamA/">
+                        <small class="form-hint">Restrict access to objects with this prefix</small>
+                    </div>
+                    <button class="btn-primary" onclick="createBinding()">Create Binding</button>
+                </div>
+            </div>
+        </div>
 
     <footer>
         <a href="https://github.com/zombar/tunnelmesh" class="footer-link">
