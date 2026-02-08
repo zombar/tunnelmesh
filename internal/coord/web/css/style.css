@@ -1861,7 +1861,6 @@ a.logs-container {
     display: flex;
     flex-direction: column;
     position: relative;
-    overflow: hidden;
 }
 
 .s3-editor-wrap {
@@ -1871,11 +1870,10 @@ a.logs-container {
 }
 
 .s3-readonly-badge {
-    position: absolute;
-    top: 0.75rem;
-    left: 50%;
-    transform: translateX(-50%);
-    background: transparent;
+    position: sticky;
+    top: 0;
+    align-self: center;
+    background: var(--color-bg-primary);
     border: 1px solid var(--color-accent-orange);
     color: var(--color-accent-orange);
     padding: 0.25rem 0.75rem;
@@ -1889,6 +1887,8 @@ a.logs-container {
     z-index: 10;
     text-shadow: 0 0 8px rgba(210, 153, 34, 0.4);
     box-shadow: 0 0 12px rgba(210, 153, 34, 0.2);
+    margin-top: 0.5rem;
+    margin-bottom: -1.5rem;
 }
 
 .s3-line-numbers {
@@ -1925,7 +1925,6 @@ a.logs-container {
     overflow: auto;
     tab-size: 4;
     white-space: pre;
-    caret-shape: block;
 }
 
 .s3-editor:focus {
