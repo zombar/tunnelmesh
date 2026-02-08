@@ -576,6 +576,11 @@
                         <label for="share-description">Description</label>
                         <input type="text" id="share-description" placeholder="Optional description">
                     </div>
+                    <div class="form-group">
+                        <label for="share-quota">Quota (MB)</label>
+                        <input type="number" id="share-quota" placeholder="0 = unlimited" min="0" step="100">
+                        <small class="form-hint">Maximum storage size for this share</small>
+                    </div>
                     <button class="btn-primary" onclick="createShare()">Create Share</button>
                 </div>
             </div>

@@ -2380,6 +2380,7 @@ function openShareModal() {
     document.getElementById('share-modal').style.display = 'flex';
     document.getElementById('share-name').value = '';
     document.getElementById('share-description').value = '';
+    document.getElementById('share-quota').value = '';
     document.getElementById('share-name').focus();
 }
 window.openShareModal = openShareModal;
@@ -2392,17 +2393,21 @@ window.closeShareModal = closeShareModal;
 async function createShare() {
     const name = document.getElementById('share-name').value.trim();
     const description = document.getElementById('share-description').value.trim();
+    const quotaMB = parseInt(document.getElementById('share-quota').value) || 0;
 
     if (!name) {
         showToast('Share name is required', 'error');
         return;
     }
 
+    // Convert MB to bytes (0 means unlimited)
+    const quota_bytes = quotaMB > 0 ? quotaMB * 1024 * 1024 : 0;
+
     try {
         const resp = await fetch('api/shares', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, description })
+            body: JSON.stringify({ name, description, quota_bytes })
         });
 
         if (resp.ok) {

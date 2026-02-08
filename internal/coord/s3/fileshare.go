@@ -38,7 +38,8 @@ func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *aut
 
 // Create creates a new file share.
 // It creates the underlying bucket, sets up default permissions, and persists the share metadata.
-func (m *FileShareManager) Create(name, description, ownerID string) (*FileShare, error) {
+// quotaBytes of 0 means unlimited (within global quota).
+func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes int64) (*FileShare, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -80,6 +81,7 @@ func (m *FileShareManager) Create(name, description, ownerID string) (*FileShare
 		Description: description,
 		Owner:       ownerID,
 		CreatedAt:   time.Now().UTC(),
+		QuotaBytes:  quotaBytes,
 	}
 	m.shares = append(m.shares, share)
 

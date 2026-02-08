@@ -1021,6 +1021,7 @@ func (s *Server) handleSharesList(w http.ResponseWriter, _ *http.Request) {
 type ShareCreateRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	QuotaBytes  int64  `json:"quota_bytes,omitempty"` // Per-share quota in bytes (0 = unlimited within global quota)
 }
 
 // handleShareCreate creates a new file share.
@@ -1044,7 +1045,7 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 	// Get owner from TLS client certificate if available
 	ownerID := s.getRequestOwner(r)
 
-	share, err := s.fileShareMgr.Create(req.Name, req.Description, ownerID)
+	share, err := s.fileShareMgr.Create(req.Name, req.Description, ownerID, req.QuotaBytes)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			s.jsonError(w, err.Error(), http.StatusConflict)

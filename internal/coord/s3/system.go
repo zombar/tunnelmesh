@@ -149,6 +149,7 @@ type FileShare struct {
 	Description string    `json:"description"` // Human-readable description
 	Owner       string    `json:"owner"`       // UserID of creator
 	CreatedAt   time.Time `json:"created_at"`
+	QuotaBytes  int64     `json:"quota_bytes,omitempty"` // Per-share quota in bytes (0 = unlimited within global quota)
 }
 
 // FileShareBucketPrefix is the prefix for file share bucket names.
