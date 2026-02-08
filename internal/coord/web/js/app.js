@@ -442,11 +442,14 @@ const bindingsPagination = createPaginationController({
 });
 
 // Helper to update pagination UI for a section
-function updateSectionPagination(prefix, controller) {
-    const uiState = controller.getUIState();
+// Can be called with (prefix, controller) or (prefix, { total, shown, hasMore, canShowLess })
+function updateSectionPagination(prefix, controllerOrState) {
+    const uiState = typeof controllerOrState.getUIState === 'function'
+        ? controllerOrState.getUIState()
+        : controllerOrState;
     const paginationEl = document.getElementById(`${prefix}-pagination`);
     if (!paginationEl) return;
-    if (uiState.isEmpty) {
+    if (uiState.isEmpty || uiState.total === 0) {
         paginationEl.style.display = 'none';
         return;
     }
@@ -456,6 +459,7 @@ function updateSectionPagination(prefix, controller) {
     document.getElementById(`${prefix}-shown-count`).textContent = uiState.shown;
     document.getElementById(`${prefix}-total-count`).textContent = uiState.total;
 }
+window.updateSectionPagination = updateSectionPagination;
 
 // Expose pagination functions for HTML onclick handlers
 window.showMorePeers = () => peersPagination.showMore();

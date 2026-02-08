@@ -321,27 +321,16 @@
             `;
         }).join('');
 
-        // Update pagination UI
-        updateS3Pagination();
-    }
-
-    function updateS3Pagination() {
-        const paginationEl = document.getElementById('s3-pagination');
-        if (!paginationEl) return;
-
+        // Update pagination UI using shared helper
         const total = state.currentItems.length;
         const shown = Math.min(state.visibleCount, total);
-        const hasMore = total > state.visibleCount;
-        const canShowLess = state.visibleCount > PAGE_SIZE;
-
-        if (hasMore || canShowLess) {
-            paginationEl.style.display = 'block';
-            document.getElementById('s3-show-more').style.display = hasMore ? 'inline' : 'none';
-            document.getElementById('s3-show-less').style.display = canShowLess ? 'inline' : 'none';
-            document.getElementById('s3-shown-count').textContent = shown;
-            document.getElementById('s3-total-count').textContent = total;
-        } else {
-            paginationEl.style.display = 'none';
+        if (typeof window.updateSectionPagination === 'function') {
+            window.updateSectionPagination('s3', {
+                total,
+                shown,
+                hasMore: total > state.visibleCount,
+                canShowLess: state.visibleCount > PAGE_SIZE,
+            });
         }
     }
 
