@@ -372,10 +372,10 @@ func newTestServerWithS3AndBucket(t *testing.T) *Server {
 		Admin:     config.AdminConfig{Enabled: true},
 		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
 		S3: config.S3Config{
-			Enabled:   true,
-			DataDir:   tempDir + "/s3",
-			Port:      9000,
-			MaxSizeGB: 1, // Required for quota enforcement
+			Enabled: true,
+			DataDir: tempDir + "/s3",
+			Port:    9000,
+			MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
 		},
 	}
 	srv, err := NewServer(cfg)

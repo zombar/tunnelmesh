@@ -17,8 +17,8 @@ Add the S3 configuration to your server config:
 ```yaml
 s3:
   enabled: true
-  data_dir: /var/lib/tunnelmesh/s3  # Storage directory
-  max_size_gb: 100                   # Quota (0 = unlimited)
+  max_size: "100Gi"                  # Storage quota (required)
+  data_dir: /var/lib/tunnelmesh/s3   # Storage directory
   port: 9000                         # S3 API port
 ```
 
@@ -27,9 +27,16 @@ s3:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `enabled` | `false` | Enable S3 storage service |
+| `max_size` | - | Storage quota (required, e.g., `10Gi`, `500Mi`, `1Ti`) |
 | `data_dir` | `{data_dir}/s3` | Directory for object storage |
-| `max_size_gb` | `0` | Storage quota in GB (0 = unlimited) |
 | `port` | `9000` | Port for S3 API (mesh IP only) |
+
+### Size Format
+
+The `max_size` option accepts Kubernetes-style size notation:
+- `Ki`, `Mi`, `Gi`, `Ti` - binary units (1Ki = 1024 bytes)
+- `K`, `M`, `G`, `T` - also supported as aliases
+- Plain numbers are interpreted as bytes
 
 ## API Endpoints
 

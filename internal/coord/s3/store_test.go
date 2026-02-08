@@ -369,7 +369,7 @@ func newTestStore(t *testing.T) *Store {
 
 func TestStoreWithQuota(t *testing.T) {
 	tmpDir := t.TempDir()
-	quota := NewQuotaManager(1) // 1 GB limit
+	quota := NewQuotaManager(1 * 1024 * 1024 * 1024) // 1 Gi limit
 
 	store, err := NewStore(tmpDir, quota)
 	require.NoError(t, err)

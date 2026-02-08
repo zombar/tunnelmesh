@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
+	"github.com/tunnelmesh/tunnelmesh/pkg/bytesize"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,10 +41,10 @@ type WireGuardServerConfig struct {
 
 // S3Config holds configuration for the S3-compatible storage service.
 type S3Config struct {
-	Enabled   bool   `yaml:"enabled"`     // Enable S3 storage (default: false)
-	DataDir   string `yaml:"data_dir"`    // Storage directory for S3 objects (default: {data_dir}/s3)
-	MaxSizeGB int    `yaml:"max_size_gb"` // Maximum storage size in GB (0 = unlimited)
-	Port      int    `yaml:"port"`        // S3 API port (default: 9000)
+	Enabled bool          `yaml:"enabled"`  // Enable S3 storage (default: false)
+	DataDir string        `yaml:"data_dir"` // Storage directory for S3 objects (default: {data_dir}/s3)
+	MaxSize bytesize.Size `yaml:"max_size"` // Maximum storage size (e.g., "10Gi", "500Mi") - required
+	Port    int           `yaml:"port"`     // S3 API port (default: 9000)
 }
 
 // WireGuardPeerConfig holds configuration for the WireGuard concentrator mode.

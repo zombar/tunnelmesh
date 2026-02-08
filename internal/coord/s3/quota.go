@@ -13,10 +13,10 @@ type QuotaManager struct {
 }
 
 // NewQuotaManager creates a new quota manager.
-// maxSizeGB of 0 means unlimited.
-func NewQuotaManager(maxSizeGB int) *QuotaManager {
+// maxBytes of 0 means unlimited.
+func NewQuotaManager(maxBytes int64) *QuotaManager {
 	return &QuotaManager{
-		maxBytes:  int64(maxSizeGB) * 1024 * 1024 * 1024,
+		maxBytes:  maxBytes,
 		perBucket: make(map[string]int64),
 	}
 }

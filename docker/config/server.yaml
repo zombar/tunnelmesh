@@ -8,6 +8,7 @@ log_level: "info"
 s3:
   enabled: true
   data_dir: "/var/lib/tunnelmesh/s3"
+  max_size: "10Gi"  # Storage quota (required)
 
 admin:
   enabled: true

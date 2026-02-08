@@ -63,9 +63,9 @@ relay:
 
 s3:
   enabled: true
-  listen: ":9000"              # S3 API endpoint
+  max_size: "10Gi"             # Storage quota (required, e.g., 10Gi, 500Mi, 1Ti)
   # data_dir: "/var/lib/tunnelmesh/s3"  # Storage directory
-  # max_size_gb: 10            # Storage quota (0 = unlimited)
+  # port: 9000                 # S3 API port
 
 # -----------------------------------------------------------------------------
 # Packet Filter (Global Rules)
