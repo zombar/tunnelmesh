@@ -214,18 +214,6 @@ func validateName(name string) error {
 	if strings.ContainsRune(name, 0) {
 		return fmt.Errorf("null bytes not allowed")
 	}
-
-	// Use filepath.Clean to normalize and detect traversal attempts
-	// This handles Unicode lookalikes and URL-encoded sequences
-	cleanPath := filepath.Clean(name)
-	if cleanPath != name && cleanPath != filepath.ToSlash(name) {
-		// Path was modified by Clean - likely contains traversal
-		if strings.Contains(cleanPath, "..") {
-			return fmt.Errorf("path traversal not allowed")
-		}
-	}
-
-	// Explicit checks for common traversal patterns
 	if name == "." || name == ".." {
 		return fmt.Errorf("invalid name")
 	}
