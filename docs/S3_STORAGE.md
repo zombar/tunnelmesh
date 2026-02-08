@@ -158,7 +158,7 @@ curl -X POST https://this.tm/api/shares \
 | Quota | Per-share storage limit (0 = unlimited, max 1TB) |
 | Owner | Creator gets bucket-admin role automatically |
 | Expires | Configurable expiry date (or use default from `share_expiry_days`) |
-| Guest Read | Allow all mesh users to read (default: true) |
+| Guest Read | Allow guest user read access (default: true) |
 
 ### Default Permissions
 

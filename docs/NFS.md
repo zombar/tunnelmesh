@@ -86,7 +86,7 @@ File share permissions are managed via RBAC in the Data tab of the admin panel:
 
 When a file share is created:
 - The creator gets `bucket-admin` on the share
-- If "Allow all mesh users to read" is enabled (default), everyone gets `bucket-read`
+- If "Allow guest user read" is enabled (default), everyone gets `bucket-read`
 
 ### Checking Access
 
