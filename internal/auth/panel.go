@@ -246,54 +246,66 @@ func (r *PanelRegistry) ListPublic() []PanelDefinition {
 }
 
 // SetPublic updates the public flag for a panel.
+// Uses copy-on-write to avoid race conditions with concurrent readers.
 func (r *PanelRegistry) SetPublic(id string, public bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	panel, ok := r.panels[id]
+	existing, ok := r.panels[id]
 	if !ok {
 		return fmt.Errorf("panel not found: %s", id)
 	}
 
-	panel.Public = public
+	// Copy-on-write: create a new panel with updated public flag
+	updated := *existing
+	updated.Public = public
+	r.panels[id] = &updated
+
 	return nil
 }
 
 // Update updates a panel's metadata (non-ID fields).
 // Only works for external panels.
+// Uses copy-on-write to avoid race conditions with concurrent readers.
 func (r *PanelRegistry) Update(id string, update PanelDefinition) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	panel, ok := r.panels[id]
+	existing, ok := r.panels[id]
 	if !ok {
 		return fmt.Errorf("panel not found: %s", id)
 	}
 
+	// Copy-on-write: create a new panel with updates applied
+	updated := *existing
+
 	// Allow updating public flag on any panel
-	panel.Public = update.Public
+	updated.Public = update.Public
 
 	// Only allow full updates on external panels
-	if !panel.Builtin {
+	if !updated.Builtin {
 		if update.Name != "" {
-			panel.Name = update.Name
+			updated.Name = update.Name
 		}
 		if update.Description != "" {
-			panel.Description = update.Description
+			updated.Description = update.Description
 		}
 		if update.Icon != "" {
-			panel.Icon = update.Icon
+			updated.Icon = update.Icon
 		}
 		if update.PluginURL != "" {
-			panel.PluginURL = update.PluginURL
+			updated.PluginURL = update.PluginURL
 		}
 		if update.PluginType != "" {
-			panel.PluginType = update.PluginType
+			updated.PluginType = update.PluginType
 		}
 		if update.SortOrder != 0 {
-			panel.SortOrder = update.SortOrder
+			updated.SortOrder = update.SortOrder
 		}
 	}
+
+	// Atomically replace the pointer
+	r.panels[id] = &updated
 
 	return nil
 }

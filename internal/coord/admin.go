@@ -2068,6 +2068,54 @@ func (s *Server) handleUserPermissions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// allowedPluginSchemes defines the allowed URL schemes for external panel plugins.
+// Only https and http are allowed to prevent javascript:, file://, data:, etc.
+var allowedPluginSchemes = map[string]bool{
+	"https": true,
+	"http":  true,
+}
+
+// validatePluginURL validates that a plugin URL is safe to load.
+// Returns an error if the URL scheme is not allowed or the URL is invalid.
+func validatePluginURL(pluginURL string) error {
+	parsed, err := url.Parse(pluginURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	if parsed.Scheme == "" {
+		return errors.New("URL must have a scheme (https:// or http://)")
+	}
+
+	if !allowedPluginSchemes[parsed.Scheme] {
+		return fmt.Errorf("scheme %q not allowed (must be https or http)", parsed.Scheme)
+	}
+
+	if parsed.Host == "" {
+		return errors.New("URL must have a host")
+	}
+
+	return nil
+}
+
+// persistExternalPanels saves external panels to the system store.
+func (s *Server) persistExternalPanels() {
+	if s.s3SystemStore == nil || s.s3Authorizer == nil || s.s3Authorizer.PanelRegistry == nil {
+		return
+	}
+
+	// Get all external panels
+	externalPanels := s.s3Authorizer.PanelRegistry.ListExternal()
+	panelPtrs := make([]*auth.PanelDefinition, len(externalPanels))
+	for i := range externalPanels {
+		panelPtrs[i] = &externalPanels[i]
+	}
+
+	if err := s.s3SystemStore.SavePanels(panelPtrs); err != nil {
+		log.Warn().Err(err).Msg("failed to persist external panels")
+	}
+}
+
 // handlePanels handles GET (list) and POST (register) for panels.
 func (s *Server) handlePanels(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -2126,10 +2174,21 @@ func (s *Server) handlePanelRegister(w http.ResponseWriter, r *http.Request) {
 	panel.External = true
 	panel.CreatedBy = userID
 
+	// Validate PluginURL for external panels (security: prevent javascript:, file://, etc.)
+	if panel.PluginURL != "" {
+		if err := validatePluginURL(panel.PluginURL); err != nil {
+			s.jsonError(w, fmt.Sprintf("invalid plugin URL: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+
 	if err := s.s3Authorizer.PanelRegistry.Register(panel); err != nil {
 		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Persist external panels
+	s.persistExternalPanels()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -2207,6 +2266,9 @@ func (s *Server) handlePanelUpdate(w http.ResponseWriter, r *http.Request, panel
 		return
 	}
 
+	// Persist external panels
+	s.persistExternalPanels()
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "updated",
@@ -2231,6 +2293,9 @@ func (s *Server) handlePanelDelete(w http.ResponseWriter, r *http.Request, panel
 		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Persist external panels
+	s.persistExternalPanels()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{

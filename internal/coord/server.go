@@ -580,6 +580,16 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 		s.s3Authorizer.GroupBindings.LoadBindings(groupBindings)
 	}
 
+	// Recover external panels
+	if panels, err := systemStore.LoadPanels(); err == nil && len(panels) > 0 {
+		log.Info().Int("count", len(panels)).Msg("recovering external panels")
+		for _, panel := range panels {
+			if err := s.s3Authorizer.PanelRegistry.Register(*panel); err != nil {
+				log.Warn().Err(err).Str("panel_id", panel.ID).Msg("failed to recover panel")
+			}
+		}
+	}
+
 	// Set up built-in group bindings if not already present
 	s.ensureBuiltinGroupBindings()
 

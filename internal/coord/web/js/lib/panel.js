@@ -295,6 +295,33 @@
 
     // --- External Panel Plugin Support ---
 
+    // Allowed URL schemes for plugin URLs (security)
+    const ALLOWED_PLUGIN_SCHEMES = ['https:', 'http:'];
+
+    // Map of panel ID -> expected origin for postMessage validation
+    const _pluginOrigins = new Map();
+
+    /**
+     * Validate and extract origin from plugin URL
+     * @param {string} pluginURL - The plugin URL to validate
+     * @returns {string|null} The origin if valid, null otherwise
+     */
+    function validatePluginURL(pluginURL) {
+        try {
+            const url = new URL(pluginURL);
+            if (!ALLOWED_PLUGIN_SCHEMES.includes(url.protocol)) {
+                console.error(
+                    `Invalid plugin URL scheme: ${url.protocol} (allowed: ${ALLOWED_PLUGIN_SCHEMES.join(', ')})`,
+                );
+                return null;
+            }
+            return url.origin;
+        } catch {
+            console.error(`Invalid plugin URL: ${pluginURL}`);
+            return null;
+        }
+    }
+
     /**
      * Register an external (plugin) panel
      * @param {Object} config - Panel configuration from API
@@ -303,6 +330,15 @@
         if (!config.id || !config.pluginURL) {
             throw new Error('External panel requires id and pluginURL');
         }
+
+        // Validate plugin URL and extract origin for security
+        const origin = validatePluginURL(config.pluginURL);
+        if (!origin) {
+            throw new Error(`Invalid plugin URL for panel ${config.id}: ${config.pluginURL}`);
+        }
+
+        // Store origin for postMessage validation
+        _pluginOrigins.set(config.id, origin);
 
         // Create container for external panel
         const container = createExternalPanelContainer(config);
@@ -381,6 +417,13 @@
     function setupPluginCommunication(panelId, iframe) {
         if (typeof window === 'undefined') return;
 
+        // Get the expected origin for this plugin (validated during registration)
+        const expectedOrigin = _pluginOrigins.get(panelId);
+        if (!expectedOrigin) {
+            console.error(`No origin registered for plugin panel: ${panelId}`);
+            return;
+        }
+
         // Send init message when iframe loads
         iframe.addEventListener('load', () => {
             iframe.contentWindow.postMessage(
@@ -390,12 +433,15 @@
                     theme: 'dark',
                     user: { id: _userId, isAdmin: _isAdmin },
                 },
-                '*',
+                expectedOrigin, // Use specific origin instead of wildcard
             );
         });
 
         // Listen for messages from plugin
         window.addEventListener('message', (event) => {
+            // Validate origin matches expected origin for this plugin
+            if (event.origin !== expectedOrigin) return;
+
             if (!event.data || !event.data.type) return;
             if (!event.data.type.startsWith('tunnelmesh:panel:')) return;
             if (event.data.panelId !== panelId) return;
@@ -456,13 +502,22 @@
         const iframes = document.querySelectorAll('.external-panel-frame iframe');
         for (const iframe of iframes) {
             try {
+                // Get the panel ID from the iframe's data attribute
+                const panelId = iframe.dataset.panelId;
+                const expectedOrigin = panelId ? _pluginOrigins.get(panelId) : null;
+
+                if (!expectedOrigin) {
+                    console.warn(`Cannot broadcast to plugin without known origin: ${panelId}`);
+                    continue;
+                }
+
                 iframe.contentWindow.postMessage(
                     {
                         type: 'tunnelmesh:event',
                         event,
                         data,
                     },
-                    '*',
+                    expectedOrigin, // Use specific origin instead of wildcard
                 );
             } catch {
                 // Ignore cross-origin errors
