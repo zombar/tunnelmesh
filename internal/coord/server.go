@@ -608,6 +608,8 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 // ensureBuiltinGroupBindings sets up the built-in group bindings if not already present.
 // - all_service_users group gets system role on _tunnelmesh bucket
 // - all_admin_users group gets admin role (unscoped)
+// - everyone group gets panel-viewer for default user panels
+// - all_admin_users group gets panel-viewer for admin-only panels
 func (s *Server) ensureBuiltinGroupBindings() {
 	modified := false
 
@@ -630,6 +632,50 @@ func (s *Server) ensureBuiltinGroupBindings() {
 			"", // Unscoped - admin has access to all buckets
 		))
 		modified = true
+	}
+
+	// Add default panel bindings for everyone group
+	everyoneBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupEveryone)
+	everyonePanels := make(map[string]bool)
+	for _, b := range everyoneBindings {
+		if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
+			everyonePanels[b.PanelScope] = true
+		}
+	}
+	for _, panelID := range auth.DefaultUserPanels() {
+		if !everyonePanels[panelID] {
+			s.s3Authorizer.GroupBindings.Add(auth.NewGroupBindingForPanel(
+				auth.GroupEveryone,
+				panelID,
+			))
+			modified = true
+			log.Info().Str("group", auth.GroupEveryone).Str("panel", panelID).Msg("added default panel binding")
+		}
+	}
+
+	// Add admin-only panel bindings for all_admin_users group
+	adminPanels := make(map[string]bool)
+	for _, b := range adminBindings {
+		if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
+			adminPanels[b.PanelScope] = true
+		}
+	}
+	// Re-fetch admin bindings since we may have added admin role binding above
+	adminBindings = s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllAdminUsers)
+	for _, b := range adminBindings {
+		if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
+			adminPanels[b.PanelScope] = true
+		}
+	}
+	for _, panelID := range auth.DefaultAdminPanels() {
+		if !adminPanels[panelID] {
+			s.s3Authorizer.GroupBindings.Add(auth.NewGroupBindingForPanel(
+				auth.GroupAllAdminUsers,
+				panelID,
+			))
+			modified = true
+			log.Info().Str("group", auth.GroupAllAdminUsers).Str("panel", panelID).Msg("added default panel binding")
+		}
 	}
 
 	// Persist if we added any bindings

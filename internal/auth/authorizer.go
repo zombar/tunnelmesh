@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/logging/audit"
 )
 
@@ -326,18 +327,22 @@ func (a *Authorizer) CanAccessPanel(userID, panelID string) bool {
 		}
 	}
 
+	log.Info().Str("user_id", userID).Str("panel_id", panelID).Msg("dashboard panel access denied")
 	return false
 }
 
 // GetAccessiblePanels returns all panel IDs a user can access.
 func (a *Authorizer) GetAccessiblePanels(userID string) []string {
 	if a.PanelRegistry == nil {
+		log.Info().Str("user_id", userID).Msg("dashboard panel permissions: no registry configured")
 		return nil
 	}
 
 	// Admin gets all panels
 	if a.IsAdmin(userID) {
-		return a.PanelRegistry.ListIDs()
+		panels := a.PanelRegistry.ListIDs()
+		log.Debug().Str("user_id", userID).Int("count", len(panels)).Msg("dashboard panel permissions: admin access")
+		return panels
 	}
 
 	// Collect accessible panels
@@ -353,7 +358,9 @@ func (a *Authorizer) GetAccessiblePanels(userID string) []string {
 		if binding.RoleName == RolePanelViewer {
 			if binding.PanelScope == "" {
 				// Unrestricted panel access - return all panels
-				return a.PanelRegistry.ListIDs()
+				panels := a.PanelRegistry.ListIDs()
+				log.Debug().Str("user_id", userID).Int("count", len(panels)).Msg("dashboard panel permissions: unrestricted user binding")
+				return panels
 			}
 			accessible[binding.PanelScope] = true
 		}
@@ -361,12 +368,15 @@ func (a *Authorizer) GetAccessiblePanels(userID string) []string {
 
 	// Check group bindings if groups are enabled
 	if a.Groups != nil && a.GroupBindings != nil {
-		for _, groupName := range a.Groups.GetGroupsForUser(userID) {
+		userGroups := a.Groups.GetGroupsForUser(userID)
+		for _, groupName := range userGroups {
 			for _, binding := range a.GroupBindings.GetForGroup(groupName) {
 				if binding.RoleName == RolePanelViewer {
 					if binding.PanelScope == "" {
 						// Unrestricted panel access - return all panels
-						return a.PanelRegistry.ListIDs()
+						panels := a.PanelRegistry.ListIDs()
+						log.Debug().Str("user_id", userID).Str("group", groupName).Int("count", len(panels)).Msg("dashboard panel permissions: unrestricted group binding")
+						return panels
 					}
 					accessible[binding.PanelScope] = true
 				}
@@ -379,5 +389,17 @@ func (a *Authorizer) GetAccessiblePanels(userID string) []string {
 	for panelID := range accessible {
 		result = append(result, panelID)
 	}
+
+	// Log accessible panels (INFO for non-admin users with limited access)
+	if len(result) == 0 {
+		var userGroups []string
+		if a.Groups != nil {
+			userGroups = a.Groups.GetGroupsForUser(userID)
+		}
+		log.Info().Str("user_id", userID).Strs("groups", userGroups).Msg("dashboard panel permissions: no panels accessible")
+	} else {
+		log.Debug().Str("user_id", userID).Int("count", len(result)).Strs("panels", result).Msg("dashboard panel permissions: granted")
+	}
+
 	return result
 }
