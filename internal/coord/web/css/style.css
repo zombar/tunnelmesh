@@ -1917,36 +1917,31 @@ a.logs-container {
     max-width: 700px;
 }
 
-/* Wider modal for version history - square corners */
-.s3-version-modal-content {
-    min-width: 750px;
-    max-width: 1050px;
-    max-height: 80vh;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    border-radius: 0;
+/* Wide modal variant for tables */
+.modal-content.modal-wide {
+    min-width: 700px;
+    max-width: 900px;
 }
 
-.s3-modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--color-border-primary);
-    background: var(--color-bg-tertiary);
-}
-
-.s3-modal-header h3 {
-    margin: 0;
-    font-size: 0.9rem;
-    font-weight: 600;
-}
-
-.s3-modal-body {
+/* Table body variant - no padding for full-width tables */
+.modal-body-table {
     padding: 0;
-    overflow-y: auto;
-    flex: 1;
+}
+
+/* Text alignment utilities */
+.text-right {
+    text-align: right;
+}
+
+.text-center {
+    text-align: center;
+}
+
+/* Button group - centered inline buttons */
+.btn-group {
+    display: inline-flex;
+    gap: 0.25rem;
+    justify-content: center;
 }
 
 .s3-version-table {
@@ -1990,41 +1985,6 @@ a.logs-container {
     margin-top: 2px;
 }
 
-/* Right-justify size, date, and actions columns */
-.s3-version-col-size,
-.s3-version-col-date,
-.s3-version-col-actions {
-    text-align: right;
-}
-
-.s3-version-col-file {
-    width: auto;
-}
-
-.s3-version-col-size {
-    width: 80px;
-    white-space: nowrap;
-}
-
-.s3-version-col-date {
-    width: 160px;
-}
-
-.s3-version-col-actions {
-    width: 80px;
-}
-
-.s3-version-actions {
-    display: flex;
-    gap: 0.25rem;
-    justify-content: flex-end;
-}
-
-.s3-version-actions .btn-sm {
-    padding: 0.2rem 0.5rem;
-    font-size: 0.7rem;
-}
-
 /* Square icon buttons for version actions */
 .s3-version-btn {
     width: 28px;
@@ -2047,17 +2007,11 @@ a.logs-container {
     color: var(--color-text-secondary);
 }
 
-/* Version date styling - relative + timestamp, right aligned */
-.s3-version-date {
-    white-space: nowrap;
-    text-align: right;
-}
-
+/* Version date styling - relative + timestamp */
 .s3-version-relative {
     display: block;
     color: var(--color-text-primary);
     font-weight: 500;
-    text-align: right;
 }
 
 .s3-version-timestamp {
@@ -2065,7 +2019,6 @@ a.logs-container {
     font-size: 0.65rem;
     color: var(--color-text-secondary);
     margin-top: 2px;
-    text-align: right;
 }
 
 .s3-selection-actions {

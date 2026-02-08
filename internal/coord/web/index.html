@@ -407,6 +407,35 @@
             </div>
         </section>
 
+        <section id="shares-section">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Shares</h2>
+                <button id="add-share-btn" class="btn-primary" onclick="event.stopPropagation(); openShareModal();">+ New Share</button>
+            </div>
+            <div class="collapsible-content">
+                <table id="shares">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Description</th>
+                            <th>Owner</th>
+                            <th>Quota</th>
+                            <th>Created</th>
+                            <th>Expires</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="shares-body"></tbody>
+                </table>
+                <div id="no-shares" class="empty-state" style="display: none;">
+                    No file shares yet. Create one to share files across the mesh.
+                </div>
+                <div id="shares-pagination" class="show-more-container" style="display: none;">
+                    <span id="shares-show-more"><button class="show-more-link" onclick="showMoreShares()">show more (<span id="shares-shown-count">0</span> / <span id="shares-total-count">0</span>)</button></span><span id="shares-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessShares()">show less</button></span>
+                </div>
+            </div>
+        </section>
+
         <section id="users-section">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Users</h2>
@@ -457,35 +486,6 @@
                 </div>
                 <div id="groups-pagination" class="show-more-container" style="display: none;">
                     <span id="groups-show-more"><button class="show-more-link" onclick="showMoreGroups()">show more (<span id="groups-shown-count">0</span> / <span id="groups-total-count">0</span>)</button></span><span id="groups-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessGroups()">show less</button></span>
-                </div>
-            </div>
-        </section>
-
-        <section id="shares-section">
-            <div class="section-header section-toggle" onclick="toggleSection(this)">
-                <h2>File Shares</h2>
-                <button id="add-share-btn" class="btn-primary" onclick="event.stopPropagation(); openShareModal();">+ New Share</button>
-            </div>
-            <div class="collapsible-content">
-                <table id="shares">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Description</th>
-                            <th>Owner</th>
-                            <th>Quota</th>
-                            <th>Created</th>
-                            <th>Expires</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="shares-body"></tbody>
-                </table>
-                <div id="no-shares" class="empty-state" style="display: none;">
-                    No file shares yet. Create one to share files across the mesh.
-                </div>
-                <div id="shares-pagination" class="show-more-container" style="display: none;">
-                    <span id="shares-show-more"><button class="show-more-link" onclick="showMoreShares()">show more (<span id="shares-shown-count">0</span> / <span id="shares-total-count">0</span>)</button></span><span id="shares-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessShares()">show less</button></span>
                 </div>
             </div>
         </section>

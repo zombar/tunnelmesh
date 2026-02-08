@@ -2160,7 +2160,7 @@ function initPanelResize(handle, container) {
     });
 }
 
-// --- Users, Groups, and File Shares Management ---
+// --- Users, Groups, and Shares Management ---
 
 // Check if S3/user management is enabled and show sections
 async function checkUserManagement() {

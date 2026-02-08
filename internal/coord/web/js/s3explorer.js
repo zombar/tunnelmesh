@@ -834,30 +834,26 @@
             return;
         }
 
-        // Create or get modal
+        // Create or get modal - uses standard modal classes for consistency
         let modal = document.getElementById('s3-version-modal');
         if (!modal) {
             modal = document.createElement('div');
             modal.id = 's3-version-modal';
-            modal.className = 's3-modal';
+            modal.className = 'modal';
             modal.innerHTML = `
-                <div class="s3-modal-content s3-version-modal-content">
-                    <div class="s3-modal-header">
+                <div class="modal-content modal-wide">
+                    <div class="modal-header">
                         <h3>Version History</h3>
-                        <button class="btn-icon" onclick="TM.s3explorer.closeModal('s3-version-modal')">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-                            </svg>
-                        </button>
+                        <button class="modal-close" onclick="TM.s3explorer.closeModal('s3-version-modal')">&times;</button>
                     </div>
-                    <div class="s3-modal-body">
+                    <div class="modal-body modal-body-table">
                         <table class="s3-version-table">
                             <thead>
                                 <tr>
-                                    <th class="s3-version-col-file">File</th>
-                                    <th class="s3-version-col-size">Size</th>
-                                    <th class="s3-version-col-date">Date</th>
-                                    <th class="s3-version-col-actions">Actions</th>
+                                    <th>File</th>
+                                    <th class="text-right">Size</th>
+                                    <th class="text-right">Date</th>
+                                    <th class="text-center">Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="s3-version-list"></tbody>
@@ -902,15 +898,17 @@
                 const fileName = key.split('/').pop();
                 return `
                     <tr class="${v.is_current ? 's3-version-current' : ''}">
-                        <td class="s3-version-col-file">
+                        <td>
                             <div class="s3-version-filename">${escapeHtml(fileName)} ${currentBadge}</div>
                             <div class="s3-version-id">${escapeHtml(v.version_id)}</div>
                         </td>
-                        <td class="s3-version-col-size">${formatBytes(v.size)}</td>
-                        <td class="s3-version-col-date">${formatVersionDate(v.last_modified)}</td>
-                        <td class="s3-version-col-actions">
-                            ${downloadBtn}
-                            ${restoreBtn}
+                        <td class="text-right">${formatBytes(v.size)}</td>
+                        <td class="text-right">${formatVersionDate(v.last_modified)}</td>
+                        <td class="text-center">
+                            <div class="btn-group">
+                                ${downloadBtn}
+                                ${restoreBtn}
+                            </div>
                         </td>
                     </tr>
                 `;
