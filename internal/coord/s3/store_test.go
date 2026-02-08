@@ -651,3 +651,111 @@ func TestObjectLifecycle_PurgeTombstonedObjectsDisabled(t *testing.T) {
 	_, err = store.HeadObject("test-bucket", "file.txt")
 	assert.NoError(t, err)
 }
+
+func TestBucketTombstone(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	// Create bucket with objects
+	err = store.CreateBucket("test-bucket", "alice")
+	require.NoError(t, err)
+
+	content := []byte("test content")
+	_, err = store.PutObject("test-bucket", "file1.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+	_, err = store.PutObject("test-bucket", "file2.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Tombstone the bucket
+	err = store.TombstoneBucket("test-bucket")
+	require.NoError(t, err)
+
+	// Bucket should be tombstoned
+	bucketMeta, err := store.HeadBucket("test-bucket")
+	require.NoError(t, err)
+	assert.True(t, bucketMeta.IsTombstoned())
+
+	// Objects should appear tombstoned via HeadObject
+	obj1, err := store.HeadObject("test-bucket", "file1.txt")
+	require.NoError(t, err)
+	assert.True(t, obj1.IsTombstoned(), "object should appear tombstoned when bucket is tombstoned")
+
+	// Objects should appear tombstoned in ListObjects
+	objects, _, _, err := store.ListObjects("test-bucket", "", "", 100)
+	require.NoError(t, err)
+	assert.Len(t, objects, 2)
+	for _, obj := range objects {
+		assert.True(t, obj.IsTombstoned(), "all objects should appear tombstoned")
+	}
+
+	// Untombstone the bucket
+	err = store.UntombstoneBucket("test-bucket")
+	require.NoError(t, err)
+
+	// Bucket should no longer be tombstoned
+	bucketMeta, err = store.HeadBucket("test-bucket")
+	require.NoError(t, err)
+	assert.False(t, bucketMeta.IsTombstoned())
+
+	// Objects should no longer appear tombstoned
+	obj1, err = store.HeadObject("test-bucket", "file1.txt")
+	require.NoError(t, err)
+	assert.False(t, obj1.IsTombstoned(), "object should not appear tombstoned after bucket untombstoned")
+}
+
+func TestDeleteTwiceToPurge(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	err = store.CreateBucket("test-bucket", "alice")
+	require.NoError(t, err)
+
+	content := []byte("delete me")
+	_, err = store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// First delete: should tombstone
+	err = store.DeleteObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	meta, err := store.HeadObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned(), "first delete should tombstone")
+
+	// Second delete: should purge
+	err = store.DeleteObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	// Object should be gone
+	_, err = store.HeadObject("test-bucket", "file.txt")
+	assert.Equal(t, ErrObjectNotFound, err, "second delete should purge")
+}
+
+func TestDeleteTwiceToPurge_BucketTombstoned(t *testing.T) {
+	store, err := NewStore(t.TempDir(), nil)
+	require.NoError(t, err)
+
+	err = store.CreateBucket("test-bucket", "alice")
+	require.NoError(t, err)
+
+	content := []byte("delete me")
+	_, err = store.PutObject("test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Tombstone the bucket (simulates file share deletion)
+	err = store.TombstoneBucket("test-bucket")
+	require.NoError(t, err)
+
+	// Object appears tombstoned via bucket
+	meta, err := store.HeadObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+	assert.True(t, meta.IsTombstoned())
+
+	// Delete should purge (since already tombstoned via bucket)
+	err = store.DeleteObject("test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	// Object should be gone
+	_, err = store.HeadObject("test-bucket", "file.txt")
+	assert.Equal(t, ErrObjectNotFound, err, "delete of bucket-tombstoned object should purge")
+}
