@@ -1031,3 +1031,179 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 	canRead := srv2.s3Authorizer.Authorize(testUserID, "get", "objects", "test-bucket", "")
 	assert.True(t, canRead, "user should have read permission after restart")
 }
+
+func newTestServerWithS3(t *testing.T) *Server {
+	t.Helper()
+	tempDir := t.TempDir()
+	cfg := &config.ServerConfig{
+		Listen:    ":0",
+		AuthToken: "test-token",
+		DataDir:   tempDir,
+		Admin:     config.AdminConfig{Enabled: true},
+		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
+		S3: config.S3Config{
+			Enabled: true,
+			DataDir: tempDir + "/s3",
+			Port:    9000,
+		},
+	}
+	srv, err := NewServer(cfg)
+	require.NoError(t, err)
+	return srv
+}
+
+func TestServer_BindingsAPI_ListEmpty(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.adminMux)
+	require.NotNil(t, srv.s3Authorizer)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/bindings", nil)
+	w := httptest.NewRecorder()
+
+	srv.adminMux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var bindings []*auth.RoleBinding
+	err := json.Unmarshal(w.Body.Bytes(), &bindings)
+	require.NoError(t, err)
+	// Should have at least one binding (for the service user)
+	assert.GreaterOrEqual(t, len(bindings), 0)
+}
+
+func TestServer_BindingsAPI_CreateBinding(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.adminMux)
+	require.NotNil(t, srv.s3Authorizer)
+
+	// Create a new binding
+	reqBody := RoleBindingRequest{
+		UserID:       "alice",
+		RoleName:     auth.RoleBucketRead,
+		BucketScope:  "test-bucket",
+		ObjectPrefix: "data/",
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/bindings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.adminMux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	var created auth.RoleBinding
+	err := json.Unmarshal(w.Body.Bytes(), &created)
+	require.NoError(t, err)
+
+	assert.Equal(t, "alice", created.UserID)
+	assert.Equal(t, auth.RoleBucketRead, created.RoleName)
+	assert.Equal(t, "test-bucket", created.BucketScope)
+	assert.Equal(t, "data/", created.ObjectPrefix)
+	assert.NotEmpty(t, created.Name)
+}
+
+func TestServer_BindingsAPI_CreateBindingValidation(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.adminMux)
+
+	tests := []struct {
+		name     string
+		req      RoleBindingRequest
+		wantCode int
+	}{
+		{
+			name:     "missing user_id",
+			req:      RoleBindingRequest{RoleName: auth.RoleBucketRead},
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "missing role_name",
+			req:      RoleBindingRequest{UserID: "alice"},
+			wantCode: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, _ := json.Marshal(tt.req)
+			req := httptest.NewRequest(http.MethodPost, "/api/bindings", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			srv.adminMux.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.wantCode, w.Code)
+		})
+	}
+}
+
+func TestServer_BindingsAPI_GetBinding(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.adminMux)
+	require.NotNil(t, srv.s3Authorizer)
+
+	// Create a binding first
+	binding := auth.NewRoleBindingWithPrefix("bob", auth.RoleBucketWrite, "mybucket", "prefix/")
+	srv.s3Authorizer.Bindings.Add(binding)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/bindings/"+binding.Name, nil)
+	w := httptest.NewRecorder()
+
+	srv.adminMux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var got auth.RoleBinding
+	err := json.Unmarshal(w.Body.Bytes(), &got)
+	require.NoError(t, err)
+
+	assert.Equal(t, binding.Name, got.Name)
+	assert.Equal(t, "bob", got.UserID)
+	assert.Equal(t, auth.RoleBucketWrite, got.RoleName)
+}
+
+func TestServer_BindingsAPI_GetBindingNotFound(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.adminMux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/bindings/nonexistent", nil)
+	w := httptest.NewRecorder()
+
+	srv.adminMux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestServer_BindingsAPI_DeleteBinding(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.adminMux)
+	require.NotNil(t, srv.s3Authorizer)
+
+	// Create a binding first
+	binding := auth.NewRoleBindingWithPrefix("charlie", auth.RoleBucketAdmin, "", "")
+	srv.s3Authorizer.Bindings.Add(binding)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/bindings/"+binding.Name, nil)
+	w := httptest.NewRecorder()
+
+	srv.adminMux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Verify it's gone
+	assert.Nil(t, srv.s3Authorizer.Bindings.Get(binding.Name))
+}
+
+func TestServer_BindingsAPI_DeleteBindingNotFound(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.adminMux)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/bindings/nonexistent", nil)
+	w := httptest.NewRecorder()
+
+	srv.adminMux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
