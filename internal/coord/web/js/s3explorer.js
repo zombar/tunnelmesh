@@ -854,10 +854,10 @@
                         <table class="s3-version-table">
                             <thead>
                                 <tr>
-                                    <th>Version</th>
-                                    <th>Size</th>
-                                    <th>Date</th>
-                                    <th>Actions</th>
+                                    <th class="s3-version-col-file">File</th>
+                                    <th class="s3-version-col-size">Size</th>
+                                    <th class="s3-version-col-date">Date</th>
+                                    <th class="s3-version-col-actions">Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="s3-version-list"></tbody>
@@ -899,15 +899,16 @@
                     }
                 }
 
+                const fileName = key.split('/').pop();
                 return `
                     <tr class="${v.is_current ? 's3-version-current' : ''}">
-                        <td>
-                            <div class="s3-version-id">${escapeHtml(v.version_id.slice(0, 16))}...</div>
-                            ${currentBadge}
+                        <td class="s3-version-col-file">
+                            <div class="s3-version-filename">${escapeHtml(fileName)} ${currentBadge}</div>
+                            <div class="s3-version-id">${escapeHtml(v.version_id)}</div>
                         </td>
-                        <td>${formatBytes(v.size)}</td>
-                        <td class="s3-version-date">${formatVersionDate(v.last_modified)}</td>
-                        <td class="s3-version-actions">
+                        <td class="s3-version-col-size">${formatBytes(v.size)}</td>
+                        <td class="s3-version-col-date">${formatVersionDate(v.last_modified)}</td>
+                        <td class="s3-version-col-actions">
                             ${downloadBtn}
                             ${restoreBtn}
                         </td>
