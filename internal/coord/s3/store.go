@@ -125,7 +125,12 @@ func (s *Store) QuotaStats() *QuotaStats {
 }
 
 // calculateQuotaUsage scans all objects and updates quota tracking.
+// This is called during initialization before the store is accessible to other
+// goroutines, but we hold the mutex for defense in depth and future-proofing.
 func (s *Store) calculateQuotaUsage() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
 	entries, err := os.ReadDir(bucketsDir)
 	if err != nil {

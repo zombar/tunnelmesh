@@ -1044,6 +1044,26 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate share name (DNS-safe: alphanumeric and hyphens, 1-63 chars)
+	if len(req.Name) > 63 {
+		s.jsonError(w, "name too long (max 63 characters)", http.StatusBadRequest)
+		return
+	}
+	for i, c := range req.Name {
+		isAlphaNum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		isValidHyphen := c == '-' && i > 0 && i < len(req.Name)-1
+		if !isAlphaNum && !isValidHyphen {
+			s.jsonError(w, "name must be alphanumeric with optional hyphens (not at start/end)", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Validate quota (must be non-negative)
+	if req.QuotaBytes < 0 {
+		s.jsonError(w, "quota_bytes must be non-negative", http.StatusBadRequest)
+		return
+	}
+
 	// Get owner from TLS client certificate if available
 	ownerID := s.getRequestOwner(r)
 
@@ -1541,7 +1561,14 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 
 	objects, _, _, err := s.s3Store.ListObjects(bucket, prefix, "", 1000)
 	if err != nil {
-		s.jsonError(w, "failed to list objects", http.StatusInternalServerError)
+		switch err {
+		case s3.ErrBucketNotFound:
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		case s3.ErrAccessDenied:
+			s.jsonError(w, "access denied", http.StatusForbidden)
+		default:
+			s.jsonError(w, "failed to list objects", http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -1605,7 +1632,16 @@ func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, 
 func (s *Server) handleS3GetObject(w http.ResponseWriter, bucket, key string) {
 	reader, meta, err := s.s3Store.GetObject(bucket, key)
 	if err != nil {
-		s.jsonError(w, "object not found", http.StatusNotFound)
+		switch err {
+		case s3.ErrBucketNotFound:
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		case s3.ErrObjectNotFound:
+			s.jsonError(w, "object not found", http.StatusNotFound)
+		case s3.ErrAccessDenied:
+			s.jsonError(w, "access denied", http.StatusForbidden)
+		default:
+			s.jsonError(w, "failed to get object", http.StatusInternalServerError)
+		}
 		return
 	}
 	defer func() { _ = reader.Close() }()
@@ -1674,7 +1710,16 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, bucket, key string)
 
 	err := s.s3Store.DeleteObject(bucket, key)
 	if err != nil {
-		s.jsonError(w, "failed to delete object", http.StatusInternalServerError)
+		switch err {
+		case s3.ErrBucketNotFound:
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		case s3.ErrObjectNotFound:
+			s.jsonError(w, "object not found", http.StatusNotFound)
+		case s3.ErrAccessDenied:
+			s.jsonError(w, "access denied", http.StatusForbidden)
+		default:
+			s.jsonError(w, "failed to delete object", http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -1685,7 +1730,14 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, bucket, key string)
 func (s *Server) handleS3HeadObject(w http.ResponseWriter, bucket, key string) {
 	meta, err := s.s3Store.HeadObject(bucket, key)
 	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
+		switch err {
+		case s3.ErrBucketNotFound, s3.ErrObjectNotFound:
+			w.WriteHeader(http.StatusNotFound)
+		case s3.ErrAccessDenied:
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
 		return
 	}
 

@@ -92,6 +92,18 @@
         return div.innerHTML;
     }
 
+    // Escape string for use in JavaScript string literals within HTML attributes
+    // Prevents XSS when building onclick handlers with user-controlled data
+    function escapeJsString(str) {
+        if (!str) return '';
+        return str
+            .replace(/\\/g, '\\\\')  // Escape backslashes first
+            .replace(/'/g, "\\'")    // Escape single quotes
+            .replace(/"/g, '\\"')    // Escape double quotes
+            .replace(/\n/g, '\\n')   // Escape newlines
+            .replace(/\r/g, '\\r');  // Escape carriage returns
+    }
+
     function formatBytes(bytes) {
         if (bytes === 0) return '0 B';
         const k = 1024;
@@ -242,7 +254,7 @@
             if (!state.currentPath && !state.currentFile) {
                 html += `<span class="s3-breadcrumb-item current">${escapeHtml(state.currentBucket)}</span>`;
             } else {
-                html += `<span class="s3-breadcrumb-item" onclick="TM.s3explorer.navigateTo('${escapeHtml(state.currentBucket)}', '')">${escapeHtml(state.currentBucket)}</span>`;
+                html += `<span class="s3-breadcrumb-item" onclick="TM.s3explorer.navigateTo('${escapeJsString(state.currentBucket)}', '')">${escapeHtml(state.currentBucket)}</span>`;
             }
 
             // Path parts
@@ -262,7 +274,7 @@
                     if (isLast) {
                         html += `<span class="s3-breadcrumb-item current">${escapeHtml(isFile ? part : part)}</span>`;
                     } else {
-                        html += `<span class="s3-breadcrumb-item" onclick="TM.s3explorer.navigateTo('${escapeHtml(state.currentBucket)}', '${escapeHtml(accum)}')">${escapeHtml(part)}</span>`;
+                        html += `<span class="s3-breadcrumb-item" onclick="TM.s3explorer.navigateTo('${escapeJsString(state.currentBucket)}', '${escapeJsString(accum)}')">${escapeHtml(part)}</span>`;
                     }
                 }
             }
@@ -391,10 +403,10 @@
                 const isTombstoned = Boolean(item.tombstonedAt);
                 const nameClass = item.isFolder ? 's3-name s3-name-folder' : 's3-name';
                 const onclick = item.isBucket
-                    ? `TM.s3explorer.navigateTo('${escapeHtml(item.name)}', '')`
+                    ? `TM.s3explorer.navigateTo('${escapeJsString(item.name)}', '')`
                     : item.isFolder
-                      ? `TM.s3explorer.navigateTo('${escapeHtml(state.currentBucket)}', '${escapeHtml(item.key)}')`
-                      : `TM.s3explorer.openFile('${escapeHtml(state.currentBucket)}', '${escapeHtml(item.key)}')`;
+                      ? `TM.s3explorer.navigateTo('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`
+                      : `TM.s3explorer.openFile('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`;
                 const itemId = item.key || item.name;
                 const isSelected = state.selectedItems.has(itemId);
                 let rowClass = isSelected ? 's3-selected' : '';
@@ -402,7 +414,7 @@
                 // Show checkboxes for files/folders (not buckets), disabled for read-only or tombstoned
                 const checkbox = item.isBucket
                     ? ''
-                    : `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} ${state.writable && !isTombstoned ? '' : 'disabled'} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeHtml(itemId)}')" />`;
+                    : `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} ${state.writable && !isTombstoned ? '' : 'disabled'} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeJsString(itemId)}')" />`;
                 const tombstoneBadge = isTombstoned ? '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
 
                 // Only show quota column for bucket list (not when inside a bucket)
