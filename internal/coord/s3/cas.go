@@ -18,6 +18,26 @@ import (
 // CAS (Content-Addressable Storage) manages encrypted, compressed chunks.
 // Chunks are identified by their SHA-256 hash (computed on plaintext).
 // Storage format: plaintext -> zstd compress -> XChaCha20-Poly1305 encrypt -> store
+//
+// SECURITY NOTE - Convergent Encryption:
+// This implementation uses convergent encryption where identical plaintext produces
+// identical ciphertext. This enables deduplication across the storage system but has
+// security implications:
+//
+//   - Attackers who know the plaintext can verify if that exact content exists by
+//     computing the expected ciphertext and comparing.
+//   - All users share the same encryption keys (derived from mesh PSK), so content
+//     uploaded by one user can be deduplicated against content from another.
+//
+// Mitigations in place:
+//   - Nonces are derived from masterKey + content hash (not just content), preventing
+//     attackers without the master key from predicting ciphertexts.
+//   - Authenticated encryption (XChaCha20-Poly1305) prevents tampering.
+//   - Hash verification on read detects corruption.
+//
+// This tradeoff is acceptable for single-tenant mesh deployments. For multi-tenant
+// scenarios with strict data isolation requirements, consider adding per-user salt
+// to the key derivation (at the cost of losing cross-user deduplication).
 type CAS struct {
 	chunksDir string
 	masterKey [32]byte // Derived from mesh PSK for convergent encryption
@@ -111,7 +131,7 @@ func (c *CAS) WriteChunk(data []byte) (string, error) {
 }
 
 // ReadChunk retrieves and decrypts a chunk by its hash.
-// Pipeline: read -> decrypt -> decompress -> return plaintext
+// Pipeline: read -> decrypt -> decompress -> verify hash -> return plaintext
 func (c *CAS) ReadChunk(hash string) ([]byte, error) {
 	chunkPath := c.chunkPath(hash)
 
@@ -136,6 +156,12 @@ func (c *CAS) ReadChunk(hash string) ([]byte, error) {
 	data, err := c.decompress(compressed)
 	if err != nil {
 		return nil, fmt.Errorf("decompress chunk: %w", err)
+	}
+
+	// Verify hash matches content (detect corruption)
+	actualHash := c.contentHash(data)
+	if actualHash != hash {
+		return nil, fmt.Errorf("chunk hash mismatch: expected %s, got %s (data corruption)", hash, actualHash)
 	}
 
 	return data, nil

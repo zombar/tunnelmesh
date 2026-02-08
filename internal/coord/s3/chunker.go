@@ -103,12 +103,13 @@ func (c *Chunker) fillBuffer() error {
 }
 
 // findBoundary finds the next chunk boundary using Buzhash rolling hash.
+// Uses the standard Buzhash formula: H_new = rol(H_old, 1) ^ h(new) ^ rol(h(old), n)
 func (c *Chunker) findBoundary() int {
 	// Initialize rolling hash with first windowSize bytes (or less if not enough data)
 	windowStart := 0
-	if c.bufLen > c.windowSize {
+	if c.bufLen >= c.windowSize {
 		windowStart = c.windowSize
-		for i := 0; i < c.windowSize && i < c.bufLen; i++ {
+		for i := 0; i < c.windowSize; i++ {
 			c.hash = rol32(c.hash, 1) ^ buzhashTable[c.buf[i]]
 		}
 	}
@@ -120,12 +121,16 @@ func (c *Chunker) findBoundary() int {
 	}
 
 	for i := start; i < c.bufLen; i++ {
-		// Update rolling hash: remove oldest byte, add new byte
+		// Update rolling hash using correct Buzhash order:
+		// 1. Rotate the hash left by 1
+		// 2. XOR in the new byte
+		// 3. XOR out the old byte (rotated by window size)
+		c.hash = rol32(c.hash, 1)
+		c.hash ^= buzhashTable[c.buf[i]]
 		if i >= c.windowSize {
 			outByte := c.buf[i-c.windowSize]
 			c.hash ^= rol32(buzhashTable[outByte], uint32(c.windowSize))
 		}
-		c.hash = rol32(c.hash, 1) ^ buzhashTable[c.buf[i]]
 
 		// Check for boundary (after minimum size)
 		if i >= MinChunkSize && (c.hash&ChunkMask) == 0 {
