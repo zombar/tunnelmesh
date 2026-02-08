@@ -1713,7 +1713,8 @@ a.logs-container {
 
 /* Resizable content container */
 .s3-content {
-    max-height: 300px;
+    min-height: 320px;
+    max-height: 500px;
     overflow-y: auto;
     overflow-x: hidden;
 }
