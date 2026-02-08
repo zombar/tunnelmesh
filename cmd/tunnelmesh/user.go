@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -122,15 +123,11 @@ func runUserSetup(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Prompt for name if not provided via flag
+	// Use OS username if not provided via flag
 	if userName == "" {
-		fmt.Print("Enter your display name: ")
-		reader := bufio.NewReader(os.Stdin)
-		name, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("read name: %w", err)
+		if u, err := user.Current(); err == nil {
+			userName = u.Username
 		}
-		userName = strings.TrimSpace(name)
 	}
 
 	// Generate mnemonic
@@ -295,14 +292,11 @@ func runUserRegister(cmd *cobra.Command, args []string) error {
 		fmt.Println("No user identity found. Setting up...")
 		fmt.Println()
 
-		// Prompt for name
-		fmt.Print("Enter your display name: ")
-		reader := bufio.NewReader(os.Stdin)
-		userName, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("read name: %w", err)
+		// Use OS username as display name
+		var userName string
+		if u, err := user.Current(); err == nil {
+			userName = u.Username
 		}
-		userName = strings.TrimSpace(userName)
 
 		// Generate mnemonic
 		mnemonic, err := auth.GenerateMnemonic()
