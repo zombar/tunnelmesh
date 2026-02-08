@@ -641,3 +641,49 @@ func TestS3Proxy_NotFound(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
+
+func TestS3Proxy_PathTraversal(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	tests := []struct {
+		name         string
+		path         string
+		expectedCode int
+	}{
+		// URL-encoded path traversal attempts (bypass HTTP path cleaning)
+		{"bucket url-encoded ..", "/api/s3/buckets/%2e%2e/objects/passwd", http.StatusBadRequest},
+		{"key url-encoded ..", "/api/s3/buckets/test-bucket/objects/%2e%2e%2fetc%2fpasswd", http.StatusBadRequest},
+		// Backslash attempts
+		{"bucket with backslash", "/api/s3/buckets/..\\..\\etc/objects/passwd", http.StatusBadRequest},
+		// URL-encoded dotdot
+		{"bucket is dotdot", "/api/s3/buckets/%2e%2e/objects/test", http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			rec := httptest.NewRecorder()
+			srv.adminMux.ServeHTTP(rec, req)
+
+			// Should be rejected with BadRequest, not return file contents
+			assert.Equal(t, tt.expectedCode, rec.Code)
+		})
+	}
+}
+
+func TestS3Proxy_URLEncodedKey(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Create object with special chars in name
+	content := []byte("hello world")
+	_, err := srv.s3Store.PutObject("test-bucket", "file with spaces.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Access with URL-encoded key
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects/file%20with%20spaces.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "hello world", rec.Body.String())
+}

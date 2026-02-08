@@ -3,6 +3,7 @@ package coord
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -1391,6 +1392,24 @@ type S3BucketsResponse struct {
 	Quota   S3QuotaInfo    `json:"quota"`
 }
 
+// validateS3Name validates a bucket or object key name to prevent path traversal.
+func validateS3Name(name string) error {
+	if name == "" {
+		return fmt.Errorf("name cannot be empty")
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("invalid name")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("path traversal not allowed")
+	}
+	// Check for absolute paths or parent directory references
+	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") {
+		return fmt.Errorf("absolute paths not allowed")
+	}
+	return nil
+}
+
 // handleS3Proxy routes S3 explorer API requests.
 func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 	if s.s3Store == nil {
@@ -1412,6 +1431,18 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(path, "buckets/") {
 		parts := strings.SplitN(strings.TrimPrefix(path, "buckets/"), "/", 2)
 		bucket := parts[0]
+
+		// URL decode bucket name
+		if decoded, err := url.PathUnescape(bucket); err == nil {
+			bucket = decoded
+		}
+
+		// Validate bucket name
+		if err := validateS3Name(bucket); err != nil {
+			s.jsonError(w, "invalid bucket name: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
 		if len(parts) == 1 || parts[1] == "" || parts[1] == "objects" {
 			// List objects in bucket
 			s.handleS3ListObjects(w, r, bucket)
@@ -1419,6 +1450,18 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		if strings.HasPrefix(parts[1], "objects/") {
 			key := strings.TrimPrefix(parts[1], "objects/")
+
+			// URL decode object key
+			if decoded, err := url.PathUnescape(key); err == nil {
+				key = decoded
+			}
+
+			// Validate object key
+			if err := validateS3Name(key); err != nil {
+				s.jsonError(w, "invalid object key: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+
 			s.handleS3Object(w, r, bucket, key)
 			return
 		}
@@ -1575,6 +1618,9 @@ func (s *Server) handleS3GetObject(w http.ResponseWriter, bucket, key string) {
 	_, _ = io.Copy(w, reader)
 }
 
+// MaxS3ObjectSize is the maximum size for S3 object uploads (10MB).
+const MaxS3ObjectSize = 10 * 1024 * 1024
+
 // handleS3PutObject creates or updates an object.
 func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	// Check bucket write permission (could be extended to full RBAC)
@@ -1594,9 +1640,16 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 		contentType = "application/octet-stream"
 	}
 
+	// Limit request body size to prevent DoS
+	r.Body = http.MaxBytesReader(w, r.Body, MaxS3ObjectSize)
+
 	// Read body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		if err.Error() == "http: request body too large" {
+			s.jsonError(w, "object too large (max 10MB)", http.StatusRequestEntityTooLarge)
+			return
+		}
 		s.jsonError(w, "failed to read body", http.StatusBadRequest)
 		return
 	}

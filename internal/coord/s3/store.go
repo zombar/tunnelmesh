@@ -672,11 +672,15 @@ func (s *Store) PurgeObject(bucket, key string) error {
 
 // SetTombstoneRetentionDays sets the number of days to retain tombstoned objects before purging.
 func (s *Store) SetTombstoneRetentionDays(days int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.tombstoneRetentionDays = days
 }
 
 // TombstoneRetentionDays returns the configured tombstone retention period in days.
 func (s *Store) TombstoneRetentionDays() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.tombstoneRetentionDays
 }
 

@@ -246,19 +246,29 @@ func (m *FileShareManager) TombstoneExpiredShareContents() int {
 	tombstonedCount := 0
 	for _, share := range expiredShares {
 		bucketName := FileShareBucketPrefix + share.Name
-		objects, _, _, err := m.store.ListObjects(bucketName, "", "", 1000)
-		if err != nil {
-			continue
-		}
 
-		for _, obj := range objects {
-			// Skip already tombstoned objects
-			if obj.IsTombstoned() {
-				continue
+		// Paginate through all objects in the bucket
+		marker := ""
+		for {
+			objects, isTruncated, nextMarker, err := m.store.ListObjects(bucketName, "", marker, 1000)
+			if err != nil {
+				break
 			}
-			if err := m.store.TombstoneObject(bucketName, obj.Key); err == nil {
-				tombstonedCount++
+
+			for _, obj := range objects {
+				// Skip already tombstoned objects
+				if obj.IsTombstoned() {
+					continue
+				}
+				if err := m.store.TombstoneObject(bucketName, obj.Key); err == nil {
+					tombstonedCount++
+				}
 			}
+
+			if !isTruncated {
+				break
+			}
+			marker = nextMarker
 		}
 	}
 

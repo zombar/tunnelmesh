@@ -295,6 +295,39 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 	}()
 }
 
+// StartPeriodicCleanup starts the background cleanup goroutine for S3 storage.
+// It periodically purges tombstoned objects past their retention period and
+// tombstones content in expired file shares.
+func (s *Server) StartPeriodicCleanup(ctx context.Context) {
+	if s.s3Store == nil {
+		return
+	}
+
+	// Run cleanup every hour
+	ticker := time.NewTicker(1 * time.Hour)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// Purge tombstoned objects past retention period
+				if purged := s.s3Store.PurgeTombstonedObjects(); purged > 0 {
+					log.Info().Int("count", purged).Msg("purged tombstoned S3 objects")
+				}
+
+				// Tombstone content in expired file shares
+				if s.fileShareMgr != nil {
+					if tombstoned := s.fileShareMgr.TombstoneExpiredShareContents(); tombstoned > 0 {
+						log.Info().Int("count", tombstoned).Msg("tombstoned expired file share content")
+					}
+				}
+			}
+		}
+	}()
+}
+
 // SetVersion sets the server version for admin display.
 func (s *Server) SetVersion(version string) {
 	s.version = version
