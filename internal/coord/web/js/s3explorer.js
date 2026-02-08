@@ -772,37 +772,43 @@
             return;
         }
 
+        if (item.isBucket) {
+            alert('Buckets cannot be renamed');
+            return;
+        }
+
+        if (item.isFolder) {
+            alert('Folders cannot be renamed (would require renaming all contents)');
+            return;
+        }
+
         try {
             const oldKey = item.key || item.name;
-            const newKey = item.isFolder
-                ? state.currentPath + newName + '/'
-                : state.currentPath + newName;
+            const newKey = state.currentPath + newName;
 
-            if (item.isBucket) {
-                alert('Buckets cannot be renamed');
-                return;
+            // S3 rename = GET + PUT + DELETE (no native copy support)
+            // First get the file content
+            const getResp = await fetch(`/api/s3/${state.currentBucket}/${encodeURIComponent(oldKey)}`);
+            if (!getResp.ok) {
+                throw new Error(`Failed to read file: ${getResp.status}`);
             }
+            const content = await getResp.blob();
 
-            // S3 rename = copy + delete
-            // First copy to new key
-            const copyResp = await fetch(`/api/s3/${state.currentBucket}/${encodeURIComponent(newKey)}`, {
+            // Put to new key
+            const putResp = await fetch(`/api/s3/${state.currentBucket}/${encodeURIComponent(newKey)}`, {
                 method: 'PUT',
-                headers: {
-                    'x-amz-copy-source': `/${state.currentBucket}/${encodeURIComponent(oldKey)}`,
-                },
+                body: content,
             });
-
-            if (!copyResp.ok) {
-                throw new Error(`Copy failed: ${copyResp.status}`);
+            if (!putResp.ok) {
+                throw new Error(`Failed to create new file: ${putResp.status}`);
             }
 
-            // Then delete old key
+            // Delete old key
             const deleteResp = await fetch(`/api/s3/${state.currentBucket}/${encodeURIComponent(oldKey)}`, {
                 method: 'DELETE',
             });
-
             if (!deleteResp.ok) {
-                throw new Error(`Delete failed: ${deleteResp.status}`);
+                throw new Error(`Failed to delete old file: ${deleteResp.status}`);
             }
 
             state.selectedItems.clear();
