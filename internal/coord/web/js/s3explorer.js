@@ -352,65 +352,84 @@
         renderFileListing(false);
     }
 
+    function isBinaryContent(content) {
+        // Check for null bytes or high ratio of non-printable characters
+        const sample = content.slice(0, 8192);
+        let nonPrintable = 0;
+        for (let i = 0; i < sample.length; i++) {
+            const code = sample.charCodeAt(i);
+            if (code === 0) return true; // Null byte = definitely binary
+            if (code < 32 && code !== 9 && code !== 10 && code !== 13) {
+                nonPrintable++;
+            }
+        }
+        return nonPrintable / sample.length > 0.1; // >10% non-printable = binary
+    }
+
     async function openFile(bucket, key) {
         const browser = document.getElementById('s3-browser');
         const viewer = document.getElementById('s3-viewer');
         const preview = document.getElementById('s3-preview');
         const editor = document.getElementById('s3-editor');
-        const lineNumbers = document.getElementById('s3-line-numbers');
         const browseActions = document.getElementById('s3-browse-actions');
+        const selectionActions = document.getElementById('s3-selection-actions');
         const fileActions = document.getElementById('s3-file-actions');
 
         const fileName = key.split('/').pop();
 
+        // Clear selection when opening file
+        state.selectedItems.clear();
+        updateSelectionUI();
+
         state.currentFile = { bucket, key };
         state.isDirty = false;
 
-        // Hide browser and browse actions
+        // Hide browser, browse actions, and selection actions
         if (browser) browser.style.display = 'none';
         if (browseActions) browseActions.style.display = 'none';
+        if (selectionActions) selectionActions.style.display = 'none';
 
         renderBreadcrumb();
 
-        if (isTextFile(fileName)) {
-            try {
-                const { content } = await getObject(bucket, key);
-                state.originalContent = content;
-
-                if (viewer) viewer.style.display = 'block';
-                if (preview) preview.style.display = 'none';
-                if (fileActions) fileActions.style.display = 'flex';
-
-                if (editor) {
-                    editor.value = content;
-                    editor.readOnly = false;
-                }
-                updateLineNumbers();
-            } catch (err) {
-                showToast('Failed to load file: ' + err.message, 'error');
-                closeFile();
-            }
-        } else if (isImageFile(fileName)) {
+        // Handle images specially (display inline)
+        if (isImageFile(fileName)) {
             if (viewer) viewer.style.display = 'none';
             if (preview) {
                 preview.style.display = 'flex';
                 preview.innerHTML = `<img src="api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}" alt="${escapeHtml(fileName)}">`;
             }
             if (fileActions) fileActions.style.display = 'flex';
-        } else {
-            // Binary file
-            if (viewer) viewer.style.display = 'none';
-            if (preview) {
-                preview.style.display = 'flex';
-                preview.innerHTML = `
-                    <div class="s3-binary-info">
-                        <svg class="s3-binary-icon" width="48" height="48" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
-                        <div class="s3-binary-name">${escapeHtml(fileName)}</div>
-                        <div class="s3-binary-hint">Binary file - click Download to view</div>
-                    </div>
-                `;
+            return;
+        }
+
+        // Try to open all other files as text
+        try {
+            const { content } = await getObject(bucket, key);
+
+            // Check if content is binary
+            if (isBinaryContent(content)) {
+                showToast('Binary file - use Download to view', 'info');
+                state.currentFile = null;
+                // Stay in browser view
+                if (browser) browser.style.display = 'block';
+                if (browseActions) browseActions.style.display = 'flex';
+                return;
             }
+
+            state.originalContent = content;
+
+            if (viewer) viewer.style.display = 'block';
+            if (preview) preview.style.display = 'none';
             if (fileActions) fileActions.style.display = 'flex';
+
+            if (editor) {
+                editor.value = content;
+                editor.readOnly = false;
+            }
+            updateLineNumbers();
+        } catch (err) {
+            showToast('Failed to load file: ' + err.message, 'error');
+            closeFile();
         }
     }
 
