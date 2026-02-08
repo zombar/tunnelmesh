@@ -508,7 +508,10 @@
         state.currentFile = null;
         state.isDirty = false;
 
-        // Look up writable state from bucket info
+        // Look up writable state from bucket info (fetch if not cached)
+        if (bucket && state.buckets.length === 0) {
+            state.buckets = await fetchBuckets();
+        }
         const bucketInfo = state.buckets.find(b => b.name === bucket);
         state.writable = bucketInfo ? bucketInfo.writable : true;
 
