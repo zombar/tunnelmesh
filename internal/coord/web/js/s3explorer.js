@@ -220,6 +220,7 @@
         const viewer = document.getElementById('s3-viewer');
         const preview = document.getElementById('s3-preview');
         const empty = document.getElementById('s3-empty');
+        const browseActions = document.getElementById('s3-browse-actions');
         const fileActions = document.getElementById('s3-file-actions');
 
         if (!tbody) return;
@@ -228,6 +229,8 @@
         if (viewer) viewer.style.display = 'none';
         if (preview) preview.style.display = 'none';
         if (browser) browser.style.display = 'block';
+        // Show browse actions, hide file actions
+        if (browseActions) browseActions.style.display = 'flex';
         if (fileActions) fileActions.style.display = 'none';
 
         // Clear current file
@@ -306,6 +309,7 @@
         const preview = document.getElementById('s3-preview');
         const editor = document.getElementById('s3-editor');
         const lineNumbers = document.getElementById('s3-line-numbers');
+        const browseActions = document.getElementById('s3-browse-actions');
         const fileActions = document.getElementById('s3-file-actions');
 
         const fileName = key.split('/').pop();
@@ -313,8 +317,9 @@
         state.currentFile = { bucket, key };
         state.isDirty = false;
 
-        // Hide browser
+        // Hide browser and browse actions
         if (browser) browser.style.display = 'none';
+        if (browseActions) browseActions.style.display = 'none';
 
         renderBreadcrumb();
 
@@ -396,10 +401,10 @@
         if (!saveBtn) return;
 
         if (state.isDirty) {
-            saveBtn.classList.add('s3-dirty');
+            saveBtn.classList.add('dirty');
             saveBtn.textContent = 'Save *';
         } else {
-            saveBtn.classList.remove('s3-dirty');
+            saveBtn.classList.remove('dirty');
             saveBtn.textContent = 'Save';
         }
     }

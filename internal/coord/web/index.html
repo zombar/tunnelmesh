@@ -301,20 +301,42 @@
         <section id="s3-section" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>S3 Explorer</h2>
-                <div class="s3-actions" id="s3-header-actions">
-                    <button class="btn-primary" onclick="event.stopPropagation(); s3NewFile();">+ New</button>
-                    <button class="btn-primary" onclick="event.stopPropagation(); s3Upload();">Upload</button>
-                </div>
             </div>
             <div class="collapsible-content">
-                <!-- Navigation bar with breadcrumb -->
+                <!-- Navigation bar with breadcrumb and actions -->
                 <div class="s3-nav" id="s3-nav">
                     <div class="s3-breadcrumb" id="s3-breadcrumb"></div>
-                    <div class="s3-file-actions" id="s3-file-actions" style="display: none;">
-                        <button class="btn-small btn-primary" id="s3-save-btn" onclick="s3Save()">Save</button>
-                        <button class="btn-small" onclick="s3Download()">Download</button>
-                        <button class="btn-small btn-danger" onclick="s3Delete()">Delete</button>
-                        <button class="btn-small" onclick="s3CloseFile()">Close</button>
+                    <div class="s3-toolbar">
+                        <!-- Browse actions (shown when viewing folder) -->
+                        <div class="s3-browse-actions" id="s3-browse-actions">
+                            <button class="s3-btn" onclick="s3NewFile()" title="New file">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                                <span>New</span>
+                            </button>
+                            <button class="s3-btn" onclick="s3Upload()" title="Upload file">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
+                                <span>Upload</span>
+                            </button>
+                        </div>
+                        <!-- File actions (shown when viewing file) -->
+                        <div class="s3-file-actions" id="s3-file-actions" style="display: none;">
+                            <button class="s3-btn s3-btn-save" id="s3-save-btn" onclick="s3Save()" title="Save changes">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
+                                <span>Save</span>
+                            </button>
+                            <button class="s3-btn" onclick="s3Download()" title="Download file">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                                <span>Download</span>
+                            </button>
+                            <button class="s3-btn s3-btn-danger" onclick="s3Delete()" title="Delete file">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                                <span>Delete</span>
+                            </button>
+                            <button class="s3-btn" onclick="s3CloseFile()" title="Close file">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                                <span>Close</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <!-- File listing (table view) -->
