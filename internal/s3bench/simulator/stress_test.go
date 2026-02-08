@@ -2,6 +2,9 @@ package simulator
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -65,9 +68,28 @@ func TestStressAlienInvasion(t *testing.T) {
 	// Create story with increased document counts (4-6 versions)
 	story := &scenarios.AlienInvasion{}
 
+	// Phase 1: Optionally enable HTTP testing (set USE_HTTP=1 to test full network stack)
+	useHTTP := os.Getenv("USE_HTTP") == "1"
+	var httpServer *httptest.Server
+	var httpEndpoint string
+
+	if useHTTP {
+		// Create S3 HTTP server with mock authorizer for testing (allows all authenticated requests)
+		mockAuth := &mockHTTPAuthorizer{credentials: credentials, authorizer: authorizer}
+		s3Server := s3.NewServer(store, mockAuth, nil)
+		httpServer = httptest.NewServer(s3Server.Handler())
+		httpEndpoint = httpServer.URL
+		t.Logf("HTTP server started at %s (testing full network stack)", httpEndpoint)
+		defer httpServer.Close()
+	}
+
 	// Create user manager
+	endpoint := "http://localhost:8080"
+	if useHTTP {
+		endpoint = httpEndpoint
+	}
 	userMgr := NewUserManager(store, credentials, authorizer, shareManager, story)
-	if err := userMgr.Setup(ctx, "http://localhost:8080"); err != nil {
+	if err := userMgr.Setup(ctx, endpoint); err != nil {
 		t.Fatalf("Setting up users: %v", err)
 	}
 	defer func() {
@@ -85,6 +107,8 @@ func TestStressAlienInvasion(t *testing.T) {
 		EnableWorkflows:      true,
 		AdversaryAttempts:    adversaryAttempts,
 		MaxConcurrentUploads: 20,
+		UseHTTP:              useHTTP,      // Phase 1: HTTP testing
+		HTTPEndpoint:         httpEndpoint, // Phase 1: HTTP endpoint
 		UserManager:          userMgr,
 		WorkflowTestsEnabled: map[WorkflowType]bool{
 			WorkflowDeletion:    true,
@@ -209,4 +233,33 @@ func TestStressAlienInvasion(t *testing.T) {
 	}
 
 	t.Logf("\n✅ Stress test completed successfully!")
+}
+
+// mockHTTPAuthorizer allows authenticated requests for HTTP testing.
+// It validates requests based on user ID header and uses the real authorizer for RBAC checks.
+type mockHTTPAuthorizer struct {
+	credentials *s3.CredentialStore
+	authorizer  *auth.Authorizer
+}
+
+// AuthorizeRequest authenticates and authorizes an HTTP request.
+func (m *mockHTTPAuthorizer) AuthorizeRequest(r *http.Request, verb, resource, bucket, objectKey string) (string, error) {
+	// Extract user ID from header (set by simulator for testing)
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		return "", s3.ErrAccessDenied
+	}
+
+	// Use real authorizer for RBAC checks
+	if m.authorizer.Authorize(userID, verb, resource, bucket, objectKey) {
+		return userID, nil
+	}
+
+	return "", s3.ErrAccessDenied
+}
+
+// GetAllowedPrefixes returns the allowed object prefixes for a user in a bucket.
+func (m *mockHTTPAuthorizer) GetAllowedPrefixes(userID, bucket string) []string {
+	// For testing, return nil (unrestricted access within authorized buckets)
+	return nil
 }

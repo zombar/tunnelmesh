@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"sync"
 	"time"
 
@@ -34,6 +35,11 @@ type SimulatorConfig struct {
 
 	// Concurrency
 	MaxConcurrentUploads int // Max parallel uploads (0 = unlimited)
+
+	// Network Testing (Phase 1: HTTP Server)
+	UseHTTP       bool   // Use HTTP server instead of direct Store calls
+	HTTPEndpoint  string // HTTP endpoint for S3 API (e.g., "http://localhost:8080")
+	EnableMetrics bool   // Enable metrics collection
 
 	// S3 components (optional, for actual operations)
 	UserManager *UserManager // User session manager with S3 access
@@ -70,7 +76,8 @@ type Simulator struct {
 	meshOrch     *MeshOrchestrator
 
 	// S3 components (for actual operations)
-	userMgr *UserManager // User session management
+	userMgr    *UserManager // User session management
+	httpClient *http.Client // HTTP client for network testing
 
 	// Execution state
 	startTime time.Time
@@ -153,7 +160,10 @@ func NewSimulator(config SimulatorConfig) (*Simulator, error) {
 		adversaryGen: make(map[string]*AdversarySimulator),
 		workflowGen:  NewWorkflowGenerator(config.Story, config.TimeScale),
 		userMgr:      config.UserManager,
-		attempts:     make(map[string][]AdversaryAttempt),
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+		attempts: make(map[string][]AdversaryAttempt),
 		metrics: &SimulatorMetrics{
 			StoryDuration: config.Story.Duration(),
 		},
@@ -448,6 +458,11 @@ func (s *Simulator) executeTask(ctx context.Context, task *WorkloadTask) error {
 
 // executeUpload performs an S3 upload operation.
 func (s *Simulator) executeUpload(ctx context.Context, store *s3.Store, session *UserSession, bucket string, task *WorkloadTask) error {
+	// Route to HTTP or direct store access
+	if s.config.UseHTTP {
+		return s.executeUploadHTTP(ctx, session, bucket, task)
+	}
+
 	// Build object metadata
 	metadata := map[string]string{
 		"author":    task.Author.Name,
@@ -463,9 +478,7 @@ func (s *Simulator) executeUpload(ctx context.Context, store *s3.Store, session 
 		metadata["expires_at"] = task.ExpiresAt.Format(time.RFC3339)
 	}
 
-	// Upload to S3
-	// Note: Authorization is bypassed here since we're accessing the store directly.
-	// In a real scenario with HTTP S3 API, authorization would be enforced via credentials.
+	// Upload to S3 (direct store access - bypasses HTTP/auth)
 	reader := bytes.NewReader(task.Content)
 	_, err := store.PutObject(bucket, task.Filename, reader, int64(len(task.Content)), task.ContentType, metadata)
 	if err != nil {
@@ -475,8 +488,56 @@ func (s *Simulator) executeUpload(ctx context.Context, store *s3.Store, session 
 	return nil
 }
 
+// executeUploadHTTP performs an S3 upload via HTTP (tests full network stack).
+func (s *Simulator) executeUploadHTTP(ctx context.Context, session *UserSession, bucket string, task *WorkloadTask) error {
+	// Build URL: http://endpoint/bucket/key
+	url := fmt.Sprintf("%s/%s/%s", s.config.HTTPEndpoint, bucket, task.Filename)
+
+	// Create HTTP request
+	reader := bytes.NewReader(task.Content)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, reader)
+	if err != nil {
+		return fmt.Errorf("creating HTTP request: %w", err)
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", task.ContentType)
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(task.Content)))
+	req.Header.Set("X-User-ID", session.UserID) // Authentication for HTTP testing
+
+	// Add metadata as x-amz-meta- headers
+	req.Header.Set("x-amz-meta-author", task.Author.Name)
+	req.Header.Set("x-amz-meta-author_id", task.Author.ID)
+	req.Header.Set("x-amz-meta-doc_type", task.DocType)
+	req.Header.Set("x-amz-meta-version", fmt.Sprintf("%d", task.VersionNum))
+
+	// Execute request
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("HTTP PUT %s: %w", url, err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Str("url", url).Msg("Failed to close response body")
+		}
+	}()
+
+	// Check response
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP PUT %s failed: %d %s", url, resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
 // executeDelete performs an S3 delete operation.
 func (s *Simulator) executeDelete(ctx context.Context, store *s3.Store, session *UserSession, bucket string, task *WorkloadTask) error {
+	// Route to HTTP or direct store access
+	if s.config.UseHTTP {
+		return s.executeDeleteHTTP(ctx, session, bucket, task)
+	}
+
 	// Delete object (creates deletion marker/tombstone)
 	err := store.DeleteObject(bucket, task.Filename)
 	if err != nil {
@@ -486,8 +547,43 @@ func (s *Simulator) executeDelete(ctx context.Context, store *s3.Store, session 
 	return nil
 }
 
+// executeDeleteHTTP performs an S3 delete via HTTP.
+func (s *Simulator) executeDeleteHTTP(ctx context.Context, session *UserSession, bucket string, task *WorkloadTask) error {
+	url := fmt.Sprintf("%s/%s/%s", s.config.HTTPEndpoint, bucket, task.Filename)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return fmt.Errorf("creating HTTP request: %w", err)
+	}
+
+	// Set authentication header
+	req.Header.Set("X-User-ID", session.UserID)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("HTTP DELETE %s: %w", url, err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Str("url", url).Msg("Failed to close response body")
+		}
+	}()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP DELETE %s failed: %d %s", url, resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
 // executeDownload performs an S3 download operation.
 func (s *Simulator) executeDownload(ctx context.Context, store *s3.Store, session *UserSession, bucket string, task *WorkloadTask) ([]byte, error) {
+	// Route to HTTP or direct store access
+	if s.config.UseHTTP {
+		return s.executeDownloadHTTP(ctx, session, bucket, task)
+	}
+
 	// Get object
 	reader, _, err := store.GetObject(bucket, task.Filename)
 	if err != nil {
@@ -506,6 +602,36 @@ func (s *Simulator) executeDownload(ctx context.Context, store *s3.Store, sessio
 	}
 
 	return data, nil
+}
+
+// executeDownloadHTTP performs an S3 download via HTTP.
+func (s *Simulator) executeDownloadHTTP(ctx context.Context, session *UserSession, bucket string, task *WorkloadTask) ([]byte, error) {
+	url := fmt.Sprintf("%s/%s/%s", s.config.HTTPEndpoint, bucket, task.Filename)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating HTTP request: %w", err)
+	}
+
+	// Set authentication header
+	req.Header.Set("X-User-ID", session.UserID)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP GET %s: %w", url, err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Str("url", url).Msg("Failed to close response body")
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP GET %s failed: %d %s", url, resp.StatusCode, string(body))
+	}
+
+	return io.ReadAll(resp.Body)
 }
 
 // executeAdversaryAttempt executes a single adversary attempt and tests RBAC.
