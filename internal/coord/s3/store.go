@@ -28,6 +28,7 @@ type ObjectMeta struct {
 	ContentType  string            `json:"content_type"`
 	ETag         string            `json:"etag"` // MD5 hash of content
 	LastModified time.Time         `json:"last_modified"`
+	Expires      *time.Time        `json:"expires,omitempty"`  // Optional expiration date
 	Metadata     map[string]string `json:"metadata,omitempty"` // User-defined metadata
 }
 

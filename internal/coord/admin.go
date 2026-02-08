@@ -1333,6 +1333,7 @@ type S3ObjectInfo struct {
 	Key          string `json:"key"`
 	Size         int64  `json:"size"`
 	LastModified string `json:"last_modified"`
+	Expires      string `json:"expires,omitempty"` // Optional expiration date
 	ContentType  string `json:"content_type,omitempty"`
 	IsPrefix     bool   `json:"is_prefix,omitempty"` // True for "folder" prefixes
 }
@@ -1479,12 +1480,16 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 			}
 		}
 
-		result = append(result, S3ObjectInfo{
+		info := S3ObjectInfo{
 			Key:          obj.Key,
 			Size:         obj.Size,
 			LastModified: obj.LastModified.Format(time.RFC3339),
 			ContentType:  obj.ContentType,
-		})
+		}
+		if obj.Expires != nil {
+			info.Expires = obj.Expires.Format(time.RFC3339)
+		}
+		result = append(result, info)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -275,6 +275,7 @@
                 isBucket: true,
                 size: b.used_bytes || 0,
                 lastModified: b.created_at,
+                expires: null,
                 writable: b.writable
             }));
         } else {
@@ -291,10 +292,10 @@
             items = objects.map(obj => {
                 if (obj.is_prefix) {
                     const name = obj.key.replace(state.currentPath, '').replace(/\/$/, '');
-                    return { name, isFolder: true, key: obj.key, size: null, lastModified: null };
+                    return { name, isFolder: true, key: obj.key, size: null, lastModified: null, expires: null };
                 } else {
                     const name = obj.key.replace(state.currentPath, '');
-                    return { name, isFolder: false, key: obj.key, size: obj.size, lastModified: obj.last_modified };
+                    return { name, isFolder: false, key: obj.key, size: obj.size, lastModified: obj.last_modified, expires: obj.expires };
                 }
             }).filter(item => item.name && item.name !== '.folder');
         }
@@ -341,6 +342,7 @@
                     <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span></div></td>
                     <td>${item.size !== null ? formatBytes(item.size) : '-'}</td>
                     <td>${formatDate(item.lastModified)}</td>
+                    <td>${formatDate(item.expires)}</td>
                 </tr>
             `;
         }).join('');

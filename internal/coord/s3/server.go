@@ -267,12 +267,16 @@ func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket stri
 	}
 
 	for _, obj := range objects {
-		resp.Contents = append(resp.Contents, ObjectInfo{
+		info := ObjectInfo{
 			Key:          obj.Key,
 			LastModified: obj.LastModified.Format(time.RFC3339),
 			ETag:         obj.ETag,
 			Size:         obj.Size,
-		})
+		}
+		if obj.Expires != nil {
+			info.Expires = obj.Expires.Format(time.RFC3339)
+		}
+		resp.Contents = append(resp.Contents, info)
 	}
 
 	s.writeXML(w, http.StatusOK, resp)
@@ -330,12 +334,16 @@ func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket st
 	}
 
 	for _, obj := range objects {
-		resp.Contents = append(resp.Contents, ObjectInfo{
+		info := ObjectInfo{
 			Key:          obj.Key,
 			LastModified: obj.LastModified.Format(time.RFC3339),
 			ETag:         obj.ETag,
 			Size:         obj.Size,
-		})
+		}
+		if obj.Expires != nil {
+			info.Expires = obj.Expires.Format(time.RFC3339)
+		}
+		resp.Contents = append(resp.Contents, info)
 	}
 
 	s.writeXML(w, http.StatusOK, resp)
@@ -598,4 +606,5 @@ type ObjectInfo struct {
 	LastModified string `xml:"LastModified"`
 	ETag         string `xml:"ETag"`
 	Size         int64  `xml:"Size"`
+	Expires      string `xml:"Expires,omitempty"` // Custom: object expiration date
 }
