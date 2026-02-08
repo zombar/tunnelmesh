@@ -2706,3 +2706,13 @@ function s3ShowLess() {
     if (TM.s3explorer) TM.s3explorer.showLess();
 }
 window.s3ShowLess = s3ShowLess;
+
+function s3Rename() {
+    if (TM.s3explorer) TM.s3explorer.renameSelected();
+}
+window.s3Rename = s3Rename;
+
+function s3DeleteSelected() {
+    if (TM.s3explorer) TM.s3explorer.deleteSelected();
+}
+window.s3DeleteSelected = s3DeleteSelected;

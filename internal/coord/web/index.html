@@ -318,6 +318,18 @@
                                 <span>Upload</span>
                             </button>
                         </div>
+                        <!-- Selection actions (shown when items selected) -->
+                        <div class="s3-selection-actions" id="s3-selection-actions" style="display: none;">
+                            <button class="s3-btn" id="s3-rename-btn" onclick="s3Rename()" title="Rename">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                                <span>Rename</span>
+                            </button>
+                            <button class="s3-btn s3-btn-danger" onclick="s3DeleteSelected()" title="Delete selected">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                                <span>Delete</span>
+                            </button>
+                            <span class="s3-selection-count" id="s3-selection-count"></span>
+                        </div>
                         <!-- File actions (shown when viewing file) -->
                         <div class="s3-file-actions" id="s3-file-actions" style="display: none;">
                             <button class="s3-btn s3-btn-save" id="s3-save-btn" onclick="s3Save()" title="Save changes">
@@ -346,6 +358,7 @@
                         <table id="s3-files">
                             <thead>
                                 <tr>
+                                    <th class="s3-col-checkbox"></th>
                                     <th class="s3-col-name">Name</th>
                                     <th class="s3-col-size">Size</th>
                                     <th class="s3-col-modified">Last Modified</th>

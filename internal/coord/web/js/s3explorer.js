@@ -27,6 +27,8 @@
         // Pagination
         currentItems: [],     // All items in current view
         visibleCount: PAGE_SIZE,
+        // Selection
+        selectedItems: new Set(),  // Set of item keys/names
     };
 
     // Text file extensions
@@ -243,9 +245,11 @@
         state.currentFile = null;
         state.isDirty = false;
 
-        // Reset pagination when navigating to new folder
+        // Reset pagination and selection when navigating to new folder
         if (resetPagination) {
             state.visibleCount = PAGE_SIZE;
+            state.selectedItems.clear();
+            updateSelectionUI();
         }
 
         let items = [];
@@ -301,7 +305,7 @@
         // Only show visible items
         const visibleItems = items.slice(0, state.visibleCount);
 
-        tbody.innerHTML = visibleItems.map(item => {
+        tbody.innerHTML = visibleItems.map((item, index) => {
             const icon = item.isFolder
                 ? '<svg class="s3-icon s3-icon-folder" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>'
                 : '<svg class="s3-icon s3-icon-file" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>';
@@ -311,9 +315,13 @@
                 : item.isFolder
                     ? `TM.s3explorer.navigateTo('${escapeHtml(state.currentBucket)}', '${escapeHtml(item.key)}')`
                     : `TM.s3explorer.openFile('${escapeHtml(state.currentBucket)}', '${escapeHtml(item.key)}')`;
+            const itemId = item.key || item.name;
+            const isSelected = state.selectedItems.has(itemId);
+            const rowClass = isSelected ? 's3-selected' : '';
 
             return `
-                <tr onclick="${onclick}">
+                <tr class="${rowClass}" onclick="${onclick}">
+                    <td><input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeHtml(itemId)}')" /></td>
                     <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span></div></td>
                     <td>${item.size !== null ? formatBytes(item.size) : '-'}</td>
                     <td>${formatDate(item.lastModified)}</td>
@@ -699,6 +707,142 @@
     }
 
     // =========================================================================
+    // Selection
+    // =========================================================================
+
+    function toggleSelection(itemId) {
+        if (state.selectedItems.has(itemId)) {
+            state.selectedItems.delete(itemId);
+        } else {
+            state.selectedItems.add(itemId);
+        }
+        updateSelectionUI();
+        updateRowSelectionVisuals();
+    }
+
+    function updateSelectionUI() {
+        const browseActions = document.getElementById('s3-browse-actions');
+        const selectionActions = document.getElementById('s3-selection-actions');
+        const renameBtn = document.getElementById('s3-rename-btn');
+        const countEl = document.getElementById('s3-selection-count');
+
+        const count = state.selectedItems.size;
+
+        if (count > 0) {
+            if (browseActions) browseActions.style.display = 'none';
+            if (selectionActions) selectionActions.style.display = 'flex';
+            if (renameBtn) renameBtn.style.display = count === 1 ? 'inline-flex' : 'none';
+            if (countEl) countEl.textContent = `${count} selected`;
+        } else {
+            if (browseActions) browseActions.style.display = 'flex';
+            if (selectionActions) selectionActions.style.display = 'none';
+        }
+    }
+
+    function updateRowSelectionVisuals() {
+        const rows = document.querySelectorAll('#s3-files-body tr');
+        rows.forEach(row => {
+            const checkbox = row.querySelector('.s3-checkbox');
+            if (checkbox) {
+                const itemId = checkbox.dataset.itemId;
+                const isSelected = state.selectedItems.has(itemId);
+                checkbox.checked = isSelected;
+                row.classList.toggle('s3-selected', isSelected);
+            }
+        });
+    }
+
+    function getSelectedItem() {
+        if (state.selectedItems.size !== 1) return null;
+        const itemId = [...state.selectedItems][0];
+        return state.currentItems.find(item => (item.key || item.name) === itemId);
+    }
+
+    async function renameSelected() {
+        const item = getSelectedItem();
+        if (!item) return;
+
+        const oldName = item.name;
+        const newName = prompt('Enter new name:', oldName);
+        if (!newName || newName === oldName) return;
+
+        // Validate name
+        if (newName.includes('/')) {
+            alert('Name cannot contain /');
+            return;
+        }
+
+        try {
+            const oldKey = item.key || item.name;
+            const newKey = item.isFolder
+                ? state.currentPath + newName + '/'
+                : state.currentPath + newName;
+
+            if (item.isBucket) {
+                alert('Buckets cannot be renamed');
+                return;
+            }
+
+            // S3 rename = copy + delete
+            // First copy to new key
+            const copyResp = await fetch(`/api/s3/${state.currentBucket}/${encodeURIComponent(newKey)}`, {
+                method: 'PUT',
+                headers: {
+                    'x-amz-copy-source': `/${state.currentBucket}/${encodeURIComponent(oldKey)}`,
+                },
+            });
+
+            if (!copyResp.ok) {
+                throw new Error(`Copy failed: ${copyResp.status}`);
+            }
+
+            // Then delete old key
+            const deleteResp = await fetch(`/api/s3/${state.currentBucket}/${encodeURIComponent(oldKey)}`, {
+                method: 'DELETE',
+            });
+
+            if (!deleteResp.ok) {
+                throw new Error(`Delete failed: ${deleteResp.status}`);
+            }
+
+            state.selectedItems.clear();
+            await renderFileListing();
+        } catch (err) {
+            console.error('Rename failed:', err);
+            alert('Rename failed: ' + err.message);
+        }
+    }
+
+    async function deleteSelected() {
+        const count = state.selectedItems.size;
+        if (count === 0) return;
+
+        const confirmMsg = count === 1
+            ? 'Delete this item?'
+            : `Delete ${count} items?`;
+
+        if (!confirm(confirmMsg)) return;
+
+        try {
+            for (const itemId of state.selectedItems) {
+                const item = state.currentItems.find(i => (i.key || i.name) === itemId);
+                if (!item || item.isBucket) continue;
+
+                const key = item.key || item.name;
+                await fetch(`/api/s3/${state.currentBucket}/${encodeURIComponent(key)}`, {
+                    method: 'DELETE',
+                });
+            }
+
+            state.selectedItems.clear();
+            await renderFileListing();
+        } catch (err) {
+            console.error('Delete failed:', err);
+            alert('Delete failed: ' + err.message);
+        }
+    }
+
+    // =========================================================================
     // Initialization
     // =========================================================================
 
@@ -736,5 +880,8 @@
         refresh: renderFileListing,
         showMore,
         showLess,
+        toggleSelection,
+        renameSelected,
+        deleteSelected,
     };
 });

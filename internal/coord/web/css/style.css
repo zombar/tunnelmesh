@@ -1771,8 +1771,13 @@ a.logs-container {
     background: var(--color-bg-tertiary);
 }
 
+.s3-col-checkbox {
+    width: 32px;
+    padding: 0 0.5rem !important;
+}
+
 .s3-col-name {
-    width: 60%;
+    width: calc(60% - 32px);
 }
 
 .s3-col-size {
@@ -1781,6 +1786,29 @@ a.logs-container {
 
 .s3-col-modified {
     width: 25%;
+}
+
+.s3-checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--color-accent-blue);
+}
+
+#s3-files tbody tr.s3-selected {
+    background: var(--color-bg-tertiary);
+}
+
+.s3-selection-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.s3-selection-count {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    margin-left: 0.5rem;
 }
 
 /* File/folder row styling */
