@@ -1713,8 +1713,7 @@ a.logs-container {
 
 /* Resizable content container */
 .s3-content {
-    min-height: 320px;
-    max-height: 500px;
+    max-height: 320px;
     overflow-y: auto;
     overflow-x: hidden;
 }
@@ -1863,19 +1862,23 @@ a.logs-container {
 
 .s3-readonly-badge {
     position: absolute;
-    top: 50%;
+    top: 1rem;
     left: 50%;
-    transform: translate(-50%, -50%);
-    background: var(--color-bg-tertiary);
-    border: 1px solid var(--color-border-primary);
-    color: var(--color-text-secondary);
-    padding: 0.5rem 1rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    border-radius: 4px;
+    transform: translateX(-50%);
+    background: transparent;
+    border: 2px solid var(--color-accent-orange);
+    color: var(--color-accent-orange);
+    padding: 0.4rem 1.2rem;
+    font-family: 'Courier New', monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    border-radius: 2px;
     pointer-events: none;
     z-index: 10;
+    text-shadow: 0 0 8px rgba(210, 153, 34, 0.4);
+    box-shadow: 0 0 12px rgba(210, 153, 34, 0.2);
 }
 
 .s3-line-numbers {
