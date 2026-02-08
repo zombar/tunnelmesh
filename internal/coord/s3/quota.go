@@ -68,21 +68,16 @@ func (qm *QuotaManager) CanAllocate(bytes int64) bool {
 // Allocate records storage allocation for a bucket.
 // Returns false if quota would be exceeded.
 func (qm *QuotaManager) Allocate(bucket string, bytes int64) bool {
-	if qm.maxBytes > 0 {
-		qm.mu.Lock()
-		defer qm.mu.Unlock()
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
 
-		if qm.usedBytes+bytes > qm.maxBytes {
-			return false
-		}
-		qm.usedBytes += bytes
-		qm.perBucket[bucket] += bytes
-	} else {
-		qm.mu.Lock()
-		defer qm.mu.Unlock()
-		qm.usedBytes += bytes
-		qm.perBucket[bucket] += bytes
+	// Check quota if limited
+	if qm.maxBytes > 0 && qm.usedBytes+bytes > qm.maxBytes {
+		return false
 	}
+
+	qm.usedBytes += bytes
+	qm.perBucket[bucket] += bytes
 	return true
 }
 
@@ -107,24 +102,25 @@ func (qm *QuotaManager) Release(bucket string, bytes int64) {
 func (qm *QuotaManager) Update(bucket string, oldBytes, newBytes int64) bool {
 	delta := newBytes - oldBytes
 
-	if qm.maxBytes > 0 && delta > 0 {
-		qm.mu.Lock()
-		defer qm.mu.Unlock()
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
 
-		if qm.usedBytes+delta > qm.maxBytes {
-			return false
-		}
-		qm.usedBytes += delta
-		qm.perBucket[bucket] += delta
-	} else {
-		qm.mu.Lock()
-		defer qm.mu.Unlock()
-		qm.usedBytes += delta
-		qm.perBucket[bucket] += delta
-		if qm.perBucket[bucket] <= 0 {
-			delete(qm.perBucket, bucket)
-		}
+	// Check quota if limited and delta is positive
+	if qm.maxBytes > 0 && delta > 0 && qm.usedBytes+delta > qm.maxBytes {
+		return false
 	}
+
+	qm.usedBytes += delta
+	// Guard against underflow
+	if qm.usedBytes < 0 {
+		qm.usedBytes = 0
+	}
+
+	qm.perBucket[bucket] += delta
+	if qm.perBucket[bucket] <= 0 {
+		delete(qm.perBucket, bucket)
+	}
+
 	return true
 }
 

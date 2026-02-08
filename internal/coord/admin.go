@@ -1071,8 +1071,12 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get owner from TLS client certificate if available
+	// Get owner from TLS client certificate - required for share creation
 	ownerID := s.getRequestOwner(r)
+	if ownerID == "" {
+		s.jsonError(w, "client certificate required for share creation", http.StatusUnauthorized)
+		return
+	}
 
 	// Build share options
 	opts := &s3.FileShareOptions{}
@@ -1241,10 +1245,10 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 // getRequestOwner extracts the owner identity from the request.
-// It tries to get the peer name from the TLS client certificate,
-// falling back to "admin" if not available.
+// It returns the peer name from the TLS client certificate, or empty string if unavailable.
+// Callers should validate the returned value before using it for ownership.
 func (s *Server) getRequestOwner(r *http.Request) string {
-	// Try to get peer name from TLS client certificate
+	// Get peer name from TLS client certificate
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		cn := r.TLS.PeerCertificates[0].Subject.CommonName
 		// CN format is "peername.tunnelmesh" - extract just the peer name
@@ -1253,8 +1257,9 @@ func (s *Server) getRequestOwner(r *http.Request) string {
 		}
 		return cn
 	}
-	// Fallback to admin if no TLS client certificate
-	return "admin"
+	// No client certificate - return empty string
+	// Callers must handle this case explicitly
+	return ""
 }
 
 // --- Role Binding API Handlers ---

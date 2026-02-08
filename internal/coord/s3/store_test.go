@@ -759,3 +759,98 @@ func TestDeleteTwiceToPurge_BucketTombstoned(t *testing.T) {
 	_, err = store.HeadObject("test-bucket", "file.txt")
 	assert.Equal(t, ErrObjectNotFound, err, "delete of bucket-tombstoned object should purge")
 }
+
+// --- Path Traversal Regression Tests ---
+
+func TestPathTraversal_BucketName(t *testing.T) {
+	store := newTestStore(t)
+
+	// Test various path traversal attempts in bucket names
+	// Note: URL-encoded attacks (like %2f) are handled at the API layer where
+	// URL decoding occurs before validation. These tests cover the storage layer.
+	maliciousBuckets := []string{
+		"..",
+		"../etc",
+		"bucket/../etc",
+		"bucket/../../etc",
+		"./bucket",
+		".\\bucket",
+		"bucket\\..\\etc",
+		"/etc/passwd",
+		"\\etc\\passwd",
+	}
+
+	for _, name := range maliciousBuckets {
+		t.Run(name, func(t *testing.T) {
+			err := store.CreateBucket(name, "attacker")
+			assert.Error(t, err, "bucket name %q should be rejected", name)
+		})
+	}
+}
+
+func TestPathTraversal_ObjectKey(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Test various path traversal attempts in object keys
+	// Note: URL-encoded attacks are handled at the API layer
+	maliciousKeys := []string{
+		"..",
+		"../etc/passwd",
+		"foo/../../../etc/passwd",
+		"foo/bar/../../..",
+		"foo\\..\\..\\etc",
+		"/etc/passwd",
+		"\\etc\\passwd",
+	}
+
+	content := []byte("malicious content")
+	for _, key := range maliciousKeys {
+		t.Run(key, func(t *testing.T) {
+			_, err := store.PutObject("test-bucket", key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+			assert.Error(t, err, "object key %q should be rejected", key)
+		})
+	}
+}
+
+func TestPathTraversal_ValidPaths(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Test that valid paths with dots are still allowed
+	validKeys := []string{
+		"file.txt",
+		"folder/file.txt",
+		"folder.with.dots/file.txt",
+		".hidden",
+		"folder/.hidden",
+		"...file",
+		"file...",
+		"folder/...file",
+		"dotdot..file",
+		"file..dotdot",
+	}
+
+	content := []byte("valid content")
+	for _, key := range validKeys {
+		t.Run(key, func(t *testing.T) {
+			_, err := store.PutObject("test-bucket", key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+			assert.NoError(t, err, "object key %q should be allowed", key)
+		})
+	}
+}
+
+func TestPathTraversal_ValidNestedPaths(t *testing.T) {
+	store := newTestStore(t)
+	require.NoError(t, store.CreateBucket("test-bucket", "alice"))
+
+	// Test nested paths that should work
+	content := []byte("valid content")
+
+	// First create a folder, then a file in it
+	_, err := store.PutObject("test-bucket", "dotfolder/.hidden", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	assert.NoError(t, err, "nested .hidden file should be allowed")
+
+	_, err = store.PutObject("test-bucket", ".hiddendir/file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	assert.NoError(t, err, "file in .hidden directory should be allowed")
+}

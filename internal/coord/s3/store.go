@@ -177,11 +177,23 @@ func validateName(name string) error {
 	if name == "." || name == ".." {
 		return fmt.Errorf("invalid name")
 	}
-	if strings.Contains(name, "..") {
-		return fmt.Errorf("path traversal not allowed")
+	// Check for path traversal: ".." as a component (not "..." which is valid)
+	// Split on both forward and back slashes to handle all platforms
+	for _, sep := range []string{"/", "\\"} {
+		parts := strings.Split(name, sep)
+		for _, part := range parts {
+			if part == ".." {
+				return fmt.Errorf("path traversal not allowed")
+			}
+		}
 	}
+	// Block absolute paths
 	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") {
 		return fmt.Errorf("absolute paths not allowed")
+	}
+	// Block relative paths starting with "./" or ".\"
+	if strings.HasPrefix(name, "./") || strings.HasPrefix(name, ".\\") {
+		return fmt.Errorf("relative paths not allowed")
 	}
 	return nil
 }
