@@ -114,19 +114,15 @@
         return d.toLocaleDateString();
     }
 
+    // Use formatExpiry from TM.format utility
     function formatExpiry(isoDate) {
         if (!isoDate) return '-';
-        const d = new Date(isoDate);
-        const now = new Date();
-        const diffMs = d - now;
-        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-        if (diffDays < 0) return 'Expired';
-        if (diffDays === 0) return 'Today';
-        if (diffDays === 1) return 'Tomorrow';
-        if (diffDays < 30) return `in ${diffDays}d`;
-        if (diffDays < 365) return `in ${Math.floor(diffDays / 30)}mo`;
-        return `in ${Math.floor(diffDays / 365)}y`;
+        // Delegate to shared utility (handles null check internally too)
+        if (typeof TM !== 'undefined' && TM.format && TM.format.formatExpiry) {
+            return TM.format.formatExpiry(isoDate);
+        }
+        // Fallback if utility not loaded
+        return new Date(isoDate).toLocaleDateString();
     }
 
     function getExtension(filename) {
