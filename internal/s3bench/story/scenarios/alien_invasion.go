@@ -147,7 +147,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{3000, 15000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Scientific analyses - periodic
 		{
@@ -156,7 +156,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{10000, 50000},
 			Authors:     []string{"scientist"},
 			DataPattern: "realistic",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Traffic reports - very frequent, shows escalation
 		{
@@ -165,7 +165,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{2000, 8000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Council meetings - rare, very large
 		{
@@ -174,7 +174,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{30000, 120000},
 			Authors:     []string{"commander"},
 			DataPattern: "realistic",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Phone transcripts - frequent
 		{
@@ -183,7 +183,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{2000, 12000},
 			Authors:     []string{"commander", "scientist"},
 			DataPattern: "realistic",
-			Versions:    1,
+			Versions:    2,
 		},
 		// IM transcripts - very frequent
 		{
@@ -192,7 +192,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{1000, 8000},
 			Authors:     []string{"commander", "scientist", "eve"},
 			DataPattern: "realistic",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Casualty lists - periodic, growing
 		{
@@ -201,7 +201,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{5000, 25000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Supply manifests - daily
 		{
@@ -210,7 +210,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{3000, 15000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    2, // Updated as supplies deplete
+			Versions:    4, // Updated as supplies deplete
 		},
 		// Intel briefs - periodic
 		{
@@ -219,7 +219,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{8000, 35000},
 			Authors:     []string{"commander"},
 			DataPattern: "realistic",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Radio logs - frequent, dramatic
 		{
@@ -228,7 +228,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{4000, 25000},
 			Authors:     []string{"commander"},
 			DataPattern: "realistic",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Press releases - periodic
 		{
@@ -237,7 +237,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{1000, 5000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Private diaries - frequent, personal
 		{
@@ -246,7 +246,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{1500, 8000},
 			Authors:     []string{"scientist", "eve"},
 			DataPattern: "realistic",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Hospital records - frequent
 		{
@@ -255,7 +255,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{3000, 15000},
 			Authors:     []string{"scientist"},
 			DataPattern: "realistic",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Lab results - frequent
 		{
@@ -264,7 +264,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{2000, 12000},
 			Authors:     []string{"scientist"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Field notes - frequent
 		{
@@ -273,7 +273,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{1000, 6000},
 			Authors:     []string{"commander"},
 			DataPattern: "realistic",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Drone footage metadata - very frequent
 		{
@@ -282,7 +282,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{800, 4000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Status updates - very frequent, brief
 		{
@@ -291,7 +291,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{500, 3000},
 			Authors:     []string{"commander", "scientist"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Incident reports - frequent
 		{
@@ -300,7 +300,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{2000, 10000},
 			Authors:     []string{"commander"},
 			DataPattern: "realistic",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Sensor readings - very frequent
 		{
@@ -309,7 +309,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{1000, 5000},
 			Authors:     []string{"scientist"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Social media posts - extremely frequent
 		{
@@ -318,7 +318,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{300, 2000},
 			Authors:     []string{"eve"},
 			DataPattern: "realistic",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Email messages - extremely frequent
 		{
@@ -327,7 +327,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{500, 3000},
 			Authors:     []string{"commander", "scientist", "eve"},
 			DataPattern: "realistic",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Alert messages - very frequent
 		{
@@ -336,7 +336,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{400, 2000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// News bulletins - frequent
 		{
@@ -345,7 +345,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{1000, 5000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Logistics reports - frequent
 		{
@@ -354,7 +354,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{2000, 8000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Personnel status - frequent
 		{
@@ -363,7 +363,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{1500, 6000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Weather/environmental reports - frequent
 		{
@@ -372,7 +372,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{1000, 4000},
 			Authors:     []string{"scientist"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 		},
 		// Intercepted communications - rare, mysterious
 		{
@@ -390,7 +390,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{2000, 7000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    1,
+			Versions:    2,
 			ExpiresIn:   6 * time.Hour, // Orders expire after 6h
 		},
 	}
