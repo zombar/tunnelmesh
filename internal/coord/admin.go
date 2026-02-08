@@ -2099,9 +2099,10 @@ func validatePluginURL(pluginURL string) error {
 }
 
 // persistExternalPanels saves external panels to the system store.
-func (s *Server) persistExternalPanels() {
+// Returns an error if persistence fails.
+func (s *Server) persistExternalPanels() error {
 	if s.s3SystemStore == nil || s.s3Authorizer == nil || s.s3Authorizer.PanelRegistry == nil {
-		return
+		return nil // No storage configured, skip persistence
 	}
 
 	// Get all external panels
@@ -2111,9 +2112,7 @@ func (s *Server) persistExternalPanels() {
 		panelPtrs[i] = &externalPanels[i]
 	}
 
-	if err := s.s3SystemStore.SavePanels(panelPtrs); err != nil {
-		log.Warn().Err(err).Msg("failed to persist external panels")
-	}
+	return s.s3SystemStore.SavePanels(panelPtrs)
 }
 
 // handlePanels handles GET (list) and POST (register) for panels.
@@ -2187,8 +2186,14 @@ func (s *Server) handlePanelRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Persist external panels
-	s.persistExternalPanels()
+	// Persist external panels - rollback on failure
+	if err := s.persistExternalPanels(); err != nil {
+		// Rollback: unregister the panel
+		_ = s.s3Authorizer.PanelRegistry.Unregister(panel.ID)
+		log.Error().Err(err).Str("panel_id", panel.ID).Msg("failed to persist panel, rolling back")
+		s.jsonError(w, "failed to persist panel registration", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -2261,13 +2266,24 @@ func (s *Server) handlePanelUpdate(w http.ResponseWriter, r *http.Request, panel
 		return
 	}
 
+	// Validate PluginURL if provided (security: prevent javascript:, file://, etc.)
+	if update.PluginURL != "" {
+		if err := validatePluginURL(update.PluginURL); err != nil {
+			s.jsonError(w, fmt.Sprintf("invalid plugin URL: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+
 	if err := s.s3Authorizer.PanelRegistry.Update(panelID, update); err != nil {
 		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// Persist external panels
-	s.persistExternalPanels()
+	if err := s.persistExternalPanels(); err != nil {
+		// Log but don't fail - panel is already updated in memory
+		log.Warn().Err(err).Str("panel_id", panelID).Msg("failed to persist panel update")
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -2289,13 +2305,27 @@ func (s *Server) handlePanelDelete(w http.ResponseWriter, r *http.Request, panel
 		return
 	}
 
+	// Get panel before deletion for potential rollback
+	panel := s.s3Authorizer.PanelRegistry.Get(panelID)
+	if panel == nil {
+		s.jsonError(w, "panel not found", http.StatusNotFound)
+		return
+	}
+	panelCopy := *panel
+
 	if err := s.s3Authorizer.PanelRegistry.Unregister(panelID); err != nil {
 		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Persist external panels
-	s.persistExternalPanels()
+	// Persist external panels - rollback on failure
+	if err := s.persistExternalPanels(); err != nil {
+		// Rollback: re-register the panel
+		_ = s.s3Authorizer.PanelRegistry.Register(panelCopy)
+		log.Error().Err(err).Str("panel_id", panelID).Msg("failed to persist panel deletion, rolling back")
+		s.jsonError(w, "failed to persist panel deletion", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{

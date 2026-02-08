@@ -246,7 +246,8 @@ func (r *PanelRegistry) ListPublic() []PanelDefinition {
 }
 
 // SetPublic updates the public flag for a panel.
-// Uses copy-on-write to avoid race conditions with concurrent readers.
+// Uses mutex for synchronization and copy-on-write semantics to ensure
+// readers with existing panel references see consistent data.
 func (r *PanelRegistry) SetPublic(id string, public bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -256,7 +257,7 @@ func (r *PanelRegistry) SetPublic(id string, public bool) error {
 		return fmt.Errorf("panel not found: %s", id)
 	}
 
-	// Copy-on-write: create a new panel with updated public flag
+	// Copy before modifying to avoid mutating panel visible to concurrent readers
 	updated := *existing
 	updated.Public = public
 	r.panels[id] = &updated
@@ -266,7 +267,8 @@ func (r *PanelRegistry) SetPublic(id string, public bool) error {
 
 // Update updates a panel's metadata (non-ID fields).
 // Only works for external panels.
-// Uses copy-on-write to avoid race conditions with concurrent readers.
+// Uses mutex for synchronization and copy-on-write semantics to ensure
+// readers with existing panel references see consistent data.
 func (r *PanelRegistry) Update(id string, update PanelDefinition) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -276,7 +278,7 @@ func (r *PanelRegistry) Update(id string, update PanelDefinition) error {
 		return fmt.Errorf("panel not found: %s", id)
 	}
 
-	// Copy-on-write: create a new panel with updates applied
+	// Copy before modifying to avoid mutating panel visible to concurrent readers
 	updated := *existing
 
 	// Allow updating public flag on any panel

@@ -332,10 +332,11 @@ func (a *Authorizer) CanAccessPanel(userID, panelID string) bool {
 }
 
 // GetAccessiblePanels returns all panel IDs a user can access.
+// Always returns a non-nil slice (empty slice if no access) for consistent JSON encoding.
 func (a *Authorizer) GetAccessiblePanels(userID string) []string {
 	if a.PanelRegistry == nil {
 		log.Info().Str("user_id", userID).Msg("dashboard panel permissions: no registry configured")
-		return nil
+		return []string{}
 	}
 
 	// Admin gets all panels
