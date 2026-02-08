@@ -230,14 +230,14 @@ groups:
 
       # Critical: Quota critical level
       - alert: TunnelMeshS3QuotaCritical
-        expr: tunnelmesh_s3_quota_used_percent > 90
+        expr: tunnelmesh_s3_quota_used_percent > 85
         for: 2m
         labels:
           severity: critical
           category: data
         annotations:
           summary: "S3 storage quota critical"
-          description: "S3 storage is {{ $value }}% full (critical at 90%)"
+          description: "S3 storage is {{ $value }}% full (critical at 85%)"
 
       # Critical: High error rate
       - alert: TunnelMeshS3HighErrorRate
@@ -261,16 +261,16 @@ groups:
           summary: "S3 service down or not receiving requests"
           description: "No S3 metrics reported for 2 minutes"
 
-      # Page: Quota completely full
-      - alert: TunnelMeshS3QuotaFull
-        expr: tunnelmesh_s3_quota_used_percent >= 100
-        for: 30s
+      # Page: Quota near full - immediate action required
+      - alert: TunnelMeshS3QuotaNearFull
+        expr: tunnelmesh_s3_quota_used_percent > 92
+        for: 1m
         labels:
           severity: page
           category: data
         annotations:
-          summary: "S3 storage quota completely full"
-          description: "S3 storage has reached 100% of quota - all uploads will fail"
+          summary: "S3 storage quota near full - immediate action required"
+          description: "S3 storage is {{ $value }}% full (>92%) - uploads will fail soon"
 
   # Security & Auth Alerts
   - name: tunnelmesh-security
