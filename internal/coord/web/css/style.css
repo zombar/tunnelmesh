@@ -1612,7 +1612,7 @@ a.logs-container {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.5rem 0.75rem;
+    padding: 0.5rem 1rem;
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border-primary);
     min-height: 40px;
