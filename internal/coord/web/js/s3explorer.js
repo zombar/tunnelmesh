@@ -1,14 +1,14 @@
 // TunnelMesh S3 Explorer
 // GitHub-style single-pane file browser
 
-(function(root, factory) {
+(function (root, factory) {
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = factory();
     } else {
         root.TM = root.TM || {};
         root.TM.s3explorer = factory();
     }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
     // =========================================================================
@@ -20,17 +20,17 @@
     const state = {
         buckets: [],
         currentBucket: null,
-        currentPath: '',      // Current folder prefix
-        currentFile: null,    // { bucket, key, content, contentType }
+        currentPath: '', // Current folder prefix
+        currentFile: null, // { bucket, key, content, contentType }
         isDirty: false,
         originalContent: '',
         // Pagination
-        currentItems: [],     // All items in current view
+        currentItems: [], // All items in current view
         visibleCount: PAGE_SIZE,
         // Selection
-        selectedItems: new Set(),  // Set of item keys/names
+        selectedItems: new Set(), // Set of item keys/names
         // Permissions
-        writable: true,       // Whether current bucket is writable
+        writable: true, // Whether current bucket is writable
         // Editor options
         autosave: false,
         autosaveTimer: null,
@@ -41,11 +41,42 @@
 
     // Text file extensions
     const TEXT_EXTENSIONS = new Set([
-        'txt', 'md', 'json', 'yaml', 'yml', 'js', 'ts', 'jsx', 'tsx',
-        'go', 'py', 'rb', 'rs', 'css', 'scss', 'html', 'htm', 'xml',
-        'sh', 'bash', 'zsh', 'conf', 'ini', 'env', 'toml', 'cfg',
-        'sql', 'graphql', 'proto', 'tf', 'hcl', 'makefile',
-        'gitignore', 'dockerignore', 'log', 'csv'
+        'txt',
+        'md',
+        'json',
+        'yaml',
+        'yml',
+        'js',
+        'ts',
+        'jsx',
+        'tsx',
+        'go',
+        'py',
+        'rb',
+        'rs',
+        'css',
+        'scss',
+        'html',
+        'htm',
+        'xml',
+        'sh',
+        'bash',
+        'zsh',
+        'conf',
+        'ini',
+        'env',
+        'toml',
+        'cfg',
+        'sql',
+        'graphql',
+        'proto',
+        'tf',
+        'hcl',
+        'makefile',
+        'gitignore',
+        'dockerignore',
+        'log',
+        'csv',
     ]);
 
     const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico']);
@@ -66,7 +97,7 @@
         const k = 1024;
         const sizes = ['B', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        return `${parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
     }
 
     function formatDate(isoDate) {
@@ -89,13 +120,10 @@
         return parts[parts.length - 1].toLowerCase();
     }
 
-    function isTextFile(filename) {
+    function _isTextFile(filename) {
         const ext = getExtension(filename);
         const name = filename.toLowerCase();
-        return TEXT_EXTENSIONS.has(ext) ||
-               name === 'dockerfile' ||
-               name === 'makefile' ||
-               name.startsWith('.');
+        return TEXT_EXTENSIONS.has(ext) || name === 'dockerfile' || name === 'makefile' || name.startsWith('.');
     }
 
     function isImageFile(filename) {
@@ -169,7 +197,7 @@
         const resp = await fetch(`api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}`, {
             method: 'PUT',
             headers: { 'Content-Type': contentType },
-            body: content
+            body: content,
         });
         if (!resp.ok) throw new Error(`Failed to save: ${resp.status}`);
         return true;
@@ -177,7 +205,7 @@
 
     async function deleteObject(bucket, key) {
         const resp = await fetch(`api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}`, {
-            method: 'DELETE'
+            method: 'DELETE',
         });
         return resp.ok || resp.status === 204;
     }
@@ -209,12 +237,12 @@
             // Path parts
             if (state.currentPath || state.currentFile) {
                 const path = state.currentFile ? state.currentFile.key : state.currentPath;
-                const parts = path.split('/').filter(p => p);
+                const parts = path.split('/').filter((p) => p);
                 let accum = '';
 
                 for (let i = 0; i < parts.length; i++) {
                     const part = parts[i];
-                    accum += part + '/';
+                    accum += `${part}/`;
                     html += '<span class="s3-breadcrumb-sep">/</span>';
 
                     const isLast = i === parts.length - 1;
@@ -269,7 +297,7 @@
             // Show buckets as folders
             const buckets = await fetchBuckets();
             state.buckets = buckets;
-            items = buckets.map(b => ({
+            items = buckets.map((b) => ({
                 name: b.name,
                 isFolder: true,
                 isBucket: true,
@@ -277,7 +305,7 @@
                 quota: b.quota_bytes || 0,
                 lastModified: b.created_at,
                 expires: null,
-                writable: b.writable
+                writable: b.writable,
             }));
         } else {
             // Show objects in current path
@@ -290,15 +318,33 @@
                 return a.key.localeCompare(b.key);
             });
 
-            items = objects.map(obj => {
-                if (obj.is_prefix) {
-                    const name = obj.key.replace(state.currentPath, '').replace(/\/$/, '');
-                    return { name, isFolder: true, key: obj.key, size: null, quota: null, lastModified: null, expires: null };
-                } else {
-                    const name = obj.key.replace(state.currentPath, '');
-                    return { name, isFolder: false, key: obj.key, size: obj.size, quota: null, lastModified: obj.last_modified, expires: obj.expires };
-                }
-            }).filter(item => item.name && item.name !== '.folder');
+            items = objects
+                .map((obj) => {
+                    if (obj.is_prefix) {
+                        const name = obj.key.replace(state.currentPath, '').replace(/\/$/, '');
+                        return {
+                            name,
+                            isFolder: true,
+                            key: obj.key,
+                            size: null,
+                            quota: null,
+                            lastModified: null,
+                            expires: null,
+                        };
+                    } else {
+                        const name = obj.key.replace(state.currentPath, '');
+                        return {
+                            name,
+                            isFolder: false,
+                            key: obj.key,
+                            size: obj.size,
+                            quota: null,
+                            lastModified: obj.last_modified,
+                            expires: obj.expires,
+                        };
+                    }
+                })
+                .filter((item) => item.name && item.name !== '.folder');
         }
 
         // Store items for pagination
@@ -319,25 +365,26 @@
         // Only show visible items
         const visibleItems = items.slice(0, state.visibleCount);
 
-        tbody.innerHTML = visibleItems.map((item, index) => {
-            const icon = item.isFolder
-                ? '<svg class="s3-icon s3-icon-folder" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>'
-                : '<svg class="s3-icon s3-icon-file" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>';
-            const nameClass = item.isFolder ? 's3-name s3-name-folder' : 's3-name';
-            const onclick = item.isBucket
-                ? `TM.s3explorer.navigateTo('${escapeHtml(item.name)}', '')`
-                : item.isFolder
-                    ? `TM.s3explorer.navigateTo('${escapeHtml(state.currentBucket)}', '${escapeHtml(item.key)}')`
-                    : `TM.s3explorer.openFile('${escapeHtml(state.currentBucket)}', '${escapeHtml(item.key)}')`;
-            const itemId = item.key || item.name;
-            const isSelected = state.selectedItems.has(itemId);
-            const rowClass = isSelected ? 's3-selected' : '';
-            // Show checkboxes for files/folders (not buckets), disabled for read-only
-            const checkbox = item.isBucket
-                ? ''
-                : `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} ${state.writable ? '' : 'disabled'} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeHtml(itemId)}')" />`;
+        tbody.innerHTML = visibleItems
+            .map((item, index) => {
+                const icon = item.isFolder
+                    ? '<svg class="s3-icon s3-icon-folder" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>'
+                    : '<svg class="s3-icon s3-icon-file" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>';
+                const nameClass = item.isFolder ? 's3-name s3-name-folder' : 's3-name';
+                const onclick = item.isBucket
+                    ? `TM.s3explorer.navigateTo('${escapeHtml(item.name)}', '')`
+                    : item.isFolder
+                      ? `TM.s3explorer.navigateTo('${escapeHtml(state.currentBucket)}', '${escapeHtml(item.key)}')`
+                      : `TM.s3explorer.openFile('${escapeHtml(state.currentBucket)}', '${escapeHtml(item.key)}')`;
+                const itemId = item.key || item.name;
+                const isSelected = state.selectedItems.has(itemId);
+                const rowClass = isSelected ? 's3-selected' : '';
+                // Show checkboxes for files/folders (not buckets), disabled for read-only
+                const checkbox = item.isBucket
+                    ? ''
+                    : `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} ${state.writable ? '' : 'disabled'} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeHtml(itemId)}')" />`;
 
-            return `
+                return `
                 <tr class="${rowClass}" onclick="${onclick}">
                     <td>${checkbox}</td>
                     <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span></div></td>
@@ -347,7 +394,8 @@
                     <td>${formatDate(item.expires)}</td>
                 </tr>
             `;
-        }).join('');
+            })
+            .join('');
 
         // Update pagination UI using shared helper
         const total = state.currentItems.length;
@@ -449,7 +497,7 @@
             }
             updateLineNumbers();
         } catch (err) {
-            showToast('Failed to load file: ' + err.message, 'error');
+            showToast(`Failed to load file: ${err.message}`, 'error');
             closeFile();
         }
     }
@@ -556,7 +604,7 @@
         if (bucket && state.buckets.length === 0) {
             state.buckets = await fetchBuckets();
         }
-        const bucketInfo = state.buckets.find(b => b.name === bucket);
+        const bucketInfo = state.buckets.find((b) => b.name === bucket);
         state.writable = bucketInfo ? bucketInfo.writable : true;
 
         await renderFileListing();
@@ -580,7 +628,7 @@
             updateSaveButton();
             showToast('File saved', 'success');
         } catch (err) {
-            showToast('Failed to save: ' + err.message, 'error');
+            showToast(`Failed to save: ${err.message}`, 'error');
         }
     }
 
@@ -609,7 +657,7 @@
             state.isDirty = false;
             await renderFileListing();
         } catch (err) {
-            showToast('Failed to delete: ' + err.message, 'error');
+            showToast(`Failed to delete: ${err.message}`, 'error');
         }
     }
 
@@ -648,7 +696,7 @@
             showToast('File created', 'success');
             await openFile(state.currentBucket, key);
         } catch (err) {
-            showToast('Failed to create file: ' + err.message, 'error');
+            showToast(`Failed to create file: ${err.message}`, 'error');
         }
     }
 
@@ -661,15 +709,15 @@
             return;
         }
 
-        const key = state.currentPath + name + '/.folder';
+        const key = `${state.currentPath + name}/.folder`;
 
         try {
             await putObject(state.currentBucket, key, '', 'text/plain');
             closeModal('s3-new-modal');
             showToast('Folder created', 'success');
-            await navigateTo(state.currentBucket, state.currentPath + name + '/');
+            await navigateTo(state.currentBucket, `${state.currentPath + name}/`);
         } catch (err) {
-            showToast('Failed to create folder: ' + err.message, 'error');
+            showToast(`Failed to create folder: ${err.message}`, 'error');
         }
     }
 
@@ -707,13 +755,16 @@
 
             try {
                 const content = await file.arrayBuffer();
-                await fetch(`api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(key)}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': file.type || 'application/octet-stream' },
-                    body: content
-                });
+                await fetch(
+                    `api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(key)}`,
+                    {
+                        method: 'PUT',
+                        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+                        body: content,
+                    },
+                );
                 showToast(`Uploaded ${file.name}`, 'success');
-            } catch (err) {
+            } catch (_err) {
                 showToast(`Failed to upload ${file.name}`, 'error');
             }
         }
@@ -818,7 +869,7 @@
 
     function updateRowSelectionVisuals() {
         const rows = document.querySelectorAll('#s3-files-body tr');
-        rows.forEach(row => {
+        rows.forEach((row) => {
             const checkbox = row.querySelector('.s3-checkbox');
             if (checkbox) {
                 const itemId = checkbox.dataset.itemId;
@@ -832,7 +883,7 @@
     function getSelectedItem() {
         if (state.selectedItems.size !== 1) return null;
         const itemId = [...state.selectedItems][0];
-        return state.currentItems.find(item => (item.key || item.name) === itemId);
+        return state.currentItems.find((item) => (item.key || item.name) === itemId);
     }
 
     async function renameSelected() {
@@ -865,25 +916,33 @@
 
             // S3 rename = GET + PUT + DELETE (no native copy support)
             // First get the file content
-            const getResp = await fetch(`api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(oldKey)}`);
+            const getResp = await fetch(
+                `api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(oldKey)}`,
+            );
             if (!getResp.ok) {
                 throw new Error(`Failed to read file: ${getResp.status}`);
             }
             const content = await getResp.blob();
 
             // Put to new key
-            const putResp = await fetch(`api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(newKey)}`, {
-                method: 'PUT',
-                body: content,
-            });
+            const putResp = await fetch(
+                `api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(newKey)}`,
+                {
+                    method: 'PUT',
+                    body: content,
+                },
+            );
             if (!putResp.ok) {
                 throw new Error(`Failed to create new file: ${putResp.status}`);
             }
 
             // Delete old key
-            const deleteResp = await fetch(`api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(oldKey)}`, {
-                method: 'DELETE',
-            });
+            const deleteResp = await fetch(
+                `api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(oldKey)}`,
+                {
+                    method: 'DELETE',
+                },
+            );
             if (!deleteResp.ok) {
                 throw new Error(`Failed to delete old file: ${deleteResp.status}`);
             }
@@ -892,7 +951,7 @@
             await renderFileListing();
         } catch (err) {
             console.error('Rename failed:', err);
-            alert('Rename failed: ' + err.message);
+            alert(`Rename failed: ${err.message}`);
         }
     }
 
@@ -900,15 +959,13 @@
         const count = state.selectedItems.size;
         if (count === 0) return;
 
-        const confirmMsg = count === 1
-            ? 'Delete this item?'
-            : `Delete ${count} items?`;
+        const confirmMsg = count === 1 ? 'Delete this item?' : `Delete ${count} items?`;
 
         if (!confirm(confirmMsg)) return;
 
         try {
             for (const itemId of state.selectedItems) {
-                const item = state.currentItems.find(i => (i.key || i.name) === itemId);
+                const item = state.currentItems.find((i) => (i.key || i.name) === itemId);
                 if (!item || item.isBucket) continue;
 
                 const key = item.key || item.name;
@@ -921,7 +978,7 @@
             await renderFileListing();
         } catch (err) {
             console.error('Delete failed:', err);
-            showToast('Delete failed: ' + err.message, 'error');
+            showToast(`Delete failed: ${err.message}`, 'error');
         }
     }
 

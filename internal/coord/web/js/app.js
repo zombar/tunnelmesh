@@ -13,7 +13,7 @@ const {
 
 // Import utilities from TM modules
 const { escapeHtml } = TM.utils;
-const { formatBytes, formatRate, formatLatency, formatLastSeen } = TM.format;
+const { formatBytes, formatRate, formatLatency, formatLastSeen, formatExpiry } = TM.format;
 const { createPaginationController, updatePaginationUI } = TM.pagination;
 const { createSparklineSVG } = TM.table;
 const { createModalController } = TM.modal;
@@ -417,7 +417,9 @@ const usersPagination = createPaginationController({
     pageSize: ROWS_PER_PAGE,
     getItems: () => state.currentUsers,
     getVisibleCount: () => state.usersVisibleCount,
-    setVisibleCount: (n) => { state.usersVisibleCount = n; },
+    setVisibleCount: (n) => {
+        state.usersVisibleCount = n;
+    },
     onRender: () => renderUsersTable(),
 });
 
@@ -425,7 +427,9 @@ const groupsPagination = createPaginationController({
     pageSize: ROWS_PER_PAGE,
     getItems: () => state.currentGroups,
     getVisibleCount: () => state.groupsVisibleCount,
-    setVisibleCount: (n) => { state.groupsVisibleCount = n; },
+    setVisibleCount: (n) => {
+        state.groupsVisibleCount = n;
+    },
     onRender: () => renderGroupsTable(),
 });
 
@@ -433,7 +437,9 @@ const sharesPagination = createPaginationController({
     pageSize: ROWS_PER_PAGE,
     getItems: () => state.currentShares,
     getVisibleCount: () => state.sharesVisibleCount,
-    setVisibleCount: (n) => { state.sharesVisibleCount = n; },
+    setVisibleCount: (n) => {
+        state.sharesVisibleCount = n;
+    },
     onRender: () => renderSharesTable(),
 });
 
@@ -441,23 +447,24 @@ const bindingsPagination = createPaginationController({
     pageSize: ROWS_PER_PAGE,
     getItems: () => state.currentBindings,
     getVisibleCount: () => state.bindingsVisibleCount,
-    setVisibleCount: (n) => { state.bindingsVisibleCount = n; },
+    setVisibleCount: (n) => {
+        state.bindingsVisibleCount = n;
+    },
     onRender: () => renderBindingsTable(),
 });
 
 // Helper to update pagination UI for a section
 // Can be called with (prefix, controller) or (prefix, { total, shown, hasMore, canShowLess })
 function updateSectionPagination(prefix, controllerOrState) {
-    const uiState = typeof controllerOrState.getUIState === 'function'
-        ? controllerOrState.getUIState()
-        : controllerOrState;
+    const uiState =
+        typeof controllerOrState.getUIState === 'function' ? controllerOrState.getUIState() : controllerOrState;
     const paginationEl = document.getElementById(`${prefix}-pagination`);
     if (!paginationEl) return;
     if (uiState.isEmpty || uiState.total === 0) {
         paginationEl.style.display = 'none';
         return;
     }
-    paginationEl.style.display = (uiState.hasMore || uiState.canShowLess) ? 'block' : 'none';
+    paginationEl.style.display = uiState.hasMore || uiState.canShowLess ? 'block' : 'none';
     document.getElementById(`${prefix}-show-more`).style.display = uiState.hasMore ? 'inline' : 'none';
     document.getElementById(`${prefix}-show-less`).style.display = uiState.canShowLess ? 'inline' : 'none';
     document.getElementById(`${prefix}-shown-count`).textContent = uiState.shown;
@@ -2200,17 +2207,21 @@ function renderUsersTable() {
 
     noUsers.style.display = 'none';
     const visibleUsers = usersPagination.getVisibleItems();
-    tbody.innerHTML = visibleUsers.map(u => `
+    tbody.innerHTML = visibleUsers
+        .map(
+            (u) => `
         <tr>
             <td>${escapeHtml(u.name || '-')}</td>
             <td><code>${escapeHtml(u.id)}</code></td>
             <td><span class="status-badge ${u.is_service ? 'service' : 'user'}">${u.is_service ? 'Service' : 'User'}</span></td>
-            <td>${u.groups ? u.groups.map(g => `<span class="group-badge">${escapeHtml(g)}</span>`).join(' ') : '-'}</td>
+            <td>${u.groups ? u.groups.map((g) => `<span class="group-badge">${escapeHtml(g)}</span>`).join(' ') : '-'}</td>
             <td>${u.last_seen ? formatLastSeen(u.last_seen) : '-'}</td>
-            <td>${u.is_service ? 'Never' : (u.expires_at ? formatLastSeen(u.expires_at) : '-')}</td>
+            <td>${u.is_service ? 'Never' : u.expires_at ? formatExpiry(u.expires_at) : '-'}</td>
             <td><span class="status-badge ${u.expired ? 'expired' : 'active'}">${u.expired ? 'Expired' : 'Active'}</span></td>
         </tr>
-    `).join('');
+    `,
+        )
+        .join('');
 
     updateSectionPagination('users', usersPagination);
 }
@@ -2248,7 +2259,9 @@ function renderGroupsTable() {
 
     noGroups.style.display = 'none';
     const visibleGroups = groupsPagination.getVisibleItems();
-    tbody.innerHTML = visibleGroups.map(g => `
+    tbody.innerHTML = visibleGroups
+        .map(
+            (g) => `
         <tr>
             <td><strong>${escapeHtml(g.name)}</strong></td>
             <td>${escapeHtml(g.description || '-')}</td>
@@ -2258,12 +2271,14 @@ function renderGroupsTable() {
                 ${!g.builtin ? `<button class="btn-small btn-danger" onclick="deleteGroup('${escapeHtml(g.name)}')">Delete</button>` : '-'}
             </td>
         </tr>
-    `).join('');
+    `,
+        )
+        .join('');
 
     updateSectionPagination('groups', groupsPagination);
 }
 
-function updateGroupsTable(groups) {
+function _updateGroupsTable(groups) {
     state.currentGroups = groups || [];
     renderGroupsTable();
 }
@@ -2294,7 +2309,7 @@ async function createGroup() {
         const resp = await fetch('api/groups', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, description })
+            body: JSON.stringify({ name, description }),
         });
 
         if (resp.ok) {
@@ -2306,7 +2321,7 @@ async function createGroup() {
             showToast(data.error || 'Failed to create group', 'error');
         }
     } catch (err) {
-        showToast('Failed to create group: ' + err.message, 'error');
+        showToast(`Failed to create group: ${err.message}`, 'error');
     }
 }
 window.createGroup = createGroup;
@@ -2324,7 +2339,7 @@ async function deleteGroup(name) {
             showToast(data.error || 'Failed to delete group', 'error');
         }
     } catch (err) {
-        showToast('Failed to delete group: ' + err.message, 'error');
+        showToast(`Failed to delete group: ${err.message}`, 'error');
     }
 }
 window.deleteGroup = deleteGroup;
@@ -2356,7 +2371,9 @@ function renderSharesTable() {
 
     noShares.style.display = 'none';
     const visibleShares = sharesPagination.getVisibleItems();
-    tbody.innerHTML = visibleShares.map(s => `
+    tbody.innerHTML = visibleShares
+        .map(
+            (s) => `
         <tr>
             <td><strong>${escapeHtml(s.name)}</strong></td>
             <td>${escapeHtml(s.description || '-')}</td>
@@ -2367,12 +2384,14 @@ function renderSharesTable() {
                 <button class="btn-small btn-danger" onclick="deleteShare('${escapeHtml(s.name)}')">Delete</button>
             </td>
         </tr>
-    `).join('');
+    `,
+        )
+        .join('');
 
     updateSectionPagination('shares', sharesPagination);
 }
 
-function updateSharesTable(shares) {
+function _updateSharesTable(shares) {
     state.currentShares = shares || [];
     renderSharesTable();
 }
@@ -2396,7 +2415,7 @@ async function createShare() {
     const description = document.getElementById('share-description').value.trim();
     const quotaValue = document.getElementById('share-quota').value.trim();
     // Default to 100 MB if empty, but allow explicit 0 for unlimited
-    const quotaMB = quotaValue === '' ? 100 : (parseInt(quotaValue) || 0);
+    const quotaMB = quotaValue === '' ? 100 : parseInt(quotaValue, 10) || 0;
 
     if (!name) {
         showToast('Share name is required', 'error');
@@ -2410,7 +2429,7 @@ async function createShare() {
         const resp = await fetch('api/shares', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, description, quota_bytes })
+            body: JSON.stringify({ name, description, quota_bytes }),
         });
 
         if (resp.ok) {
@@ -2426,7 +2445,7 @@ async function createShare() {
             showToast(data.error || 'Failed to create share', 'error');
         }
     } catch (err) {
-        showToast('Failed to create share: ' + err.message, 'error');
+        showToast(`Failed to create share: ${err.message}`, 'error');
     }
 }
 window.createShare = createShare;
@@ -2448,7 +2467,7 @@ async function deleteShare(name) {
             showToast(data.error || 'Failed to delete share', 'error');
         }
     } catch (err) {
-        showToast('Failed to delete share: ' + err.message, 'error');
+        showToast(`Failed to delete share: ${err.message}`, 'error');
     }
 }
 window.deleteShare = deleteShare;
@@ -2459,7 +2478,7 @@ window.deleteShare = deleteShare;
 
 function initTabs() {
     const tabs = document.querySelectorAll('#main-tabs .tab');
-    tabs.forEach(tab => {
+    tabs.forEach((tab) => {
         tab.addEventListener('click', () => {
             const tabName = tab.dataset.tab;
             switchTab(tabName);
@@ -2469,13 +2488,13 @@ function initTabs() {
 
 function switchTab(tabName) {
     // Update tab buttons
-    document.querySelectorAll('#main-tabs .tab').forEach(t => {
+    document.querySelectorAll('#main-tabs .tab').forEach((t) => {
         t.classList.toggle('active', t.dataset.tab === tabName);
     });
 
     // Update tab content
-    document.querySelectorAll('.tab-content').forEach(content => {
-        content.classList.toggle('active', content.id === tabName + '-tab');
+    document.querySelectorAll('.tab-content').forEach((content) => {
+        content.classList.toggle('active', content.id === `${tabName}-tab`);
     });
 
     // Handle tab-specific initialization
@@ -2532,25 +2551,31 @@ function renderBindingsTable() {
 
     emptyState.style.display = 'none';
     const visibleBindings = bindingsPagination.getVisibleItems();
-    tbody.innerHTML = visibleBindings.map(b => `
+    tbody.innerHTML = visibleBindings
+        .map(
+            (b) => `
         <tr>
             <td>${escapeHtml(b.user_id || b.group_name || '-')}</td>
             <td>${escapeHtml(b.role_name)}</td>
             <td>${escapeHtml(b.bucket_scope || 'All')}</td>
             <td>${escapeHtml(b.object_prefix || '-')}</td>
             <td>
-                ${b.protected
-                    ? '<span class="text-muted" title="File share owner binding">Protected</span>'
-                    : `<button class="btn-small btn-danger" onclick="deleteBinding('${escapeHtml(b.name)}')">Delete</button>`}
+                ${
+                    b.protected
+                        ? '<span class="text-muted" title="File share owner binding">Protected</span>'
+                        : `<button class="btn-small btn-danger" onclick="deleteBinding('${escapeHtml(b.name)}')">Delete</button>`
+                }
             </td>
         </tr>
-    `).join('');
+    `,
+        )
+        .join('');
 
     updateSectionPagination('bindings', bindingsPagination);
 }
 
 // Alias for backward compat
-function renderBindings(bindings) {
+function _renderBindings(bindings) {
     state.currentBindings = bindings || [];
     renderBindingsTable();
 }
@@ -2573,7 +2598,7 @@ async function populateBindingUsers() {
         const resp = await fetch('api/users');
         if (resp.ok) {
             const users = await resp.json();
-            users.forEach(u => {
+            users.forEach((u) => {
                 const opt = document.createElement('option');
                 opt.value = u.id;
                 opt.textContent = u.name || u.id;
@@ -2609,8 +2634,8 @@ async function createBinding() {
                 user_id: userId,
                 role_name: roleName,
                 bucket_scope: bucketScope,
-                object_prefix: objectPrefix
-            })
+                object_prefix: objectPrefix,
+            }),
         });
 
         if (resp.ok) {
@@ -2622,7 +2647,7 @@ async function createBinding() {
             showToast(data.error || 'Failed to create binding', 'error');
         }
     } catch (err) {
-        showToast('Failed to create binding: ' + err.message, 'error');
+        showToast(`Failed to create binding: ${err.message}`, 'error');
     }
 }
 window.createBinding = createBinding;
@@ -2640,7 +2665,7 @@ async function deleteBinding(name) {
             showToast(data.error || 'Failed to delete binding', 'error');
         }
     } catch (err) {
-        showToast('Failed to delete binding: ' + err.message, 'error');
+        showToast(`Failed to delete binding: ${err.message}`, 'error');
     }
 }
 window.deleteBinding = deleteBinding;

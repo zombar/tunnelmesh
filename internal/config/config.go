@@ -60,19 +60,20 @@ type WireGuardPeerConfig struct {
 
 // ServerConfig holds configuration for the coordination server.
 type ServerConfig struct {
-	Listen            string                `yaml:"listen"`
-	AuthToken         string                `yaml:"auth_token"`
-	DataDir           string                `yaml:"data_dir"`           // Data directory for persistence (default: /var/lib/tunnelmesh)
-	HeartbeatInterval string                `yaml:"heartbeat_interval"` // Heartbeat interval (default: 10s)
-	Locations         bool                  `yaml:"locations"`          // Enable node location tracking (requires external IP geolocation API)
-	LogLevel          string                `yaml:"log_level"`          // trace, debug, info, warn, error (default: info)
-	Admin             AdminConfig           `yaml:"admin"`
-	Relay             RelayConfig           `yaml:"relay"`
-	WireGuard         WireGuardServerConfig `yaml:"wireguard"`
-	S3                S3Config              `yaml:"s3"`            // S3-compatible storage configuration
-	Filter            FilterConfig          `yaml:"filter"`        // Global packet filter rules for all peers
-	ServicePorts      []uint16              `yaml:"service_ports"` // Service ports to auto-allow on peers (default: [9443] for metrics)
-	JoinMesh          *PeerConfig           `yaml:"join_mesh,omitempty"`
+	Listen             string                `yaml:"listen"`
+	AuthToken          string                `yaml:"auth_token"`
+	DataDir            string                `yaml:"data_dir"`             // Data directory for persistence (default: /var/lib/tunnelmesh)
+	HeartbeatInterval  string                `yaml:"heartbeat_interval"`   // Heartbeat interval (default: 10s)
+	UserExpirationDays int                   `yaml:"user_expiration_days"` // Days until user expires after last seen (default: 270 = 9 months)
+	Locations          bool                  `yaml:"locations"`            // Enable node location tracking (requires external IP geolocation API)
+	LogLevel           string                `yaml:"log_level"`            // trace, debug, info, warn, error (default: info)
+	Admin              AdminConfig           `yaml:"admin"`
+	Relay              RelayConfig           `yaml:"relay"`
+	WireGuard          WireGuardServerConfig `yaml:"wireguard"`
+	S3                 S3Config              `yaml:"s3"`            // S3-compatible storage configuration
+	Filter             FilterConfig          `yaml:"filter"`        // Global packet filter rules for all peers
+	ServicePorts       []uint16              `yaml:"service_ports"` // Service ports to auto-allow on peers (default: [9443] for metrics)
+	JoinMesh           *PeerConfig           `yaml:"join_mesh,omitempty"`
 }
 
 // PeerConfig holds configuration for a peer node.
@@ -232,6 +233,9 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 	}
 	if len(cfg.ServicePorts) == 0 {
 		cfg.ServicePorts = []uint16{9443} // Default: metrics port for Prometheus scraping
+	}
+	if cfg.UserExpirationDays == 0 {
+		cfg.UserExpirationDays = 270 // Default: 9 months
 	}
 
 	// S3 defaults

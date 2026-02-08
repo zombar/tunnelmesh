@@ -1173,7 +1173,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			info.LastSeen = u.LastSeen.Format(time.RFC3339)
 			// Calculate expiration date for human users (service users don't auto-expire)
 			if !u.IsService() {
-				expiresAt := u.LastSeen.Add(time.Duration(auth.UserExpirationDays) * 24 * time.Hour)
+				expiresAt := u.LastSeen.Add(time.Duration(auth.GetUserExpirationDays()) * 24 * time.Hour)
 				info.ExpiresAt = expiresAt.Format(time.RFC3339)
 			}
 		}

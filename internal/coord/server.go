@@ -202,6 +202,11 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		log.Info().Msg("node location tracking enabled (uses external IP geolocation API)")
 	}
 
+	// Set user expiration days from config
+	if cfg.UserExpirationDays > 0 {
+		auth.SetUserExpirationDays(cfg.UserExpirationDays)
+	}
+
 	// Initialize WireGuard client store if enabled
 	if cfg.WireGuard.Enabled {
 		srv.wgStore = wireguard.NewStore(mesh.CIDR)
