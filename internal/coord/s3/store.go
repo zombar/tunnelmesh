@@ -174,6 +174,10 @@ func validateName(name string) error {
 	if name == "" {
 		return fmt.Errorf("name cannot be empty")
 	}
+	// Check for null bytes which could truncate paths on some filesystems
+	if strings.ContainsRune(name, 0) {
+		return fmt.Errorf("null bytes not allowed")
+	}
 	if name == "." || name == ".." {
 		return fmt.Errorf("invalid name")
 	}
@@ -465,12 +469,14 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 	}
 
 	// Update quota tracking
+	var quotaUpdated bool
 	if s.quota != nil {
 		if oldSize > 0 {
 			s.quota.Update(bucket, oldSize, written)
 		} else {
 			s.quota.Allocate(bucket, written)
 		}
+		quotaUpdated = true
 	}
 
 	// Generate ETag from MD5 hash (S3-compatible format)
@@ -495,10 +501,28 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 
 	metaData, err := json.MarshalIndent(objMeta, "", "  ")
 	if err != nil {
+		// Rollback quota on failure
+		if quotaUpdated {
+			if oldSize > 0 {
+				s.quota.Update(bucket, written, oldSize) // Reverse the update
+			} else {
+				s.quota.Release(bucket, written)
+			}
+		}
+		_ = os.Remove(objectPath)
 		return nil, fmt.Errorf("marshal object meta: %w", err)
 	}
 
 	if err := os.WriteFile(metaPath, metaData, 0644); err != nil {
+		// Rollback quota on failure
+		if quotaUpdated {
+			if oldSize > 0 {
+				s.quota.Update(bucket, written, oldSize) // Reverse the update
+			} else {
+				s.quota.Release(bucket, written)
+			}
+		}
+		_ = os.Remove(objectPath)
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
 

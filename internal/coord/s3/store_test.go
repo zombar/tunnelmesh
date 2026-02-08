@@ -778,6 +778,8 @@ func TestPathTraversal_BucketName(t *testing.T) {
 		"bucket\\..\\etc",
 		"/etc/passwd",
 		"\\etc\\passwd",
+		"bucket\x00evil",  // null byte injection
+		"\x00/etc/passwd", // null byte at start
 	}
 
 	for _, name := range maliciousBuckets {

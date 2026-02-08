@@ -3,6 +3,7 @@ package coord
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -1501,6 +1502,10 @@ func validateS3Name(name string) error {
 	if name == "" {
 		return fmt.Errorf("name cannot be empty")
 	}
+	// Check for null bytes which could truncate paths on some filesystems
+	if strings.ContainsRune(name, 0) {
+		return fmt.Errorf("null bytes not allowed")
+	}
 	if name == "." || name == ".." {
 		return fmt.Errorf("invalid name")
 	}
@@ -1772,7 +1777,8 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// Read body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		if err.Error() == "http: request body too large" {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
 			s.jsonError(w, "object too large (max 10MB)", http.StatusRequestEntityTooLarge)
 			return
 		}
