@@ -72,6 +72,15 @@ func (m *ObjectMeta) IsTombstoned() bool {
 //	      versions/
 //	        {key}/
 //	          {versionID}.json # version metadata
+//
+// VersionRetentionPolicy configures smart tiered version retention.
+type VersionRetentionPolicy struct {
+	RecentDays    int // Keep all versions from last N days
+	WeeklyWeeks   int // Then keep one version per week for N weeks
+	MonthlyMonths int // Then keep one version per month for N months
+}
+
+// Store provides S3 storage with content-addressable chunks and versioning.
 type Store struct {
 	dataDir                 string
 	cas                     *CAS // Content-addressable storage for chunks
@@ -80,6 +89,8 @@ type Store struct {
 	defaultShareExpiryDays  int // Days until file shares expire (0 = never)
 	tombstoneRetentionDays  int // Days to retain tombstoned objects before purging (0 = never purge)
 	versionRetentionDays    int // Days to retain object versions (0 = forever)
+	maxVersionsPerObject    int // Max versions to keep per object (0 = unlimited)
+	versionRetentionPolicy  VersionRetentionPolicy
 	mu                      sync.RWMutex
 }
 
@@ -163,12 +174,33 @@ func (s *Store) QuotaStats() *QuotaStats {
 }
 
 // calculateQuotaUsage scans all objects and updates quota tracking.
+// For CAS-enabled stores, this calculates the total size of all chunks.
 // This is called during initialization before the store is accessible to other
 // goroutines, but we hold the mutex for defense in depth and future-proofing.
 func (s *Store) calculateQuotaUsage() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// For CAS-enabled stores, calculate total chunk storage size
+	// Chunks are shared across all buckets, so we track total storage
+	if s.cas != nil {
+		chunksDir := filepath.Join(s.dataDir, "chunks")
+		var totalSize int64
+		_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			totalSize += info.Size()
+			return nil
+		})
+		// Set as "_chunks" bucket for internal tracking
+		if totalSize > 0 {
+			s.quota.SetUsed("_chunks", totalSize)
+		}
+		return nil
+	}
+
+	// Legacy: scan objects directory (for non-CAS stores)
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
 	entries, err := os.ReadDir(bucketsDir)
 	if err != nil {
@@ -1008,6 +1040,20 @@ func (s *Store) VersionRetentionDays() int {
 	return s.versionRetentionDays
 }
 
+// SetMaxVersionsPerObject sets the maximum number of versions to keep per object.
+func (s *Store) SetMaxVersionsPerObject(max int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxVersionsPerObject = max
+}
+
+// SetVersionRetentionPolicy sets the smart tiered version retention policy.
+func (s *Store) SetVersionRetentionPolicy(policy VersionRetentionPolicy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.versionRetentionPolicy = policy
+}
+
 // generateVersionID creates a unique, sortable version ID.
 // Format: {unixNano}-{random6hex}
 func generateVersionID() string {
@@ -1062,21 +1108,32 @@ func (s *Store) archiveCurrentVersion(bucket, key string) error {
 	return nil
 }
 
-// pruneExpiredVersions removes versions older than the retention period.
+// pruneExpiredVersions removes versions according to the retention policy.
+// Smart tiered pruning (when configured):
+//   - Keep all versions from last RecentDays
+//   - Keep one version per week for WeeklyWeeks
+//   - Keep one version per month for MonthlyMonths
+//   - Delete everything older
+//   - Enforce MaxVersionsPerObject limit
+//
+// If no smart pruning is configured (all values 0), falls back to simple
+// versionRetentionDays cutoff.
+//
 // Returns the number of versions pruned.
 func (s *Store) pruneExpiredVersions(bucket, key string) int {
-	if s.versionRetentionDays <= 0 {
-		return 0 // Disabled
-	}
-
-	cutoff := time.Now().UTC().AddDate(0, 0, -s.versionRetentionDays)
-	prunedCount := 0
-
 	versionDir := s.versionDir(bucket, key)
 	entries, err := os.ReadDir(versionDir)
 	if err != nil {
 		return 0
 	}
+
+	// Load all versions with metadata
+	type versionEntry struct {
+		path     string
+		meta     ObjectMeta
+		modified time.Time
+	}
+	var versions []versionEntry
 
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
@@ -1094,18 +1151,120 @@ func (s *Store) pruneExpiredVersions(bucket, key string) int {
 			continue
 		}
 
-		if meta.LastModified.Before(cutoff) {
-			// Delete version metadata
-			_ = os.Remove(versionPath)
-			prunedCount++
+		versions = append(versions, versionEntry{
+			path:     versionPath,
+			meta:     meta,
+			modified: meta.LastModified,
+		})
+	}
 
-			// Garbage collect chunks if using CAS
-			if s.cas != nil && len(meta.Chunks) > 0 {
-				for _, hash := range meta.Chunks {
-					// Check if chunk is still referenced by other versions
-					if !s.isChunkReferenced(hash, bucket, key, meta.VersionID) {
-						_ = s.cas.DeleteChunk(hash)
-					}
+	if len(versions) == 0 {
+		return 0
+	}
+
+	// Sort by modified time (newest first)
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[i].modified.After(versions[j].modified)
+	})
+
+	now := time.Now().UTC()
+	policy := s.versionRetentionPolicy
+	maxVersions := s.maxVersionsPerObject
+
+	// Check if smart pruning is configured
+	smartPruningEnabled := policy.RecentDays > 0 || policy.WeeklyWeeks > 0 || policy.MonthlyMonths > 0
+
+	// Track which versions to keep
+	keep := make(map[int]bool)
+
+	if smartPruningEnabled {
+		// Smart tiered pruning
+		weekKept := make(map[int]bool)  // year*100 + week
+		monthKept := make(map[int]bool) // year*100 + month
+
+		// Calculate time boundaries (only if that tier is enabled)
+		var recentCutoff, weeklyCutoff, monthlyCutoff time.Time
+		if policy.RecentDays > 0 {
+			recentCutoff = now.AddDate(0, 0, -policy.RecentDays)
+		}
+		if policy.WeeklyWeeks > 0 {
+			weeklyCutoff = now.AddDate(0, 0, -policy.RecentDays-(policy.WeeklyWeeks*7))
+		}
+		if policy.MonthlyMonths > 0 {
+			monthlyCutoff = now.AddDate(0, -policy.MonthlyMonths, -policy.RecentDays-(policy.WeeklyWeeks*7))
+		}
+
+		for i, v := range versions {
+			// Recent period: keep all (if configured)
+			if policy.RecentDays > 0 && v.modified.After(recentCutoff) {
+				keep[i] = true
+				continue
+			}
+
+			// Weekly period: keep one per week (if configured)
+			if policy.WeeklyWeeks > 0 && v.modified.After(weeklyCutoff) {
+				year, week := v.modified.ISOWeek()
+				weekKey := year*100 + week
+				if !weekKept[weekKey] {
+					keep[i] = true
+					weekKept[weekKey] = true
+				}
+				continue
+			}
+
+			// Monthly period: keep one per month (if configured)
+			if policy.MonthlyMonths > 0 && v.modified.After(monthlyCutoff) {
+				monthKey := v.modified.Year()*100 + int(v.modified.Month())
+				if !monthKept[monthKey] {
+					keep[i] = true
+					monthKept[monthKey] = true
+				}
+				continue
+			}
+
+			// Older than all configured periods: check max versions
+			if maxVersions > 0 && i < maxVersions {
+				keep[i] = true
+			}
+		}
+	} else {
+		// No smart pruning - use simple retention days only
+		if s.versionRetentionDays > 0 {
+			simpleCutoff := now.AddDate(0, 0, -s.versionRetentionDays)
+			for i, v := range versions {
+				if v.modified.After(simpleCutoff) || v.modified.Equal(simpleCutoff) {
+					keep[i] = true
+				} else if maxVersions > 0 && i < maxVersions {
+					keep[i] = true
+				}
+			}
+		} else {
+			// No retention configured - keep all (but respect max versions)
+			for i := range versions {
+				if maxVersions <= 0 || i < maxVersions {
+					keep[i] = true
+				}
+			}
+		}
+	}
+
+	// Delete versions not in keep set
+	prunedCount := 0
+	for i, v := range versions {
+		if keep[i] {
+			continue
+		}
+
+		// Delete version metadata
+		_ = os.Remove(v.path)
+		prunedCount++
+
+		// Garbage collect chunks if using CAS
+		if s.cas != nil && len(v.meta.Chunks) > 0 {
+			for _, hash := range v.meta.Chunks {
+				// Use global check to ensure chunk isn't used elsewhere
+				if !s.isChunkReferencedGlobally(hash) {
+					_ = s.cas.DeleteChunk(hash)
 				}
 			}
 		}
@@ -1114,7 +1273,72 @@ func (s *Store) pruneExpiredVersions(bucket, key string) int {
 	return prunedCount
 }
 
+// isChunkReferencedGlobally checks if a chunk is referenced by ANY object in ANY bucket.
+// This is the safe way to check before deleting a chunk to prevent data loss.
+func (s *Store) isChunkReferencedGlobally(hash string) bool {
+	bucketsDir := filepath.Join(s.dataDir, "buckets")
+	bucketEntries, err := os.ReadDir(bucketsDir)
+	if err != nil {
+		return true // Assume referenced if we can't check
+	}
+
+	for _, bucketEntry := range bucketEntries {
+		if !bucketEntry.IsDir() {
+			continue
+		}
+		bucket := bucketEntry.Name()
+
+		// Check all current objects in this bucket
+		metaDir := filepath.Join(bucketsDir, bucket, "meta")
+		metaEntries, _ := os.ReadDir(metaDir)
+		for _, metaEntry := range metaEntries {
+			if metaEntry.IsDir() || filepath.Ext(metaEntry.Name()) != ".json" {
+				continue
+			}
+			metaPath := filepath.Join(metaDir, metaEntry.Name())
+			data, err := os.ReadFile(metaPath)
+			if err != nil {
+				continue
+			}
+			var meta ObjectMeta
+			if err := json.Unmarshal(data, &meta); err != nil {
+				continue
+			}
+			for _, h := range meta.Chunks {
+				if h == hash {
+					return true
+				}
+			}
+		}
+
+		// Check all versions directory
+		versionsDir := filepath.Join(bucketsDir, bucket, "versions")
+		_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			var meta ObjectMeta
+			if err := json.Unmarshal(data, &meta); err != nil {
+				return nil
+			}
+			for _, h := range meta.Chunks {
+				if h == hash {
+					return filepath.SkipAll // Found - stop walking
+				}
+			}
+			return nil
+		})
+	}
+
+	return false
+}
+
 // isChunkReferenced checks if a chunk is referenced by any version other than the excluded one.
+// For single-object operations. Use isChunkReferencedGlobally for deletion safety.
 func (s *Store) isChunkReferenced(hash, bucket, key, excludeVersionID string) bool {
 	// Check current version
 	if meta, err := s.getObjectMeta(bucket, key); err == nil {
@@ -1127,7 +1351,7 @@ func (s *Store) isChunkReferenced(hash, bucket, key, excludeVersionID string) bo
 		}
 	}
 
-	// Check all versions
+	// Check all versions of this object
 	versionDir := s.versionDir(bucket, key)
 	entries, err := os.ReadDir(versionDir)
 	if err != nil {
@@ -1163,6 +1387,131 @@ func (s *Store) isChunkReferenced(hash, bucket, key, excludeVersionID string) bo
 	}
 
 	return false
+}
+
+// GCStats holds statistics from a garbage collection run.
+type GCStats struct {
+	VersionsPruned   int   // Number of version metadata files deleted
+	ChunksDeleted    int   // Number of orphaned chunks deleted
+	BytesReclaimed   int64 // Approximate bytes reclaimed from chunk deletion
+	ObjectsScanned   int   // Number of objects scanned
+	BucketsProcessed int   // Number of buckets processed
+}
+
+// RunGarbageCollection performs a full garbage collection pass.
+// This should be called periodically (e.g., hourly) to clean up:
+//   - Expired versions according to retention policy
+//   - Orphaned chunks not referenced by any object
+//
+// This is safe to run while the store is in use, but may be slow for large stores.
+func (s *Store) RunGarbageCollection() GCStats {
+	stats := GCStats{}
+
+	if s.cas == nil {
+		return stats // No CAS, no GC needed
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Phase 1: Prune expired versions across all buckets
+	bucketsDir := filepath.Join(s.dataDir, "buckets")
+	bucketEntries, err := os.ReadDir(bucketsDir)
+	if err != nil {
+		return stats
+	}
+
+	for _, bucketEntry := range bucketEntries {
+		if !bucketEntry.IsDir() {
+			continue
+		}
+		bucket := bucketEntry.Name()
+		stats.BucketsProcessed++
+
+		// Find all objects in this bucket
+		metaDir := filepath.Join(bucketsDir, bucket, "meta")
+		metaEntries, _ := os.ReadDir(metaDir)
+
+		for _, metaEntry := range metaEntries {
+			if metaEntry.IsDir() || filepath.Ext(metaEntry.Name()) != ".json" {
+				continue
+			}
+			stats.ObjectsScanned++
+
+			// Extract key from filename
+			key := strings.TrimSuffix(metaEntry.Name(), ".json")
+			pruned := s.pruneExpiredVersions(bucket, key)
+			stats.VersionsPruned += pruned
+		}
+	}
+
+	// Phase 2: Build global chunk reference set
+	referencedChunks := make(map[string]struct{})
+
+	for _, bucketEntry := range bucketEntries {
+		if !bucketEntry.IsDir() {
+			continue
+		}
+		bucket := bucketEntry.Name()
+
+		// Scan current objects
+		metaDir := filepath.Join(bucketsDir, bucket, "meta")
+		metaEntries, _ := os.ReadDir(metaDir)
+		for _, metaEntry := range metaEntries {
+			if metaEntry.IsDir() || filepath.Ext(metaEntry.Name()) != ".json" {
+				continue
+			}
+			metaPath := filepath.Join(metaDir, metaEntry.Name())
+			data, _ := os.ReadFile(metaPath)
+			var meta ObjectMeta
+			if json.Unmarshal(data, &meta) == nil {
+				for _, h := range meta.Chunks {
+					referencedChunks[h] = struct{}{}
+				}
+			}
+		}
+
+		// Scan versions
+		versionsDir := filepath.Join(bucketsDir, bucket, "versions")
+		_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
+			}
+			data, _ := os.ReadFile(path)
+			var meta ObjectMeta
+			if json.Unmarshal(data, &meta) == nil {
+				for _, h := range meta.Chunks {
+					referencedChunks[h] = struct{}{}
+				}
+			}
+			return nil
+		})
+	}
+
+	// Phase 3: Delete orphaned chunks
+	chunksDir := filepath.Join(s.dataDir, "chunks")
+	_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+
+		// Extract hash from path (chunks are stored as chunks/ab/abcdef...)
+		hash := filepath.Base(path)
+		if _, referenced := referencedChunks[hash]; !referenced {
+			stats.BytesReclaimed += info.Size()
+			if os.Remove(path) == nil {
+				stats.ChunksDeleted++
+			}
+		}
+		return nil
+	})
+
+	// Update quota if tracking
+	if s.quota != nil {
+		_ = s.calculateQuotaUsage()
+	}
+
+	return stats
 }
 
 // ListVersions returns all versions of an object.
@@ -1373,7 +1722,7 @@ func (s *Store) deleteAllVersions(bucket, key string) {
 	versionDir := s.versionDir(bucket, key)
 
 	// Collect all chunk hashes from versions for GC
-	var chunksToCheck []string
+	chunksToCheck := make(map[string]struct{})
 	entries, err := os.ReadDir(versionDir)
 	if err == nil {
 		for _, entry := range entries {
@@ -1392,19 +1741,22 @@ func (s *Store) deleteAllVersions(bucket, key string) {
 				continue
 			}
 
-			chunksToCheck = append(chunksToCheck, meta.Chunks...)
+			for _, h := range meta.Chunks {
+				chunksToCheck[h] = struct{}{}
+			}
 		}
 	}
 
 	// Remove version directory
 	_ = os.RemoveAll(versionDir)
 
-	// GC chunks that are no longer referenced
+	// GC chunks that are no longer referenced GLOBALLY
+	// This checks ALL objects in ALL buckets to ensure chunk is truly orphaned
 	if s.cas != nil {
-		for _, hash := range chunksToCheck {
-			// Since we're deleting all versions, check if chunk is used elsewhere
-			// For now, just delete - a proper implementation would scan all objects
-			_ = s.cas.DeleteChunk(hash)
+		for hash := range chunksToCheck {
+			if !s.isChunkReferencedGlobally(hash) {
+				_ = s.cas.DeleteChunk(hash)
+			}
 		}
 	}
 }

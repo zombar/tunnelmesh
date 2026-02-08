@@ -41,14 +41,24 @@ type WireGuardServerConfig struct {
 
 // S3Config holds configuration for the S3-compatible storage service.
 type S3Config struct {
-	Enabled                bool          `yaml:"enabled"`                  // Enable S3 storage (default: false)
-	DataDir                string        `yaml:"data_dir"`                 // Storage directory for S3 objects (default: {data_dir}/s3)
-	MaxSize                bytesize.Size `yaml:"max_size"`                 // Maximum storage size (e.g., "10Gi", "500Mi") - required
-	Port                   int           `yaml:"port"`                     // S3 API port (default: 9000)
-	ObjectExpiryDays       int           `yaml:"object_expiry_days"`       // Days until objects expire (default: 9125 = 25 years)
-	ShareExpiryDays        int           `yaml:"share_expiry_days"`        // Days until file shares expire (default: 365 = 1 year)
-	TombstoneRetentionDays int           `yaml:"tombstone_retention_days"` // Days to keep tombstoned items before deletion (default: 90)
-	VersionRetentionDays   int           `yaml:"version_retention_days"`   // Days to keep object versions (default: 30)
+	Enabled                bool                   `yaml:"enabled"`                  // Enable S3 storage (default: false)
+	DataDir                string                 `yaml:"data_dir"`                 // Storage directory for S3 objects (default: {data_dir}/s3)
+	MaxSize                bytesize.Size          `yaml:"max_size"`                 // Maximum storage size (e.g., "10Gi", "500Mi") - required
+	Port                   int                    `yaml:"port"`                     // S3 API port (default: 9000)
+	ObjectExpiryDays       int                    `yaml:"object_expiry_days"`       // Days until objects expire (default: 9125 = 25 years)
+	ShareExpiryDays        int                    `yaml:"share_expiry_days"`        // Days until file shares expire (default: 365 = 1 year)
+	TombstoneRetentionDays int                    `yaml:"tombstone_retention_days"` // Days to keep tombstoned items before deletion (default: 90)
+	VersionRetentionDays   int                    `yaml:"version_retention_days"`   // Days to keep object versions (default: 30)
+	MaxVersionsPerObject   int                    `yaml:"max_versions_per_object"`  // Max versions to keep per object (default: 100, 0 = unlimited)
+	VersionRetention       VersionRetentionConfig `yaml:"version_retention"`        // Tiered version retention policy
+}
+
+// VersionRetentionConfig configures smart tiered version retention.
+// Older versions are kept at decreasing granularity to save space while maintaining history.
+type VersionRetentionConfig struct {
+	RecentDays    int `yaml:"recent_days"`    // Keep all versions from last N days (default: 7)
+	WeeklyWeeks   int `yaml:"weekly_weeks"`   // Then keep one version per week for N weeks (default: 4)
+	MonthlyMonths int `yaml:"monthly_months"` // Then keep one version per month for N months (default: 6)
 }
 
 // WireGuardPeerConfig holds configuration for the WireGuard concentrator mode.
@@ -261,6 +271,19 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 		}
 		if cfg.S3.VersionRetentionDays == 0 {
 			cfg.S3.VersionRetentionDays = 30 // Default: 30 days
+		}
+		if cfg.S3.MaxVersionsPerObject == 0 {
+			cfg.S3.MaxVersionsPerObject = 100 // Default: 100 versions per object
+		}
+		// Smart retention defaults (tiered pruning)
+		if cfg.S3.VersionRetention.RecentDays == 0 {
+			cfg.S3.VersionRetention.RecentDays = 7 // Keep all versions from last 7 days
+		}
+		if cfg.S3.VersionRetention.WeeklyWeeks == 0 {
+			cfg.S3.VersionRetention.WeeklyWeeks = 4 // Keep weekly versions for 4 weeks
+		}
+		if cfg.S3.VersionRetention.MonthlyMonths == 0 {
+			cfg.S3.VersionRetention.MonthlyMonths = 6 // Keep monthly versions for 6 months
 		}
 	}
 

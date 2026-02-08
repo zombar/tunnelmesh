@@ -300,8 +300,10 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 }
 
 // StartPeriodicCleanup starts the background cleanup goroutine for S3 storage.
-// It periodically purges tombstoned objects past their retention period and
-// tombstones content in expired file shares.
+// It periodically:
+//   - Purges tombstoned objects past their retention period
+//   - Tombstones content in expired file shares
+//   - Runs garbage collection on versions and orphaned chunks
 func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 	if s.s3Store == nil {
 		return
@@ -326,6 +328,17 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 					if tombstoned := s.fileShareMgr.TombstoneExpiredShareContents(); tombstoned > 0 {
 						log.Info().Int("count", tombstoned).Msg("tombstoned expired file share content")
 					}
+				}
+
+				// Run garbage collection on versions and orphaned chunks
+				gcStats := s.s3Store.RunGarbageCollection()
+				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 {
+					log.Info().
+						Int("versions_pruned", gcStats.VersionsPruned).
+						Int("chunks_deleted", gcStats.ChunksDeleted).
+						Int64("bytes_reclaimed", gcStats.BytesReclaimed).
+						Int("objects_scanned", gcStats.ObjectsScanned).
+						Msg("S3 garbage collection completed")
 				}
 			}
 		}
@@ -470,6 +483,15 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	// Set expiry defaults from config
 	store.SetDefaultObjectExpiryDays(cfg.S3.ObjectExpiryDays)
 	store.SetDefaultShareExpiryDays(cfg.S3.ShareExpiryDays)
+
+	// Set version retention config
+	store.SetVersionRetentionDays(cfg.S3.VersionRetentionDays)
+	store.SetMaxVersionsPerObject(cfg.S3.MaxVersionsPerObject)
+	store.SetVersionRetentionPolicy(s3.VersionRetentionPolicy{
+		RecentDays:    cfg.S3.VersionRetention.RecentDays,
+		WeeklyWeeks:   cfg.S3.VersionRetention.WeeklyWeeks,
+		MonthlyMonths: cfg.S3.VersionRetention.MonthlyMonths,
+	})
 
 	// Create authorizer with group support
 	s.s3Authorizer = auth.NewAuthorizerWithGroups()
