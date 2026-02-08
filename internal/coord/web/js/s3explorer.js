@@ -513,10 +513,8 @@
 
         if (state.isDirty) {
             saveBtn.classList.add('dirty');
-            saveBtn.textContent = 'Save *';
         } else {
             saveBtn.classList.remove('dirty');
-            saveBtn.textContent = 'Save';
         }
     }
 
