@@ -2361,6 +2361,7 @@ function renderSharesTable() {
             <td><strong>${escapeHtml(s.name)}</strong></td>
             <td>${escapeHtml(s.description || '-')}</td>
             <td>${escapeHtml(s.owner)}</td>
+            <td>${s.quota_bytes ? formatBytes(s.quota_bytes) : 'Unlimited'}</td>
             <td>${s.created_at ? new Date(s.created_at).toLocaleDateString() : '-'}</td>
             <td>
                 <button class="btn-small btn-danger" onclick="deleteShare('${escapeHtml(s.name)}')">Delete</button>
@@ -2415,6 +2416,9 @@ async function createShare() {
             closeShareModal();
             fetchShares();
             fetchBindings(); // Refresh bindings since share creation adds admin binding
+            if (typeof TM !== 'undefined' && TM.s3explorer) {
+                TM.s3explorer.refresh(); // Refresh S3 explorer to show new bucket
+            }
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to create share', 'error');
@@ -2434,6 +2438,9 @@ async function deleteShare(name) {
             showToast(`File share "${name}" deleted`, 'success');
             fetchShares();
             fetchBindings(); // Refresh bindings since share deletion removes bindings
+            if (typeof TM !== 'undefined' && TM.s3explorer) {
+                TM.s3explorer.refresh(); // Refresh S3 explorer to remove bucket
+            }
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to delete share', 'error');

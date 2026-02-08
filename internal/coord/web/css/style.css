@@ -1833,19 +1833,23 @@ a.logs-container {
 }
 
 .s3-col-name {
-    width: calc(45% - 32px);
+    width: calc(35% - 32px);
 }
 
 .s3-col-size {
-    width: 12%;
+    width: 10%;
+}
+
+.s3-col-quota {
+    width: 10%;
 }
 
 .s3-col-modified {
-    width: 20%;
+    width: 18%;
 }
 
 .s3-col-expires {
-    width: 20%;
+    width: 18%;
 }
 
 .s3-checkbox {

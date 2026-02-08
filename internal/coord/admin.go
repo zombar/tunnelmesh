@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/web"
 	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
@@ -1340,10 +1341,11 @@ type S3ObjectInfo struct {
 
 // S3BucketInfo represents an S3 bucket for the explorer API.
 type S3BucketInfo struct {
-	Name      string `json:"name"`
-	CreatedAt string `json:"created_at"`
-	Writable  bool   `json:"writable"`
-	UsedBytes int64  `json:"used_bytes"`
+	Name       string `json:"name"`
+	CreatedAt  string `json:"created_at"`
+	Writable   bool   `json:"writable"`
+	UsedBytes  int64  `json:"used_bytes"`
+	QuotaBytes int64  `json:"quota_bytes,omitempty"` // Per-bucket quota (from file share, 0 = unlimited)
 }
 
 // S3QuotaInfo represents overall S3 storage quota for the explorer API.
@@ -1419,11 +1421,22 @@ func (s *Server) handleS3ListBuckets(w http.ResponseWriter, r *http.Request) {
 		if quotaStats != nil {
 			usedBytes = quotaStats.PerBucket[b.Name]
 		}
+
+		// Look up per-bucket quota from file share if this is a file share bucket
+		var quotaBytes int64
+		if s.fileShareMgr != nil && strings.HasPrefix(b.Name, s3.FileShareBucketPrefix) {
+			shareName := strings.TrimPrefix(b.Name, s3.FileShareBucketPrefix)
+			if share := s.fileShareMgr.Get(shareName); share != nil {
+				quotaBytes = share.QuotaBytes
+			}
+		}
+
 		bucketInfos = append(bucketInfos, S3BucketInfo{
-			Name:      b.Name,
-			CreatedAt: b.CreatedAt.Format(time.RFC3339),
-			Writable:  writable,
-			UsedBytes: usedBytes,
+			Name:       b.Name,
+			CreatedAt:  b.CreatedAt.Format(time.RFC3339),
+			Writable:   writable,
+			UsedBytes:  usedBytes,
+			QuotaBytes: quotaBytes,
 		})
 	}
 
