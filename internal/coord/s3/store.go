@@ -160,6 +160,24 @@ func (s *Store) calculateQuotaUsage() error {
 	return nil
 }
 
+// validateName validates a bucket or object key name to prevent path traversal.
+// This is a defense-in-depth measure; API-level validation should also be applied.
+func validateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name cannot be empty")
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("invalid name")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("path traversal not allowed")
+	}
+	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") {
+		return fmt.Errorf("absolute paths not allowed")
+	}
+	return nil
+}
+
 // bucketPath returns the path to a bucket directory.
 func (s *Store) bucketPath(bucket string) string {
 	return filepath.Join(s.dataDir, "buckets", bucket)
@@ -182,6 +200,11 @@ func (s *Store) objectMetaPath(bucket, key string) string {
 
 // CreateBucket creates a new bucket.
 func (s *Store) CreateBucket(bucket, owner string) error {
+	// Validate bucket name (defense in depth)
+	if err := validateName(bucket); err != nil {
+		return fmt.Errorf("invalid bucket name: %w", err)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -364,6 +387,14 @@ func (s *Store) ListBuckets() ([]BucketMeta, error) {
 
 // PutObject writes an object to a bucket.
 func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, contentType string, metadata map[string]string) (*ObjectMeta, error) {
+	// Validate names (defense in depth)
+	if err := validateName(bucket); err != nil {
+		return nil, fmt.Errorf("invalid bucket name: %w", err)
+	}
+	if err := validateName(key); err != nil {
+		return nil, fmt.Errorf("invalid key: %w", err)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -456,6 +487,14 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 
 // GetObject retrieves an object from a bucket.
 func (s *Store) GetObject(bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
+	// Validate names (defense in depth)
+	if err := validateName(bucket); err != nil {
+		return nil, nil, fmt.Errorf("invalid bucket name: %w", err)
+	}
+	if err := validateName(key); err != nil {
+		return nil, nil, fmt.Errorf("invalid key: %w", err)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -533,6 +572,14 @@ func (s *Store) getObjectMeta(bucket, key string) (*ObjectMeta, error) {
 // If the object is already tombstoned, it permanently purges it.
 // This allows "delete twice to permanently remove" UX pattern.
 func (s *Store) DeleteObject(bucket, key string) error {
+	// Validate names (defense in depth)
+	if err := validateName(bucket); err != nil {
+		return fmt.Errorf("invalid bucket name: %w", err)
+	}
+	if err := validateName(key); err != nil {
+		return fmt.Errorf("invalid key: %w", err)
+	}
+
 	// Check if object or bucket is already tombstoned
 	bucketMeta, err := s.HeadBucket(bucket)
 	if err != nil {
@@ -687,11 +734,15 @@ func (s *Store) TombstoneRetentionDays() int {
 // PurgeTombstonedObjects removes all tombstoned objects older than the retention period.
 // Returns the number of objects purged.
 func (s *Store) PurgeTombstonedObjects() int {
-	if s.tombstoneRetentionDays <= 0 {
+	s.mu.RLock()
+	retentionDays := s.tombstoneRetentionDays
+	s.mu.RUnlock()
+
+	if retentionDays <= 0 {
 		return 0 // Disabled
 	}
 
-	cutoff := time.Now().UTC().AddDate(0, 0, -s.tombstoneRetentionDays)
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
 	purgedCount := 0
 
 	// List all buckets
@@ -701,17 +752,26 @@ func (s *Store) PurgeTombstonedObjects() int {
 	}
 
 	for _, bucket := range buckets {
-		objects, _, _, err := s.ListObjects(bucket.Name, "", "", 0)
-		if err != nil {
-			continue
-		}
+		// Paginate through all objects in the bucket
+		marker := ""
+		for {
+			objects, isTruncated, nextMarker, err := s.ListObjects(bucket.Name, "", marker, 1000)
+			if err != nil {
+				break
+			}
 
-		for _, obj := range objects {
-			if obj.IsTombstoned() && obj.TombstonedAt.Before(cutoff) {
-				if err := s.PurgeObject(bucket.Name, obj.Key); err == nil {
-					purgedCount++
+			for _, obj := range objects {
+				if obj.IsTombstoned() && obj.TombstonedAt.Before(cutoff) {
+					if err := s.PurgeObject(bucket.Name, obj.Key); err == nil {
+						purgedCount++
+					}
 				}
 			}
+
+			if !isTruncated {
+				break
+			}
+			marker = nextMarker
 		}
 	}
 
