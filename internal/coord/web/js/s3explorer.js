@@ -419,12 +419,7 @@
 
             // Check if content is binary
             if (isBinaryContent(content)) {
-                showToast('Binary file - not for human eyes', 'info');
-                state.currentFile = null;
-                // Stay in browser view
-                if (browser) browser.style.display = 'block';
-                if (browseActions && state.writable) browseActions.style.display = 'flex';
-                return;
+                throw new Error('Binary file - not for human eyes');
             }
 
             state.originalContent = content;
