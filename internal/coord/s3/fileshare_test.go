@@ -11,9 +11,17 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 )
 
-func TestFileShareManager_Create(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
+// newTestStoreWithCASForFileshare creates a store with CAS for fileshare tests.
+func newTestStoreWithCASForFileshare(t *testing.T) *Store {
+	t.Helper()
+	masterKey := [32]byte{1, 2, 3, 4, 5, 6, 7, 8}
+	store, err := NewStoreWithCAS(t.TempDir(), nil, masterKey)
 	require.NoError(t, err)
+	return store
+}
+
+func TestFileShareManager_Create(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -37,8 +45,7 @@ func TestFileShareManager_Create(t *testing.T) {
 }
 
 func TestFileShareManager_Create_SetsPermissions(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -74,8 +81,7 @@ func TestFileShareManager_Create_SetsPermissions(t *testing.T) {
 }
 
 func TestFileShareManager_Create_GuestReadDisabled(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -115,8 +121,7 @@ func TestFileShareManager_Create_GuestReadDisabled(t *testing.T) {
 }
 
 func TestFileShareManager_Create_ExpiryFromOptions(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -134,8 +139,7 @@ func TestFileShareManager_Create_ExpiryFromOptions(t *testing.T) {
 }
 
 func TestFileShareManager_Create_DuplicateName(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -152,8 +156,7 @@ func TestFileShareManager_Create_DuplicateName(t *testing.T) {
 }
 
 func TestFileShareManager_Delete(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -191,8 +194,7 @@ func TestFileShareManager_Delete(t *testing.T) {
 }
 
 func TestFileShareManager_DeleteAndRecreate_RestoresContent(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -236,8 +238,7 @@ func TestFileShareManager_DeleteAndRecreate_RestoresContent(t *testing.T) {
 }
 
 func TestFileShareManager_Delete_RemovesPermissions(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -269,8 +270,7 @@ func TestFileShareManager_Delete_RemovesPermissions(t *testing.T) {
 }
 
 func TestFileShareManager_Get(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -291,8 +291,7 @@ func TestFileShareManager_Get(t *testing.T) {
 }
 
 func TestFileShareManager_List(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -307,9 +306,7 @@ func TestFileShareManager_List(t *testing.T) {
 }
 
 func TestFileShareManager_Persistence(t *testing.T) {
-	tempDir := t.TempDir()
-	store, err := NewStore(tempDir, nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -344,8 +341,7 @@ func TestFileShare_CreatedAt(t *testing.T) {
 }
 
 func TestFileShareManager_Create_SetsExpiry(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 
 	// Set default expiry to 365 days
 	store.SetDefaultShareExpiryDays(365)
@@ -389,8 +385,7 @@ func TestFileShare_IsExpired(t *testing.T) {
 }
 
 func TestFileShareManager_TombstoneExpiredShareContents(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
@@ -425,8 +420,7 @@ func TestFileShareManager_TombstoneExpiredShareContents(t *testing.T) {
 }
 
 func TestFileShareManager_IsProtectedBinding(t *testing.T) {
-	store, err := NewStore(t.TempDir(), nil)
-	require.NoError(t, err)
+	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 	authorizer := auth.NewAuthorizerWithGroups()

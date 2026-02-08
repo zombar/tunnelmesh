@@ -3,6 +3,7 @@ package coord
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -299,8 +300,11 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 }
 
 // StartPeriodicCleanup starts the background cleanup goroutine for S3 storage.
-// It periodically purges tombstoned objects past their retention period and
-// tombstones content in expired file shares.
+// It periodically:
+//   - Purges tombstoned objects past their retention period
+//   - Tombstones content in expired file shares
+//   - Runs garbage collection on versions and orphaned chunks
+//   - Updates CAS metrics (dedup ratio, chunk count, etc.)
 func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 	if s.s3Store == nil {
 		return
@@ -310,6 +314,10 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Hour)
 	go func() {
 		defer ticker.Stop()
+
+		// Update metrics on startup
+		s.updateCASMetrics()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -326,9 +334,48 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 						log.Info().Int("count", tombstoned).Msg("tombstoned expired file share content")
 					}
 				}
+
+				// Run garbage collection on versions and orphaned chunks
+				gcStart := time.Now()
+				gcStats := s.s3Store.RunGarbageCollection()
+				gcDuration := time.Since(gcStart).Seconds()
+
+				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 {
+					log.Info().
+						Int("versions_pruned", gcStats.VersionsPruned).
+						Int("chunks_deleted", gcStats.ChunksDeleted).
+						Int64("bytes_reclaimed", gcStats.BytesReclaimed).
+						Int("objects_scanned", gcStats.ObjectsScanned).
+						Msg("S3 garbage collection completed")
+				}
+
+				// Record GC metrics
+				if metrics := s3.GetS3Metrics(); metrics != nil {
+					metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
+				}
+
+				// Update CAS metrics after GC
+				s.updateCASMetrics()
 			}
 		}
 	}()
+}
+
+// updateCASMetrics collects and updates CAS/chunking metrics.
+func (s *Server) updateCASMetrics() {
+	if s.s3Store == nil {
+		return
+	}
+
+	casStats := s.s3Store.GetCASStats()
+	if metrics := s3.GetS3Metrics(); metrics != nil {
+		metrics.UpdateCASMetrics(
+			casStats.ChunkCount,
+			casStats.ChunkBytes,
+			casStats.LogicalBytes,
+			casStats.VersionCount,
+		)
+	}
 }
 
 // SetVersion sets the server version for admin display.
@@ -413,6 +460,38 @@ func (s *Server) getServicePorts() []uint16 {
 	return ports
 }
 
+// loadOrCreateCASKey loads or creates the master key for CAS encryption.
+// The key is stored in the S3 data directory as cas.key.
+func (s *Server) loadOrCreateCASKey(dataDir string) ([32]byte, error) {
+	keyPath := filepath.Join(dataDir, "cas.key")
+	var masterKey [32]byte
+
+	// Try to load existing key
+	data, err := os.ReadFile(keyPath)
+	if err == nil && len(data) == 32 {
+		copy(masterKey[:], data)
+		return masterKey, nil
+	}
+
+	// Create new key
+	if _, err := rand.Read(masterKey[:]); err != nil {
+		return masterKey, fmt.Errorf("generate CAS key: %w", err)
+	}
+
+	// Ensure data directory exists
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return masterKey, fmt.Errorf("create data directory: %w", err)
+	}
+
+	// Save key to disk
+	if err := os.WriteFile(keyPath, masterKey[:], 0o600); err != nil {
+		return masterKey, fmt.Errorf("save CAS key: %w", err)
+	}
+
+	log.Info().Str("path", keyPath).Msg("generated new CAS encryption key")
+	return masterKey, nil
+}
+
 // initS3Storage initializes the S3 storage subsystem.
 func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	// Require max_size to be configured for quota enforcement
@@ -421,8 +500,14 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	}
 	quota := s3.NewQuotaManager(cfg.S3.MaxSize.Bytes())
 
-	// Create store
-	store, err := s3.NewStore(cfg.S3.DataDir, quota)
+	// Load or create master key for CAS encryption
+	masterKey, err := s.loadOrCreateCASKey(cfg.S3.DataDir)
+	if err != nil {
+		return fmt.Errorf("initialize CAS key: %w", err)
+	}
+
+	// Create store with CAS for content-addressed storage
+	store, err := s3.NewStoreWithCAS(cfg.S3.DataDir, quota, masterKey)
 	if err != nil {
 		return fmt.Errorf("create S3 store: %w", err)
 	}
@@ -431,6 +516,15 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	// Set expiry defaults from config
 	store.SetDefaultObjectExpiryDays(cfg.S3.ObjectExpiryDays)
 	store.SetDefaultShareExpiryDays(cfg.S3.ShareExpiryDays)
+
+	// Set version retention config
+	store.SetVersionRetentionDays(cfg.S3.VersionRetentionDays)
+	store.SetMaxVersionsPerObject(cfg.S3.MaxVersionsPerObject)
+	store.SetVersionRetentionPolicy(s3.VersionRetentionPolicy{
+		RecentDays:    cfg.S3.VersionRetention.RecentDays,
+		WeeklyWeeks:   cfg.S3.VersionRetention.WeeklyWeeks,
+		MonthlyMonths: cfg.S3.VersionRetention.MonthlyMonths,
+	})
 
 	// Create authorizer with group support
 	s.s3Authorizer = auth.NewAuthorizerWithGroups()
@@ -515,6 +609,8 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 // - all_service_users group gets system role on _tunnelmesh bucket
 // - all_admin_users group gets admin role (unscoped)
 func (s *Server) ensureBuiltinGroupBindings() {
+	modified := false
+
 	// Check if bindings already exist
 	serviceBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllServiceUsers)
 	if len(serviceBindings) == 0 {
@@ -523,6 +619,7 @@ func (s *Server) ensureBuiltinGroupBindings() {
 			auth.RoleSystem,
 			"", // Unscoped, but RoleSystem only applies to _tunnelmesh
 		))
+		modified = true
 	}
 
 	adminBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllAdminUsers)
@@ -532,6 +629,14 @@ func (s *Server) ensureBuiltinGroupBindings() {
 			auth.RoleAdmin,
 			"", // Unscoped - admin has access to all buckets
 		))
+		modified = true
+	}
+
+	// Persist if we added any bindings
+	if modified && s.s3SystemStore != nil {
+		if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
+			log.Warn().Err(err).Msg("failed to persist builtin group bindings")
+		}
 	}
 }
 
@@ -1057,6 +1162,9 @@ func (s *Server) StartAdminServer(addr string, tlsCert *tls.Certificate) error {
 		s.adminServer.TLSConfig = &tls.Config{
 			Certificates: []tls.Certificate{*tlsCert},
 			MinVersion:   tls.VersionTLS12,
+			// Request client certs for user identification, but don't require them
+			// This allows getRequestOwner() to identify users for operations like share creation
+			ClientAuth: tls.RequestClientCert,
 		}
 		log.Info().Str("addr", addr).Msg("starting admin server (HTTPS)")
 		go func() {

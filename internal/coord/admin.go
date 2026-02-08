@@ -1246,7 +1246,8 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 // getRequestOwner extracts the owner identity from the request.
-// It returns the peer name from the TLS client certificate, or empty string if unavailable.
+// It returns the peer name from the TLS client certificate, or looks up the peer
+// by their mesh IP if no certificate is available (browser access from within mesh).
 // Callers should validate the returned value before using it for ownership.
 func (s *Server) getRequestOwner(r *http.Request) string {
 	// Get peer name from TLS client certificate
@@ -1258,8 +1259,35 @@ func (s *Server) getRequestOwner(r *http.Request) string {
 		}
 		return cn
 	}
-	// No client certificate - return empty string
-	// Callers must handle this case explicitly
+
+	// No client certificate - try to identify by mesh IP
+	// This handles browser access from within the mesh where the browser
+	// doesn't have a client certificate but the request originates from a peer
+	if peerName := s.getPeerByRemoteAddr(r.RemoteAddr); peerName != "" {
+		return peerName
+	}
+
+	return ""
+}
+
+// getPeerByRemoteAddr looks up a peer by their mesh IP address.
+// Returns the peer name if found, empty string otherwise.
+func (s *Server) getPeerByRemoteAddr(remoteAddr string) string {
+	// Extract IP from "ip:port" format
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		// Maybe it's just an IP without port
+		host = remoteAddr
+	}
+
+	s.peersMu.RLock()
+	defer s.peersMu.RUnlock()
+
+	for _, info := range s.peers {
+		if info.peer.MeshIP == host {
+			return info.peer.Name
+		}
+	}
 	return ""
 }
 
@@ -1564,7 +1592,20 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if strings.HasPrefix(parts[1], "objects/") {
-			key := strings.TrimPrefix(parts[1], "objects/")
+			objPath := strings.TrimPrefix(parts[1], "objects/")
+
+			// Check for version subresources (e.g., objects/{key}/versions, objects/{key}/restore)
+			// Split on /versions or /restore to extract key and subresource
+			var key, subresource string
+			if idx := strings.Index(objPath, "/versions"); idx >= 0 {
+				key = objPath[:idx]
+				subresource = "versions"
+			} else if idx := strings.Index(objPath, "/restore"); idx >= 0 {
+				key = objPath[:idx]
+				subresource = "restore"
+			} else {
+				key = objPath
+			}
 
 			// URL decode object key
 			if decoded, err := url.PathUnescape(key); err == nil {
@@ -1577,7 +1618,15 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			s.handleS3Object(w, r, bucket, key)
+			// Route based on subresource
+			switch subresource {
+			case "versions":
+				s.handleS3ListVersions(w, r, bucket, key)
+			case "restore":
+				s.handleS3RestoreVersion(w, r, bucket, key)
+			default:
+				s.handleS3Object(w, r, bucket, key)
+			}
 			return
 		}
 	}
@@ -1711,7 +1760,13 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	switch r.Method {
 	case http.MethodGet:
-		s.handleS3GetObject(w, bucket, key)
+		// Check for versionId query param
+		versionID := r.URL.Query().Get("versionId")
+		if versionID != "" {
+			s.handleS3GetObjectVersion(w, bucket, key, versionID)
+		} else {
+			s.handleS3GetObject(w, bucket, key)
+		}
 	case http.MethodPut:
 		s.handleS3PutObject(w, r, bucket, key)
 	case http.MethodDelete:
@@ -1745,6 +1800,33 @@ func (s *Server) handleS3GetObject(w http.ResponseWriter, bucket, key string) {
 	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	w.Header().Set("ETag", meta.ETag)
 	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
+
+	_, _ = io.Copy(w, reader)
+}
+
+// handleS3GetObjectVersion returns a specific version of an object.
+func (s *Server) handleS3GetObjectVersion(w http.ResponseWriter, bucket, key, versionID string) {
+	reader, meta, err := s.s3Store.GetObjectVersion(bucket, key, versionID)
+	if err != nil {
+		switch err {
+		case s3.ErrBucketNotFound:
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		case s3.ErrObjectNotFound:
+			s.jsonError(w, "version not found", http.StatusNotFound)
+		case s3.ErrAccessDenied:
+			s.jsonError(w, "access denied", http.StatusForbidden)
+		default:
+			s.jsonError(w, "failed to get object version", http.StatusInternalServerError)
+		}
+		return
+	}
+	defer func() { _ = reader.Close() }()
+
+	w.Header().Set("Content-Type", meta.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	w.Header().Set("ETag", meta.ETag)
+	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
+	w.Header().Set("X-Version-Id", meta.VersionID)
 
 	_, _ = io.Copy(w, reader)
 }
@@ -1842,4 +1924,104 @@ func (s *Server) handleS3HeadObject(w http.ResponseWriter, bucket, key string) {
 	w.Header().Set("ETag", meta.ETag)
 	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
 	w.WriteHeader(http.StatusOK)
+}
+
+// --- S3 Version API Handlers ---
+
+// S3VersionInfo represents a version for the API response.
+type S3VersionInfo struct {
+	VersionID    string `json:"version_id"`
+	Size         int64  `json:"size"`
+	ETag         string `json:"etag"`
+	LastModified string `json:"last_modified"`
+	IsCurrent    bool   `json:"is_current"`
+}
+
+// handleS3ListVersions returns all versions of an object.
+func (s *Server) handleS3ListVersions(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	versions, err := s.s3Store.ListVersions(bucket, key)
+	if err != nil {
+		switch err {
+		case s3.ErrBucketNotFound:
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		case s3.ErrObjectNotFound:
+			s.jsonError(w, "object not found", http.StatusNotFound)
+		case s3.ErrAccessDenied:
+			s.jsonError(w, "access denied", http.StatusForbidden)
+		default:
+			s.jsonError(w, "failed to list versions", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Convert to API response format
+	result := make([]S3VersionInfo, 0, len(versions))
+	for _, v := range versions {
+		result = append(result, S3VersionInfo{
+			VersionID:    v.VersionID,
+			Size:         v.Size,
+			ETag:         v.ETag,
+			LastModified: v.LastModified.Format(time.RFC3339),
+			IsCurrent:    v.IsCurrent,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+// RestoreVersionRequest is the request body for restoring a version.
+type RestoreVersionRequest struct {
+	VersionID string `json:"version_id"`
+}
+
+// handleS3RestoreVersion restores a previous version of an object.
+func (s *Server) handleS3RestoreVersion(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check bucket write permission
+	if bucket == auth.SystemBucket {
+		s.jsonError(w, "bucket is read-only", http.StatusForbidden)
+		return
+	}
+
+	var req RestoreVersionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.VersionID == "" {
+		s.jsonError(w, "version_id is required", http.StatusBadRequest)
+		return
+	}
+
+	meta, err := s.s3Store.RestoreVersion(bucket, key, req.VersionID)
+	if err != nil {
+		switch err {
+		case s3.ErrBucketNotFound:
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		case s3.ErrObjectNotFound:
+			s.jsonError(w, "version not found", http.StatusNotFound)
+		case s3.ErrAccessDenied:
+			s.jsonError(w, "access denied", http.StatusForbidden)
+		default:
+			s.jsonError(w, "failed to restore version: "+err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     "restored",
+		"version_id": meta.VersionID,
+	})
 }

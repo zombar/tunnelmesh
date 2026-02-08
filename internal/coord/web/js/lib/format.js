@@ -91,6 +91,50 @@
     }
 
     /**
+     * Format timestamp as human-readable relative time (verbose, for past dates)
+     * @param {string|Date} timestamp - ISO timestamp or Date object
+     * @returns {string} Relative time like "5 minutes ago" or "Yesterday"
+     */
+    function formatRelativeTime(timestamp) {
+        if (!timestamp) return '-';
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / (1000 * 60));
+        const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+        if (diffMins < 1) return 'Just now';
+        if (diffMins < 60) return diffMins === 1 ? '1 minute ago' : `${diffMins} minutes ago`;
+        if (diffHours < 24) return diffHours === 1 ? '1 hour ago' : `${diffHours} hours ago`;
+        if (diffDays === 1) return 'Yesterday';
+        if (diffDays < 30) return `${diffDays} days ago`;
+        if (diffDays < 365) {
+            const months = Math.floor(diffDays / 30);
+            return months === 1 ? '1 month ago' : `${months} months ago`;
+        }
+        const years = Math.floor(diffDays / 365);
+        return years === 1 ? '1 year ago' : `${years} years ago`;
+    }
+
+    /**
+     * Format timestamp as human-readable date/time
+     * @param {string|Date} timestamp - ISO timestamp or Date object
+     * @returns {string} Formatted date like "Feb 8, 2026, 5:30 PM"
+     */
+    function formatDateTime(timestamp) {
+        if (!timestamp) return '-';
+        const date = new Date(timestamp);
+        return date.toLocaleString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+        });
+    }
+
+    /**
      * Format expiry timestamp as relative time (for future dates)
      * @param {string|Date} timestamp - ISO timestamp or Date object
      * @returns {string} Relative time like "in 5d" or "in 3mo", or "Expired" if past
@@ -141,6 +185,8 @@
         formatLatency,
         formatLatencyCompact,
         formatLastSeen,
+        formatRelativeTime,
+        formatDateTime,
         formatExpiry,
         formatNumber,
     };

@@ -9,9 +9,10 @@ import (
 
 func newTestServer(t *testing.T) (*s3.Store, *s3.FileShareManager, *auth.Authorizer, *PasswordStore) {
 	t.Helper()
-	store, err := s3.NewStore(t.TempDir(), nil)
+	masterKey := [32]byte{1, 2, 3, 4, 5, 6, 7, 8}
+	store, err := s3.NewStoreWithCAS(t.TempDir(), nil, masterKey)
 	if err != nil {
-		t.Fatalf("NewStore failed: %v", err)
+		t.Fatalf("NewStoreWithCAS failed: %v", err)
 	}
 	systemStore, err := s3.NewSystemStore(store, "svc:coordinator")
 	if err != nil {

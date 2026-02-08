@@ -1890,6 +1890,143 @@ a.logs-container {
     color: var(--color-danger, #dc3545);
 }
 
+.s3-badge-current {
+    background: var(--color-success-bg, #d4edda);
+    color: var(--color-success, #28a745);
+}
+
+/* S3 Version Modal */
+.s3-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.s3-modal-content {
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: 4px;
+    min-width: 500px;
+    max-width: 700px;
+}
+
+/* Wide modal variant for tables - fixed header, scrolling body */
+.modal-content.modal-wide {
+    min-width: 700px;
+    max-width: 900px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Table body variant - no padding, scrollable for fixed header */
+.modal-body-table {
+    padding: 0;
+    overflow-y: auto;
+    max-height: 60vh;
+}
+
+/* Text alignment utilities */
+.text-right {
+    text-align: right;
+}
+
+.text-center {
+    text-align: center;
+}
+
+/* Button group - centered inline buttons */
+.btn-group {
+    display: inline-flex;
+    gap: 0.25rem;
+    justify-content: center;
+}
+
+.s3-version-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+
+.s3-version-table th,
+.s3-version-table td {
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--color-border-secondary);
+}
+
+.s3-version-table th {
+    background: var(--color-bg-tertiary);
+    font-weight: 600;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+}
+
+.s3-version-table tbody tr:hover {
+    background: var(--color-bg-hover);
+}
+
+.s3-version-current {
+    background: var(--color-bg-tertiary);
+}
+
+.s3-version-filename {
+    font-weight: 500;
+    color: var(--color-text-primary);
+}
+
+.s3-version-id {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--color-text-secondary);
+    margin-top: 2px;
+}
+
+/* Square icon buttons for version actions - square corners */
+.s3-version-btn {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 0;
+    border-radius: 0;
+}
+
+.s3-version-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.s3-version-btn:disabled:hover {
+    background: var(--color-bg-tertiary);
+    border-color: var(--color-border-primary);
+    color: var(--color-text-secondary);
+}
+
+/* Version date styling - relative + timestamp */
+.s3-version-relative {
+    display: block;
+    color: var(--color-text-primary);
+    font-weight: 500;
+}
+
+.s3-version-timestamp {
+    display: block;
+    font-size: 0.65rem;
+    color: var(--color-text-secondary);
+    margin-top: 2px;
+}
+
 .s3-selection-actions {
     display: flex;
     align-items: center;

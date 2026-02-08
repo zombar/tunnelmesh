@@ -97,11 +97,11 @@
     function escapeJsString(str) {
         if (!str) return '';
         return str
-            .replace(/\\/g, '\\\\')  // Escape backslashes first
-            .replace(/'/g, "\\'")    // Escape single quotes
-            .replace(/"/g, '\\"')    // Escape double quotes
-            .replace(/\n/g, '\\n')   // Escape newlines
-            .replace(/\r/g, '\\r');  // Escape carriage returns
+            .replace(/\\/g, '\\\\') // Escape backslashes first
+            .replace(/'/g, "\\'") // Escape single quotes
+            .replace(/"/g, '\\"') // Escape double quotes
+            .replace(/\n/g, '\\n') // Escape newlines
+            .replace(/\r/g, '\\r'); // Escape carriage returns
     }
 
     function formatBytes(bytes) {
@@ -124,6 +124,26 @@
         if (diffDays > 0 && diffDays < 7) return `${diffDays} days ago`;
 
         return d.toLocaleDateString();
+    }
+
+    // Format date for version history - shows relative time + readable timestamp
+    // Uses shared TM.format utilities for DRY code
+    function formatVersionDate(isoDate) {
+        if (!isoDate) return '-';
+
+        // Use shared format utilities if available
+        let relative, timestamp;
+        if (typeof TM !== 'undefined' && TM.format) {
+            relative = TM.format.formatRelativeTime(isoDate);
+            timestamp = TM.format.formatDateTime(isoDate);
+        } else {
+            // Fallback for standalone use
+            const d = new Date(isoDate);
+            relative = d.toLocaleDateString();
+            timestamp = d.toLocaleString();
+        }
+
+        return `<span class="s3-version-relative">${relative}</span><span class="s3-version-timestamp">${timestamp}</span>`;
     }
 
     // Use formatExpiry from TM.format utility
@@ -231,6 +251,35 @@
             method: 'DELETE',
         });
         return resp.ok || resp.status === 204;
+    }
+
+    async function fetchVersions(bucket, key) {
+        try {
+            const resp = await fetch(
+                `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/versions`,
+            );
+            if (!resp.ok) return [];
+            return await resp.json();
+        } catch (err) {
+            console.error('Failed to fetch versions:', err);
+            return [];
+        }
+    }
+
+    async function restoreVersion(bucket, key, versionId) {
+        const resp = await fetch(
+            `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/restore`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version_id: versionId }),
+            },
+        );
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.error || `Failed to restore: ${resp.status}`);
+        }
+        return await resp.json();
     }
 
     // =========================================================================
@@ -484,7 +533,7 @@
         const fileName = key.split('/').pop();
         // Check if file is tombstoned from cached items
         const item = state.currentItems.find((i) => i.key === key);
-        const isTombstoned = item && item.tombstonedAt;
+        const isTombstoned = item?.tombstonedAt;
         const isReadOnly = !state.writable || isTombstoned;
 
         // Clear selection when opening file
@@ -765,6 +814,138 @@
     function closeModal(modalId) {
         const modal = document.getElementById(modalId);
         if (modal) modal.style.display = 'none';
+    }
+
+    // =========================================================================
+    // Version History
+    // =========================================================================
+
+    async function showVersionHistory() {
+        if (!state.currentFile) {
+            showToast('No file selected', 'warning');
+            return;
+        }
+
+        const { bucket, key } = state.currentFile;
+        const versions = await fetchVersions(bucket, key);
+
+        if (versions.length === 0) {
+            showToast('No version history available', 'info');
+            return;
+        }
+
+        // Create or get modal - uses standard modal classes for consistency
+        let modal = document.getElementById('s3-version-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 's3-version-modal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content modal-wide">
+                    <div class="modal-header">
+                        <h3>Version History</h3>
+                        <button class="modal-close" onclick="TM.s3explorer.closeModal('s3-version-modal')">&times;</button>
+                    </div>
+                    <div class="modal-body modal-body-table">
+                        <table class="s3-version-table">
+                            <thead>
+                                <tr>
+                                    <th>File</th>
+                                    <th class="text-right">Size</th>
+                                    <th class="text-right">Date</th>
+                                    <th class="text-center">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="s3-version-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        // Populate version list
+        const tbody = document.getElementById('s3-version-list');
+        const canRestore = state.writable; // Can only restore if bucket is writable
+
+        tbody.innerHTML = versions
+            .map((v) => {
+                const currentBadge = v.is_current ? '<span class="s3-badge s3-badge-current">Current</span>' : '';
+                // Square icon buttons with tooltips
+                const downloadBtn = `<button class="btn-icon s3-version-btn" title="Download this version" onclick="TM.s3explorer.downloadVersion('${escapeJsString(v.version_id)}')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                    </svg>
+                </button>`;
+
+                let restoreBtn = '';
+                if (!v.is_current) {
+                    if (canRestore) {
+                        restoreBtn = `<button class="btn-icon s3-version-btn" title="Restore this version" onclick="TM.s3explorer.restoreVersionAndRefresh('${escapeJsString(v.version_id)}')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
+                            </svg>
+                        </button>`;
+                    } else {
+                        restoreBtn = `<button class="btn-icon s3-version-btn" title="Cannot restore (read-only)" disabled>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
+                            </svg>
+                        </button>`;
+                    }
+                }
+
+                const fileName = key.split('/').pop();
+                return `
+                    <tr class="${v.is_current ? 's3-version-current' : ''}">
+                        <td>
+                            <div class="s3-version-filename">${escapeHtml(fileName)} ${currentBadge}</div>
+                            <div class="s3-version-id">${escapeHtml(v.version_id)}</div>
+                        </td>
+                        <td class="text-right">${formatBytes(v.size)}</td>
+                        <td class="text-right">${formatVersionDate(v.last_modified)}</td>
+                        <td class="text-center">
+                            <div class="btn-group">
+                                ${downloadBtn}
+                                ${restoreBtn}
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            })
+            .join('');
+
+        modal.style.display = 'flex';
+    }
+
+    async function restoreVersionAndRefresh(versionId) {
+        if (!state.currentFile) return;
+
+        const { bucket, key } = state.currentFile;
+
+        try {
+            await restoreVersion(bucket, key, versionId);
+            showToast('Version restored', 'success');
+            closeModal('s3-version-modal');
+
+            // Reload the file content
+            await openFile(bucket, key);
+        } catch (err) {
+            showToast(`Failed to restore: ${err.message}`, 'error');
+        }
+    }
+
+    function downloadVersion(versionId) {
+        if (!state.currentFile) return;
+
+        const { bucket, key } = state.currentFile;
+        const url = `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}?versionId=${encodeURIComponent(versionId)}`;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${key.split('/').pop()}.${versionId.slice(0, 10)}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     }
 
     // =========================================================================
@@ -1066,5 +1247,9 @@
         deleteSelected,
         setAutosave,
         toggleFullscreen,
+        // Version history
+        showVersionHistory,
+        restoreVersionAndRefresh,
+        downloadVersion,
     };
 });
