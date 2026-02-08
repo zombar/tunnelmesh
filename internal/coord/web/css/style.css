@@ -731,6 +731,11 @@ tr:hover td {
     background: var(--color-bg-secondary);
 }
 
+/* Ensure pagination after tables is centered */
+table + .show-more-container {
+    text-align: center;
+}
+
 /* DNS group highlight - invert: brighten OTHER rows, keep grouped rows normal */
 #dns-body.dns-group-active tr:not(.dns-group-highlight) td {
     background: var(--color-bg-secondary);
