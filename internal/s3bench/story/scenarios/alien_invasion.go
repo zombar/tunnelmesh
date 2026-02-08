@@ -149,15 +149,6 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			DataPattern: "compressible",
 			Versions:    1,
 		},
-		// Autopsy reports - rare, large, classified
-		{
-			Type:        "autopsy",
-			Frequency:   20 * time.Hour, // Only 3-4 total
-			SizeRange:   [2]int64{15000, 40000},
-			Authors:     []string{"scientist"},
-			DataPattern: "realistic",
-			Versions:    2, // Updated with new findings
-		},
 		// Scientific analyses - periodic
 		{
 			Type:        "scientific_analysis",

@@ -159,9 +159,9 @@ func TestAlienInvasion(t *testing.T) {
 		}
 	}
 
-	// Check for key document types
+	// Check for key document types (autopsy removed per user request)
 	requiredTypes := []string{
-		"battle_report", "sitrep", "autopsy", "scientific_analysis",
+		"battle_report", "sitrep", "scientific_analysis",
 		"council_meeting", "telephone", "im_transcript", "casualty_list",
 	}
 	for _, reqType := range requiredTypes {

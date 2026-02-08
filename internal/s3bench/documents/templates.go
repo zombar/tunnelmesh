@@ -47,8 +47,6 @@ func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte
 		content, err = GenerateBattleReport(ctx)
 	case "sitrep":
 		content, err = GenerateSITREP(ctx)
-	case "autopsy":
-		content, err = GenerateAutopsy(ctx)
 	case "scientific_analysis":
 		content, err = GenerateScientificAnalysis(ctx)
 	case "traffic_report":
