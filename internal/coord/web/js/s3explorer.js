@@ -865,16 +865,16 @@
                 if (!item || item.isBucket) continue;
 
                 const key = item.key || item.name;
-                await fetch(`/api/s3/${state.currentBucket}/${encodeURIComponent(key)}`, {
-                    method: 'DELETE',
-                });
+                await deleteObject(state.currentBucket, key);
             }
 
             state.selectedItems.clear();
+            updateSelectionUI();
+            showToast(`Deleted ${count} item${count > 1 ? 's' : ''}`, 'success');
             await renderFileListing();
         } catch (err) {
             console.error('Delete failed:', err);
-            alert('Delete failed: ' + err.message);
+            showToast('Delete failed: ' + err.message, 'error');
         }
     }
 
