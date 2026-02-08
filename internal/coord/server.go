@@ -3,6 +3,7 @@ package coord
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -413,6 +414,38 @@ func (s *Server) getServicePorts() []uint16 {
 	return ports
 }
 
+// loadOrCreateCASKey loads or creates the master key for CAS encryption.
+// The key is stored in the S3 data directory as cas.key.
+func (s *Server) loadOrCreateCASKey(dataDir string) ([32]byte, error) {
+	keyPath := filepath.Join(dataDir, "cas.key")
+	var masterKey [32]byte
+
+	// Try to load existing key
+	data, err := os.ReadFile(keyPath)
+	if err == nil && len(data) == 32 {
+		copy(masterKey[:], data)
+		return masterKey, nil
+	}
+
+	// Create new key
+	if _, err := rand.Read(masterKey[:]); err != nil {
+		return masterKey, fmt.Errorf("generate CAS key: %w", err)
+	}
+
+	// Ensure data directory exists
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return masterKey, fmt.Errorf("create data directory: %w", err)
+	}
+
+	// Save key to disk
+	if err := os.WriteFile(keyPath, masterKey[:], 0o600); err != nil {
+		return masterKey, fmt.Errorf("save CAS key: %w", err)
+	}
+
+	log.Info().Str("path", keyPath).Msg("generated new CAS encryption key")
+	return masterKey, nil
+}
+
 // initS3Storage initializes the S3 storage subsystem.
 func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	// Require max_size to be configured for quota enforcement
@@ -421,8 +454,14 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	}
 	quota := s3.NewQuotaManager(cfg.S3.MaxSize.Bytes())
 
-	// Create store
-	store, err := s3.NewStore(cfg.S3.DataDir, quota)
+	// Load or create master key for CAS encryption
+	masterKey, err := s.loadOrCreateCASKey(cfg.S3.DataDir)
+	if err != nil {
+		return fmt.Errorf("initialize CAS key: %w", err)
+	}
+
+	// Create store with CAS for content-addressed storage
+	store, err := s3.NewStoreWithCAS(cfg.S3.DataDir, quota, masterKey)
 	if err != nil {
 		return fmt.Errorf("create S3 store: %w", err)
 	}

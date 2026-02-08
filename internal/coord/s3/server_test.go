@@ -47,10 +47,23 @@ func (m *mockAuthorizer) GetAllowedPrefixes(userID, bucket string) []string {
 
 func newTestServer(t *testing.T) (*Server, *Store) {
 	t.Helper()
-	store := newTestStore(t)
+	// Use CAS-enabled store for server tests (required for PutObject)
+	masterKey := [32]byte{1, 2, 3, 4, 5, 6, 7, 8}
+	store, err := NewStoreWithCAS(t.TempDir(), nil, masterKey)
+	require.NoError(t, err)
 	auth := &mockAuthorizer{userID: "alice", allowAll: true}
 	server := NewServer(store, auth, nil) // nil metrics for tests
 	return server, store
+}
+
+// newTestStoreWithCASForServer creates a CAS-enabled store for server tests
+// that need to use a custom authorizer.
+func newTestStoreWithCASForServer(t *testing.T) *Store {
+	t.Helper()
+	masterKey := [32]byte{1, 2, 3, 4, 5, 6, 7, 8}
+	store, err := NewStoreWithCAS(t.TempDir(), nil, masterKey)
+	require.NoError(t, err)
+	return store
 }
 
 func TestListBuckets(t *testing.T) {
@@ -430,7 +443,7 @@ func TestListObjectsBucketNotFound(t *testing.T) {
 }
 
 func TestAccessDenied(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCASForServer(t)
 	auth := &mockAuthorizer{denyAll: true}
 	server := NewServer(store, auth, nil)
 
@@ -469,7 +482,7 @@ func TestNestedObjectKey(t *testing.T) {
 }
 
 func TestListObjects_PrefixFiltered(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCASForServer(t)
 	require.NoError(t, store.CreateBucket("my-bucket", "alice"))
 
 	// Create objects in different prefixes
@@ -507,7 +520,7 @@ func TestListObjects_PrefixFiltered(t *testing.T) {
 }
 
 func TestListObjects_MultiplePrefixesFiltered(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCASForServer(t)
 	require.NoError(t, store.CreateBucket("my-bucket", "alice"))
 
 	_, _ = store.PutObject("my-bucket", "teamA/doc.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
@@ -541,7 +554,7 @@ func TestListObjects_MultiplePrefixesFiltered(t *testing.T) {
 }
 
 func TestListObjects_UnrestrictedAccess(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCASForServer(t)
 	require.NoError(t, store.CreateBucket("my-bucket", "alice"))
 
 	_, _ = store.PutObject("my-bucket", "teamA/doc.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
@@ -571,7 +584,7 @@ func TestListObjects_UnrestrictedAccess(t *testing.T) {
 }
 
 func TestListObjectsV2_PrefixFiltered(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCASForServer(t)
 	require.NoError(t, store.CreateBucket("my-bucket", "alice"))
 
 	_, _ = store.PutObject("my-bucket", "projects/teamA/doc.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
@@ -602,7 +615,7 @@ func TestListObjectsV2_PrefixFiltered(t *testing.T) {
 }
 
 func TestListObjects_EmptyPrefixesNoAccess(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCASForServer(t)
 	require.NoError(t, store.CreateBucket("my-bucket", "alice"))
 
 	_, _ = store.PutObject("my-bucket", "doc.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)

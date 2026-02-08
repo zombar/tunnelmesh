@@ -1890,6 +1890,103 @@ a.logs-container {
     color: var(--color-danger, #dc3545);
 }
 
+.s3-badge-current {
+    background: var(--color-success-bg, #d4edda);
+    color: var(--color-success, #28a745);
+}
+
+/* S3 Version Modal */
+.s3-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.s3-modal-content {
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: 4px;
+    min-width: 500px;
+    max-width: 700px;
+    max-height: 80vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.s3-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--color-border-primary);
+    background: var(--color-bg-tertiary);
+}
+
+.s3-modal-header h3 {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.s3-modal-body {
+    padding: 0;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.s3-version-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+
+.s3-version-table th,
+.s3-version-table td {
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--color-border-secondary);
+}
+
+.s3-version-table th {
+    background: var(--color-bg-tertiary);
+    font-weight: 600;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+}
+
+.s3-version-table tbody tr:hover {
+    background: var(--color-bg-hover);
+}
+
+.s3-version-current {
+    background: var(--color-bg-tertiary);
+}
+
+.s3-version-id {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--color-text-secondary);
+}
+
+.s3-version-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.s3-version-actions .btn-sm {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.7rem;
+}
+
 .s3-selection-actions {
     display: flex;
     align-items: center;

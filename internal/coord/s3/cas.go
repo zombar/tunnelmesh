@@ -1,0 +1,306 @@
+// Package s3 provides an S3-compatible object storage service for the coordinator.
+package s3
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
+
+	"github.com/klauspost/compress/zstd"
+	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/hkdf"
+)
+
+// CAS (Content-Addressable Storage) manages encrypted, compressed chunks.
+// Chunks are identified by their SHA-256 hash (computed on plaintext).
+// Storage format: plaintext -> zstd compress -> XChaCha20-Poly1305 encrypt -> store
+type CAS struct {
+	chunksDir string
+	masterKey [32]byte // Derived from mesh PSK for convergent encryption
+	mu        sync.RWMutex
+
+	// Compression encoder/decoder pools for reuse
+	encoderPool sync.Pool
+	decoderPool sync.Pool
+}
+
+// NewCAS creates a new content-addressable storage.
+// masterKey should be derived from the mesh PSK for consistent encryption across coordinators.
+func NewCAS(chunksDir string, masterKey [32]byte) (*CAS, error) {
+	if err := os.MkdirAll(chunksDir, 0755); err != nil {
+		return nil, fmt.Errorf("create chunks dir: %w", err)
+	}
+
+	cas := &CAS{
+		chunksDir: chunksDir,
+		masterKey: masterKey,
+	}
+
+	// Initialize encoder pool
+	cas.encoderPool = sync.Pool{
+		New: func() interface{} {
+			enc, _ := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+			return enc
+		},
+	}
+
+	// Initialize decoder pool
+	cas.decoderPool = sync.Pool{
+		New: func() interface{} {
+			dec, _ := zstd.NewReader(nil)
+			return dec
+		},
+	}
+
+	return cas, nil
+}
+
+// WriteChunk stores a chunk and returns its content hash.
+// If the chunk already exists (same content), it returns immediately (dedup).
+// Pipeline: plaintext -> compress -> encrypt -> store
+func (c *CAS) WriteChunk(data []byte) (string, error) {
+	// Compute hash on plaintext for content addressing
+	hash := c.contentHash(data)
+	chunkPath := c.chunkPath(hash)
+
+	// Check if chunk already exists (dedup)
+	c.mu.RLock()
+	exists := fileExists(chunkPath)
+	c.mu.RUnlock()
+
+	if exists {
+		return hash, nil
+	}
+
+	// Compress
+	compressed, err := c.compress(data)
+	if err != nil {
+		return "", fmt.Errorf("compress chunk: %w", err)
+	}
+
+	// Encrypt with convergent encryption (deterministic key/nonce from content hash)
+	encrypted, err := c.encrypt(compressed, hash)
+	if err != nil {
+		return "", fmt.Errorf("encrypt chunk: %w", err)
+	}
+
+	// Write to disk
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Double-check existence after acquiring write lock
+	if fileExists(chunkPath) {
+		return hash, nil
+	}
+
+	// Write atomically via temp file
+	tmpPath := chunkPath + ".tmp"
+	if err := os.WriteFile(tmpPath, encrypted, 0644); err != nil {
+		return "", fmt.Errorf("write chunk: %w", err)
+	}
+	if err := os.Rename(tmpPath, chunkPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("rename chunk: %w", err)
+	}
+
+	return hash, nil
+}
+
+// ReadChunk retrieves and decrypts a chunk by its hash.
+// Pipeline: read -> decrypt -> decompress -> return plaintext
+func (c *CAS) ReadChunk(hash string) ([]byte, error) {
+	chunkPath := c.chunkPath(hash)
+
+	c.mu.RLock()
+	encrypted, err := os.ReadFile(chunkPath)
+	c.mu.RUnlock()
+
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("chunk not found: %s", hash)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read chunk: %w", err)
+	}
+
+	// Decrypt
+	compressed, err := c.decrypt(encrypted, hash)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt chunk: %w", err)
+	}
+
+	// Decompress
+	data, err := c.decompress(compressed)
+	if err != nil {
+		return nil, fmt.Errorf("decompress chunk: %w", err)
+	}
+
+	return data, nil
+}
+
+// DeleteChunk removes a chunk from storage.
+func (c *CAS) DeleteChunk(hash string) error {
+	chunkPath := c.chunkPath(hash)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := os.Remove(chunkPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete chunk: %w", err)
+	}
+	return nil
+}
+
+// ChunkExists checks if a chunk exists in storage.
+func (c *CAS) ChunkExists(hash string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return fileExists(c.chunkPath(hash))
+}
+
+// ChunkSize returns the size of a chunk on disk (encrypted size).
+func (c *CAS) ChunkSize(hash string) (int64, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	info, err := os.Stat(c.chunkPath(hash))
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+// TotalSize returns the total size of all chunks in storage.
+func (c *CAS) TotalSize() (int64, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var total int64
+	err := filepath.Walk(c.chunksDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	return total, err
+}
+
+// contentHash computes SHA-256 of plaintext data.
+func (c *CAS) contentHash(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
+// chunkPath returns the filesystem path for a chunk.
+// Uses two-level directory structure to avoid too many files in one directory.
+func (c *CAS) chunkPath(hash string) string {
+	// Use first 2 chars as subdirectory: chunks/ab/abcdef123...
+	if len(hash) < 2 {
+		return filepath.Join(c.chunksDir, hash)
+	}
+	dir := filepath.Join(c.chunksDir, hash[:2])
+	_ = os.MkdirAll(dir, 0755) // Ensure subdir exists
+	return filepath.Join(dir, hash)
+}
+
+// deriveChunkKey derives a per-chunk encryption key using HKDF.
+// This enables convergent encryption: same plaintext -> same key -> same ciphertext.
+func (c *CAS) deriveChunkKey(hash string) ([32]byte, error) {
+	var key [32]byte
+	hkdfReader := hkdf.New(sha256.New, c.masterKey[:], []byte(hash), []byte("tunnelmesh-s3-chunk"))
+	if _, err := io.ReadFull(hkdfReader, key[:]); err != nil {
+		return key, fmt.Errorf("derive chunk key: %w", err)
+	}
+	return key, nil
+}
+
+// deriveNonce derives a deterministic nonce from the content hash.
+// This enables convergent encryption where same content produces same ciphertext.
+func (c *CAS) deriveNonce(hash string) ([24]byte, error) {
+	var nonce [24]byte
+	// Use HKDF with different info string to derive nonce
+	hkdfReader := hkdf.New(sha256.New, []byte(hash), nil, []byte("tunnelmesh-s3-nonce"))
+	if _, err := io.ReadFull(hkdfReader, nonce[:]); err != nil {
+		return nonce, fmt.Errorf("derive nonce: %w", err)
+	}
+	return nonce, nil
+}
+
+// encrypt encrypts data using XChaCha20-Poly1305 with convergent encryption.
+func (c *CAS) encrypt(plaintext []byte, hash string) ([]byte, error) {
+	key, err := c.deriveChunkKey(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce, err := c.deriveNonce(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	aead, err := chacha20poly1305.NewX(key[:])
+	if err != nil {
+		return nil, fmt.Errorf("create cipher: %w", err)
+	}
+
+	// Encrypt in place with authentication tag
+	ciphertext := aead.Seal(nil, nonce[:], plaintext, nil)
+	return ciphertext, nil
+}
+
+// decrypt decrypts data using XChaCha20-Poly1305.
+func (c *CAS) decrypt(ciphertext []byte, hash string) ([]byte, error) {
+	key, err := c.deriveChunkKey(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce, err := c.deriveNonce(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	aead, err := chacha20poly1305.NewX(key[:])
+	if err != nil {
+		return nil, fmt.Errorf("create cipher: %w", err)
+	}
+
+	plaintext, err := aead.Open(nil, nonce[:], ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt: %w", err)
+	}
+
+	return plaintext, nil
+}
+
+// compress compresses data using zstd.
+func (c *CAS) compress(data []byte) ([]byte, error) {
+	enc := c.encoderPool.Get().(*zstd.Encoder)
+	defer c.encoderPool.Put(enc)
+
+	return enc.EncodeAll(data, nil), nil
+}
+
+// decompress decompresses zstd-compressed data.
+func (c *CAS) decompress(data []byte) ([]byte, error) {
+	dec := c.decoderPool.Get().(*zstd.Decoder)
+	defer c.decoderPool.Put(dec)
+
+	return dec.DecodeAll(data, nil)
+}
+
+// fileExists checks if a file exists.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// ContentHash computes the SHA-256 hash of data (exported for use by Store).
+func ContentHash(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}

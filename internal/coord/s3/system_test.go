@@ -10,7 +10,7 @@ import (
 )
 
 func TestNewSystemStore(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCAS(t)
 
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
@@ -26,7 +26,7 @@ func TestNewSystemStore(t *testing.T) {
 }
 
 func TestNewSystemStoreExistingBucket(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCAS(t)
 
 	// Pre-create the system bucket
 	require.NoError(t, store.CreateBucket(SystemBucket, "svc:coordinator"))
@@ -38,7 +38,7 @@ func TestNewSystemStoreExistingBucket(t *testing.T) {
 }
 
 func TestSystemStoreSaveLoadUsers(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCAS(t)
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -58,7 +58,7 @@ func TestSystemStoreSaveLoadUsers(t *testing.T) {
 }
 
 func TestSystemStoreLoadUsersNotFound(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCAS(t)
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -69,7 +69,7 @@ func TestSystemStoreLoadUsersNotFound(t *testing.T) {
 }
 
 func TestSystemStoreSaveLoadRoles(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCAS(t)
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -87,7 +87,7 @@ func TestSystemStoreSaveLoadRoles(t *testing.T) {
 }
 
 func TestSystemStoreSaveLoadBindings(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCAS(t)
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -108,7 +108,7 @@ func TestSystemStoreSaveLoadBindings(t *testing.T) {
 }
 
 func TestSystemStoreSaveLoadStatsHistory(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCAS(t)
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -131,7 +131,7 @@ func TestSystemStoreSaveLoadStatsHistory(t *testing.T) {
 }
 
 func TestSystemStoreSaveLoadWireGuardClients(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCAS(t)
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -150,7 +150,7 @@ func TestSystemStoreSaveLoadWireGuardClients(t *testing.T) {
 }
 
 func TestSystemStoreExists(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCAS(t)
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -166,7 +166,7 @@ func TestSystemStoreExists(t *testing.T) {
 }
 
 func TestSystemStoreDelete(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCAS(t)
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
@@ -181,7 +181,7 @@ func TestSystemStoreDelete(t *testing.T) {
 }
 
 func TestSystemStoreDeleteNotFound(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithCAS(t)
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 

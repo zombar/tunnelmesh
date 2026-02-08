@@ -48,6 +48,7 @@ type S3Config struct {
 	ObjectExpiryDays       int           `yaml:"object_expiry_days"`       // Days until objects expire (default: 9125 = 25 years)
 	ShareExpiryDays        int           `yaml:"share_expiry_days"`        // Days until file shares expire (default: 365 = 1 year)
 	TombstoneRetentionDays int           `yaml:"tombstone_retention_days"` // Days to keep tombstoned items before deletion (default: 90)
+	VersionRetentionDays   int           `yaml:"version_retention_days"`   // Days to keep object versions (default: 30)
 }
 
 // WireGuardPeerConfig holds configuration for the WireGuard concentrator mode.
@@ -257,6 +258,9 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 		}
 		if cfg.S3.TombstoneRetentionDays == 0 {
 			cfg.S3.TombstoneRetentionDays = 90 // Default: 90 days
+		}
+		if cfg.S3.VersionRetentionDays == 0 {
+			cfg.S3.VersionRetentionDays = 30 // Default: 30 days
 		}
 	}
 

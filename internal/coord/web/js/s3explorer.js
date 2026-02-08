@@ -233,6 +233,47 @@
         return resp.ok || resp.status === 204;
     }
 
+    async function fetchVersions(bucket, key) {
+        try {
+            const resp = await fetch(
+                `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/versions`,
+            );
+            if (!resp.ok) return [];
+            return await resp.json();
+        } catch (err) {
+            console.error('Failed to fetch versions:', err);
+            return [];
+        }
+    }
+
+    async function restoreVersion(bucket, key, versionId) {
+        const resp = await fetch(
+            `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/restore`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version_id: versionId }),
+            },
+        );
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.error || `Failed to restore: ${resp.status}`);
+        }
+        return await resp.json();
+    }
+
+    async function getObjectVersion(bucket, key, versionId) {
+        const resp = await fetch(
+            `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}?versionId=${encodeURIComponent(versionId)}`,
+        );
+        if (!resp.ok) throw new Error(`Failed to get version: ${resp.status}`);
+        return {
+            content: await resp.text(),
+            contentType: resp.headers.get('Content-Type'),
+            size: parseInt(resp.headers.get('Content-Length'), 10) || 0,
+        };
+    }
+
     // =========================================================================
     // Rendering
     // =========================================================================
@@ -768,6 +809,118 @@
     }
 
     // =========================================================================
+    // Version History
+    // =========================================================================
+
+    async function showVersionHistory() {
+        if (!state.currentFile) {
+            showToast('No file selected', 'warning');
+            return;
+        }
+
+        const { bucket, key } = state.currentFile;
+        const versions = await fetchVersions(bucket, key);
+
+        if (versions.length === 0) {
+            showToast('No version history available', 'info');
+            return;
+        }
+
+        // Create or get modal
+        let modal = document.getElementById('s3-version-modal');
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 's3-version-modal';
+            modal.className = 's3-modal';
+            modal.innerHTML = `
+                <div class="s3-modal-content s3-version-modal-content">
+                    <div class="s3-modal-header">
+                        <h3>Version History</h3>
+                        <button class="btn-icon" onclick="TM.s3explorer.closeModal('s3-version-modal')">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="s3-modal-body">
+                        <table class="s3-version-table">
+                            <thead>
+                                <tr>
+                                    <th>Version</th>
+                                    <th>Size</th>
+                                    <th>Date</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="s3-version-list"></tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        // Populate version list
+        const tbody = document.getElementById('s3-version-list');
+        tbody.innerHTML = versions
+            .map((v) => {
+                const currentBadge = v.is_current ? '<span class="s3-badge s3-badge-current">Current</span>' : '';
+                const restoreBtn = v.is_current
+                    ? ''
+                    : `<button class="btn btn-sm btn-secondary" onclick="TM.s3explorer.restoreVersionAndRefresh('${escapeJsString(v.version_id)}')">Restore</button>`;
+                const downloadBtn = `<button class="btn btn-sm btn-secondary" onclick="TM.s3explorer.downloadVersion('${escapeJsString(v.version_id)}')">Download</button>`;
+
+                return `
+                    <tr class="${v.is_current ? 's3-version-current' : ''}">
+                        <td>
+                            <div class="s3-version-id">${escapeHtml(v.version_id.slice(0, 20))}...</div>
+                            ${currentBadge}
+                        </td>
+                        <td>${formatBytes(v.size)}</td>
+                        <td>${formatDate(v.last_modified)}</td>
+                        <td class="s3-version-actions">
+                            ${downloadBtn}
+                            ${restoreBtn}
+                        </td>
+                    </tr>
+                `;
+            })
+            .join('');
+
+        modal.style.display = 'flex';
+    }
+
+    async function restoreVersionAndRefresh(versionId) {
+        if (!state.currentFile) return;
+
+        const { bucket, key } = state.currentFile;
+
+        try {
+            await restoreVersion(bucket, key, versionId);
+            showToast('Version restored', 'success');
+            closeModal('s3-version-modal');
+
+            // Reload the file content
+            await openFile(bucket, key);
+        } catch (err) {
+            showToast(`Failed to restore: ${err.message}`, 'error');
+        }
+    }
+
+    function downloadVersion(versionId) {
+        if (!state.currentFile) return;
+
+        const { bucket, key } = state.currentFile;
+        const url = `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}?versionId=${encodeURIComponent(versionId)}`;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${key.split('/').pop()}.${versionId.slice(0, 10)}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+
+    // =========================================================================
     // Upload
     // =========================================================================
 
@@ -1066,5 +1219,9 @@
         deleteSelected,
         setAutosave,
         toggleFullscreen,
+        // Version history
+        showVersionHistory,
+        restoreVersionAndRefresh,
+        downloadVersion,
     };
 });
