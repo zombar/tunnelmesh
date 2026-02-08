@@ -1870,11 +1870,11 @@ a.logs-container {
 }
 
 .s3-readonly-badge {
-    position: sticky;
-    top: 0;
-    align-self: center;
-    background: var(--color-bg-primary);
-    border: 1px solid var(--color-accent-orange);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-accent-orange);
     color: var(--color-accent-orange);
     padding: 0.25rem 0.75rem;
     font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
@@ -1882,13 +1882,11 @@ a.logs-container {
     font-weight: 600;
     letter-spacing: 0.15em;
     text-transform: uppercase;
-    border-radius: 2px;
     pointer-events: none;
     z-index: 10;
     text-shadow: 0 0 8px rgba(210, 153, 34, 0.4);
-    box-shadow: 0 0 12px rgba(210, 153, 34, 0.2);
-    margin-top: 0.5rem;
-    margin-bottom: -1.5rem;
+    box-shadow: 0 4px 12px rgba(210, 153, 34, 0.15);
+    flex-shrink: 0;
 }
 
 .s3-line-numbers {
