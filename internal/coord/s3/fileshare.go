@@ -2,6 +2,7 @@ package s3
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -180,4 +181,25 @@ func (m *FileShareManager) List() []*FileShare {
 // BucketName returns the bucket name for a file share.
 func (m *FileShareManager) BucketName(shareName string) string {
 	return FileShareBucketPrefix + shareName
+}
+
+// IsProtectedBinding returns true if the binding is a file share owner's admin binding.
+// These bindings should not be deleted manually - they are managed by the file share lifecycle.
+func (m *FileShareManager) IsProtectedBinding(binding *auth.RoleBinding) bool {
+	// Only bucket-admin bindings on file share buckets can be protected
+	if binding.RoleName != auth.RoleBucketAdmin {
+		return false
+	}
+	if !strings.HasPrefix(binding.BucketScope, FileShareBucketPrefix) {
+		return false
+	}
+
+	// Check if the user is the owner of this file share
+	shareName := strings.TrimPrefix(binding.BucketScope, FileShareBucketPrefix)
+	share := m.Get(shareName)
+	if share == nil {
+		return false
+	}
+
+	return share.Owner == binding.UserID
 }

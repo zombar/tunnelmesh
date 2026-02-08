@@ -1213,8 +1213,18 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		bindings := s.s3Authorizer.Bindings.List()
+		// Add protected flag to each binding for UI
+		type bindingWithProtected struct {
+			*auth.RoleBinding
+			Protected bool `json:"protected"`
+		}
+		result := make([]bindingWithProtected, len(bindings))
+		for i, b := range bindings {
+			protected := s.fileShareMgr != nil && s.fileShareMgr.IsProtectedBinding(b)
+			result[i] = bindingWithProtected{RoleBinding: b, Protected: protected}
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(bindings)
+		_ = json.NewEncoder(w).Encode(result)
 
 	case http.MethodPost:
 		var req RoleBindingRequest
@@ -1280,6 +1290,12 @@ func (s *Server) handleBindingByName(w http.ResponseWriter, r *http.Request) {
 		binding := s.s3Authorizer.Bindings.Get(bindingName)
 		if binding == nil {
 			s.jsonError(w, "binding not found", http.StatusNotFound)
+			return
+		}
+
+		// Check if this is a protected file share owner binding
+		if s.fileShareMgr != nil && s.fileShareMgr.IsProtectedBinding(binding) {
+			s.jsonError(w, "cannot delete file share owner binding; delete the file share instead", http.StatusForbidden)
 			return
 		}
 
