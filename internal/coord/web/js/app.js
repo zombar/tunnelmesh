@@ -2268,7 +2268,7 @@ function renderGroupsTable() {
             <td>${g.members ? g.members.length : 0}</td>
             <td>${g.builtin ? 'Yes' : 'No'}</td>
             <td>
-                ${!g.builtin ? `<button class="btn-small btn-danger" onclick="deleteGroup('${escapeHtml(g.name)}')">Delete</button>` : '-'}
+                ${g.builtin ? '<span class="text-muted" title="Built-in group">Protected</span>' : `<button class="btn-small btn-danger" onclick="deleteGroup('${escapeHtml(g.name)}')">Delete</button>`}
             </td>
         </tr>
     `,
