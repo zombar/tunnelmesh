@@ -18,11 +18,17 @@ type GroupBinding struct {
 
 // NewGroupBinding creates a new group binding.
 func NewGroupBinding(groupName, roleName, bucketScope string) *GroupBinding {
+	return NewGroupBindingWithPrefix(groupName, roleName, bucketScope, "")
+}
+
+// NewGroupBindingWithPrefix creates a new group binding with object prefix.
+func NewGroupBindingWithPrefix(groupName, roleName, bucketScope, objectPrefix string) *GroupBinding {
 	return &GroupBinding{
-		Name:        uuid.New().String()[:8],
-		GroupName:   groupName,
-		RoleName:    roleName,
-		BucketScope: bucketScope,
+		Name:         uuid.New().String()[:8],
+		GroupName:    groupName,
+		RoleName:     roleName,
+		BucketScope:  bucketScope,
+		ObjectPrefix: objectPrefix,
 	}
 }
 

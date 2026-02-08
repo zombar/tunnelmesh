@@ -297,6 +297,10 @@ func (s *Server) setupAdminRoutes() {
 	// User management API
 	s.adminMux.HandleFunc("/api/users", s.handleUsers)
 
+	// Role binding management API
+	s.adminMux.HandleFunc("/api/bindings", s.handleBindings)
+	s.adminMux.HandleFunc("/api/bindings/", s.handleBindingByName)
+
 	// Expose metrics on admin interface for Prometheus scraping via mesh IP
 	s.adminMux.Handle("/metrics", promhttp.Handler())
 
@@ -934,8 +938,9 @@ func (s *Server) handleGroupMembers(w http.ResponseWriter, r *http.Request, grou
 
 // GroupBindingRequest is the request body for granting a role to a group.
 type GroupBindingRequest struct {
-	RoleName    string `json:"role_name"`
-	BucketScope string `json:"bucket_scope,omitempty"`
+	RoleName     string `json:"role_name"`
+	BucketScope  string `json:"bucket_scope,omitempty"`
+	ObjectPrefix string `json:"object_prefix,omitempty"`
 }
 
 // handleGroupBindings handles role bindings for a group.
@@ -963,7 +968,7 @@ func (s *Server) handleGroupBindings(w http.ResponseWriter, r *http.Request, gro
 			return
 		}
 
-		binding := auth.NewGroupBinding(groupName, req.RoleName, req.BucketScope)
+		binding := auth.NewGroupBindingWithPrefix(groupName, req.RoleName, req.BucketScope, req.ObjectPrefix)
 		s.s3Authorizer.GroupBindings.Add(binding)
 
 		// Persist
@@ -1186,4 +1191,111 @@ func (s *Server) getRequestOwner(r *http.Request) string {
 	}
 	// Fallback to admin if no TLS client certificate
 	return "admin"
+}
+
+// --- Role Binding API Handlers ---
+
+// RoleBindingRequest is the request body for creating a user role binding.
+type RoleBindingRequest struct {
+	UserID       string `json:"user_id"`
+	RoleName     string `json:"role_name"`
+	BucketScope  string `json:"bucket_scope,omitempty"`
+	ObjectPrefix string `json:"object_prefix,omitempty"`
+}
+
+// handleBindings handles GET (list) and POST (create) for user role bindings.
+func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
+	if s.s3Authorizer == nil {
+		s.jsonError(w, "authorization not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		bindings := s.s3Authorizer.Bindings.List()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(bindings)
+
+	case http.MethodPost:
+		var req RoleBindingRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.jsonError(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.UserID == "" {
+			s.jsonError(w, "user_id is required", http.StatusBadRequest)
+			return
+		}
+		if req.RoleName == "" {
+			s.jsonError(w, "role_name is required", http.StatusBadRequest)
+			return
+		}
+
+		binding := auth.NewRoleBindingWithPrefix(req.UserID, req.RoleName, req.BucketScope, req.ObjectPrefix)
+		s.s3Authorizer.Bindings.Add(binding)
+
+		// Persist
+		if s.s3SystemStore != nil {
+			if err := s.s3SystemStore.SaveBindings(s.s3Authorizer.Bindings.List()); err != nil {
+				log.Warn().Err(err).Msg("failed to persist bindings")
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(binding)
+
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleBindingByName handles GET and DELETE for a specific role binding.
+func (s *Server) handleBindingByName(w http.ResponseWriter, r *http.Request) {
+	if s.s3Authorizer == nil {
+		s.jsonError(w, "authorization not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Parse path: /api/bindings/{name}
+	path := strings.TrimPrefix(r.URL.Path, "/api/bindings/")
+	bindingName := strings.TrimSuffix(path, "/")
+
+	if bindingName == "" {
+		s.jsonError(w, "binding name required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		binding := s.s3Authorizer.Bindings.Get(bindingName)
+		if binding == nil {
+			s.jsonError(w, "binding not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(binding)
+
+	case http.MethodDelete:
+		binding := s.s3Authorizer.Bindings.Get(bindingName)
+		if binding == nil {
+			s.jsonError(w, "binding not found", http.StatusNotFound)
+			return
+		}
+
+		s.s3Authorizer.Bindings.Remove(bindingName)
+
+		// Persist
+		if s.s3SystemStore != nil {
+			if err := s.s3SystemStore.SaveBindings(s.s3Authorizer.Bindings.List()); err != nil {
+				log.Warn().Err(err).Msg("failed to persist bindings")
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }

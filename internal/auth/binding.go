@@ -18,11 +18,17 @@ type RoleBinding struct {
 
 // NewRoleBinding creates a new role binding.
 func NewRoleBinding(userID, roleName, bucketScope string) *RoleBinding {
+	return NewRoleBindingWithPrefix(userID, roleName, bucketScope, "")
+}
+
+// NewRoleBindingWithPrefix creates a new role binding with object prefix.
+func NewRoleBindingWithPrefix(userID, roleName, bucketScope, objectPrefix string) *RoleBinding {
 	return &RoleBinding{
-		Name:        uuid.New().String()[:8],
-		UserID:      userID,
-		RoleName:    roleName,
-		BucketScope: bucketScope,
+		Name:         uuid.New().String()[:8],
+		UserID:       userID,
+		RoleName:     roleName,
+		BucketScope:  bucketScope,
+		ObjectPrefix: objectPrefix,
 	}
 }
 
@@ -74,6 +80,13 @@ func (bs *BindingStore) Remove(name string) {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	delete(bs.bindings, name)
+}
+
+// Get returns a binding by name.
+func (bs *BindingStore) Get(name string) *RoleBinding {
+	bs.mu.RLock()
+	defer bs.mu.RUnlock()
+	return bs.bindings[name]
 }
 
 // GetForUser returns all bindings for a user.
