@@ -1421,7 +1421,7 @@ a.alert-tile {
 
 a.logs-container {
     display: block;
-    max-height: 300px;
+    height: 300px;
     overflow-y: auto;
     overflow-x: hidden;
     font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
