@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -575,5 +576,121 @@ func TestParseProtocol(t *testing.T) {
 				t.Errorf("parseProtocol() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSyncAllPortForwards(t *testing.T) {
+	now := time.Now()
+	mockContainers := []ContainerInfo{
+		{
+			ID:          "running1",
+			Name:        "nginx",
+			State:       "running",
+			NetworkMode: "bridge",
+			Ports: []PortBinding{
+				{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
+			},
+			StartedAt: now.Add(-time.Hour),
+		},
+		{
+			ID:          "running2",
+			Name:        "redis",
+			State:       "running",
+			NetworkMode: "bridge",
+			Ports: []PortBinding{
+				{HostPort: 6379, ContainerPort: 6379, Protocol: "tcp"},
+			},
+			StartedAt: now.Add(-time.Hour),
+		},
+		{
+			ID:    "stopped",
+			Name:  "postgres",
+			State: "exited",
+		},
+	}
+
+	mock := &mockDockerClient{containers: mockContainers}
+	filter := &mockFilter{}
+
+	autoForward := true
+	cfg := &config.DockerConfig{
+		Socket:          "unix:///var/run/docker.sock",
+		AutoPortForward: &autoForward,
+	}
+
+	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr.client = mock
+	mgr.filter = filter
+
+	ctx := context.Background()
+	err := mgr.syncAllPortForwards(ctx)
+	if err != nil {
+		t.Fatalf("syncAllPortForwards failed: %v", err)
+	}
+
+	// Should have created port forwards for 2 running containers (2 ports total)
+	if len(filter.rules) != 2 {
+		t.Errorf("Expected 2 port forward rules, got %d", len(filter.rules))
+	}
+
+	// Verify correct ports were forwarded
+	expectedPorts := map[uint16]bool{8080: false, 6379: false}
+	for _, rule := range filter.rules {
+		if _, exists := expectedPorts[rule.Port]; exists {
+			expectedPorts[rule.Port] = true
+		}
+	}
+
+	for port, found := range expectedPorts {
+		if !found {
+			t.Errorf("Expected port forward for port %d", port)
+		}
+	}
+}
+
+func TestSyncAllPortForwards_NoRunningContainers(t *testing.T) {
+	mockContainers := []ContainerInfo{
+		{ID: "stopped1", Name: "nginx", State: "exited"},
+		{ID: "stopped2", Name: "redis", State: "stopped"},
+	}
+
+	mock := &mockDockerClient{containers: mockContainers}
+	filter := &mockFilter{}
+
+	autoForward := true
+	cfg := &config.DockerConfig{
+		Socket:          "unix:///var/run/docker.sock",
+		AutoPortForward: &autoForward,
+	}
+
+	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr.client = mock
+	mgr.filter = filter
+
+	ctx := context.Background()
+	err := mgr.syncAllPortForwards(ctx)
+	if err != nil {
+		t.Fatalf("syncAllPortForwards failed: %v", err)
+	}
+
+	// Should not create any port forwards
+	if len(filter.rules) != 0 {
+		t.Errorf("Expected 0 port forward rules, got %d", len(filter.rules))
+	}
+}
+
+func TestSyncAllPortForwards_ListError(t *testing.T) {
+	mock := &mockDockerClient{
+		err: errors.New("Docker daemon not responding"),
+	}
+
+	cfg := &config.DockerConfig{Socket: "unix:///var/run/docker.sock"}
+	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr.client = mock
+
+	ctx := context.Background()
+	err := mgr.syncAllPortForwards(ctx)
+	if err == nil {
+		t.Error("Expected error when ListContainers fails")
 	}
 }

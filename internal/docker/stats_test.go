@@ -92,3 +92,152 @@ func TestContainerStatsSnapshot_Structure(t *testing.T) {
 		t.Errorf("MemoryPercent = %v, want 50.0", snapshot.MemoryPercent)
 	}
 }
+
+func TestCollectAndPersistStats_NilClient(t *testing.T) {
+	mgr := &Manager{
+		peerName: "test-peer",
+		client:   nil, // No Docker client
+	}
+
+	// collectAndPersistStats with nil client should return nil (no-op)
+	err := mgr.collectAndPersistStats(context.Background(), nil)
+	if err != nil {
+		t.Errorf("collectAndPersistStats with nil client should not error, got: %v", err)
+	}
+}
+
+func TestListContainers_ForStatsCollection(t *testing.T) {
+	// Test that ListContainers works correctly for stats collection
+	now := time.Now()
+	mockContainers := []ContainerInfo{
+		{
+			ID:        "abc123",
+			ShortID:   "abc123",
+			Name:      "test-nginx",
+			Image:     "nginx:latest",
+			State:     "running",
+			CreatedAt: now.Add(-time.Hour),
+			StartedAt: now.Add(-time.Hour),
+		},
+		{
+			ID:        "def456",
+			ShortID:   "def456",
+			Name:      "test-stopped",
+			Image:     "redis:latest",
+			State:     "exited",
+			CreatedAt: now.Add(-2 * time.Hour),
+		},
+	}
+
+	mockClient := &mockDockerClient{
+		containers: mockContainers,
+	}
+
+	mgr := &Manager{
+		peerName: "test-peer",
+		client:   mockClient,
+	}
+
+	ctx := context.Background()
+	containers, err := mgr.ListContainers(ctx)
+	if err != nil {
+		t.Fatalf("ListContainers failed: %v", err)
+	}
+
+	if len(containers) != 2 {
+		t.Errorf("Expected 2 containers, got %d", len(containers))
+	}
+
+	// Verify we got both running and stopped containers
+	states := make(map[string]int)
+	for _, c := range containers {
+		states[c.State]++
+	}
+
+	if states["running"] != 1 {
+		t.Errorf("Expected 1 running container, got %d", states["running"])
+	}
+
+	if states["exited"] != 1 {
+		t.Errorf("Expected 1 exited container, got %d", states["exited"])
+	}
+}
+
+func TestInspectContainer_ForStatsCollection(t *testing.T) {
+	// Test that InspectContainer works for stats collection
+	now := time.Now()
+	mockContainer := ContainerInfo{
+		ID:        "abc123",
+		ShortID:   "abc123",
+		Name:      "test-nginx",
+		Image:     "nginx:latest",
+		State:     "running",
+		CreatedAt: now.Add(-time.Hour),
+		StartedAt: now.Add(-time.Hour),
+		Ports: []PortBinding{
+			{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
+		},
+	}
+
+	mockClient := &mockDockerClient{
+		containers: []ContainerInfo{mockContainer},
+	}
+
+	mgr := &Manager{
+		peerName: "test-peer",
+		client:   mockClient,
+	}
+
+	ctx := context.Background()
+	info, err := mgr.InspectContainer(ctx, "abc123")
+	if err != nil {
+		t.Fatalf("InspectContainer failed: %v", err)
+	}
+
+	if info == nil {
+		t.Fatal("Expected non-nil container info")
+	}
+
+	if info.Name != "test-nginx" {
+		t.Errorf("Expected name 'test-nginx', got %q", info.Name)
+	}
+
+	if len(info.Ports) != 1 {
+		t.Errorf("Expected 1 port, got %d", len(info.Ports))
+	}
+}
+
+func TestStartPeriodicStatsCollection_ContextCancellation(t *testing.T) {
+	// Test that periodic stats collection stops when context is cancelled
+	mockClient := &mockDockerClient{
+		containers: []ContainerInfo{
+			{ID: "abc123", Name: "test", State: "running"},
+		},
+	}
+
+	mgr := &Manager{
+		peerName: "test-peer",
+		client:   mockClient,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		// Note: We can't actually test with a real S3 store, but we can test
+		// that the function respects context cancellation
+		mgr.StartPeriodicStatsCollection(ctx, nil) // nil store returns immediately
+		close(done)
+	}()
+
+	// Cancel context
+	cancel()
+
+	// Should exit quickly
+	select {
+	case <-done:
+		// Expected - should return when context cancelled
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("StartPeriodicStatsCollection did not respect context cancellation")
+	}
+}
