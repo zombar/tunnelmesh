@@ -776,7 +776,7 @@ sudo tunnelmesh service start
 # On your laptop
 tunnelmesh init --peer --output ~/.tunnelmesh/vpn.yaml
 
-# Edit: set server, auth_token, exit_node: "cloud-server"
+# Edit: set server, auth_token, exit_peer: "cloud-server"
 nano ~/.tunnelmesh/vpn.yaml
 
 # Join and save as context

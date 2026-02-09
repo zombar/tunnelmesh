@@ -237,7 +237,7 @@ tunnelmesh join --exit-node exit-peer-name
 Or in config:
 
 ```yaml
-exit_node: "exit-peer-name"
+exit_peer: "exit-peer-name"
 ```
 
 TunnelMesh automatically configures:

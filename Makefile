@@ -1,6 +1,6 @@
 .PHONY: all build build-force test test-verbose test-coverage test-js test-js-coverage test-all clean install lint fmt hooks hooks-install vendor \
         dev-server dev-peer gen-keys release release-all push-release \
-        docker-build docker-up docker-down docker-logs docker-clean docker-test docker-admin \
+        docker-build docker-up docker-down docker-logs docker-clean docker-test \
         ghcr-login ghcr-build ghcr-push deploy deploy-plan deploy-destroy deploy-taint-coordinator \
         deploy-update deploy-update-node \
         service-install service-uninstall service-start service-stop service-status
@@ -202,20 +202,6 @@ docker-up: docker-build
 		sudo tunnelmesh context rm docker 2>/dev/null || true; \
 		sudo tunnelmesh join --server http://localhost:8081 --token docker-test-token-123 --context docker; \
 	fi
-
-docker-admin:
-	@echo "Waiting for admin panel at https://this.tunnelmesh/ ..."
-	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do \
-		if curl -sk --connect-timeout 2 https://this.tunnelmesh/ >/dev/null 2>&1; then \
-			echo "Admin panel ready, opening..."; \
-			open https://this.tunnelmesh/; \
-			exit 0; \
-		fi; \
-		echo -n "."; \
-		sleep 1; \
-	done; \
-	echo ""; \
-	echo "Timed out waiting for admin panel. Make sure you've joined the mesh first."
 
 docker-down:
 	$(DOCKER_COMPOSE) down

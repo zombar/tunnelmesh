@@ -481,7 +481,7 @@ Each peer in the `nodes` map supports these options:
 | Option | Type | Description |
 | -------- | ------ | ------------- |
 | `allow_exit_traffic` | bool | Allow other peers to route internet through this peer |
-| `exit_node` | string | Route this node's internet through specified peer |
+| `exit_peer` | string | Route this node's internet through specified peer |
 
 ### Infrastructure Options
 

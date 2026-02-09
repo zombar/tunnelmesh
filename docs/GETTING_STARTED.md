@@ -418,7 +418,7 @@ sudo nano /etc/tunnelmesh/peer.yaml
 Add:
 
 ```yaml
-exit_node: "exit-peer-name"  # Name of your exit peer peer
+exit_peer: "exit-peer-name"  # Name of your exit peer
 ```
 
 Restart:
