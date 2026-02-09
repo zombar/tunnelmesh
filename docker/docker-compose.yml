@@ -11,6 +11,7 @@ services:
       - ./scripts/server-entrypoint.sh:/scripts/server-entrypoint.sh:ro
       - metrics-data:/var/lib/tunnelmesh
       - s3-data:/var/lib/tunnelmesh/s3
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Docker socket for container management
     cap_add:
       - NET_ADMIN
     devices:
