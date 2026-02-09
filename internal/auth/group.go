@@ -8,7 +8,7 @@ import (
 
 // Built-in group names.
 const (
-	GroupEveryone        = "everyone"          // All registered human users
+	GroupEveryone        = "everyone"          // All registered users (peer = user)
 	GroupAllServiceUsers = "all_service_users" // All service accounts (svc:*)
 	GroupAllAdminUsers   = "all_admin_users"   // All users with admin role
 )

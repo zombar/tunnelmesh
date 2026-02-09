@@ -49,6 +49,7 @@ const (
 	GroupsPath        = "auth/groups.json"
 	GroupBindingsPath = "auth/group_bindings.json"
 	FileSharesPath    = "auth/file_shares.json"
+	PanelsPath        = "auth/panels.json"
 )
 
 // Stats paths
@@ -139,6 +140,23 @@ func (ss *SystemStore) LoadGroupBindings() ([]*auth.GroupBinding, error) {
 		return nil, err
 	}
 	return bindings, nil
+}
+
+// --- External Panels ---
+
+// SavePanels saves external panel definitions to S3.
+// Only external (non-builtin) panels are persisted.
+func (ss *SystemStore) SavePanels(panels []*auth.PanelDefinition) error {
+	return ss.saveJSON(PanelsPath, panels)
+}
+
+// LoadPanels loads external panel definitions from S3.
+func (ss *SystemStore) LoadPanels() ([]*auth.PanelDefinition, error) {
+	var panels []*auth.PanelDefinition
+	if err := ss.loadJSON(PanelsPath, &panels); err != nil {
+		return nil, err
+	}
+	return panels, nil
 }
 
 // --- File Shares ---

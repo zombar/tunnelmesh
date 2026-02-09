@@ -7,13 +7,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// GroupBinding binds a group to a role with optional bucket and object prefix scope.
+// GroupBinding binds a group to a role with optional bucket, object prefix, or panel scope.
 type GroupBinding struct {
 	Name         string `json:"name"`                    // Unique binding name
 	GroupName    string `json:"group_name"`              // Group being granted access
 	RoleName     string `json:"role_name"`               // Role being granted
 	BucketScope  string `json:"bucket_scope,omitempty"`  // Optional: scope to specific bucket
 	ObjectPrefix string `json:"object_prefix,omitempty"` // Optional: scope to object key prefix
+	PanelScope   string `json:"panel_scope,omitempty"`   // Optional: scope to specific panel ID
 }
 
 // NewGroupBinding creates a new group binding.
@@ -29,6 +30,16 @@ func NewGroupBindingWithPrefix(groupName, roleName, bucketScope, objectPrefix st
 		RoleName:     roleName,
 		BucketScope:  bucketScope,
 		ObjectPrefix: objectPrefix,
+	}
+}
+
+// NewGroupBindingForPanel creates a new group binding for panel access.
+func NewGroupBindingForPanel(groupName, panelID string) *GroupBinding {
+	return &GroupBinding{
+		Name:       uuid.New().String()[:8],
+		GroupName:  groupName,
+		RoleName:   RolePanelViewer,
+		PanelScope: panelID,
 	}
 }
 
@@ -53,6 +64,15 @@ func (gb *GroupBinding) AppliesToObject(bucket, key string) bool {
 		return strings.HasPrefix(key, gb.ObjectPrefix)
 	}
 	return true
+}
+
+// AppliesToPanel checks if this binding grants access to a panel.
+// Empty PanelScope means access to all panels (for this role).
+func (gb *GroupBinding) AppliesToPanel(panelID string) bool {
+	if gb.PanelScope == "" {
+		return true // No scope = all panels
+	}
+	return gb.PanelScope == panelID
 }
 
 // GroupBindingStore manages group bindings in memory.

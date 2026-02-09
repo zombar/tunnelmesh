@@ -307,6 +307,11 @@ func (s *Server) setupAdminRoutes() {
 	// S3 proxy for explorer
 	s.adminMux.HandleFunc("/api/s3/", s.handleS3Proxy)
 
+	// Panel management API
+	s.adminMux.HandleFunc("/api/panels", s.handlePanels)
+	s.adminMux.HandleFunc("/api/panels/", s.handlePanelByID)
+	s.adminMux.HandleFunc("/api/user/permissions", s.handleUserPermissions)
+
 	// Expose metrics on admin interface for Prometheus scraping via mesh IP
 	s.adminMux.Handle("/metrics", promhttp.Handler())
 
@@ -1248,26 +1253,43 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 // getRequestOwner extracts the owner identity from the request.
 // It returns the peer name from the TLS client certificate, or looks up the peer
 // by their mesh IP if no certificate is available (browser access from within mesh).
-// Callers should validate the returned value before using it for ownership.
+// Returns the user ID (derived from public key) for RBAC purposes, falling back to peer name
+// if user ID is not available.
 func (s *Server) getRequestOwner(r *http.Request) string {
+	var peerName string
+
 	// Get peer name from TLS client certificate
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		cn := r.TLS.PeerCertificates[0].Subject.CommonName
 		// CN format is "peername.tunnelmesh" - extract just the peer name
 		if strings.HasSuffix(cn, ".tunnelmesh") {
-			return strings.TrimSuffix(cn, ".tunnelmesh")
+			peerName = strings.TrimSuffix(cn, ".tunnelmesh")
+		} else {
+			peerName = cn
 		}
-		return cn
 	}
 
 	// No client certificate - try to identify by mesh IP
 	// This handles browser access from within the mesh where the browser
 	// doesn't have a client certificate but the request originates from a peer
-	if peerName := s.getPeerByRemoteAddr(r.RemoteAddr); peerName != "" {
-		return peerName
+	if peerName == "" {
+		peerName = s.getPeerByRemoteAddr(r.RemoteAddr)
 	}
 
-	return ""
+	if peerName == "" {
+		return ""
+	}
+
+	// Look up the user ID for this peer (derived from their public key)
+	s.peersMu.RLock()
+	defer s.peersMu.RUnlock()
+
+	if info, ok := s.peers[peerName]; ok && info.userID != "" {
+		return info.userID
+	}
+
+	// Fall back to peer name if user ID not available
+	return peerName
 }
 
 // getPeerByRemoteAddr looks up a peer by their mesh IP address.
@@ -2023,5 +2045,307 @@ func (s *Server) handleS3RestoreVersion(w http.ResponseWriter, r *http.Request, 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":     "restored",
 		"version_id": meta.VersionID,
+	})
+}
+
+// --- Panel Management API ---
+
+// UserPermissions is the response for the user permissions endpoint.
+type UserPermissions struct {
+	UserID  string   `json:"user_id"`
+	IsAdmin bool     `json:"is_admin"`
+	Panels  []string `json:"panels"`
+}
+
+// handleUserPermissions returns the current user's accessible panels.
+func (s *Server) handleUserPermissions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.s3Authorizer == nil {
+		s.jsonError(w, "authorizer not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	userID := s.getRequestOwner(r)
+	if userID == "" {
+		userID = "guest"
+	}
+
+	isAdmin := s.s3Authorizer.IsAdmin(userID)
+	panels := s.s3Authorizer.GetAccessiblePanels(userID)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(UserPermissions{
+		UserID:  userID,
+		IsAdmin: isAdmin,
+		Panels:  panels,
+	})
+}
+
+// allowedPluginSchemes defines the allowed URL schemes for external panel plugins.
+// Only https and http are allowed to prevent javascript:, file://, data:, etc.
+var allowedPluginSchemes = map[string]bool{
+	"https": true,
+	"http":  true,
+}
+
+// validatePluginURL validates that a plugin URL is safe to load.
+// Returns an error if the URL scheme is not allowed or the URL is invalid.
+func validatePluginURL(pluginURL string) error {
+	parsed, err := url.Parse(pluginURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	if parsed.Scheme == "" {
+		return errors.New("URL must have a scheme (https:// or http://)")
+	}
+
+	if !allowedPluginSchemes[parsed.Scheme] {
+		return fmt.Errorf("scheme %q not allowed (must be https or http)", parsed.Scheme)
+	}
+
+	if parsed.Host == "" {
+		return errors.New("URL must have a host")
+	}
+
+	return nil
+}
+
+// persistExternalPanels saves external panels to the system store.
+// Returns an error if persistence fails.
+func (s *Server) persistExternalPanels() error {
+	if s.s3SystemStore == nil || s.s3Authorizer == nil || s.s3Authorizer.PanelRegistry == nil {
+		return nil // No storage configured, skip persistence
+	}
+
+	// Get all external panels
+	externalPanels := s.s3Authorizer.PanelRegistry.ListExternal()
+	panelPtrs := make([]*auth.PanelDefinition, len(externalPanels))
+	for i := range externalPanels {
+		panelPtrs[i] = &externalPanels[i]
+	}
+
+	return s.s3SystemStore.SavePanels(panelPtrs)
+}
+
+// handlePanels handles GET (list) and POST (register) for panels.
+func (s *Server) handlePanels(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handlePanelsList(w, r)
+	case http.MethodPost:
+		s.handlePanelRegister(w, r)
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handlePanelsList returns all registered panels.
+func (s *Server) handlePanelsList(w http.ResponseWriter, r *http.Request) {
+	if s.s3Authorizer == nil || s.s3Authorizer.PanelRegistry == nil {
+		s.jsonError(w, "panel registry not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Filter by external if query param present
+	externalOnly := r.URL.Query().Get("external") == "true"
+
+	var panels []auth.PanelDefinition
+	if externalOnly {
+		panels = s.s3Authorizer.PanelRegistry.ListExternal()
+	} else {
+		panels = s.s3Authorizer.PanelRegistry.List()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"panels": panels,
+	})
+}
+
+// handlePanelRegister registers a new external panel (admin only).
+func (s *Server) handlePanelRegister(w http.ResponseWriter, r *http.Request) {
+	if s.s3Authorizer == nil || s.s3Authorizer.PanelRegistry == nil {
+		s.jsonError(w, "panel registry not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	userID := s.getRequestOwner(r)
+	if !s.s3Authorizer.IsAdmin(userID) {
+		s.jsonError(w, "admin access required", http.StatusForbidden)
+		return
+	}
+
+	var panel auth.PanelDefinition
+	if err := json.NewDecoder(r.Body).Decode(&panel); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Force external flag for API-registered panels
+	panel.External = true
+	panel.CreatedBy = userID
+
+	// Validate PluginURL for external panels (security: prevent javascript:, file://, etc.)
+	if panel.PluginURL != "" {
+		if err := validatePluginURL(panel.PluginURL); err != nil {
+			s.jsonError(w, fmt.Sprintf("invalid plugin URL: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	if err := s.s3Authorizer.PanelRegistry.Register(panel); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Persist external panels - rollback on failure
+	if err := s.persistExternalPanels(); err != nil {
+		// Rollback: unregister the panel
+		_ = s.s3Authorizer.PanelRegistry.Unregister(panel.ID)
+		log.Error().Err(err).Str("panel_id", panel.ID).Msg("failed to persist panel, rolling back")
+		s.jsonError(w, "failed to persist panel registration", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "registered",
+		"panel":  s.s3Authorizer.PanelRegistry.Get(panel.ID),
+	})
+}
+
+// handlePanelByID handles GET, PATCH, DELETE for a specific panel.
+func (s *Server) handlePanelByID(w http.ResponseWriter, r *http.Request) {
+	// Extract panel ID from path: /api/panels/{id}
+	panelID := strings.TrimPrefix(r.URL.Path, "/api/panels/")
+	if panelID == "" {
+		s.jsonError(w, "panel ID required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handlePanelGet(w, r, panelID)
+	case http.MethodPatch:
+		s.handlePanelUpdate(w, r, panelID)
+	case http.MethodDelete:
+		s.handlePanelDelete(w, r, panelID)
+	default:
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handlePanelGet returns a specific panel.
+func (s *Server) handlePanelGet(w http.ResponseWriter, _ *http.Request, panelID string) {
+	if s.s3Authorizer == nil || s.s3Authorizer.PanelRegistry == nil {
+		s.jsonError(w, "panel registry not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	panel := s.s3Authorizer.PanelRegistry.Get(panelID)
+	if panel == nil {
+		s.jsonError(w, "panel not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(panel)
+}
+
+// handlePanelUpdate updates a panel (admin only).
+func (s *Server) handlePanelUpdate(w http.ResponseWriter, r *http.Request, panelID string) {
+	if s.s3Authorizer == nil || s.s3Authorizer.PanelRegistry == nil {
+		s.jsonError(w, "panel registry not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	userID := s.getRequestOwner(r)
+	if !s.s3Authorizer.IsAdmin(userID) {
+		s.jsonError(w, "admin access required", http.StatusForbidden)
+		return
+	}
+
+	panel := s.s3Authorizer.PanelRegistry.Get(panelID)
+	if panel == nil {
+		s.jsonError(w, "panel not found", http.StatusNotFound)
+		return
+	}
+
+	var update auth.PanelDefinition
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate PluginURL if provided (security: prevent javascript:, file://, etc.)
+	if update.PluginURL != "" {
+		if err := validatePluginURL(update.PluginURL); err != nil {
+			s.jsonError(w, fmt.Sprintf("invalid plugin URL: %v", err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	if err := s.s3Authorizer.PanelRegistry.Update(panelID, update); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Persist external panels
+	if err := s.persistExternalPanels(); err != nil {
+		// Log but don't fail - panel is already updated in memory
+		log.Warn().Err(err).Str("panel_id", panelID).Msg("failed to persist panel update")
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "updated",
+		"panel":  s.s3Authorizer.PanelRegistry.Get(panelID),
+	})
+}
+
+// handlePanelDelete unregisters an external panel (admin only).
+func (s *Server) handlePanelDelete(w http.ResponseWriter, r *http.Request, panelID string) {
+	if s.s3Authorizer == nil || s.s3Authorizer.PanelRegistry == nil {
+		s.jsonError(w, "panel registry not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	userID := s.getRequestOwner(r)
+	if !s.s3Authorizer.IsAdmin(userID) {
+		s.jsonError(w, "admin access required", http.StatusForbidden)
+		return
+	}
+
+	// Get panel before deletion for potential rollback
+	panel := s.s3Authorizer.PanelRegistry.Get(panelID)
+	if panel == nil {
+		s.jsonError(w, "panel not found", http.StatusNotFound)
+		return
+	}
+	panelCopy := *panel
+
+	if err := s.s3Authorizer.PanelRegistry.Unregister(panelID); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Persist external panels - rollback on failure
+	if err := s.persistExternalPanels(); err != nil {
+		// Rollback: re-register the panel
+		_ = s.s3Authorizer.PanelRegistry.Register(panelCopy)
+		log.Error().Err(err).Str("panel_id", panelID).Msg("failed to persist panel deletion, rolling back")
+		s.jsonError(w, "failed to persist panel deletion", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "deleted",
 	})
 }

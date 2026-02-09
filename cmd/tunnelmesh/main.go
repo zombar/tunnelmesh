@@ -132,27 +132,20 @@ QUICK START - Run a coordinator (with local peer):
   # 1. Generate config (server + peer combined):
   tunnelmesh init --server --peer
 
-  # 2. Create your identity:
-  tunnelmesh user setup
-
-  # 3. Start the coordinator:
+  # 2. Start the coordinator:
   tunnelmesh serve --config server.yaml
 
-  # 4. Register as admin (first user):
-  tunnelmesh user register --server https://localhost:8443
+  # First peer to join becomes admin automatically
 
 QUICK START - Join an existing mesh:
 
-  # 1. Create your identity (if you haven't already):
-  tunnelmesh user setup
-
-  # 2. Join using invite token from admin:
+  # 1. Join using invite token from admin:
   tunnelmesh join --server coord.example.com --token <token> --context work
 
-  # 3. Register to get S3 storage access:
-  tunnelmesh user register
+  # Identity is automatic - derived from your SSH key
+  # First user to join becomes admin
 
-  # 4. Install as system service (optional):
+  # 2. Install as system service (optional):
   tunnelmesh service install
 
 MANAGING BUCKETS:
@@ -293,9 +286,6 @@ Examples:
 
 	// Filter command - manage packet filter rules
 	rootCmd.AddCommand(newFilterCmd())
-
-	// User command - manage user identity
-	rootCmd.AddCommand(newUserCmd())
 
 	// Buckets command - manage S3 buckets
 	rootCmd.AddCommand(newBucketsCmd())
@@ -735,15 +725,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if genServer {
 		fmt.Println("\nNext steps:")
 		fmt.Println("  1. Edit server.yaml with your settings")
-		fmt.Println("  2. tunnelmesh user setup")
-		fmt.Println("  3. tunnelmesh serve --config server.yaml")
-		fmt.Println("  4. tunnelmesh user register --server https://localhost:8443")
+		fmt.Println("  2. tunnelmesh serve --config server.yaml")
+		fmt.Println("  3. First peer to join becomes admin automatically")
 	} else if genPeer {
 		fmt.Println("\nNext steps:")
 		fmt.Println("  1. Edit peer.yaml with server URL and token")
-		fmt.Println("  2. tunnelmesh user setup")
-		fmt.Println("  3. tunnelmesh join --config peer.yaml --context <name>")
-		fmt.Println("  4. tunnelmesh user register")
+		fmt.Println("  2. tunnelmesh join --config peer.yaml --context <name>")
+		fmt.Println("  Identity is automatic - derived from your SSH key")
 	}
 
 	return nil
@@ -1056,6 +1044,14 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Create peer identity and mesh node
 	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, udpPort, Version, resp)
 	identity.Location = location // Set location for heartbeat reporting
+
+	// Log if peer was renamed due to hostname conflict
+	if resp.PeerName != "" && resp.PeerName != cfg.Name {
+		log.Info().
+			Str("original", cfg.Name).
+			Str("assigned", resp.PeerName).
+			Msg("hostname conflict - using assigned name")
+	}
 	node := peer.NewMeshNode(identity, client)
 
 	// Set up forwarder with node's tunnel manager and router

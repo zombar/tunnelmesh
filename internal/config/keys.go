@@ -27,6 +27,12 @@ func GenerateKeyPair(privPath string) error {
 		return fmt.Errorf("generate key pair: %w", err)
 	}
 
+	return SaveKeyPairFromED25519(privPath, pubKey, privKey)
+}
+
+// SaveKeyPairFromED25519 saves an existing ED25519 keypair in SSH format.
+// The private key is saved to privPath and public key to privPath.pub
+func SaveKeyPairFromED25519(privPath string, pubKey ed25519.PublicKey, privKey ed25519.PrivateKey) error {
 	// Marshal private key to OpenSSH format
 	sshPubKey, err := ssh.NewPublicKey(pubKey)
 	if err != nil {
@@ -157,6 +163,32 @@ func DecodePublicKey(encoded string) (ssh.PublicKey, error) {
 	}
 
 	return key, nil
+}
+
+// ExtractED25519FromSSHKey extracts the raw ED25519 public key from an SSH public key.
+// The SSH key must be an ED25519 key; returns an error for other key types.
+func ExtractED25519FromSSHKey(sshPubKey ssh.PublicKey) (ed25519.PublicKey, error) {
+	cryptoPubKey, ok := sshPubKey.(ssh.CryptoPublicKey)
+	if !ok {
+		return nil, fmt.Errorf("SSH key does not support CryptoPublicKey interface")
+	}
+
+	edPubKey, ok := cryptoPubKey.CryptoPublicKey().(ed25519.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("SSH key is not an ED25519 key")
+	}
+
+	return edPubKey, nil
+}
+
+// DecodeED25519PublicKey decodes a base64-encoded SSH ED25519 public key to raw ED25519 bytes.
+func DecodeED25519PublicKey(encoded string) (ed25519.PublicKey, error) {
+	sshPubKey, err := DecodePublicKey(encoded)
+	if err != nil {
+		return nil, err
+	}
+
+	return ExtractED25519FromSSHKey(sshPubKey)
 }
 
 // ED25519PrivateToX25519 converts an ED25519 private key to X25519 format.

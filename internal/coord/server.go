@@ -39,6 +39,7 @@ type peerInfo struct {
 	lastStatsTime  time.Time
 	prevStatsTime  time.Time
 	aliases        []string // DNS aliases registered by this peer
+	userID         string   // User ID derived from peer's public key (SHA256[:8] hex)
 
 	// Latency metrics reported by peer
 	coordinatorRTT int64            // Peer's reported RTT to coordinator (ms)
@@ -420,11 +421,6 @@ func (s *Server) setupRoutes() {
 	if s.cfg.WireGuard.Enabled {
 		s.setupWireGuardRoutes()
 	}
-
-	// Setup user registration endpoint (if S3 is enabled for user management)
-	if s.cfg.S3.Enabled {
-		s.mux.HandleFunc("/api/v1/user/register", s.handleUserRegister)
-	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -580,6 +576,16 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 		s.s3Authorizer.GroupBindings.LoadBindings(groupBindings)
 	}
 
+	// Recover external panels
+	if panels, err := systemStore.LoadPanels(); err == nil && len(panels) > 0 {
+		log.Info().Int("count", len(panels)).Msg("recovering external panels")
+		for _, panel := range panels {
+			if err := s.s3Authorizer.PanelRegistry.Register(*panel); err != nil {
+				log.Warn().Err(err).Str("panel_id", panel.ID).Msg("failed to recover panel")
+			}
+		}
+	}
+
 	// Set up built-in group bindings if not already present
 	s.ensureBuiltinGroupBindings()
 
@@ -608,6 +614,8 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 // ensureBuiltinGroupBindings sets up the built-in group bindings if not already present.
 // - all_service_users group gets system role on _tunnelmesh bucket
 // - all_admin_users group gets admin role (unscoped)
+// - everyone group gets panel-viewer for default user panels
+// - all_admin_users group gets panel-viewer for admin-only panels
 func (s *Server) ensureBuiltinGroupBindings() {
 	modified := false
 
@@ -630,6 +638,50 @@ func (s *Server) ensureBuiltinGroupBindings() {
 			"", // Unscoped - admin has access to all buckets
 		))
 		modified = true
+	}
+
+	// Add default panel bindings for everyone group
+	everyoneBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupEveryone)
+	everyonePanels := make(map[string]bool)
+	for _, b := range everyoneBindings {
+		if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
+			everyonePanels[b.PanelScope] = true
+		}
+	}
+	for _, panelID := range auth.DefaultUserPanels() {
+		if !everyonePanels[panelID] {
+			s.s3Authorizer.GroupBindings.Add(auth.NewGroupBindingForPanel(
+				auth.GroupEveryone,
+				panelID,
+			))
+			modified = true
+			log.Info().Str("group", auth.GroupEveryone).Str("panel", panelID).Msg("added default panel binding")
+		}
+	}
+
+	// Add admin-only panel bindings for all_admin_users group
+	adminPanels := make(map[string]bool)
+	for _, b := range adminBindings {
+		if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
+			adminPanels[b.PanelScope] = true
+		}
+	}
+	// Re-fetch admin bindings since we may have added admin role binding above
+	adminBindings = s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllAdminUsers)
+	for _, b := range adminBindings {
+		if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
+			adminPanels[b.PanelScope] = true
+		}
+	}
+	for _, panelID := range auth.DefaultAdminPanels() {
+		if !adminPanels[panelID] {
+			s.s3Authorizer.GroupBindings.Add(auth.NewGroupBindingForPanel(
+				auth.GroupAllAdminUsers,
+				panelID,
+			))
+			modified = true
+			log.Info().Str("group", auth.GroupAllAdminUsers).Str("panel", panelID).Msg("added default panel binding")
+		}
 	}
 
 	// Persist if we added any bindings
@@ -831,6 +883,27 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.peersMu.Lock()
 	defer s.peersMu.Unlock()
 
+	// Check for hostname collision with different public key
+	// If another peer exists with same name but different key, auto-suffix the name
+	originalName := req.Name
+	if existing, exists := s.peers[req.Name]; exists {
+		if existing.peer.PublicKey != req.PublicKey {
+			// Different device trying to use same name - find unique suffix
+			baseName := req.Name
+			for i := 2; ; i++ {
+				candidateName := fmt.Sprintf("%s-%d", baseName, i)
+				if _, taken := s.peers[candidateName]; !taken {
+					req.Name = candidateName
+					log.Info().
+						Str("original", originalName).
+						Str("assigned", req.Name).
+						Msg("hostname conflict - assigned unique name")
+					break
+				}
+			}
+		}
+	}
+
 	// Validate aliases first (before any state changes)
 	if len(req.Aliases) > 0 {
 		if err := s.validateAliases(req.Aliases, req.Name); err != nil {
@@ -919,12 +992,59 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.dnsCache[alias] = meshIP
 	}
 
+	// Compute user ID from peer's SSH public key for RBAC purposes
+	var userID string
+	if isExisting && existing.userID != "" {
+		// Preserve existing user ID
+		userID = existing.userID
+	} else if req.PublicKey != "" {
+		// Derive user ID from SSH public key
+		if edPubKey, err := config.DecodeED25519PublicKey(req.PublicKey); err == nil {
+			userID = auth.ComputeUserID(edPubKey)
+		} else {
+			log.Debug().Err(err).Str("peer", req.Name).Msg("failed to derive user ID from public key")
+		}
+	}
+
 	s.peers[req.Name] = &peerInfo{
 		peer:         peer,
 		registeredAt: registeredAt,
 		aliases:      req.Aliases,
+		userID:       userID,
 	}
 	s.dnsCache[req.Name] = meshIP
+
+	// Auto-register user: add to "everyone" group and create user record on first registration
+	// User identity is derived from peer's SSH key - no separate registration needed
+	var isFirstUser bool
+	if userID != "" && s.s3Authorizer != nil && s.s3Authorizer.Groups != nil {
+		isNewUser := !s.s3Authorizer.Groups.IsMember(auth.GroupEveryone, userID)
+		if isNewUser {
+			// Check if this is the first user (no one in admin group yet)
+			adminGroup := s.s3Authorizer.Groups.Get(auth.GroupAllAdminUsers)
+			if adminGroup != nil && len(adminGroup.Members) == 0 {
+				isFirstUser = true
+				// First user becomes admin
+				if err := s.s3Authorizer.Groups.AddMember(auth.GroupAllAdminUsers, userID); err != nil {
+					log.Warn().Err(err).Str("user_id", userID).Msg("failed to add first user to admin group")
+				} else {
+					log.Info().Str("peer", req.Name).Str("user_id", userID).Msg("first user - granted admin role")
+				}
+			}
+
+			// Add to everyone group
+			if err := s.s3Authorizer.Groups.AddMember(auth.GroupEveryone, userID); err != nil {
+				log.Warn().Err(err).Str("peer", req.Name).Str("user_id", userID).Msg("failed to add user to everyone group")
+			} else {
+				log.Debug().Str("peer", req.Name).Str("user_id", userID).Msg("added user to everyone group")
+			}
+		}
+
+		// Create or update user record in user store
+		if s.s3SystemStore != nil {
+			s.updateUserRecord(userID, req.Name, req.PublicKey, isNewUser)
+		}
+	}
 
 	// Generate JWT token for relay authentication
 	token, err := s.GenerateToken(req.Name, meshIP)
@@ -953,6 +1073,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Token:         token,
 		CoordMeshIP:   s.coordMeshIP, // For "this.tunnelmesh" resolution
 		ServerVersion: s.version,
+		PeerName:      req.Name, // May differ from original request if renamed
+		UserID:        userID,
+		IsFirstUser:   isFirstUser,
 	}
 
 	// Generate TLS certificate for the peer
@@ -1070,6 +1193,47 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 	resp := proto.DNSUpdateNotification{Records: records}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// updateUserRecord creates or updates a user record in the user store.
+// This is called during peer registration to ensure the user exists in the user list.
+func (s *Server) updateUserRecord(userID, peerName, publicKey string, isNewUser bool) {
+	users, err := s.s3SystemStore.LoadUsers()
+	if err != nil {
+		log.Warn().Err(err).Str("user_id", userID).Msg("failed to load users for update")
+		users = []*auth.User{}
+	}
+
+	now := time.Now()
+	var found bool
+	for _, u := range users {
+		if u.ID == userID {
+			// Update existing user: refresh last seen time and update name if this is the same device
+			u.LastSeen = now
+			// Update name if current peer provides one and user name is empty or matches this peer
+			if peerName != "" && (u.Name == "" || u.Name == peerName) {
+				u.Name = peerName
+			}
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		// Create new user
+		users = append(users, &auth.User{
+			ID:        userID,
+			Name:      peerName,
+			PublicKey: publicKey,
+			CreatedAt: now,
+			LastSeen:  now,
+		})
+		log.Debug().Str("user_id", userID).Str("name", peerName).Msg("created user record")
+	}
+
+	if err := s.s3SystemStore.SaveUsers(users); err != nil {
+		log.Warn().Err(err).Str("user_id", userID).Msg("failed to save users")
+	}
 }
 
 func (s *Server) jsonError(w http.ResponseWriter, message string, code int) {
@@ -1281,172 +1445,4 @@ func (s *Server) handleWireGuardHandshake(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-// handleUserRegister handles user registration requests.
-// This endpoint allows users to register their identity with the mesh.
-// The first human user to register becomes an admin.
-func (s *Server) handleUserRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req proto.UserRegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.jsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Validate required fields
-	if req.UserID == "" || req.PublicKey == "" {
-		s.jsonError(w, "user_id and public_key are required", http.StatusBadRequest)
-		return
-	}
-
-	// Verify the signature to prove ownership of the private key
-	if !auth.VerifyUserSignature(req.PublicKey, req.UserID, req.Signature) {
-		s.jsonError(w, "invalid signature", http.StatusUnauthorized)
-		return
-	}
-
-	// Load existing users to check for expired users
-	var existingUsers []*auth.User
-	var existingUser *auth.User
-	if s.s3SystemStore != nil {
-		existingUsers, _ = s.s3SystemStore.LoadUsers()
-		for _, u := range existingUsers {
-			if u.ID == req.UserID {
-				existingUser = u
-				break
-			}
-		}
-	}
-
-	// Check if user is already registered and not expired
-	existingBindings := s.s3Authorizer.Bindings.GetForUser(req.UserID)
-	existingGroups := s.s3Authorizer.Groups.GetGroupsForUser(req.UserID)
-	isActiveUser := (len(existingBindings) > 0 || len(existingGroups) > 0) &&
-		(existingUser == nil || !existingUser.IsExpired())
-
-	if isActiveUser {
-		// User already registered and active - return existing info
-		roles := make([]string, 0, len(existingBindings))
-		for _, b := range existingBindings {
-			roles = append(roles, b.RoleName)
-		}
-
-		// Update LastSeen
-		if existingUser != nil {
-			existingUser.LastSeen = time.Now().UTC()
-			if s.s3SystemStore != nil {
-				_ = s.s3SystemStore.SaveUsers(existingUsers)
-			}
-		}
-
-		// Get existing S3 credentials
-		accessKey, secretKey, _ := s.s3Credentials.RegisterUser(req.UserID, req.PublicKey)
-
-		resp := proto.UserRegisterResponse{
-			UserID:      req.UserID,
-			Roles:       roles,
-			Groups:      existingGroups,
-			S3AccessKey: accessKey,
-			S3SecretKey: secretKey,
-			IsFirstUser: false,
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	// Determine if this is the first user
-	isFirstUser := !s.s3Authorizer.HasHumanAdmin()
-
-	// Register S3 credentials
-	accessKey, secretKey, err := s.s3Credentials.RegisterUser(req.UserID, req.PublicKey)
-	if err != nil {
-		s.jsonError(w, "failed to register S3 credentials", http.StatusInternalServerError)
-		return
-	}
-
-	// Add user to appropriate groups
-	var groups []string
-	if strings.HasPrefix(req.UserID, auth.ServiceUserPrefix) {
-		// Service users go to all_service_users group
-		_ = s.s3Authorizer.Groups.AddMember(auth.GroupAllServiceUsers, req.UserID)
-		groups = append(groups, auth.GroupAllServiceUsers)
-	} else {
-		// Human users go to everyone group
-		_ = s.s3Authorizer.Groups.AddMember(auth.GroupEveryone, req.UserID)
-		groups = append(groups, auth.GroupEveryone)
-
-		if isFirstUser {
-			// First human user also becomes admin
-			_ = s.s3Authorizer.Groups.AddMember(auth.GroupAllAdminUsers, req.UserID)
-			groups = append(groups, auth.GroupAllAdminUsers)
-			log.Info().Str("user_id", req.UserID).Msg("first user registered as admin")
-		}
-	}
-
-	// Create or update user record
-	now := time.Now().UTC()
-	isReactivation := existingUser != nil && existingUser.IsExpired()
-
-	if existingUser != nil {
-		// Update existing user (reactivation case)
-		existingUser.Name = req.Name
-		existingUser.LastSeen = now
-		existingUser.Expired = false
-		existingUser.ExpiredAt = time.Time{}
-	} else {
-		// Create new user record
-		user := &auth.User{
-			ID:        req.UserID,
-			Name:      req.Name,
-			PublicKey: req.PublicKey,
-			CreatedAt: now,
-			LastSeen:  now,
-		}
-		existingUsers = append(existingUsers, user)
-	}
-
-	// Save user and groups to system store if available
-	if s.s3SystemStore != nil {
-		if err := s.s3SystemStore.SaveUsers(existingUsers); err != nil {
-			log.Warn().Err(err).Str("user_id", req.UserID).Msg("failed to persist user")
-		}
-
-		// Save groups
-		if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
-			log.Warn().Err(err).Msg("failed to persist groups")
-		}
-	}
-
-	if isReactivation {
-		log.Info().
-			Str("user_id", req.UserID).
-			Str("name", req.Name).
-			Strs("groups", groups).
-			Msg("expired user reactivated")
-	} else {
-		log.Info().
-			Str("user_id", req.UserID).
-			Str("name", req.Name).
-			Strs("groups", groups).
-			Bool("is_first_user", isFirstUser).
-			Msg("user registered")
-	}
-
-	resp := proto.UserRegisterResponse{
-		UserID:      req.UserID,
-		Groups:      groups,
-		S3AccessKey: accessKey,
-		S3SecretKey: secretKey,
-		IsFirstUser: isFirstUser,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
 }

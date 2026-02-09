@@ -23,7 +23,7 @@ func newBucketsCmd() *cobra.Command {
 		Short: "Manage S3 buckets",
 		Long: `Manage S3 buckets on the TunnelMesh coordinator.
 
-Requires an active context with S3 credentials (run 'tunnelmesh user register' first).
+Requires an active context (run 'tunnelmesh join' to connect to a mesh).
 
 Examples:
   # List all buckets

@@ -1,9 +1,9 @@
 package auth
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,100 +11,55 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewUserFromMnemonic(t *testing.T) {
-	mnemonic := "abandon ability able"
-
-	user, err := NewUserFromMnemonic(mnemonic, "Alice")
+func TestComputeUserID(t *testing.T) {
+	// Generate a test key pair
+	pubKey, _, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 
-	assert.NotEmpty(t, user.ID)
-	assert.NotEmpty(t, user.PublicKey)
-	assert.Equal(t, "Alice", user.Name)
-	assert.False(t, user.CreatedAt.IsZero())
-	assert.False(t, user.IsService())
-}
-
-func TestNewUserFromMnemonicDeterministic(t *testing.T) {
-	mnemonic := "abandon ability able"
-
-	user1, err := NewUserFromMnemonic(mnemonic, "Alice")
-	require.NoError(t, err)
-
-	user2, err := NewUserFromMnemonic(mnemonic, "Bob")
-	require.NoError(t, err)
-
-	// Same mnemonic = same ID and public key (name is metadata only)
-	assert.Equal(t, user1.ID, user2.ID)
-	assert.Equal(t, user1.PublicKey, user2.PublicKey)
-	assert.NotEqual(t, user1.Name, user2.Name)
-}
-
-func TestUserID(t *testing.T) {
-	mnemonic := "abandon ability able"
-
-	user, err := NewUserFromMnemonic(mnemonic, "")
-	require.NoError(t, err)
+	userID := ComputeUserID(pubKey)
 
 	// ID should be 16 hex chars (first 8 bytes of SHA256)
-	assert.Len(t, user.ID, 16)
-	assert.Regexp(t, "^[0-9a-f]{16}$", user.ID)
+	assert.Len(t, userID, 16)
+	assert.Regexp(t, "^[0-9a-f]{16}$", userID)
 }
 
-func TestUserPublicKeyEncodeDecode(t *testing.T) {
-	mnemonic := "abandon ability able"
-
-	user, err := NewUserFromMnemonic(mnemonic, "")
+func TestComputeUserIDDeterministic(t *testing.T) {
+	// Generate a test key pair
+	pubKey, _, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 
-	// PublicKey should be valid base64
-	decoded, err := base64.StdEncoding.DecodeString(user.PublicKey)
-	require.NoError(t, err)
-	assert.Len(t, decoded, 32) // ED25519 public key is 32 bytes
+	// Same public key should always produce same user ID
+	id1 := ComputeUserID(pubKey)
+	id2 := ComputeUserID(pubKey)
+	assert.Equal(t, id1, id2)
 }
 
-func TestUserIdentitySaveLoad(t *testing.T) {
-	tempDir := t.TempDir()
-	identityPath := filepath.Join(tempDir, "user.json")
-
-	// Create and save identity
-	mnemonic := "abandon ability able"
-	identity, err := NewUserIdentity(mnemonic, "TestUser")
+func TestComputeUserIDFromBase64(t *testing.T) {
+	// Generate a test key pair
+	pubKey, _, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 
-	err = identity.Save(identityPath)
-	require.NoError(t, err)
+	// Encode public key to base64
+	pubKeyB64 := base64.StdEncoding.EncodeToString(pubKey)
 
-	// Load identity
-	loaded, err := LoadUserIdentity(identityPath)
+	// Should produce same ID as ComputeUserID
+	id1 := ComputeUserID(pubKey)
+	id2, err := ComputeUserIDFromBase64(pubKeyB64)
 	require.NoError(t, err)
-
-	assert.Equal(t, identity.User.ID, loaded.User.ID)
-	assert.Equal(t, identity.User.PublicKey, loaded.User.PublicKey)
-	assert.Equal(t, identity.User.Name, loaded.User.Name)
+	assert.Equal(t, id1, id2)
 }
 
-func TestUserIdentityLoadNotExist(t *testing.T) {
-	_, err := LoadUserIdentity("/nonexistent/path/user.json")
-	assert.True(t, os.IsNotExist(err))
+func TestComputeUserIDFromBase64_InvalidBase64(t *testing.T) {
+	_, err := ComputeUserIDFromBase64("not-valid-base64!!!")
+	assert.Error(t, err)
 }
 
-func TestUserIdentitySign(t *testing.T) {
-	mnemonic := "abandon ability able"
-	identity, err := NewUserIdentity(mnemonic, "")
-	require.NoError(t, err)
-
-	message := []byte("test message")
-	signature := identity.Sign(message)
-
-	assert.Len(t, signature, 64) // ED25519 signature is 64 bytes
-
-	// Verify signature
-	valid := identity.Verify(message, signature)
-	assert.True(t, valid)
-
-	// Invalid message should fail verification
-	valid = identity.Verify([]byte("wrong message"), signature)
-	assert.False(t, valid)
+func TestComputeUserIDFromBase64_WrongKeySize(t *testing.T) {
+	// Encode a key that's too short
+	shortKey := base64.StdEncoding.EncodeToString([]byte("tooshort"))
+	_, err := ComputeUserIDFromBase64(shortKey)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid public key size")
 }
 
 func TestServiceUser(t *testing.T) {
@@ -121,48 +76,6 @@ func TestServiceUser(t *testing.T) {
 		Name: "Alice",
 	}
 	assert.False(t, user2.IsService())
-}
-
-func TestVerifyUserSignature(t *testing.T) {
-	mnemonic := "abandon ability able"
-	identity, err := NewUserIdentity(mnemonic, "TestUser")
-	require.NoError(t, err)
-
-	message := identity.User.ID
-
-	// Sign the message
-	signature, err := identity.SignMessage(message)
-	require.NoError(t, err)
-
-	// Verify should succeed
-	valid := VerifyUserSignature(identity.User.PublicKey, message, signature)
-	assert.True(t, valid)
-
-	// Wrong message should fail
-	valid = VerifyUserSignature(identity.User.PublicKey, "wrong-message", signature)
-	assert.False(t, valid)
-
-	// Wrong signature should fail
-	valid = VerifyUserSignature(identity.User.PublicKey, message, "invalidsignature")
-	assert.False(t, valid)
-
-	// Invalid public key should fail
-	valid = VerifyUserSignature("invalidpubkey", message, signature)
-	assert.False(t, valid)
-}
-
-func TestSignMessage(t *testing.T) {
-	mnemonic := "abandon ability able"
-	identity, err := NewUserIdentity(mnemonic, "TestUser")
-	require.NoError(t, err)
-
-	signature, err := identity.SignMessage("test message")
-	require.NoError(t, err)
-
-	// Signature should be valid base64
-	decoded, err := base64.StdEncoding.DecodeString(signature)
-	require.NoError(t, err)
-	assert.Len(t, decoded, 64) // ED25519 signature is 64 bytes
 }
 
 // --- User expiration tests ---
