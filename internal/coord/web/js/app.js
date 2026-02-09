@@ -2647,10 +2647,8 @@ function initRefreshCoordinator() {
     // When bindings change, refresh S3 explorer (permissions might have changed)
     TM.refresh.addDependency('bindings', ['s3']);
 
-    // When groups change, refresh peers-mgmt (group membership affects user list)
-    TM.refresh.addDependency('groups', ['peers-mgmt']);
-
-    // When peers-mgmt changes, refresh groups and bindings (user changes affect group/role assignments)
+    // When peers-mgmt (users) changes, refresh groups and bindings (user changes affect group/role assignments)
+    // Note: Removed groups → peers-mgmt to avoid circular dependency
     TM.refresh.addDependency('peers-mgmt', ['groups', 'bindings']);
 }
 
@@ -2687,7 +2685,8 @@ function switchTab(tabName) {
             }
         });
     } else if (tabName === 'data') {
-        TM.refresh.triggerMultiple(['peers-mgmt', 'groups', 'shares', 'bindings', 's3']);
+        // Refresh all data panels without cascading (we're already listing all of them)
+        TM.refresh.triggerMultiple(['peers-mgmt', 'groups', 'shares', 'bindings', 's3'], { cascade: false });
     }
 }
 window.switchTab = switchTab;
