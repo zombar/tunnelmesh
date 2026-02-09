@@ -2719,6 +2719,7 @@ function renderBindingsTable() {
             <td>${escapeHtml(b.role_name)}</td>
             <td>${escapeHtml(b.bucket_scope || 'All')}</td>
             <td>${escapeHtml(b.object_prefix || '-')}</td>
+            <td>${escapeHtml(b.panel_scope || '-')}</td>
             <td>${b.created_at ? TM.format.formatRelativeTime(b.created_at) : '-'}</td>
             <td>
                 ${
