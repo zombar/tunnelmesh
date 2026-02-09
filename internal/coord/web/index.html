@@ -54,10 +54,10 @@
         </div>
     </nav>
 
-    <!-- App Tab Content -->
-    <div id="app-tab" class="tab-content active">
+    <!-- All panel sections in one container - tab visibility controlled by data-tab attribute -->
     <main>
-        <section id="s3-section" style="display: none;">
+        <!-- App Tab Panels -->
+        <section id="s3-section" data-tab="app" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Objects</h2>
             </div>
@@ -167,7 +167,7 @@
             </div>
         </section>
 
-        <section id="shares-section" style="display: none;">
+        <section id="shares-section" data-tab="app" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Shares</h2>
                 <button id="add-share-btn" class="btn-primary" onclick="event.stopPropagation(); openShareModal();">+ New Share</button>
@@ -196,7 +196,7 @@
             </div>
         </section>
 
-        <section id="docker-section" class="panel" style="display: none;">
+        <section id="docker-section" data-tab="app" class="panel" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Docker</h2>
                 <button id="refresh-docker-btn" class="btn-primary" onclick="event.stopPropagation(); refreshDockerContainers();" title="Refresh containers">⟳ Refresh</button>
@@ -227,7 +227,7 @@
             </div>
         </section>
 
-        <section id="dns-section" style="display: none;">
+        <section id="dns-section" data-tab="app" style="display: none;">
             <h2 class="section-toggle" onclick="toggleSection(this)">DNS</h2>
             <div class="collapsible-content">
                 <table id="dns">
@@ -247,13 +247,9 @@
                 </div>
             </div>
         </section>
-    </main>
-    </div><!-- End App Tab -->
 
-    <!-- Mesh Tab Content -->
-    <div id="mesh-tab" class="tab-content">
-    <main>
-    <section id="alerts-section" style="display: none;">
+        <!-- Mesh Tab Panels -->
+        <section id="alerts-section" data-tab="mesh" style="display: none;">
         <div class="alert-tiles">
             <a class="alert-tile warning clickable-card" id="alert-tile-warning" href="/prometheus/alerts">
                 <div class="alert-content">
@@ -276,7 +272,7 @@
         </div>
     </section>
 
-    <section id="visualizer-section" style="display: none;">
+    <section id="visualizer-section" data-tab="mesh" style="display: none;">
         <div class="visualizer-card">
             <div class="visualizer-header section-toggle" onclick="toggleSection(this)">
                 <h2>Topology</h2>
@@ -289,7 +285,7 @@
         </div>
     </section>
 
-    <section id="map-section" style="display: none;">
+    <section id="map-section" data-tab="mesh" style="display: none;">
         <div class="map-card">
             <div class="map-header section-toggle" onclick="toggleSection(this)">
                 <h2>Map</h2>
@@ -300,7 +296,7 @@
         </div>
     </section>
 
-    <section id="charts-section" style="display: none;">
+    <section id="charts-section" data-tab="mesh" style="display: none;">
         <div class="charts-card">
             <div class="charts-header section-toggle" onclick="toggleSection(this)">
                 <h2>Charts</h2>
@@ -320,8 +316,7 @@
         </div>
     </section>
 
-    <main>
-        <section id="peers-section" style="display: none;">
+        <section id="peers-section" data-tab="mesh" style="display: none;">
             <h2 class="section-toggle" onclick="toggleSection(this)">Network</h2>
             <div class="collapsible-content">
                 <table id="peers">
@@ -347,7 +342,7 @@
             </div>
         </section>
 
-        <section id="logs-section" class="logs-card" style="display: none;">
+        <section id="logs-section" data-tab="mesh" class="logs-card" style="display: none;">
             <h2 class="section-toggle" onclick="toggleSection(this)">Logs</h2>
             <div class="collapsible-content">
                 <a id="logs-link" class="logs-container clickable-card" href="/grafana/explore">
@@ -360,7 +355,7 @@
             </div>
         </section>
 
-        <section id="wireguard-section" style="display: none;">
+        <section id="wireguard-section" data-tab="mesh" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>WireGuard</h2>
                 <button id="add-wg-client-btn" class="btn-primary" onclick="event.stopPropagation()">+ Add Peer</button>
@@ -388,7 +383,7 @@
             </div>
         </section>
 
-        <section id="filter-section" style="display: none;">
+        <section id="filter-section" data-tab="mesh" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Filter</h2>
                 <button id="add-filter-rule-btn" class="btn-primary" onclick="event.stopPropagation(); openFilterModal();">+ Add Rule</button>
@@ -481,13 +476,8 @@
             </div>
         </div>
 
-    </main>
-    </div><!-- End Mesh Tab -->
-    <!-- Data Tab Content -->
-    <div id="data-tab" class="tab-content">
-    <main>
-        <!-- Objects Section (GitHub-style file browser) -->
-        <section id="peers-mgmt-section" style="display: none;">
+        <!-- Data Tab Panels -->
+        <section id="peers-mgmt-section" data-tab="data" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Peers</h2>
             </div>
@@ -514,7 +504,7 @@
             </div>
         </section>
 
-        <section id="groups-section" style="display: none;">
+        <section id="groups-section" data-tab="data" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Groups</h2>
                 <button id="add-group-btn" class="btn-primary" onclick="event.stopPropagation(); openGroupModal();">+ Add Group</button>
@@ -540,7 +530,7 @@
             </div>
         </section>
 
-        <section id="bindings-section" style="display: none;">
+        <section id="bindings-section" data-tab="data" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Bindings</h2>
                 <button id="add-binding-btn" class="btn-primary" onclick="event.stopPropagation(); openBindingModal();">+ Add Binding</button>
@@ -570,7 +560,6 @@
         </section>
 
     </main>
-    </div><!-- End Data Tab -->
 
     <!-- Container for external plugin panels -->
     <div id="external-panels" class="external-panels-container"></div>

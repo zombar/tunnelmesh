@@ -232,6 +232,11 @@ header h1 {
     display: block;
 }
 
+/* Tab-based section visibility - hide sections not in active tab */
+section.tab-hidden {
+    display: none !important;
+}
+
 /* Charts Section - matches main's width constraints */
 #charts-section {
     max-width: 1400px;

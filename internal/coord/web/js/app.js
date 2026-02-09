@@ -2703,9 +2703,18 @@ function switchTab(tabName) {
         t.classList.toggle('active', t.dataset.tab === tabName);
     });
 
-    // Update tab content
-    document.querySelectorAll('.tab-content').forEach((content) => {
-        content.classList.toggle('active', content.id === `${tabName}-tab`);
+    // Show/hide sections based on their data-tab attribute
+    // Panel system controls base visibility (permissions), we just add tab filtering
+    document.querySelectorAll('section[data-tab]').forEach((section) => {
+        const belongsToTab = section.dataset.tab === tabName;
+        // Only show if: (1) belongs to active tab, AND (2) panel system hasn't hidden it
+        if (belongsToTab) {
+            // Remove tab-based hiding - panel system controls final visibility
+            section.classList.remove('tab-hidden');
+        } else {
+            // Hide because it belongs to a different tab
+            section.classList.add('tab-hidden');
+        }
     });
 
     // Handle tab-specific initialization
