@@ -19,6 +19,11 @@ type ContainerInfo struct {
 	Ports         []PortBinding     `json:"ports"`
 	NetworkMode   string            `json:"network_mode"` // "bridge", "host", "none", etc.
 	Labels        map[string]string `json:"labels"`
+	// Resource usage stats (populated for running containers)
+	CPUPercent    float64 `json:"cpu_percent,omitempty"`    // CPU usage percentage
+	MemoryBytes   uint64  `json:"memory_bytes,omitempty"`   // Current memory usage in bytes
+	MemoryPercent float64 `json:"memory_percent,omitempty"` // Memory usage percentage
+	DiskBytes     uint64  `json:"disk_bytes,omitempty"`     // Disk space used by container
 }
 
 // PortBinding represents a container port binding to the host.

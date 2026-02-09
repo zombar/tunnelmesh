@@ -67,15 +67,20 @@ function renderDockerContainers() {
     tbody.innerHTML = dockerContainers.map(container => {
         const statusBadge = getDockerStatusBadge(container.state);
         const uptime = formatDockerUptime(container.uptime_seconds);
+        const cpu = formatDockerPercent(container.cpu_percent);
+        const memory = formatDockerMemory(container.memory_bytes, container.memory_percent);
+        const disk = formatDockerDisk(container.disk_bytes);
         const ports = formatDockerPorts(container.ports);
         const actions = renderDockerActions(container);
 
         return `
             <tr>
                 <td><strong>${escapeHtml(container.name)}</strong></td>
-                <td><code>${escapeHtml(container.image)}</code></td>
                 <td>${statusBadge}</td>
                 <td>${uptime}</td>
+                <td>${cpu}</td>
+                <td>${memory}</td>
+                <td>${disk}</td>
                 <td>${ports}</td>
                 <td><code>${escapeHtml(container.network_mode)}</code></td>
                 <td>${actions}</td>
@@ -99,7 +104,7 @@ function getDockerStatusBadge(state) {
 // Format uptime in human-readable format
 function formatDockerUptime(seconds) {
     if (!seconds || seconds === 0) {
-        return '--';
+        return '<span style="color: var(--color-text-secondary);">--</span>';
     }
 
     const days = Math.floor(seconds / 86400);
@@ -112,6 +117,37 @@ function formatDockerUptime(seconds) {
     if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
 
     return parts.join(' ');
+}
+
+// Format CPU percentage
+function formatDockerPercent(percent) {
+    if (percent === undefined || percent === null) {
+        return '<span style="color: var(--color-text-secondary);">--</span>';
+    }
+    return `${percent.toFixed(1)}%`;
+}
+
+// Format memory usage
+function formatDockerMemory(bytes, percent) {
+    if (!bytes || bytes === 0) {
+        return '<span style="color: var(--color-text-secondary);">--</span>';
+    }
+    const mb = (bytes / (1024 * 1024)).toFixed(0);
+    const pct = percent ? ` (${percent.toFixed(0)}%)` : '';
+    return `${mb} MB${pct}`;
+}
+
+// Format disk usage
+function formatDockerDisk(bytes) {
+    if (!bytes || bytes === 0) {
+        return '<span style="color: var(--color-text-secondary);">--</span>';
+    }
+    const gb = (bytes / (1024 * 1024 * 1024));
+    if (gb >= 1) {
+        return `${gb.toFixed(1)} GB`;
+    }
+    const mb = (bytes / (1024 * 1024)).toFixed(0);
+    return `${mb} MB`;
 }
 
 // Format container ports for display

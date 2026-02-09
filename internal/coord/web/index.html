@@ -532,7 +532,7 @@
             </div>
         </section>
 
-        <section id="docker-section" style="display: none;">
+        <section id="docker-section" class="panel" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Docker Containers</h2>
                 <button id="refresh-docker-btn" class="btn-primary" onclick="event.stopPropagation(); refreshDockerContainers();" title="Refresh containers">⟳ Refresh</button>
@@ -542,9 +542,11 @@
                     <thead>
                         <tr>
                             <th>Name</th>
-                            <th>Image</th>
                             <th>Status</th>
                             <th>Uptime</th>
+                            <th>CPU</th>
+                            <th>Memory</th>
+                            <th>Disk</th>
                             <th>Ports</th>
                             <th>Network</th>
                             <th>Actions</th>
