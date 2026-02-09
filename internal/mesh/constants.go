@@ -6,8 +6,8 @@ const (
 	DomainSuffix = ".tunnelmesh" // Canonical domain suffix
 	// AliasTM is a short alias for .tunnelmesh domain.
 
-	AliasTM      = ".tm"         // Short alias
-	AliasMesh    = ".mesh"       // Alternative alias
+	AliasTM   = ".tm"   // Short alias
+	AliasMesh = ".mesh" // Alternative alias
 
 	// Network configuration
 	CIDR = "172.30.0.0/16" // Mesh network CIDR - all peers get IPs from this range

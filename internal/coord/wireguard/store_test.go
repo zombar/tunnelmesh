@@ -272,13 +272,14 @@ func __import_fmt() interface {
 } {
 	return __fmtImport{}
 }
+
 // nolint:revive // Underscore names used to prevent unused import errors in generated test
 
 type __fmtImport struct{}
 
 func (__fmtImport) Sscanf(s, format string, a ...interface{}) (int, error) {
 	return scanfImpl(s, format, a...)
-// nolint:revive // format required by type interface but not used
+	// nolint:revive // format required by type interface but not used
 }
 
 func scanfImpl(s, format string, a ...interface{}) (int, error) {

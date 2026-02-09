@@ -14,7 +14,7 @@ import (
 )
 
 var (
-// ErrClientNotFound is returned when a WireGuard client cannot be found.
+	// ErrClientNotFound is returned when a WireGuard client cannot be found.
 
 	ErrClientNotFound = errors.New("client not found")
 	ErrIPExhausted    = errors.New("no available IPs in WireGuard client range")

@@ -277,6 +277,7 @@ func (f *S3Filesystem) MkdirAll(path string, perm os.FileMode) error {
 func (f *S3Filesystem) Symlink(target, link string) error {
 	return errors.New("symlinks not supported")
 }
+
 // nolint:revive // link required by billy.Filesystem interface
 
 // Readlink reads a symbolic link (not supported for S3).

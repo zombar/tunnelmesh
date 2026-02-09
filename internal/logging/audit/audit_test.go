@@ -475,7 +475,7 @@ func TestLogRoleBinding(t *testing.T) {
 	}
 }
 
-	// nolint:revive // t required by test helper signature but not used
+// nolint:revive // t required by test helper signature but not used
 func TestNilLogger(t *testing.T) {
 	// Test that calling methods on a logger with noop logger doesn't panic
 	logger := zerolog.Nop()

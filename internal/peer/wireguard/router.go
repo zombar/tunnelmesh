@@ -8,7 +8,7 @@ import (
 )
 
 var (
-// ErrPacketTooShort is returned when an IP packet is too small to parse.
+	// ErrPacketTooShort is returned when an IP packet is too small to parse.
 
 	ErrPacketTooShort = errors.New("packet too short")
 	ErrNotIPv4        = errors.New("not an IPv4 packet")
@@ -119,8 +119,8 @@ func (r *Router) IsWGClientIP(ipStr string) bool {
 
 // RouteDecision represents where a packet should be routed.
 type RouteDecision int
-	// RouteToMesh forwards packet to mesh via tunnel/relay.
 
+// RouteToMesh forwards packet to mesh via tunnel/relay.
 
 const (
 	RouteToMesh     RouteDecision = iota // Forward to mesh via tunnel/relay

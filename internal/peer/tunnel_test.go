@@ -19,7 +19,7 @@ func newMockTunnel() *mockTunnel {
 	return &mockTunnel{}
 }
 
-	// nolint:revive // p required by io.Reader interface but not used in mock
+// nolint:revive // p required by io.Reader interface but not used in mock
 func (m *mockTunnel) Read(p []byte) (n int, err error) {
 	return 0, io.EOF
 }

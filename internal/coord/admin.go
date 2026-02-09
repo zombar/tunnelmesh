@@ -108,6 +108,7 @@ type AdminPeerInfo struct {
 //   - history=N: include last N stats data points per peer (default: 0)
 //   - since=<RFC3339>: include stats data points since this timestamp
 //   - maxPoints=N: downsample history to at most N points (for chart display)
+//
 // nolint:gocyclo // Admin overview aggregates data from multiple sources
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

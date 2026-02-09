@@ -158,6 +158,7 @@ func runShareDelete(cmd *cobra.Command, args []string) error {
 	fmt.Printf("File share '%s' deleted\n", name)
 	return nil
 }
+
 // nolint:revive // cmd required by cobra.Command RunE signature
 
 func runShareInfo(cmd *cobra.Command, args []string) error {

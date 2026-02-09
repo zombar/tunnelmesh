@@ -405,7 +405,7 @@ func runServeFromService(ctx context.Context, configPath string) error {
 	}()
 
 	// If JoinMesh is configured, join the mesh as a client
-// nolint:dupl // Mesh join logic is duplicated for serve and standalone modes
+	// nolint:dupl // Mesh join logic is duplicated for serve and standalone modes
 	if cfg.JoinMesh != nil {
 		cfg.JoinMesh.Server = "http://127.0.0.1" + cfg.Listen
 		cfg.JoinMesh.AuthToken = cfg.AuthToken
@@ -615,7 +615,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}()
 
 	// If JoinMesh is configured, join the mesh as a client
-// nolint:dupl // Companion join logic for different mode  
+	// nolint:dupl // Companion join logic for different mode
 	if cfg.JoinMesh != nil {
 		// Set server URL to localhost and copy auth token
 		cfg.JoinMesh.Server = "http://127.0.0.1" + cfg.Listen
