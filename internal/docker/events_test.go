@@ -163,8 +163,9 @@ func TestEventDebounce(t *testing.T) {
 		watcher.handleEvent(event)
 	}
 
-	// Wait for debounce window
-	time.Sleep(100 * time.Millisecond)
+	// Wait for debounce window + processing time
+	// Use longer timeout for slower CI systems (Windows/Ubuntu)
+	time.Sleep(200 * time.Millisecond)
 
 	// Should only have received 1 event due to debouncing
 	mu.Lock()
