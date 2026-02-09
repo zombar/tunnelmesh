@@ -111,6 +111,7 @@ type PeerConfig struct {
 	AllowExitTraffic  bool                `yaml:"allow_exit_traffic"` // Allow this peer to act as exit peer for other peers
 	Filter            FilterConfig        `yaml:"filter"`             // Local packet filter rules
 	Loki              LokiConfig          `yaml:"loki"`               // Loki log shipping configuration
+	Docker            DockerConfig        `yaml:"docker"`             // Docker container orchestration
 }
 
 // TUNConfig holds configuration for the TUN interface.
@@ -140,6 +141,12 @@ type LokiConfig struct {
 	URL           string `yaml:"url"`            // Loki push URL (e.g., "http://172.30.0.1:3100")
 	BatchSize     int    `yaml:"batch_size"`     // Max entries before flush (default: 100)
 	FlushInterval string `yaml:"flush_interval"` // Flush interval (default: "5s")
+}
+
+// DockerConfig holds configuration for Docker container orchestration.
+type DockerConfig struct {
+	Socket          string `yaml:"socket"`            // Docker socket path (default: unix:///var/run/docker.sock)
+	AutoPortForward *bool  `yaml:"auto_port_forward"` // Auto-create filter rules for container ports (default: true if nil)
 }
 
 // FilterRule represents a single packet filter rule for config files.
@@ -411,6 +418,12 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 			}
 		}
 	}
+
+	// Docker defaults
+	if cfg.Docker.Socket == "" {
+		cfg.Docker.Socket = "unix:///var/run/docker.sock"
+	}
+	// AutoPortForward defaults to true (opt-out model) if not explicitly set
 
 	return cfg, nil
 }

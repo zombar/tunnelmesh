@@ -310,6 +310,17 @@ func (s *Server) setupAdminRoutes() {
 	// S3 proxy for explorer
 	s.adminMux.HandleFunc("/api/s3/", s.handleS3Proxy)
 
+	// Docker orchestration API (when coordinator has Docker enabled via join_mesh)
+	s.adminMux.HandleFunc("/api/docker/containers", s.handleDockerContainers)
+	s.adminMux.HandleFunc("/api/docker/containers/", func(w http.ResponseWriter, r *http.Request) {
+		// Route to inspect or control based on path suffix
+		if strings.HasSuffix(r.URL.Path, "/control") {
+			s.handleDockerControl(w, r)
+		} else {
+			s.handleDockerContainerInspect(w, r)
+		}
+	})
+
 	// Panel management API
 	s.adminMux.HandleFunc("/api/panels", s.handlePanels)
 	s.adminMux.HandleFunc("/api/panels/", s.handlePanelByID)

@@ -120,14 +120,14 @@ Access control via existing RBAC system:
 
 **Default groups**:
 - `everyone`: visualizer, map, charts, s3, shares
-- `all_admin_users`: peers, logs, wireguard, filter, dns, users, groups, bindings
+- `all_admin_users`: peers, logs, wireguard, filter, dns, users, groups, bindings, docker
 
 ### Built-in Panel IDs
 
 | Tab  | Panels                                                |
 |------|-------------------------------------------------------|
 | mesh | visualizer, map, charts, peers, logs, wireguard, filter, dns |
-| data | s3, shares, users, groups, bindings                   |
+| data | s3, shares, users, groups, bindings, docker           |
 
 ### CSS Design Tokens
 
@@ -173,6 +173,111 @@ window.parent.postMessage({
     user: { id: '...', isAdmin: false }
 }
 ```
+
+## Docker Orchestration
+
+TunnelMesh coordinators automatically detect and integrate with Docker when the Docker socket is available. No explicit configuration required.
+
+### Configuration
+
+Docker integration is **automatically enabled** when:
+- The coordinator joins the mesh (`join_mesh` configured)
+- Docker socket exists at `/var/run/docker.sock` (default)
+
+**Optional configuration:**
+
+```yaml
+# server.yaml - only if you need non-default settings
+join_mesh:
+  name: coordinator
+  server: localhost:8080
+  auth_token: your-token
+  docker:
+    socket: "unix:///var/run/docker.sock"  # Custom socket path
+    auto_port_forward: false                # Disable automatic port forwarding
+```
+
+**Security Note**: Docker socket access grants root-equivalent privileges. Use with caution. Consider Docker rootless mode for enhanced security.
+
+### Automatic Port Forwarding
+
+When a container starts with published ports on a bridge network:
+1. TunnelMesh creates temporary filter rules allowing access to those ports
+2. Rules expire after 24 hours (container lifetime-based)
+3. Rules are shown as "Temporary" in the filter panel
+4. Host network containers are skipped (already have direct access)
+5. **Event-driven**: Automatically detects containers started via any method (docker run, docker-compose, restart policies)
+
+**Example:**
+```bash
+# Container with published port
+docker run -d -p 8080:80 nginx
+
+# TunnelMesh automatically creates:
+# Port: 8080, Protocol: TCP, Action: Allow, Expires: <24h from now>
+# This happens automatically via Docker events API - no manual refresh needed
+```
+
+### Docker Panel
+
+The Docker panel (data tab) displays:
+- **Container list**: Name, image, status, uptime, ports, network mode
+- **Status badges**: Running (green), exited (red), other states
+- **Control actions**: Start, stop, restart buttons (admin-only)
+- **Port mappings**: Shows published host:container ports
+
+**Panel visibility:**
+- Hidden if Docker socket not found
+- Admin-only by default
+- Grantable via: `role=panel-viewer, panel_scope=docker`
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/docker/containers` | List all containers (query: `?status=running`) |
+| GET | `/api/docker/containers/{id}` | Inspect specific container |
+| POST | `/api/docker/containers/{id}/control` | Control container (`action: start\|stop\|restart`) |
+
+**Control request:**
+```json
+POST /api/docker/containers/abc123/control
+{
+  "action": "restart"
+}
+```
+
+### Prometheus Metrics
+
+Docker container metrics are automatically exposed for Prometheus scraping:
+
+```
+docker_container_cpu_percent{peer, container_id, container_name, image}
+docker_container_memory_bytes{peer, container_id, container_name, image}
+docker_container_memory_percent{peer, container_id, container_name, image}
+docker_container_disk_bytes{peer, container_id, container_name, image}
+docker_container_status{peer, container_id, container_name, image}  # 1=running, 0=stopped
+docker_container_info{peer, container_id, container_name, image, status, network_mode}
+```
+
+### Implementation Details
+
+**Files:**
+- `internal/docker/` - Docker manager, events watcher, port forwarding, metrics
+- `internal/coord/docker.go` - Coordinator API handlers
+- `internal/coord/web/js/docker.js` - Frontend panel implementation
+
+**Architecture:**
+- Each coordinator/peer monitors its own local Docker daemon (no cross-peer aggregation)
+- Event watcher streams Docker events API in real-time
+- Automatically syncs port forwards on container start events (bridge networks only)
+- Debounces rapid events (100ms window) to prevent duplicate processing
+- Filter rules expire naturally via TTL mechanism (24h)
+
+**Testing:**
+- 20+ unit tests with mock Docker client
+- TDD approach: tests written before implementation
+- 100% coverage on core Docker manager functionality
 
 ## Skills
 

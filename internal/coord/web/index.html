@@ -532,6 +532,32 @@
             </div>
         </section>
 
+        <section id="docker-section" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Docker Containers</h2>
+                <button id="refresh-docker-btn" class="btn-primary" onclick="event.stopPropagation(); refreshDockerContainers();" title="Refresh containers">⟳ Refresh</button>
+            </div>
+            <div class="collapsible-content">
+                <table id="docker-containers">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Image</th>
+                            <th>Status</th>
+                            <th>Uptime</th>
+                            <th>Ports</th>
+                            <th>Network</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="docker-containers-body"></tbody>
+                </table>
+                <div id="no-docker-containers" class="empty-state" style="display: none;">
+                    No Docker containers found.
+                </div>
+            </div>
+        </section>
+
     </main>
     </div><!-- End Data Tab -->
 
@@ -710,6 +736,7 @@
         </a>
     </footer>
 
+    <script src="js/docker.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

@@ -22,6 +22,7 @@ const (
 	PanelPeerMgmt   = "peer-mgmt"
 	PanelGroups     = "groups"
 	PanelBindings   = "bindings"
+	PanelDocker     = "docker"
 )
 
 // Panel tabs
@@ -90,6 +91,7 @@ func (r *PanelRegistry) registerBuiltinPanels() {
 		{ID: PanelPeerMgmt, Name: "Peers", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 30, Builtin: true},
 		{ID: PanelGroups, Name: "Groups", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 40, Builtin: true},
 		{ID: PanelBindings, Name: "Role Bindings", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 50, Builtin: true},
+		{ID: PanelDocker, Name: "Docker Containers", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 60, Builtin: true},
 	}
 
 	for _, p := range builtins {
@@ -317,7 +319,7 @@ func BuiltinPanelIDs() []string {
 	return []string{
 		PanelVisualizer, PanelMap, PanelCharts, PanelPeers,
 		PanelLogs, PanelWireGuard, PanelFilter, PanelDNS,
-		PanelS3, PanelShares, PanelPeerMgmt, PanelGroups, PanelBindings,
+		PanelS3, PanelShares, PanelPeerMgmt, PanelGroups, PanelBindings, PanelDocker,
 	}
 }
 
@@ -332,6 +334,6 @@ func DefaultPeerPanels() []string {
 func DefaultAdminPanels() []string {
 	return []string{
 		PanelPeers, PanelLogs, PanelWireGuard, PanelFilter, PanelDNS,
-		PanelPeerMgmt, PanelGroups, PanelBindings,
+		PanelPeerMgmt, PanelGroups, PanelBindings, PanelDocker,
 	}
 }

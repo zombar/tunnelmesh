@@ -31,6 +31,7 @@ import (
 	meshctx "github.com/tunnelmesh/tunnelmesh/internal/context"
 	"github.com/tunnelmesh/tunnelmesh/internal/control"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord"
+	"github.com/tunnelmesh/tunnelmesh/internal/docker"
 	meshdns "github.com/tunnelmesh/tunnelmesh/internal/dns"
 	"github.com/tunnelmesh/tunnelmesh/internal/logging/loki"
 	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
@@ -422,6 +423,17 @@ func runServeFromService(ctx context.Context, configPath string) error {
 
 			// Set coordinator's mesh IP for "this.tunnelmesh" resolution
 			srv.SetCoordMeshIP(meshIP)
+
+			// Initialize Docker manager for coordinator (for API endpoints)
+			if cfg.JoinMesh.Docker.Socket != "" {
+				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, nil)
+				if err := dockerMgr.Start(ctx); err != nil {
+					log.Warn().Err(err).Msg("failed to start coordinator Docker manager")
+				} else {
+					srv.SetDockerManager(dockerMgr)
+					log.Info().Msg("Coordinator Docker manager started")
+				}
+			}
 
 			if cfg.Admin.Enabled && tlsMgr != nil {
 				// Load TLS cert for admin HTTPS
@@ -1092,6 +1104,17 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		log.Warn().Err(err).Msg("failed to start control socket, CLI commands may not work")
 	} else {
 		defer func() { _ = ctrlServer.Stop() }()
+	}
+
+	// Initialize Docker manager for automatic port forwarding
+	if cfg.Docker.Socket != "" {
+		dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, nil)
+		if err := dockerMgr.Start(ctx); err != nil {
+			log.Warn().Err(err).Msg("failed to start Docker manager")
+		} else {
+			defer func() { _ = dockerMgr.Stop() }()
+			log.Info().Msg("Docker manager started")
+		}
 	}
 
 	// Configure exit node settings

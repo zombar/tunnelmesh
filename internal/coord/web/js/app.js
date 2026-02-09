@@ -2127,6 +2127,16 @@ function registerBuiltinPanels() {
             hasActionButton: true,
             sortOrder: 50,
         },
+        {
+            id: 'docker',
+            sectionId: 'docker-section',
+            tab: 'data',
+            title: 'Docker Containers',
+            category: 'admin',
+            hasActionButton: true,
+            sortOrder: 60,
+            onInit: () => loadDockerContainers(),
+        },
     ];
 
     panels.forEach((p) => {

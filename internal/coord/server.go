@@ -26,6 +26,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/nfs"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
+	"github.com/tunnelmesh/tunnelmesh/internal/docker"
 	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/tracing"
@@ -98,6 +99,8 @@ type Server struct {
 	filter            *routing.PacketFilter // Global packet filter
 	filterSavePending atomic.Bool           // Debounce flag for async filter saves
 	filterSaveMu      sync.Mutex            // Protects SaveFilterRules from concurrent calls
+	// Docker orchestration (when coordinator joins mesh)
+	dockerMgr *docker.Manager // Docker manager (nil if Docker not enabled)
 	// Peer name cache for owner display (cached to avoid LoadPeers() on every request)
 	peerNameCache atomic.Pointer[map[string]string] // Peer ID -> name mapping
 }
@@ -1689,6 +1692,13 @@ func (s *Server) SetCoordMeshIP(ip string) {
 func (s *Server) SetMetricsRegistry(registry prometheus.Registerer) {
 	s.coordMetrics = InitCoordMetrics(registry)
 	log.Debug().Msg("coordinator metrics initialized")
+}
+
+// SetDockerManager sets the Docker manager for the coordinator.
+// This is called when the coordinator joins the mesh and has Docker enabled.
+func (s *Server) SetDockerManager(mgr *docker.Manager) {
+	s.dockerMgr = mgr
+	log.Info().Msg("Docker manager initialized on coordinator")
 }
 
 // StartAdminServer starts the admin interface on the specified address.
