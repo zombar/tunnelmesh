@@ -226,6 +226,27 @@
                 </div>
             </div>
         </section>
+
+        <section id="dns-section" style="display: none;">
+            <h2 class="section-toggle" onclick="toggleSection(this)">DNS</h2>
+            <div class="collapsible-content">
+                <table id="dns">
+                    <thead>
+                        <tr>
+                            <th>Hostname</th>
+                            <th>Mesh IP</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dns-body"></tbody>
+                </table>
+                <div id="dns-pagination" class="show-more-container" style="display: none;">
+                    <span id="dns-show-more"><button class="show-more-link" onclick="showMoreDns()">show more (<span id="dns-shown-count">0</span> / <span id="dns-total-count">0</span>)</button></span><span id="dns-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessDns()">show less</button></span>
+                </div>
+                <div id="no-dns" class="empty-state" style="display: none;">
+                    No DNS records yet.
+                </div>
+            </div>
+        </section>
     </main>
     </div><!-- End App Tab -->
 
@@ -544,27 +565,6 @@
                 </div>
                 <div id="bindings-pagination" class="show-more-container" style="display: none;">
                     <span id="bindings-show-more"><button class="show-more-link" onclick="showMoreBindings()">show more (<span id="bindings-shown-count">0</span> / <span id="bindings-total-count">0</span>)</button></span><span id="bindings-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessBindings()">show less</button></span>
-                </div>
-            </div>
-        </section>
-
-        <section id="dns-section" style="display: none;">
-            <h2 class="section-toggle" onclick="toggleSection(this)">DNS</h2>
-            <div class="collapsible-content">
-                <table id="dns">
-                    <thead>
-                        <tr>
-                            <th>Hostname</th>
-                            <th>Mesh IP</th>
-                        </tr>
-                    </thead>
-                    <tbody id="dns-body"></tbody>
-                </table>
-                <div id="dns-pagination" class="show-more-container" style="display: none;">
-                    <span id="dns-show-more"><button class="show-more-link" onclick="showMoreDns()">show more (<span id="dns-shown-count">0</span> / <span id="dns-total-count">0</span>)</button></span><span id="dns-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessDns()">show less</button></span>
-                </div>
-                <div id="no-dns" class="empty-state" style="display: none;">
-                    No DNS records yet.
                 </div>
             </div>
         </section>
