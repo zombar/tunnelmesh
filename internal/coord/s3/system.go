@@ -87,10 +87,10 @@ type FilterRulePersisted struct {
 	SourcePeer string `json:"source_peer"` // Empty = any peer
 }
 
-// FilterRulesData stores both temporary and service rules.
+// FilterRulesData stores temporary filter rules.
+// Service rules are not persisted as they always come from coordinator config.
 type FilterRulesData struct {
 	Temporary []FilterRulePersisted `json:"temporary"`
-	Service   []FilterRulePersisted `json:"service"`
 }
 
 // --- Users ---

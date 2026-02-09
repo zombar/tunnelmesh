@@ -96,6 +96,7 @@ type Server struct {
 	// Packet filter
 	filter            *routing.PacketFilter // Global packet filter
 	filterSavePending atomic.Bool           // Debounce flag for async filter saves
+	filterSaveMu      sync.Mutex            // Protects SaveFilterRules from concurrent calls
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -404,23 +405,34 @@ func (s *Server) recoverFilterRules() error {
 }
 
 // SaveFilterRules persists filter rules to S3 or does nothing if S3 is disabled.
+// Filters out expired rules before saving to prevent storage bloat.
 func (s *Server) SaveFilterRules() error {
 	if s.s3SystemStore == nil {
 		return nil // S3 not enabled, skip
 	}
+
+	// Mutex prevents concurrent saves from racing
+	s.filterSaveMu.Lock()
+	defer s.filterSaveMu.Unlock()
 
 	// Get all current rules
 	allRules := s.filter.ListRules()
 
 	data := s3.FilterRulesData{
 		Temporary: make([]s3.FilterRulePersisted, 0),
-		Service:   make([]s3.FilterRulePersisted, 0), // Always empty - service rules not persisted
 	}
 
-	// Only persist temporary rules (CLI/API added)
+	// Only persist non-expired temporary rules (CLI/API added)
 	// Service rules always come from config and are not persisted
+	// Expired rules are filtered out to prevent storage bloat
+	now := time.Now().Unix()
 	for _, r := range allRules {
 		if r.Source == routing.SourceTemporary {
+			// Skip expired rules
+			if r.Rule.Expires > 0 && r.Rule.Expires <= now {
+				continue
+			}
+
 			persisted := s3.FilterRulePersisted{
 				Port:       r.Rule.Port,
 				Protocol:   routing.ProtocolToString(r.Rule.Protocol),
@@ -456,11 +468,14 @@ func (s *Server) saveFilterRulesAsync() {
 	go func() {
 		// Small delay to coalesce rapid changes
 		time.Sleep(100 * time.Millisecond)
-		s.filterSavePending.Store(false)
 
+		// Save before resetting flag to prevent losing changes
 		if err := s.SaveFilterRules(); err != nil {
 			log.Error().Err(err).Msg("failed to save filter rules")
 		}
+
+		// Reset flag after save completes
+		s.filterSavePending.Store(false)
 	}()
 }
 

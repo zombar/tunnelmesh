@@ -690,6 +690,16 @@ func (s *Server) handleFilterRuleAdd(w http.ResponseWriter, r *http.Request) {
 		s.relay.PushFilterRuleAdd(req.PeerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
 	}
 
+	// Validate TTL bounds
+	if req.TTL < 0 {
+		s.jsonError(w, "ttl cannot be negative", http.StatusBadRequest)
+		return
+	}
+	if req.TTL > 365*24*3600 { // Max 1 year
+		s.jsonError(w, "ttl exceeds maximum (1 year)", http.StatusBadRequest)
+		return
+	}
+
 	// Update coordinator's filter and persist to S3
 	if s.filter != nil {
 		// Calculate expiry if TTL specified
