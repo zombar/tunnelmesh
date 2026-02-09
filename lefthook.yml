@@ -44,7 +44,7 @@ pre-commit:
     lint:
       glob: "*.go"
       exclude: "vendor/**"
-      run: golangci-lint run --new-from-rev=HEAD
+      run: GOFLAGS="-mod=readonly" golangci-lint run --new-from-rev=HEAD
       fail_text: "Fix linting errors before committing"
 
     # JavaScript linting and tests

@@ -22,6 +22,11 @@ listen: ":8443"
 # Generate a secure token: openssl rand -hex 32
 auth_token: "your-secure-token-here"
 
+# Admin peers - peer names that should be granted admin role
+# These peers will be added to the 'admins' group on first registration
+# Example: admin_peers: ["honker", "oldie"]
+# admin_peers: []
+
 # Log level: trace, debug, info, warn, error
 # Use "debug" or "trace" for troubleshooting
 log_level: "info"

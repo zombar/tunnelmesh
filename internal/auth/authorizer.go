@@ -157,7 +157,7 @@ func (a *Authorizer) checkGroupBindings(peerID, verb, resource, bucketName, obje
 }
 
 // IsAdmin checks if a peer has the admin role.
-// Checks both direct bindings and group membership in all_admin_users.
+// Checks both direct bindings and group membership in admins.
 func (a *Authorizer) IsAdmin(peerID string) bool {
 	// Check direct admin binding
 	for _, binding := range a.Bindings.GetForPeer(peerID) {
@@ -168,7 +168,7 @@ func (a *Authorizer) IsAdmin(peerID string) bool {
 
 	// Check group membership if groups are enabled
 	if a.Groups != nil {
-		return a.Groups.IsMember(GroupAllAdminUsers, peerID)
+		return a.Groups.IsMember(GroupAdmins, peerID)
 	}
 
 	return false
@@ -184,9 +184,9 @@ func (a *Authorizer) HasHumanAdmin() bool {
 		}
 	}
 
-	// Check all_admin_users group membership if groups are enabled
+	// Check admins group membership if groups are enabled
 	if a.Groups != nil {
-		group := a.Groups.Get(GroupAllAdminUsers)
+		group := a.Groups.Get(GroupAdmins)
 		if group != nil {
 			for _, member := range group.Members {
 				if !strings.HasPrefix(member, ServicePeerPrefix) {

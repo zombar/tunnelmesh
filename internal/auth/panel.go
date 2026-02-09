@@ -85,7 +85,7 @@ func (r *PanelRegistry) registerBuiltinPanels() {
 		{ID: PanelDNS, Name: "DNS Records", Tab: PanelTabMesh, Category: PanelCategoryNetwork, SortOrder: 80, Builtin: true},
 
 		// Data tab panels
-		{ID: PanelS3, Name: "Object Viewer", Tab: PanelTabData, Category: PanelCategoryStorage, SortOrder: 10, Builtin: true},
+		{ID: PanelS3, Name: "Objects", Tab: PanelTabData, Category: PanelCategoryStorage, SortOrder: 10, Builtin: true},
 		{ID: PanelShares, Name: "Shares", Tab: PanelTabData, Category: PanelCategoryStorage, SortOrder: 20, Builtin: true},
 		{ID: PanelPeerMgmt, Name: "Peers", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 30, Builtin: true},
 		{ID: PanelGroups, Name: "Groups", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 40, Builtin: true},

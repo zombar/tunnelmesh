@@ -76,10 +76,11 @@ module "node" {
   source   = "./modules/tunnelmesh-node"
   for_each = var.peers
 
-  name       = each.key
-  domain     = var.domain
-  auth_token = var.auth_token
-  region     = lookup(each.value, "region", var.default_region)
+  name        = each.key
+  domain      = var.domain
+  auth_token  = var.auth_token
+  admin_peers = var.admin_peers
+  region      = lookup(each.value, "region", var.default_region)
 
   # Feature flags from node config
   coordinator_enabled = lookup(each.value, "coordinator", false)

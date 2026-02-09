@@ -164,7 +164,7 @@ func TestGroupStore_BuiltinGroups(t *testing.T) {
 	assert.True(t, everyone.Builtin)
 	assert.Equal(t, "All registered peers", everyone.Description)
 
-	allAdmin := store.Get(GroupAllAdminUsers)
+	allAdmin := store.Get(GroupAdmins)
 	require.NotNil(t, allAdmin)
 	assert.True(t, allAdmin.Builtin)
 }
@@ -174,13 +174,13 @@ func TestGroupStore_List(t *testing.T) {
 
 	// Should include built-in groups
 	groups := store.List()
-	assert.GreaterOrEqual(t, len(groups), 2) // everyone, all_admin_users
+	assert.GreaterOrEqual(t, len(groups), 2) // everyone, admins
 
 	_, _ = store.Create("developers", "")
 	_, _ = store.Create("testers", "")
 
 	groups = store.List()
-	assert.GreaterOrEqual(t, len(groups), 4) // everyone, all_admin_users, developers, testers
+	assert.GreaterOrEqual(t, len(groups), 4) // everyone, admins, developers, testers
 }
 
 func TestGroupStore_LoadGroups(t *testing.T) {

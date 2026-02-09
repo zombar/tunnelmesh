@@ -22,7 +22,7 @@ func newGroupCmd() *cobra.Command {
 		Long: `Manage TunnelMesh groups.
 
 Groups allow you to assign permissions to multiple peers at once.
-Built-in groups: everyone, all_admin_users
+Built-in groups: everyone, admins
 
 Examples:
   # List all groups

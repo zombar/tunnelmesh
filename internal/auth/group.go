@@ -8,8 +8,8 @@ import (
 
 // Built-in group names.
 const (
-	GroupEveryone      = "everyone"        // All registered peers (peer = user)
-	GroupAllAdminUsers = "all_admin_users" // All peers with admin role
+	GroupEveryone = "everyone" // All registered peers
+	GroupAdmins   = "admins"   // All peers with admin role
 )
 
 // Group errors.
@@ -59,9 +59,9 @@ func NewGroupStore() *GroupStore {
 		CreatedAt:   time.Now().UTC(),
 		Builtin:     true,
 	}
-	store.groups[GroupAllAdminUsers] = &Group{
-		Name:        GroupAllAdminUsers,
-		Description: "All admin peers",
+	store.groups[GroupAdmins] = &Group{
+		Name:        GroupAdmins,
+		Description: "",
 		Members:     []string{},
 		CreatedAt:   time.Now().UTC(),
 		Builtin:     true,
@@ -214,9 +214,9 @@ func (gs *GroupStore) LoadGroups(groups []*Group) {
 		CreatedAt:   time.Now().UTC(),
 		Builtin:     true,
 	}
-	gs.groups[GroupAllAdminUsers] = &Group{
-		Name:        GroupAllAdminUsers,
-		Description: "All admin peers",
+	gs.groups[GroupAdmins] = &Group{
+		Name:        GroupAdmins,
+		Description: "",
 		Members:     []string{},
 		CreatedAt:   time.Now().UTC(),
 		Builtin:     true,

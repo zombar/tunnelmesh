@@ -17,7 +17,7 @@ make docker-test
 
 # Stop
 docker compose down
-```
+```text
 
 ## Building the Image
 
@@ -25,20 +25,20 @@ docker compose down
 
 ```bash
 make docker-build
-```
+```text
 
 ### Manual Build
 
 ```bash
 docker build -t tunnelmesh:latest -f docker/Dockerfile .
-```
+```text
 
 ## Docker Compose Stack
 
 The included `docker-compose.yml` sets up a complete mesh environment:
 
 | Service | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `server` | Coordination server with admin UI |
 | `client` | Mesh peer (5 replicas by default) |
 | `prometheus` | Metrics collection |
@@ -60,7 +60,7 @@ docker compose up -d server client
 
 # Scale clients
 docker compose up -d --scale client=10
-```
+```text
 
 ### Viewing Logs
 
@@ -73,16 +73,16 @@ docker compose logs -f server
 
 # Last 100 lines
 docker compose logs --tail=100 server
-```
+```text
 
 ### Accessing Services
 
 | Service | URL | Notes |
-|---------|-----|-------|
-| Coordination API | http://localhost:8081 | Peers connect here |
-| Admin Dashboard | https://server-peer.tunnelmesh/ | Mesh-only (requires joining the mesh) |
-| Grafana | https://server-peer.tunnelmesh/grafana/ | Metrics dashboards (mesh-only) |
-| Prometheus | https://server-peer.tunnelmesh/prometheus/ | Raw metrics (mesh-only) |
+| --------- | ----- | ------- |
+| Coordination API | <http://localhost:8081> | Peers connect here |
+| Admin Dashboard | <https://server-peer.tunnelmesh/> | Mesh-only (requires joining the mesh) |
+| Grafana | <https://server-peer.tunnelmesh/grafana/> | Metrics dashboards (mesh-only) |
+| Prometheus | <https://server-peer.tunnelmesh/prometheus/> | Raw metrics (mesh-only) |
 
 **Note:** The admin panel and monitoring tools are only accessible from within the mesh network for security.
 
@@ -95,7 +95,7 @@ cap_add:
   - NET_ADMIN
 devices:
   - /dev/net/tun:/dev/net/tun
-```
+```text
 
 ### Minimal Container Configuration
 
@@ -110,7 +110,7 @@ services:
     volumes:
       - ./config.yaml:/etc/tunnelmesh/config.yaml:ro
     command: ["join", "--config", "/etc/tunnelmesh/config.yaml"]
-```
+```text
 
 ## Configuration
 
@@ -126,7 +126,7 @@ listen: ":8080"
 auth_token: "your-secure-token"
 admin:
   enabled: true
-```
+```text
 
 ### Peer Configuration
 
@@ -136,7 +136,7 @@ Create `docker/config/peer.yaml`:
 name: "peer-1"
 server: "http://server:8080"
 auth_token: "your-secure-token"
-```
+```text
 
 ## Network Modes
 
@@ -151,7 +151,7 @@ networks:
     ipam:
       config:
         - subnet: 172.28.0.0/24
-```
+```text
 
 ### Host Network
 
@@ -162,7 +162,7 @@ services:
   tunnelmesh:
     network_mode: host
     # Note: No port mapping needed with host network
-```
+```text
 
 ### Shared Network Namespace
 
@@ -172,7 +172,7 @@ Monitoring services share the server's network to access mesh IPs:
 services:
   prometheus:
     network_mode: "service:server"
-```
+```text
 
 ## Volumes
 
@@ -185,7 +185,7 @@ volumes:
   grafana-data:        # Grafana configuration
   loki-data:           # Log storage
   benchmark-results:   # Benchmark JSON output
-```
+```text
 
 ### Accessing Benchmark Results
 
@@ -197,8 +197,8 @@ docker compose exec server ls -la /results/
 docker cp tunnelmesh-server:/results ./benchmark-results/
 
 # View latest result
-docker compose exec server cat /results/benchmark_*.json | jq . | tail -50
-```
+ docker compose exec server cat /results/benchmark_*.json | jq . | tail -50 
+```text
 
 ## Health Checks
 
@@ -211,13 +211,13 @@ healthcheck:
   timeout: 3s
   retries: 5
   start_period: 3s
-```
+```text
 
 Check service health:
 
 ```bash
 docker compose ps
-```
+```text
 
 ## Running Tests
 
@@ -229,7 +229,7 @@ make docker-test
 
 # Manual ping test
 docker compose exec server ping -c 3 client-1.tunnelmesh
-```
+```text
 
 ### Benchmark Tests
 
@@ -239,36 +239,36 @@ docker compose exec server tunnelmesh benchmark client-1 --size 50MB
 
 # View automated benchmark results
 docker compose logs benchmarker
-```
+```text
 
 ## Troubleshooting
 
 ### TUN Device Issues
 
-```
+```text
 Error: cannot create TUN device
-```
+```text
 
 Ensure the container has proper privileges:
 
 ```bash
 # Check capabilities
-docker inspect tunnelmesh-server | jq '.[0].HostConfig.CapAdd'
+ docker inspect tunnelmesh-server | jq '.[0].HostConfig.CapAdd' 
 
 # Should include: ["NET_ADMIN"]
-```
+```text
 
 ### DNS Resolution
 
-```
+```text
 Error: cannot resolve peer
-```
+```text
 
 Check mesh DNS is working:
 
 ```bash
 docker compose exec server dig peer-1.tunnelmesh @localhost
-```
+```text
 
 ### Container Networking
 
@@ -281,7 +281,7 @@ docker compose exec server ip route
 
 # Check mesh connectivity
 docker compose exec server tunnelmesh status
-```
+```text
 
 ### Logs
 
@@ -290,8 +290,8 @@ docker compose exec server tunnelmesh status
 docker compose exec server tunnelmesh serve --log-level debug
 
 # View peer discovery
-docker compose logs server 2>&1 | grep -i peer
-```
+ docker compose logs server 2>&1 | grep -i peer 
+```text
 
 ## Production Considerations
 
@@ -308,7 +308,7 @@ services:
         reservations:
           cpus: '0.5'
           memory: 256M
-```
+```text
 
 ### Restart Policy
 
@@ -316,7 +316,7 @@ services:
 services:
   server:
     restart: unless-stopped
-```
+```text
 
 ### Logging
 
@@ -328,7 +328,7 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-```
+```text
 
 ### Security
 
@@ -360,4 +360,4 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-```
+```text

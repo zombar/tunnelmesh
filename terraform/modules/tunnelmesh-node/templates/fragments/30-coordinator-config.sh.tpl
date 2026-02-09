@@ -3,6 +3,9 @@
 cat > /etc/tunnelmesh/server.yaml <<'SERVERCONF'
 listen: ":${coordinator_port}"
 auth_token: "${auth_token}"
+%{ if length(admin_peers) > 0 ~}
+admin_peers: [${join(", ", [for p in admin_peers : "\"${p}\""])}]
+%{ endif ~}
 
 admin:
   enabled: true

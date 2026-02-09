@@ -19,6 +19,12 @@ variable "auth_token" {
   sensitive   = true
 }
 
+variable "admin_peers" {
+  description = "List of peer names that should be granted admin role"
+  type        = list(string)
+  default     = []
+}
+
 variable "region" {
   description = "DigitalOcean region"
   type        = string

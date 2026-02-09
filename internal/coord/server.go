@@ -886,16 +886,16 @@ func (s *Server) recoverCoordinatorState(cfg *config.ServerConfig, systemStore *
 }
 
 // ensureBuiltinGroupBindings sets up the built-in group bindings if not already present.
-// - all_admin_users group gets admin role (unscoped)
+// - admins group gets admin role (unscoped)
 // - everyone group gets panel-viewer for default peer panels
-// - all_admin_users group gets panel-viewer for admin-only panels
+// - admins group gets panel-viewer for admin-only panels
 func (s *Server) ensureBuiltinGroupBindings() {
 	modified := false
 
-	adminBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllAdminUsers)
+	adminBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAdmins)
 	if len(adminBindings) == 0 {
 		s.s3Authorizer.GroupBindings.Add(auth.NewGroupBinding(
-			auth.GroupAllAdminUsers,
+			auth.GroupAdmins,
 			auth.RoleAdmin,
 			"", // Unscoped - admin has access to all buckets
 		))
@@ -921,7 +921,7 @@ func (s *Server) ensureBuiltinGroupBindings() {
 		}
 	}
 
-	// Add admin-only panel bindings for all_admin_users group
+	// Add admin-only panel bindings for admins group
 	adminPanels := make(map[string]bool)
 	for _, b := range adminBindings {
 		if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
@@ -929,7 +929,7 @@ func (s *Server) ensureBuiltinGroupBindings() {
 		}
 	}
 	// Re-fetch admin bindings since we may have added admin role binding above
-	adminBindings = s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllAdminUsers)
+	adminBindings = s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAdmins)
 	for _, b := range adminBindings {
 		if b.RoleName == auth.RolePanelViewer && b.PanelScope != "" {
 			adminPanels[b.PanelScope] = true
@@ -938,11 +938,11 @@ func (s *Server) ensureBuiltinGroupBindings() {
 	for _, panelID := range auth.DefaultAdminPanels() {
 		if !adminPanels[panelID] {
 			s.s3Authorizer.GroupBindings.Add(auth.NewGroupBindingForPanel(
-				auth.GroupAllAdminUsers,
+				auth.GroupAdmins,
 				panelID,
 			))
 			modified = true
-			log.Info().Str("group", auth.GroupAllAdminUsers).Str("panel", panelID).Msg("added default panel binding")
+			log.Info().Str("group", auth.GroupAdmins).Str("panel", panelID).Msg("added default panel binding")
 		}
 	}
 
@@ -1294,15 +1294,19 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if peerID != "" && s.s3Authorizer != nil && s.s3Authorizer.Groups != nil {
 		isNewPeer := !s.s3Authorizer.Groups.IsMember(auth.GroupEveryone, peerID)
 		if isNewPeer {
-			// Check if this is the first peer (no one in admin group yet)
-			adminGroup := s.s3Authorizer.Groups.Get(auth.GroupAllAdminUsers)
-			if adminGroup != nil && len(adminGroup.Members) == 0 {
-				isFirstPeer = true
-				// First peer becomes admin
-				if err := s.s3Authorizer.Groups.AddMember(auth.GroupAllAdminUsers, peerID); err != nil {
-					log.Warn().Err(err).Str("peer_id", peerID).Msg("failed to add first peer to admin group")
+			// Check if this peer should be added to admins group (via admin_peers config)
+			isAdminPeer := false
+			for _, adminPeerName := range s.cfg.AdminPeers {
+				if adminPeerName == req.Name {
+					isAdminPeer = true
+					break
+				}
+			}
+			if isAdminPeer {
+				if err := s.s3Authorizer.Groups.AddMember(auth.GroupAdmins, peerID); err != nil {
+					log.Warn().Err(err).Str("peer_id", peerID).Str("peer", req.Name).Msg("failed to add peer to admins group")
 				} else {
-					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Msg("first peer - granted admin role")
+					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Msg("peer added to admins group via admin_peers config")
 					if s.s3SystemStore != nil {
 						if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
 							log.Warn().Err(err).Msg("failed to persist groups after admin assignment")

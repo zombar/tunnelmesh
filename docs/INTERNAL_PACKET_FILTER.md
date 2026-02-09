@@ -1,6 +1,8 @@
 # Internal Packet Filter
 
-TunnelMesh includes a built-in internal packet filter that controls which ports are accessible on each peer within the mesh network. The filter operates at the IP packet level, inspecting TCP and UDP traffic before it reaches local services.
+TunnelMesh includes a built-in internal packet filter that controls which ports are accessible on each peer within the
+mesh network. The filter operates at the IP packet level, inspecting TCP and UDP traffic before it reaches local
+services.
 
 ## Overview
 
@@ -14,7 +16,7 @@ TunnelMesh includes a built-in internal packet filter that controls which ports 
 
 Rules come from four sources, merged with "most restrictive wins" logic:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │  Coordinator Config (server.yaml)                       │
 │  → Global defaults pushed to ALL peers on connect       │
@@ -39,15 +41,17 @@ Rules come from four sources, merged with "most restrictive wins" logic:
 Conflict Resolution: MOST RESTRICTIVE WINS
   - If any source says "deny", the port is denied
   - "allow" only wins if no source denies
-```
+```text
 
 ## Service Ports
 
-When a peer connects to the coordinator, the coordinator automatically pushes service port rules. These allow access to essential coordinator services:
+When a peer connects to the coordinator, the coordinator automatically pushes service port rules. These allow access to
+essential coordinator services:
 
 - **Admin dashboard port** (typically 443 or 8080)
 
 Service rules:
+
 - Are shown in the admin UI with source "service"
 - Cannot be removed via CLI or admin panel
 - Persist as long as the peer is connected
@@ -78,7 +82,7 @@ filter:
       protocol: tcp
       action: deny
       source_peer: untrusted-peer
-```
+```text
 
 ### Peer Config (peer.yaml)
 
@@ -102,12 +106,12 @@ filter:
       protocol: tcp
       action: deny
       source_peer: dev-workstation
-```
+```text
 
 ### Rule Fields
 
 | Field | Type | Required | Description |
-|-------|------|----------|-------------|
+| ------- | ------ | ---------- | ------------- |
 | `port` | integer | Yes | Port number (1-65535) |
 | `protocol` | string | Yes | `tcp` or `udp` |
 | `action` | string | Yes | `allow` or `deny` |
@@ -128,7 +132,7 @@ tunnelmesh filter list
 #
 # Default policy: deny (allowlist mode - only allowed ports are accessible)
 # Total rules: 3
-```
+```text
 
 ### Add Temporary Rule
 
@@ -144,7 +148,7 @@ tunnelmesh filter add --port 22 --protocol tcp --action deny --source-peer badpe
 
 # Block UDP port from any peer
 tunnelmesh filter add --port 53 --protocol udp --action deny
-```
+```text
 
 ### Remove Temporary Rule
 
@@ -154,9 +158,10 @@ tunnelmesh filter remove --port 22 --protocol tcp
 
 # Remove peer-specific rule
 tunnelmesh filter remove --port 22 --protocol tcp --source-peer badpeer
-```
+```text
 
-**Note**: Only temporary rules (added via CLI or admin panel) can be removed. Rules from config files must be removed by editing the config.
+**Note**: Only temporary rules (added via CLI or admin panel) can be removed. Rules from config files must be removed by
+editing the config.
 
 ## Admin Dashboard
 
@@ -174,6 +179,7 @@ The admin panel provides an "Internal Packet Filter" section for managing rules:
 Rules pushed via admin panel take effect immediately on the target peer(s).
 
 **Important notes:**
+
 - When pushing to "All peers", a confirmation dialog is shown
 - A peer cannot create a rule filtering traffic from itself (self-targeting is prevented)
 - A warning banner appears when temporary rules exist, reminding that they won't persist after peer restart
@@ -192,7 +198,7 @@ filter:
       protocol: tcp
       action: allow
       source_peer: admin-workstation
-```
+```text
 
 ### Block untrusted peer from sensitive ports
 
@@ -207,7 +213,7 @@ filter:
       protocol: tcp
       action: deny
       source_peer: contractor-laptop
-```
+```text
 
 ### Peer-specific rules take precedence
 
@@ -223,7 +229,7 @@ rules:
     protocol: tcp
     action: deny
     source_peer: badpeer    # Deny SSH from badpeer
-```
+```text
 
 Traffic from `badpeer` to port 22 is denied, while all other peers are allowed.
 
@@ -232,7 +238,7 @@ Traffic from `badpeer` to port 22 is denied, while all other peers are allowed.
 ### Prometheus Metrics
 
 | Metric | Labels | Description |
-|--------|--------|-------------|
+| -------- | -------- | ------------- |
 | `tunnelmesh_dropped_filtered_total` | `protocol`, `source_peer` | Counter of packets dropped by filter |
 | `tunnelmesh_filter_rules_total` | `source` | Gauge of rule counts by source |
 | `tunnelmesh_filter_default_deny` | - | 1 if default-deny mode, 0 otherwise |
@@ -245,7 +251,7 @@ rate(tunnelmesh_dropped_filtered_total[5m])
 
 # Top blocked source peers
 topk(5, sum by (source_peer) (rate(tunnelmesh_dropped_filtered_total[5m])))
-```
+```text
 
 ### Alerts
 
@@ -269,11 +275,12 @@ Default alerts in `monitoring/prometheus/alerts.yml`:
     severity: warning
   annotations:
     description: "{{ $value }} different source peers being blocked on {{ $labels.peer }}"
-```
+```text
 
 ## ICMP Handling
 
-ICMP traffic (ping, traceroute) is **always allowed** through the filter for diagnostic purposes. Only TCP and UDP packets are subject to filter rules.
+ICMP traffic (ping, traceroute) is **always allowed** through the filter for diagnostic purposes. Only TCP and UDP
+packets are subject to filter rules.
 
 ## Best Practices
 
@@ -298,13 +305,13 @@ Check if `default_deny` is enabled:
 ```bash
 tunnelmesh filter list
 # Look for "Default policy: deny"
-```
+```text
 
 Add an allow rule:
 
 ```bash
 tunnelmesh filter add --port 8080 --protocol tcp
-```
+```text
 
 ### Rule not taking effect
 
@@ -320,4 +327,4 @@ Enable debug logging to see filter decisions:
 ```bash
 tunnelmesh join --log-level debug
 # Look for "filter" or "dropped" in logs
-```
+```text

@@ -1,6 +1,7 @@
 # TunnelMesh Server Configuration for Docker testing
 listen: ":8080"
 auth_token: "docker-test-token-123"
+admin_peers: ["honker", "oldie"]  # Peers that should be granted admin role
 locations: true  # Enable node location tracking (uses ip-api.com)
 log_level: "info"
 

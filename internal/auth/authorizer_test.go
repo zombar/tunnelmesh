@@ -197,8 +197,8 @@ func TestAuthorizer_IsAdmin_ViaGroup(t *testing.T) {
 	// Alice is not admin initially
 	assert.False(t, auth.IsAdmin("alice"))
 
-	// Add alice to all_admin_users group
-	_ = auth.Groups.AddMember(GroupAllAdminUsers, "alice")
+	// Add alice to admins group
+	_ = auth.Groups.AddMember(GroupAdmins, "alice")
 
 	// Now alice should be considered admin
 	assert.True(t, auth.IsAdmin("alice"))
@@ -229,11 +229,11 @@ func TestAuthorizer_HasHumanAdmin_ViaGroup(t *testing.T) {
 	assert.False(t, auth.HasHumanAdmin())
 
 	// Add service user to admin group - should not count
-	_ = auth.Groups.AddMember(GroupAllAdminUsers, "svc:coordinator")
+	_ = auth.Groups.AddMember(GroupAdmins, "svc:coordinator")
 	assert.False(t, auth.HasHumanAdmin())
 
 	// Add human user to admin group
-	_ = auth.Groups.AddMember(GroupAllAdminUsers, "alice")
+	_ = auth.Groups.AddMember(GroupAdmins, "alice")
 	assert.True(t, auth.HasHumanAdmin())
 }
 

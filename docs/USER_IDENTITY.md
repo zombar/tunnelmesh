@@ -26,7 +26,7 @@ tunnelmesh join --server coord.example.com --token <token> --context work
 
 # View your identity
 tunnelmesh status
-```
+```text
 
 ## Sharing Identity Across Devices
 
@@ -38,14 +38,16 @@ scp ~/.tunnelmesh/id_ed25519* user@new-device:~/.tunnelmesh/
 
 # On the new device, join with a different peer name
 tunnelmesh join --server coord.example.com --token <token> --context work --name laptop-2
-```
+```text
 
 Both devices will have:
+
 - **Same User ID** - same RBAC permissions
 - **Different Peer Names** - separate mesh identities
 - **Different Mesh IPs** - unique network addresses
 
-If you try to join with the same hostname as an existing peer with a different key, the coordinator will auto-suffix your name (e.g., `laptop` becomes `laptop-2`).
+If you try to join with the same hostname as an existing peer with a different key, the coordinator will auto-suffix
+your name (e.g., `laptop` becomes `laptop-2`).
 
 ## RBAC System
 
@@ -54,7 +56,7 @@ TunnelMesh uses Kubernetes-style Role-Based Access Control.
 ### Built-in Groups
 
 | Group | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `everyone` | All registered users - default group for new peers |
 | `all_admin_users` | Admin users with full access |
 | `all_service_users` | Service accounts (internal use) |
@@ -62,7 +64,7 @@ TunnelMesh uses Kubernetes-style Role-Based Access Control.
 ### Built-in Roles
 
 | Role | Description | Permissions |
-|------|-------------|-------------|
+| ------ | ------------- | ------------- |
 | `admin` | Full access | All operations on all resources |
 | `bucket-admin` | Bucket management | Create/delete buckets, full object access |
 | `bucket-write` | Write access | Read buckets, full object CRUD |
@@ -71,7 +73,7 @@ TunnelMesh uses Kubernetes-style Role-Based Access Control.
 
 ### Role Permissions
 
-```
+```text
 admin:
   - *:*                           # All verbs on all resources
 
@@ -89,19 +91,19 @@ bucket-read:
 
 system:
   - *:* (on _tunnelmesh/ only)
-```
+```text
 
 ### View Roles
 
 ```bash
 tunnelmesh role list
-```
+```text
 
 ### Create Custom Role
 
 ```bash
 tunnelmesh role create my-role --verbs get,list --resources buckets,objects
-```
+```text
 
 ### Bind Role to User
 
@@ -111,14 +113,14 @@ tunnelmesh role bind alice admin
 
 # Scoped binding (specific bucket)
 tunnelmesh role bind bob bucket-write --bucket my-bucket
-```
+```text
 
 ### View Bindings
 
 ```bash
 tunnelmesh role bindings
 tunnelmesh role bindings --user alice
-```
+```text
 
 ## Service Users
 
@@ -134,7 +136,7 @@ Service users authenticate to S3 like regular users but have their keypair deriv
 
 ### File Layout
 
-```
+```text
 ~/.tunnelmesh/
   id_ed25519                     # SSH private key (your identity)
   id_ed25519.pub                 # SSH public key
@@ -143,28 +145,29 @@ Service users authenticate to S3 like regular users but have their keypair deriv
       config.yaml                # Peer config
     home/
       config.yaml
-```
+```text
 
 ### Key Derivation
 
-```
+```text
 SSH Key (id_ed25519)
-       |
+ |
        v
 ED25519 Public Key
-       |
+ |
        v
 SHA256(public_key)[:8] as hex
-       |
+ |
        v
 User ID (16 characters)
-```
+```text
 
 S3 credentials are derived from the public key:
-```
+
+```text
 Public Key -> HKDF("s3-access-key") -> Access Key (20 chars)
 Public Key -> HKDF("s3-secret-key") -> Secret Key (40 chars)
-```
+```text
 
 ## Security Considerations
 
@@ -181,7 +184,7 @@ To revoke a user's access to a mesh, an admin can remove them from groups:
 ```bash
 # Via dashboard admin panel, or API
 # Remove user from groups / delete their bindings
-```
+```text
 
 ## CLI Reference
 
@@ -201,4 +204,4 @@ tunnelmesh group list                    # List all groups
 tunnelmesh group members GROUP           # List group members
 tunnelmesh group add-member GROUP USER   # Add user to group
 tunnelmesh group remove-member GROUP USER # Remove user from group
-```
+```text

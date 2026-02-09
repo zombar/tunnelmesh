@@ -276,10 +276,10 @@ func TestAuthorizer_GetAccessiblePanels_ViaGroup(t *testing.T) {
 func TestAuthorizer_GetAccessiblePanels_AdminViaGroup(t *testing.T) {
 	auth := NewAuthorizerWithGroups()
 
-	// Add alice to all_admin_users group
-	_ = auth.Groups.AddMember(GroupAllAdminUsers, "alice")
+	// Add alice to admins group
+	_ = auth.Groups.AddMember(GroupAdmins, "alice")
 
-	// all_admin_users should get all panels via IsAdmin check
+	// admins should get all panels via IsAdmin check
 	panels := auth.GetAccessiblePanels("alice")
 	assert.Len(t, panels, 13) // All panels
 }

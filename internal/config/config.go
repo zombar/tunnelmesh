@@ -79,6 +79,7 @@ type ServerConfig struct {
 	DataDir            string                `yaml:"data_dir"`             // Data directory for persistence (default: /var/lib/tunnelmesh)
 	HeartbeatInterval  string                `yaml:"heartbeat_interval"`   // Heartbeat interval (default: 10s)
 	UserExpirationDays int                   `yaml:"user_expiration_days"` // Days until user expires after last seen (default: 270 = 9 months)
+	AdminPeers         []string              `yaml:"admin_peers"`          // Peer names that should be added to admins group (e.g., ["honker", "oldie"])
 	Locations          bool                  `yaml:"locations"`            // Enable node location tracking (requires external IP geolocation API)
 	LogLevel           string                `yaml:"log_level"`            // trace, debug, info, warn, error (default: info)
 	Admin              AdminConfig           `yaml:"admin"`
