@@ -37,7 +37,9 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.7'
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
 
   security:
     name: Security
