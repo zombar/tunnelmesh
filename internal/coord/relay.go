@@ -3,6 +3,7 @@ package coord
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -478,6 +479,7 @@ func (r *relayManager) GetPendingRequestsFor(peerName string) []string {
 
 // NotifyRelayRequest pushes a relay notification to a peer via their persistent connection.
 // This tells the peer that other peers are waiting for relay connections.
+// nolint:dupl // Forward and reverse relay setup follow similar patterns
 func (r *relayManager) NotifyRelayRequest(peerName string, waitingPeers []string) {
 	if len(waitingPeers) == 0 {
 		return
@@ -524,6 +526,7 @@ func (r *relayManager) NotifyRelayRequest(peerName string, waitingPeers []string
 
 // NotifyHolePunch pushes a hole-punch notification to a peer via their persistent connection.
 // This tells the peer that other peers want to hole-punch with them.
+// nolint:dupl // Companion relay method
 func (r *relayManager) NotifyHolePunch(peerName string, requestingPeers []string) {
 	if len(requestingPeers) == 0 {
 		return
@@ -848,6 +851,7 @@ func (s *Server) handlePersistentRelay(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePersistentRelayMessage processes a message from a persistent relay connection.
+// nolint:gocyclo // Relay message handler processes multiple message types
 func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 	if len(data) < 1 {
 		log.Debug().Str("peer", sourcePeer).Msg("persistent relay message too short")
@@ -1228,7 +1232,7 @@ func (s *Server) relayMessages(src, dst *websocket.Conn) {
 		}
 
 		if err := dst.WriteMessage(messageType, data); err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				log.Debug().Err(err).Msg("relay write error")
 			}
 			return

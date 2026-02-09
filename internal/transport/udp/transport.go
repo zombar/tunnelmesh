@@ -219,7 +219,7 @@ func (t *Transport) Type() transport.TransportType {
 // Implement portmap.Observer interface
 
 // OnPortMapStateChanged is called when the port mapper transitions between states.
-func (t *Transport) OnPortMapStateChanged(pm *portmap.PortMapper, oldState, newState portmap.State) {
+func (t *Transport) OnPortMapStateChanged(_ *portmap.PortMapper, oldState portmap.State, newState portmap.State) {
 	log.Debug().
 		Str("old", oldState.String()).
 		Str("new", newState.String()).
@@ -242,7 +242,7 @@ func (t *Transport) OnMappingAcquired(pm *portmap.PortMapper, mapping *portmap.M
 }
 
 // OnMappingLost is called when a previously active mapping is lost.
-func (t *Transport) OnMappingLost(pm *portmap.PortMapper, reason error) {
+func (t *Transport) OnMappingLost(_ *portmap.PortMapper, reason error) {
 	t.mu.Lock()
 	// Clear the PCP-mapped address, will fall back to STUN discovery
 	t.externalAddr = ""

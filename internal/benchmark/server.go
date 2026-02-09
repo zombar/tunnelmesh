@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -167,7 +168,7 @@ func (s *Server) handleUpload(ctx context.Context, conn net.Conn, size int64) {
 
 		mt, data, err := ReadMessage(conn)
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			log.Error().Err(err).Msg("failed to read message during upload")

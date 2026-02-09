@@ -1,3 +1,5 @@
+// Package connection implements a finite state machine for peer connection management.
+
 package connection
 
 import (
@@ -315,6 +317,8 @@ func (pc *PeerConnection) StartReconnecting(reason string, err error) error {
 	pc.ClearTunnel()
 	return pc.TransitionTo(StateReconnecting, reason, err)
 }
+
+// nolint:revive // ConnectionInfo name kept for clarity despite stuttering
 
 // ConnectionInfo contains snapshot information about a connection.
 type ConnectionInfo struct {

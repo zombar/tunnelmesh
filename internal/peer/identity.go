@@ -8,6 +8,7 @@ import (
 
 // PeerIdentity holds the immutable identity of this peer in the mesh.
 // This information is established at startup and doesn't change during runtime.
+// nolint:revive // PeerIdentity name kept for clarity despite stuttering
 type PeerIdentity struct {
 	Name          string
 	PubKeyEncoded string
@@ -23,8 +24,14 @@ type PeerIdentity struct {
 
 // NewPeerIdentity creates a PeerIdentity from config and registration response.
 func NewPeerIdentity(cfg *config.PeerConfig, pubKeyEncoded string, udpPort int, version string, resp *proto.RegisterResponse) *PeerIdentity {
+	// Use coordinator-assigned name if different from config (handles auto-suffix for duplicates)
+	name := cfg.Name
+	if resp.PeerName != "" && resp.PeerName != cfg.Name {
+		name = resp.PeerName
+	}
+
 	return &PeerIdentity{
-		Name:          cfg.Name,
+		Name:          name,
 		PubKeyEncoded: pubKeyEncoded,
 		SSHPort:       cfg.SSHPort,
 		UDPPort:       udpPort,

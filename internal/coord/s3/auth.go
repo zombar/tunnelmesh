@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"golang.org/x/crypto/hkdf"
 )
@@ -117,18 +118,21 @@ func (a *RBACAuthorizer) AuthorizeRequest(r *http.Request, verb, resource, bucke
 	}
 
 	if accessKey == "" {
+		log.Info().Str("method", r.Method).Str("path", r.URL.Path).Msg("S3 access denied: no credentials")
 		return "", ErrAccessDenied
 	}
 
 	// Lookup user by access key
 	userID, ok := a.credentials.LookupUser(accessKey)
 	if !ok {
+		log.Info().Str("access_key", accessKey[:min(8, len(accessKey))]).Msg("S3 access denied: unknown access key")
 		return "", ErrAccessDenied
 	}
 
 	// Get stored secret key
 	secretKey, ok := a.credentials.GetSecret(userID)
 	if !ok {
+		log.Info().Str("user_id", userID).Msg("S3 access denied: no secret key")
 		return "", ErrAccessDenied
 	}
 
@@ -137,11 +141,13 @@ func (a *RBACAuthorizer) AuthorizeRequest(r *http.Request, verb, resource, bucke
 		if isBasicAuth {
 			// For Basic auth, password is the secret key directly
 			if !hmac.Equal([]byte(secretKey), []byte(secret)) {
+				log.Info().Str("user_id", userID).Msg("S3 access denied: invalid password")
 				return "", ErrAccessDenied
 			}
 		} else {
 			// For AWS-style auth, verify signature
 			if !verifySimpleSignature(accessKey, secretKey, secret) {
+				log.Info().Str("user_id", userID).Msg("S3 access denied: invalid signature")
 				return "", ErrAccessDenied
 			}
 		}
@@ -149,6 +155,7 @@ func (a *RBACAuthorizer) AuthorizeRequest(r *http.Request, verb, resource, bucke
 
 	// Check RBAC permissions
 	if !a.authorizer.Authorize(userID, verb, resource, bucket, objectKey) {
+		log.Info().Str("user_id", userID).Str("verb", verb).Str("resource", resource).Str("bucket", bucket).Str("object", objectKey).Msg("S3 access denied: permission denied")
 		return "", ErrAccessDenied
 	}
 

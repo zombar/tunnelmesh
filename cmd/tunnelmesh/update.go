@@ -43,6 +43,8 @@ Examples:
 	return updateCmd
 }
 
+// nolint:gocyclo // Update logic handles multiple platforms and scenarios
+// nolint:revive // cmd required by cobra.Command RunE signature
 func runUpdate(cmd *cobra.Command, args []string) error {
 	setupLogging()
 
@@ -212,7 +214,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		fmt.Println("FAILED")
 		fmt.Println("Rolling back...")
 		if rbErr := update.RollbackReplace(currentPath, backupPath); rbErr != nil {
-			return fmt.Errorf("update failed and rollback failed: update error: %w, rollback error: %v", err, rbErr)
+			return fmt.Errorf("update failed and rollback failed: update error: %w, rollback error: %w", err, rbErr)
 		}
 		fmt.Println("Rolled back to previous version")
 		return fmt.Errorf("update verification failed: %w", err)

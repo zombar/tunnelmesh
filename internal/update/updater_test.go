@@ -316,7 +316,7 @@ func TestUpdaterDownloadWithProgress(t *testing.T) {
 	}
 
 	var progressCalled bool
-	progressFn := func(downloaded, total int64) {
+	progressFn := func(_ int64, total int64) {
 		progressCalled = true
 		if total != int64(len(binaryContent)) {
 			t.Errorf("total = %d, want %d", total, len(binaryContent))

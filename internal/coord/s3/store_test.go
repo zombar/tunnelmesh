@@ -880,7 +880,11 @@ func TestCDCChunking_BasicSplit(t *testing.T) {
 	}
 
 	// Verify reassembly
-	var reassembled []byte
+	var totalSize int
+	for _, chunk := range chunks {
+		totalSize += len(chunk)
+	}
+	reassembled := make([]byte, 0, totalSize)
 	for _, chunk := range chunks {
 		reassembled = append(reassembled, chunk...)
 	}

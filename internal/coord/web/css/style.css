@@ -26,6 +26,20 @@
     /* Card hover state (matches network topology nodes) */
     --color-card-hover-bg: #2d333b;
     --color-card-hover-border: #58a6ff;
+
+    /* Design tokens - unified styling */
+    --panel-border-radius: 0px;
+    --btn-border-radius: 0px;
+    --modal-border-radius: 0px;
+    --input-border-radius: 0px;
+
+    /* Visualizer colors - for canvas/D3 use */
+    --viz-node-online: #3fb950;
+    --viz-node-offline: #f85149;
+    --viz-node-coordinator: #58a6ff;
+    --viz-edge-online: rgba(88, 166, 255, 0.4);
+    --viz-edge-offline: rgba(248, 81, 73, 0.3);
+    --viz-label-text: #e6edf3;
 }
 
 * {
@@ -43,6 +57,83 @@ body {
     display: flex;
     flex-direction: column;
     font-size: 14px;
+}
+
+/* =========================================================================
+   Unified Panel System
+   ========================================================================= */
+
+.panel {
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--panel-border-radius);
+    margin-bottom: 1.5rem;
+}
+
+.panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border-primary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.panel-header h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    margin: 0;
+    flex: 0 1 auto;
+}
+
+/* Collapse indicator arrow */
+.panel-header::after {
+    content: '';
+    flex-shrink: 0;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid var(--color-text-secondary);
+    transition: transform 0.2s ease;
+    margin-left: auto;
+    margin-right: 0.5rem;
+}
+
+.panel-header.collapsed::after {
+    transform: rotate(-90deg);
+}
+
+.panel-header:hover::after {
+    border-top-color: var(--color-text-primary);
+}
+
+/* Panel header with action buttons - prevent collapse on button click */
+.panel-header .panel-action-btn,
+.panel-header .btn,
+.panel-header button:not(.panel-header) {
+    position: relative;
+    z-index: 1;
+}
+
+.panel-content {
+    overflow: hidden;
+    transition: max-height 0.3s ease-out, opacity 0.2s ease-out;
+    max-height: 2000px;
+    opacity: 1;
+}
+
+.panel-content.collapsed {
+    max-height: 0;
+    opacity: 0;
+}
+
+/* Resizable panel variant */
+.panel.resizable .panel-content {
+    overflow-y: auto;
 }
 
 header {
@@ -463,12 +554,33 @@ main {
     border-bottom: none;
 }
 
-/* Buttons */
-.btn-primary {
+/* =========================================================================
+   Button System - Unified styles using design tokens
+   ========================================================================= */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: var(--btn-border-radius);
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    white-space: nowrap;
+}
+
+.btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.btn-primary, .btn.btn-primary {
     background: var(--color-btn-primary);
     color: #fff;
     border: 1px solid var(--color-btn-primary);
-    border-radius: 6px;
+    border-radius: var(--btn-border-radius);
     padding: 0.5rem 1rem;
     font-size: 0.875rem;
     font-weight: 500;
@@ -488,11 +600,11 @@ main {
     opacity: 0.6;
 }
 
-.btn-secondary {
+.btn-secondary, .btn.btn-secondary {
     background: var(--color-bg-tertiary);
     color: var(--color-text-primary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
+    border-radius: var(--btn-border-radius);
     padding: 0.5rem 1rem;
     font-size: 0.875rem;
     font-weight: 500;
@@ -504,11 +616,11 @@ main {
     background: var(--color-border-primary);
 }
 
-.btn-danger {
+.btn-danger, .btn.btn-danger {
     background: transparent;
     color: var(--color-accent-red);
     border: 1px solid var(--color-accent-red);
-    border-radius: 6px;
+    border-radius: var(--btn-border-radius);
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
     cursor: pointer;
@@ -520,26 +632,31 @@ main {
     color: #fff;
 }
 
-.btn-small {
+.btn-sm, .btn-small {
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
 }
 
-.btn-icon {
+.btn-icon, .btn.btn-icon {
     background: var(--color-bg-tertiary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
+    border-radius: var(--btn-border-radius);
     color: var(--color-text-secondary);
     padding: 0.25rem 0.5rem;
     font-size: 0.875rem;
     cursor: pointer;
     margin-right: 0.25rem;
+    transition: all 0.2s ease;
 }
 
 .btn-icon:hover {
     background: var(--color-border-primary);
     border-color: var(--color-accent-blue);
     color: var(--color-accent-blue);
+}
+
+.btn-icon:active {
+    transform: scale(0.95);
 }
 
 /* Modal */
@@ -559,7 +676,7 @@ main {
 .modal-content {
     background: var(--color-bg-secondary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
+    border-radius: var(--modal-border-radius);
     max-width: 600px;
     width: 90%;
     max-height: 90vh;
@@ -614,7 +731,7 @@ main {
     padding: 0.5rem;
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
+    border-radius: var(--input-border-radius);
     color: var(--color-text-primary);
     font-size: 0.875rem;
 }
@@ -636,7 +753,7 @@ main {
 .qr-code img {
     width: 200px;
     height: 200px;
-    border-radius: 6px;
+    border-radius: var(--input-border-radius);
     background: #fff;
 }
 
@@ -655,7 +772,7 @@ main {
 .warning-box {
     background: rgba(210, 153, 34, 0.15);
     border: 1px solid rgba(210, 153, 34, 0.4);
-    border-radius: 6px;
+    border-radius: var(--panel-border-radius);
     padding: 0.75rem 1rem;
     margin-bottom: 1rem;
     font-size: 0.875rem;
@@ -677,7 +794,7 @@ main {
     width: 100%;
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
+    border-radius: var(--input-border-radius);
     color: var(--color-text-primary);
     font-family: monospace;
     font-size: 0.75rem;
@@ -970,7 +1087,7 @@ tr:nth-child(10) .obscured-ip { --stipple-seed: 5.6; }
 .transport-select {
     background: var(--color-bg-tertiary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
+    border-radius: var(--input-border-radius);
     color: var(--color-text-primary);
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
@@ -998,10 +1115,11 @@ tr:nth-child(10) .obscured-ip { --stipple-seed: 5.6; }
     white-space: nowrap;
 }
 
+/* .restart-btn is deprecated - use .btn-icon instead */
 .restart-btn {
     background: var(--color-bg-tertiary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
+    border-radius: var(--btn-border-radius);
     color: var(--color-text-secondary);
     padding: 0.25rem 0.5rem;
     font-size: 1rem;
@@ -1078,7 +1196,7 @@ footer {
 .toast {
     background: var(--color-bg-secondary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
+    border-radius: var(--panel-border-radius);
     padding: 0.75rem 1rem;
     min-width: 250px;
     max-width: 400px;
@@ -1303,7 +1421,7 @@ a.alert-tile {
 
 a.logs-container {
     display: block;
-    max-height: 300px;
+    height: 300px;
     overflow-y: auto;
     overflow-x: hidden;
     font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
@@ -1541,7 +1659,7 @@ a.logs-container {
     padding: 0.5rem;
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 6px;
+    border-radius: var(--input-border-radius);
     color: var(--color-text-primary);
     font-size: 0.875rem;
 }
@@ -1552,26 +1670,9 @@ a.logs-container {
     box-shadow: 0 0 0 2px var(--color-focus-ring);
 }
 
-/* All modals - consistent sharp corner styling */
-.modal .modal-content {
-    border-radius: 0;
-}
-
-.modal .form-group input,
-.modal .form-group select {
-    border-radius: 0;
-}
-
+/* All modals - consistent styling via design tokens (--modal-border-radius, --input-border-radius, --btn-border-radius) */
 .modal .form-group input:focus,
-.modal .form-group select:focus {
-    box-shadow: none;
-}
-
-.modal .btn-primary,
-.modal .btn-danger {
-    border-radius: 0;
-}
-
+.modal .form-group select:focus,
 .modal .btn-primary:focus,
 .modal .btn-danger:focus {
     box-shadow: none;
@@ -1912,7 +2013,7 @@ a.logs-container {
 .s3-modal-content {
     background: var(--color-bg-secondary);
     border: 1px solid var(--color-border-primary);
-    border-radius: 4px;
+    border-radius: var(--modal-border-radius);
     min-width: 500px;
     max-width: 700px;
 }

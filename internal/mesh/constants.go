@@ -2,10 +2,12 @@
 package mesh
 
 const (
-	// Domain suffixes - canonical and aliases
+	// DomainSuffix is the canonical .tunnelmesh domain for mesh nodes.
 	DomainSuffix = ".tunnelmesh" // Canonical domain suffix
-	AliasTM      = ".tm"         // Short alias
-	AliasMesh    = ".mesh"       // Alternative alias
+	// AliasTM is a short alias for .tunnelmesh domain.
+
+	AliasTM   = ".tm"   // Short alias
+	AliasMesh = ".mesh" // Alternative alias
 
 	// Network configuration
 	CIDR = "172.30.0.0/16" // Mesh network CIDR - all peers get IPs from this range

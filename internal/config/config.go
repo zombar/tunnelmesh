@@ -208,6 +208,7 @@ func (g *GeolocationConfig) IsSet() bool {
 }
 
 // LoadServerConfig loads server configuration from a YAML file.
+// nolint:gocyclo // Server config loading handles many optional fields
 func LoadServerConfig(path string) (*ServerConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

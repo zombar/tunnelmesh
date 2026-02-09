@@ -133,7 +133,7 @@ func (c *Client) RegisterWithRetry(ctx context.Context, name, publicKey string, 
 		}
 
 		// Exponential backoff with cap
-		backoff = backoff * 2
+		backoff *= 2
 		if backoff > cfg.MaxBackoff {
 			backoff = cfg.MaxBackoff
 		}

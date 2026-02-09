@@ -2,6 +2,7 @@ package udp
 
 import (
 	"bytes"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -796,7 +797,7 @@ func TestSessionSendBeforeEstablished(t *testing.T) {
 	})
 
 	err := session.Send([]byte("test data"))
-	if err != ErrSessionNotEstablished {
+	if !errors.Is(err, ErrSessionNotEstablished) {
 		t.Errorf("expected ErrSessionNotEstablished, got %v", err)
 	}
 }
@@ -817,7 +818,7 @@ func TestSessionHandlePacketBeforeEstablished(t *testing.T) {
 
 	header := &PacketHeader{Type: PacketTypeData, Receiver: 1234, Counter: 1}
 	err := session.HandlePacket(header, []byte("encrypted"))
-	if err != ErrSessionNotEstablished {
+	if !errors.Is(err, ErrSessionNotEstablished) {
 		t.Errorf("expected ErrSessionNotEstablished, got %v", err)
 	}
 }

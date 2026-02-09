@@ -75,7 +75,7 @@ Examples:
 	return shareCmd
 }
 
-func runShareList(cmd *cobra.Command, args []string) error {
+func runShareList(_ *cobra.Command, _ []string) error {
 	adminURL := getAdminURL()
 
 	resp, err := makeAdminRequest("GET", adminURL+"/api/shares", nil)
@@ -138,6 +138,7 @@ func runShareCreate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// nolint:revive // cmd required by cobra.Command RunE signature
 func runShareDelete(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
@@ -157,6 +158,8 @@ func runShareDelete(cmd *cobra.Command, args []string) error {
 	fmt.Printf("File share '%s' deleted\n", name)
 	return nil
 }
+
+// nolint:revive // cmd required by cobra.Command RunE signature
 
 func runShareInfo(cmd *cobra.Command, args []string) error {
 	name := args[0]

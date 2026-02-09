@@ -59,6 +59,7 @@ func TestRoleBindingAppliesToBucket(t *testing.T) {
 	}
 }
 
+// nolint:dupl // Test setup code follows similar pattern across binding tests
 func TestRoleBinding_AppliesToObject(t *testing.T) {
 	tests := []struct {
 		name         string

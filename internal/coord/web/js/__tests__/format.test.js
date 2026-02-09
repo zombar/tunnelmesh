@@ -167,7 +167,8 @@ describe('formatExpiry', () => {
     });
 
     test('formats months in future', () => {
-        const threeMonthsFromNow = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+        // Use 91 days to avoid flakiness at the 90-day boundary (90/30=3 exactly)
+        const threeMonthsFromNow = new Date(Date.now() + 91 * 24 * 60 * 60 * 1000);
         expect(formatExpiry(threeMonthsFromNow.toISOString())).toBe('in 3mo');
     });
 

@@ -102,7 +102,7 @@ func (w *ReplayWindow) shiftBitmap(shift int) {
 	// For simplicity, just clear bits that are now outside the window
 	// This is not optimal but works correctly
 	oldTop := w.top
-	for i := uint64(0); i < uint64(shift) && oldTop >= uint64(i); i++ {
+	for i := uint64(0); i < uint64(shift) && oldTop >= i; i++ {
 		seq := oldTop - uint64(w.size) + 1 + i
 		if seq > 0 {
 			w.clearBit(seq)

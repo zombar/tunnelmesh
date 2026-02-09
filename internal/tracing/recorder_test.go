@@ -2,6 +2,7 @@ package tracing
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -20,7 +21,7 @@ func TestInit_Disabled(t *testing.T) {
 
 	// Snapshot should return error when disabled
 	var buf bytes.Buffer
-	if err := Snapshot(&buf); err != ErrNotEnabled {
+	if err := Snapshot(&buf); !errors.Is(err, ErrNotEnabled) {
 		t.Errorf("Snapshot() = %v, want ErrNotEnabled", err)
 	}
 }
@@ -99,7 +100,7 @@ func TestSnapshot_AfterStop(t *testing.T) {
 
 	// Snapshot after stop should return error
 	var buf bytes.Buffer
-	if err := Snapshot(&buf); err != ErrNotEnabled {
+	if err := Snapshot(&buf); !errors.Is(err, ErrNotEnabled) {
 		t.Errorf("Snapshot() after Stop = %v, want ErrNotEnabled", err)
 	}
 }

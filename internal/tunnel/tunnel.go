@@ -44,6 +44,7 @@ func handleSSHRequests(reqs <-chan *ssh.Request) {
 
 // TunnelConnection represents a bidirectional tunnel connection.
 // Both SSH tunnels and relay tunnels implement this interface.
+// nolint:revive // TunnelConnection name kept for clarity despite stuttering
 type TunnelConnection interface {
 	Read(p []byte) (int, error)
 	Write(p []byte) (int, error)
@@ -94,6 +95,7 @@ func NewSSHServer(hostKey ssh.Signer, authorizedKeys []ssh.PublicKey) *SSHServer
 		authorizedKeys: authorizedKeys,
 	}
 
+	// nolint:revive // conn required by interface signature but not used
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			s.keysMu.RLock()
@@ -202,6 +204,7 @@ func (c *SSHClient) hostKeyCallback() ssh.HostKeyCallback {
 	if c.hostKey == nil {
 		// Insecure mode - accept any host key
 		return ssh.InsecureIgnoreHostKey()
+		// nolint:revive // hostname required by interface signature but not used
 	}
 
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
@@ -316,6 +319,7 @@ func (t *Tunnel) IsHealthy() bool {
 
 	// SSH channel is healthy if tunnel isn't closed
 	return t.channel != nil
+	// nolint:revive // TunnelManager name kept for clarity despite stuttering
 }
 
 // TunnelManager manages multiple tunnels to peers.

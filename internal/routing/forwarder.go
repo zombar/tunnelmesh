@@ -915,7 +915,7 @@ func (f *Forwarder) HandleTunnel(ctx context.Context, peerName string, tunnel io
 				if ctx.Err() != nil {
 					return
 				}
-				if result.err == io.EOF {
+				if errors.Is(result.err, io.EOF) {
 					log.Info().Str("peer", peerName).Msg("tunnel closed")
 					return
 				}

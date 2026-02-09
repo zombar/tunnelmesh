@@ -1,0 +1,9 @@
+# Hadolint - Dockerfile linter
+ignored:
+  - DL3018  # Allow apk add without version pinning in Alpine
+  - DL3008  # Allow apt-get without version pinning
+
+trustedRegistries:
+  - docker.io
+  - gcr.io
+  - ghcr.io

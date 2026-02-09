@@ -7,13 +7,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// RoleBinding binds a user to a role with optional bucket and object prefix scope.
+// RoleBinding binds a user to a role with optional bucket, object prefix, or panel scope.
 type RoleBinding struct {
 	Name         string `json:"name"`                    // Unique binding name
 	UserID       string `json:"user_id"`                 // User being granted access
 	RoleName     string `json:"role_name"`               // Role being granted
 	BucketScope  string `json:"bucket_scope,omitempty"`  // Optional: scope to specific bucket
 	ObjectPrefix string `json:"object_prefix,omitempty"` // Optional: scope to object key prefix
+	PanelScope   string `json:"panel_scope,omitempty"`   // Optional: scope to specific panel ID
 }
 
 // NewRoleBinding creates a new role binding.
@@ -29,6 +30,16 @@ func NewRoleBindingWithPrefix(userID, roleName, bucketScope, objectPrefix string
 		RoleName:     roleName,
 		BucketScope:  bucketScope,
 		ObjectPrefix: objectPrefix,
+	}
+}
+
+// NewRoleBindingForPanel creates a new role binding for panel access.
+func NewRoleBindingForPanel(userID, panelID string) *RoleBinding {
+	return &RoleBinding{
+		Name:       uuid.New().String()[:8],
+		UserID:     userID,
+		RoleName:   RolePanelViewer,
+		PanelScope: panelID,
 	}
 }
 
@@ -53,6 +64,15 @@ func (rb *RoleBinding) AppliesToObject(bucket, key string) bool {
 		return strings.HasPrefix(key, rb.ObjectPrefix)
 	}
 	return true
+}
+
+// AppliesToPanel checks if this binding grants access to a panel.
+// Empty PanelScope means access to all panels (for this role).
+func (rb *RoleBinding) AppliesToPanel(panelID string) bool {
+	if rb.PanelScope == "" {
+		return true // No scope = all panels
+	}
+	return rb.PanelScope == panelID
 }
 
 // BindingStore manages role bindings in memory.

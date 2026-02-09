@@ -687,3 +687,363 @@ func TestS3Proxy_URLEncodedKey(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "hello world", rec.Body.String())
 }
+
+// --- Panel API Tests ---
+
+func TestPanels_List(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/panels", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Panels []auth.PanelDefinition `json:"panels"`
+	}
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(t, err)
+
+	// Should have built-in panels
+	assert.GreaterOrEqual(t, len(resp.Panels), 10)
+
+	// Check that visualizer panel exists
+	var found bool
+	for _, p := range resp.Panels {
+		if p.ID == auth.PanelVisualizer {
+			found = true
+			assert.Equal(t, "Network Topology", p.Name)
+			assert.True(t, p.Builtin)
+			break
+		}
+	}
+	assert.True(t, found, "visualizer panel should be present")
+}
+
+func TestPanels_ListExternal(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	makeTestAdmin(srv)
+
+	// Register an external panel first
+	panel := auth.PanelDefinition{
+		ID:        "ext-test",
+		Name:      "External Test",
+		Tab:       auth.PanelTabData,
+		External:  true,
+		PluginURL: "https://example.com/plugin.js",
+	}
+	err := srv.s3Authorizer.PanelRegistry.Register(panel)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/panels?external=true", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		Panels []auth.PanelDefinition `json:"panels"`
+	}
+	err = json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(t, err)
+
+	// Should only have external panels
+	require.Len(t, resp.Panels, 1)
+	assert.Equal(t, "ext-test", resp.Panels[0].ID)
+	assert.True(t, resp.Panels[0].External)
+}
+
+func TestPanels_GetBuiltin(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/panels/visualizer", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var panel auth.PanelDefinition
+	err := json.NewDecoder(rec.Body).Decode(&panel)
+	require.NoError(t, err)
+
+	assert.Equal(t, auth.PanelVisualizer, panel.ID)
+	assert.True(t, panel.Builtin)
+}
+
+func TestPanels_GetNotFound(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/panels/nonexistent", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// makeTestAdmin grants admin access for tests (guest user since no TLS)
+func makeTestAdmin(srv *Server) {
+	// getRequestOwner returns "" for test requests without TLS
+	// Some handlers use "" directly, handleUserPermissions converts to "guest"
+	// Bind to both for consistent behavior
+	srv.s3Authorizer.Bindings.Add(&auth.RoleBinding{
+		Name:     "test-admin-binding-empty",
+		UserID:   "",
+		RoleName: auth.RoleAdmin,
+	})
+	srv.s3Authorizer.Bindings.Add(&auth.RoleBinding{
+		Name:     "test-admin-binding-guest",
+		UserID:   "guest",
+		RoleName: auth.RoleAdmin,
+	})
+}
+
+func TestPanels_RegisterExternal(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	makeTestAdmin(srv)
+
+	panel := auth.PanelDefinition{
+		ID:         "test-plugin",
+		Name:       "Test Plugin",
+		Tab:        auth.PanelTabMesh,
+		External:   true,
+		PluginURL:  "https://example.com/plugin.js",
+		PluginType: "script",
+	}
+	body, _ := json.Marshal(panel)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/panels", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	// Verify it was registered
+	registered := srv.s3Authorizer.PanelRegistry.Get("test-plugin")
+	require.NotNil(t, registered)
+	assert.Equal(t, "Test Plugin", registered.Name)
+	assert.True(t, registered.External)
+}
+
+func TestPanels_RegisterExternal_InvalidURL(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	makeTestAdmin(srv)
+
+	panel := auth.PanelDefinition{
+		ID:        "bad-plugin",
+		Name:      "Bad Plugin",
+		Tab:       auth.PanelTabMesh,
+		External:  true,
+		PluginURL: "javascript:alert(1)", // XSS attempt
+	}
+	body, _ := json.Marshal(panel)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/panels", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid plugin URL")
+}
+
+func TestPanels_RegisterExternal_NoURL(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	makeTestAdmin(srv)
+
+	// External panels without PluginURL are allowed (for script-injected panels)
+	panel := auth.PanelDefinition{
+		ID:   "no-url-plugin",
+		Name: "No URL Plugin",
+		Tab:  auth.PanelTabMesh,
+		// External flag is set by API automatically
+	}
+	body, _ := json.Marshal(panel)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/panels", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	// Verify it was registered with External flag set
+	registered := srv.s3Authorizer.PanelRegistry.Get("no-url-plugin")
+	require.NotNil(t, registered)
+	assert.True(t, registered.External)
+}
+
+func TestPanels_UpdatePublic(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	makeTestAdmin(srv)
+
+	// Set visualizer panel to public
+	update := map[string]interface{}{
+		"public": true,
+	}
+	body, _ := json.Marshal(update)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/panels/visualizer", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Verify update
+	panel := srv.s3Authorizer.PanelRegistry.Get(auth.PanelVisualizer)
+	require.NotNil(t, panel)
+	assert.True(t, panel.Public)
+}
+
+func TestPanels_UpdateExternal(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	makeTestAdmin(srv)
+
+	// First register an external panel
+	panel := auth.PanelDefinition{
+		ID:        "update-test",
+		Name:      "Update Test",
+		Tab:       auth.PanelTabMesh,
+		External:  true,
+		PluginURL: "https://example.com/plugin.js",
+	}
+	err := srv.s3Authorizer.PanelRegistry.Register(panel)
+	require.NoError(t, err)
+
+	// Update it
+	update := map[string]interface{}{
+		"name":        "Updated Name",
+		"description": "New description",
+	}
+	body, _ := json.Marshal(update)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/panels/update-test", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Verify update
+	updated := srv.s3Authorizer.PanelRegistry.Get("update-test")
+	require.NotNil(t, updated)
+	assert.Equal(t, "Updated Name", updated.Name)
+	assert.Equal(t, "New description", updated.Description)
+}
+
+func TestPanels_UpdateNotFound(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	makeTestAdmin(srv)
+
+	update := map[string]interface{}{
+		"public": true,
+	}
+	body, _ := json.Marshal(update)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/panels/nonexistent", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestPanels_DeleteExternal(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	makeTestAdmin(srv)
+
+	// First register an external panel
+	panel := auth.PanelDefinition{
+		ID:        "delete-test",
+		Name:      "Delete Test",
+		Tab:       auth.PanelTabMesh,
+		External:  true,
+		PluginURL: "https://example.com/plugin.js",
+	}
+	err := srv.s3Authorizer.PanelRegistry.Register(panel)
+	require.NoError(t, err)
+
+	// Delete it
+	req := httptest.NewRequest(http.MethodDelete, "/api/panels/delete-test", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Verify deletion
+	deleted := srv.s3Authorizer.PanelRegistry.Get("delete-test")
+	assert.Nil(t, deleted)
+}
+
+func TestPanels_DeleteBuiltin_Forbidden(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	makeTestAdmin(srv)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/panels/visualizer", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	// Returns BadRequest because Unregister returns error for built-in panels
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "cannot unregister built-in panel")
+}
+
+func TestPanels_DeleteNotFound(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	makeTestAdmin(srv)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/panels/nonexistent", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestUserPermissions(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Request without TLS will have empty user, which becomes "guest"
+	req := httptest.NewRequest(http.MethodGet, "/api/user/permissions", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		UserID  string   `json:"user_id"`
+		IsAdmin bool     `json:"is_admin"`
+		Panels  []string `json:"panels"`
+	}
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(t, err)
+
+	// Guest user should not be admin
+	assert.Equal(t, "guest", resp.UserID)
+	assert.False(t, resp.IsAdmin)
+}
+
+func TestUserPermissions_Admin(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	makeTestAdmin(srv)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/user/permissions", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp struct {
+		UserID  string   `json:"user_id"`
+		IsAdmin bool     `json:"is_admin"`
+		Panels  []string `json:"panels"`
+	}
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(t, err)
+
+	// makeTestAdmin grants admin to empty user, which becomes "guest"
+	assert.Equal(t, "guest", resp.UserID)
+	assert.True(t, resp.IsAdmin)
+	assert.GreaterOrEqual(t, len(resp.Panels), 10) // Admin gets all panels
+}

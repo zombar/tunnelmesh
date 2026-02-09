@@ -66,6 +66,7 @@ func (m *linuxMonitor) readLoop(ctx context.Context) {
 
 		n, _, err := unix.Recvfrom(m.fd, buf, 0)
 		if err != nil {
+			//nolint:errorlint // Unix errors are sentinel errors, == is correct and more efficient than errors.Is
 			if err == unix.EAGAIN || err == unix.EINTR || err == unix.EWOULDBLOCK {
 				continue
 			}

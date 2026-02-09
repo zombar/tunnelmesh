@@ -4,6 +4,7 @@ package s3
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -32,7 +33,7 @@ func NewSystemStore(store *Store, serviceUserID string) (*SystemStore, error) {
 	}
 
 	// Create system bucket if it doesn't exist
-	if _, err := store.HeadBucket(SystemBucket); err == ErrBucketNotFound {
+	if _, err := store.HeadBucket(SystemBucket); errors.Is(err, ErrBucketNotFound) {
 		if err := store.CreateBucket(SystemBucket, serviceUserID); err != nil {
 			return nil, fmt.Errorf("create system bucket: %w", err)
 		}
@@ -49,6 +50,7 @@ const (
 	GroupsPath        = "auth/groups.json"
 	GroupBindingsPath = "auth/group_bindings.json"
 	FileSharesPath    = "auth/file_shares.json"
+	PanelsPath        = "auth/panels.json"
 )
 
 // Stats paths
@@ -141,6 +143,23 @@ func (ss *SystemStore) LoadGroupBindings() ([]*auth.GroupBinding, error) {
 	return bindings, nil
 }
 
+// --- External Panels ---
+
+// SavePanels saves external panel definitions to S3.
+// Only external (non-builtin) panels are persisted.
+func (ss *SystemStore) SavePanels(panels []*auth.PanelDefinition) error {
+	return ss.saveJSON(PanelsPath, panels)
+}
+
+// LoadPanels loads external panel definitions from S3.
+func (ss *SystemStore) LoadPanels() ([]*auth.PanelDefinition, error) {
+	var panels []*auth.PanelDefinition
+	if err := ss.loadJSON(PanelsPath, &panels); err != nil {
+		return nil, err
+	}
+	return panels, nil
+}
+
 // --- File Shares ---
 
 // FileShare represents a file sharing configuration backed by an S3 bucket.
@@ -225,7 +244,7 @@ func (ss *SystemStore) saveJSON(key string, v interface{}) error {
 func (ss *SystemStore) loadJSON(key string, target interface{}) error {
 	reader, _, err := ss.store.GetObject(SystemBucket, key)
 	if err != nil {
-		if err == ErrObjectNotFound {
+		if errors.Is(err, ErrObjectNotFound) {
 			return nil // Not found is OK - return nil with empty target
 		}
 		return fmt.Errorf("get %s: %w", key, err)
@@ -260,7 +279,7 @@ func (ss *SystemStore) MigrateFromFile(localPath, s3Key string) (bool, error) {
 	if err == nil {
 		return false, nil // Already migrated
 	}
-	if err != ErrObjectNotFound {
+	if !errors.Is(err, ErrObjectNotFound) {
 		return false, err
 	}
 

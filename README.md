@@ -267,14 +267,12 @@ The tool searches for config files in the following order:
 ```bash
 # Coordinator setup (server + peer)
 tunnelmesh init --server --peer    # Generate config
-tunnelmesh user setup              # Create identity
 tunnelmesh serve -c server.yaml    # Start coordinator
-tunnelmesh user register --server https://localhost:8443  # Register as admin
+# First peer to join becomes admin automatically
 
 # Peer setup (joining existing mesh)
-tunnelmesh user setup              # Create identity (once)
 tunnelmesh join --server coord.example.com --token <token> --context work
-tunnelmesh user register           # Get S3 credentials
+# User identity derived from SSH key - no separate registration needed
 
 # Manage contexts
 tunnelmesh context list            # List all contexts

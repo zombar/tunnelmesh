@@ -20,7 +20,7 @@ coverage.html
 go.work
 
 # Dependency directories
-vendor/
+# vendor/ - Intentionally NOT ignored for supply chain security
 
 # IDE and editor files
 .idea/

@@ -185,6 +185,7 @@ func (h *Handler) authenticateConnection(conn net.Conn) (string, error) {
 }
 
 // Change returns a billy.Change for the filesystem.
+// nolint:revive // fs required by nfs.Handler interface
 func (h *Handler) Change(fs billy.Filesystem) billy.Change {
 	return nil // Read-only changes not supported via S3
 }
