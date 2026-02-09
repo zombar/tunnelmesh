@@ -635,6 +635,30 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	s.fileShareMgr = s3.NewFileShareManager(store, systemStore, s.s3Authorizer)
 	log.Info().Int("shares", len(s.fileShareMgr.List())).Msg("file share manager initialized")
 
+	// Recover coordinator state from S3
+	s.recoverCoordinatorState(cfg, systemStore)
+
+	// Add coordinator service user to all_service_users group
+	_ = s.s3Authorizer.Groups.AddMember(auth.GroupAllServiceUsers, serviceUserID)
+
+	// Register service user credentials (derived from a fixed key for now)
+	// In production, this would be derived from the CA private key
+	if _, _, err := s.s3Credentials.RegisterUser(serviceUserID, serviceUserID); err != nil {
+		return fmt.Errorf("register service user credentials: %w", err)
+	}
+
+	log.Info().
+		Str("data_dir", cfg.S3.DataDir).
+		Int("port", cfg.S3.Port).
+		Str("max_size", cfg.S3.MaxSize.String()).
+		Msg("S3 storage initialized")
+
+	return nil
+}
+
+// recoverCoordinatorState recovers ephemeral coordinator state from S3.
+// This includes stats history, WG concentrator assignment, and DNS cache/aliases.
+func (s *Server) recoverCoordinatorState(cfg *config.ServerConfig, systemStore *s3.SystemStore) {
 	// Migrate stats history from file to S3 if needed
 	statsHistoryFile := filepath.Join(cfg.DataDir, "stats_history.json")
 	if migrated, err := systemStore.MigrateFromFile(statsHistoryFile, s3.StatsHistoryPath); err != nil {
@@ -680,23 +704,6 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 		// Note: peerInfo.aliases will be updated when peers reconnect
 		s.peersMu.Unlock()
 	}
-
-	// Add coordinator service user to all_service_users group
-	_ = s.s3Authorizer.Groups.AddMember(auth.GroupAllServiceUsers, serviceUserID)
-
-	// Register service user credentials (derived from a fixed key for now)
-	// In production, this would be derived from the CA private key
-	if _, _, err := s.s3Credentials.RegisterUser(serviceUserID, serviceUserID); err != nil {
-		return fmt.Errorf("register service user credentials: %w", err)
-	}
-
-	log.Info().
-		Str("data_dir", cfg.S3.DataDir).
-		Int("port", cfg.S3.Port).
-		Str("max_size", cfg.S3.MaxSize.String()).
-		Msg("S3 storage initialized")
-
-	return nil
 }
 
 // ensureBuiltinGroupBindings sets up the built-in group bindings if not already present.

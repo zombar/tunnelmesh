@@ -358,51 +358,6 @@ func (ss *SystemStore) LoadDNSAliases() (peerAliases map[string][]string, aliasO
 	return peerAliases, aliasOwner, nil
 }
 
-// --- Generic JSON helpers ---
-
-// saveJSON saves a value as JSON to the system bucket.
-func (ss *SystemStore) saveJSON(key string, v interface{}) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal %s: %w", key, err)
-	}
-
-	_, err = ss.store.PutObject(SystemBucket, key, bytes.NewReader(data), int64(len(data)), "application/json", nil)
-	if err != nil {
-		return fmt.Errorf("put %s: %w", key, err)
-	}
-
-	return nil
-}
-
-// loadJSON loads a JSON value from the system bucket.
-// Returns nil if the object doesn't exist.
-func (ss *SystemStore) loadJSON(key string, target interface{}) error {
-	reader, _, err := ss.store.GetObject(SystemBucket, key)
-	if err != nil {
-		if errors.Is(err, ErrObjectNotFound) {
-			return nil // Not found is OK - return nil with empty target
-		}
-		return fmt.Errorf("get %s: %w", key, err)
-	}
-	defer func() { _ = reader.Close() }()
-
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", key, err)
-	}
-
-	if len(data) == 0 {
-		return nil // Empty file
-	}
-
-	if err := json.Unmarshal(data, target); err != nil {
-		return fmt.Errorf("unmarshal %s: %w", key, err)
-	}
-
-	return nil
-}
-
 // --- Checksum-validated JSON helpers ---
 
 // MetadataWrapper adds checksum validation to system metadata.
@@ -509,7 +464,11 @@ func (ss *SystemStore) tryLoadVersion(key, versionID string, target interface{})
 	if err != nil {
 		return fmt.Errorf("get object: %w", err)
 	}
-	defer reader.Close()
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Str("key", key).Msg("failed to close reader")
+		}
+	}()
 
 	data, err := io.ReadAll(reader)
 	if err != nil {
