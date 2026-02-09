@@ -254,7 +254,7 @@
         </div>
     </section>
 
-    <section id="visualizer-section">
+    <section id="visualizer-section" style="display: none;">
         <div class="visualizer-card">
             <div class="visualizer-header section-toggle" onclick="toggleSection(this)">
                 <h2>Topology</h2>
@@ -278,7 +278,7 @@
         </div>
     </section>
 
-    <section id="charts-section">
+    <section id="charts-section" style="display: none;">
         <div class="charts-card">
             <div class="charts-header section-toggle" onclick="toggleSection(this)">
                 <h2>Charts</h2>
@@ -299,7 +299,7 @@
     </section>
 
     <main>
-        <section id="peers-section">
+        <section id="peers-section" style="display: none;">
             <h2 class="section-toggle" onclick="toggleSection(this)">Network</h2>
             <div class="collapsible-content">
                 <table id="peers">
@@ -459,7 +459,7 @@
             </div>
         </div>
 
-        <section id="dns-section">
+        <section id="dns-section" style="display: none;">
             <h2 class="section-toggle" onclick="toggleSection(this)">DNS</h2>
             <div class="collapsible-content">
                 <table id="dns">
@@ -485,7 +485,7 @@
     <div id="data-tab" class="tab-content">
     <main>
         <!-- Objects Section (GitHub-style file browser) -->
-        <section id="peers-mgmt-section">
+        <section id="peers-mgmt-section" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Peers</h2>
             </div>
@@ -512,7 +512,7 @@
             </div>
         </section>
 
-        <section id="groups-section">
+        <section id="groups-section" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Groups</h2>
                 <button id="add-group-btn" class="btn-primary" onclick="event.stopPropagation(); openGroupModal();">+ Add Group</button>
@@ -538,7 +538,7 @@
             </div>
         </section>
 
-        <section id="bindings-section">
+        <section id="bindings-section" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Bindings</h2>
                 <button id="add-binding-btn" class="btn-primary" onclick="event.stopPropagation(); openBindingModal();">+ Add Binding</button>
