@@ -179,7 +179,7 @@ func TestStatsHistory_SaveLoad(t *testing.T) {
 	})
 
 	// Save
-	if err := sh1.Save(path); err != nil {
+	if err := sh1.Save(path, nil); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
@@ -190,7 +190,7 @@ func TestStatsHistory_SaveLoad(t *testing.T) {
 
 	// Load into new instance
 	sh2 := NewStatsHistory()
-	if err := sh2.Load(path); err != nil {
+	if err := sh2.Load(path, nil); err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
 
@@ -216,7 +216,7 @@ func TestStatsHistory_LoadNonExistent(t *testing.T) {
 	path := filepath.Join(tempDir, "nonexistent.json")
 
 	// Loading non-existent file should not error (just start fresh)
-	if err := sh.Load(path); err != nil {
+	if err := sh.Load(path, nil); err != nil {
 		t.Errorf("load of non-existent file should not error, got: %v", err)
 	}
 
@@ -244,13 +244,13 @@ func TestStatsHistory_LoadExpiredData(t *testing.T) {
 		BytesSentRate: 200,
 	})
 
-	if err := sh1.Save(path); err != nil {
+	if err := sh1.Save(path, nil); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
 	// Load into new instance
 	sh2 := NewStatsHistory()
-	if err := sh2.Load(path); err != nil {
+	if err := sh2.Load(path, nil); err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
 
@@ -290,7 +290,7 @@ func TestStatsHistory_FileSizeLimit(t *testing.T) {
 	}
 
 	// Save and check file size
-	if err := sh.Save(path); err != nil {
+	if err := sh.Save(path, nil); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
@@ -372,13 +372,13 @@ func TestStatsHistory_SaveLoadRoundTrip(t *testing.T) {
 	}
 
 	// Save
-	if err := sh1.Save(path); err != nil {
+	if err := sh1.Save(path, nil); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
 	// Load
 	sh2 := NewStatsHistory()
-	if err := sh2.Load(path); err != nil {
+	if err := sh2.Load(path, nil); err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
 
@@ -414,7 +414,7 @@ func TestStatsHistory_MultipleSaveLoadCycles(t *testing.T) {
 		sh := NewStatsHistory()
 
 		// Load existing data
-		if err := sh.Load(path); err != nil {
+		if err := sh.Load(path, nil); err != nil {
 			t.Fatalf("cycle %d: load failed: %v", cycle, err)
 		}
 
@@ -427,14 +427,14 @@ func TestStatsHistory_MultipleSaveLoadCycles(t *testing.T) {
 		}
 
 		// Save
-		if err := sh.Save(path); err != nil {
+		if err := sh.Save(path, nil); err != nil {
 			t.Fatalf("cycle %d: save failed: %v", cycle, err)
 		}
 	}
 
 	// Final load and verify
 	shFinal := NewStatsHistory()
-	if err := shFinal.Load(path); err != nil {
+	if err := shFinal.Load(path, nil); err != nil {
 		t.Fatalf("final load failed: %v", err)
 	}
 
@@ -454,7 +454,7 @@ func TestStatsHistory_LoadCorruptJSON(t *testing.T) {
 	}
 
 	sh := NewStatsHistory()
-	err := sh.Load(path)
+	err := sh.Load(path, nil)
 	if err == nil {
 		t.Error("expected error loading corrupt JSON, got nil")
 	}
@@ -470,7 +470,7 @@ func TestStatsHistory_LoadEmptyFile(t *testing.T) {
 	}
 
 	sh := NewStatsHistory()
-	err := sh.Load(path)
+	err := sh.Load(path, nil)
 	if err == nil {
 		t.Error("expected error loading empty file, got nil")
 	}
@@ -486,7 +486,7 @@ func TestStatsHistory_LoadEmptyJSON(t *testing.T) {
 	}
 
 	sh := NewStatsHistory()
-	if err := sh.Load(path); err != nil {
+	if err := sh.Load(path, nil); err != nil {
 		t.Errorf("loading empty JSON should not error: %v", err)
 	}
 
@@ -507,7 +507,7 @@ func TestStatsHistory_SaveOverwritesExisting(t *testing.T) {
 		Timestamp:     now,
 		BytesSentRate: 100,
 	})
-	if err := sh1.Save(path); err != nil {
+	if err := sh1.Save(path, nil); err != nil {
 		t.Fatalf("first save failed: %v", err)
 	}
 
@@ -517,13 +517,13 @@ func TestStatsHistory_SaveOverwritesExisting(t *testing.T) {
 		Timestamp:     now,
 		BytesSentRate: 200,
 	})
-	if err := sh2.Save(path); err != nil {
+	if err := sh2.Save(path, nil); err != nil {
 		t.Fatalf("second save failed: %v", err)
 	}
 
 	// Load and verify only second data exists
 	sh3 := NewStatsHistory()
-	if err := sh3.Load(path); err != nil {
+	if err := sh3.Load(path, nil); err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
 
@@ -568,13 +568,13 @@ func TestStatsHistory_ConcurrentRecordAndSave(t *testing.T) {
 	wg.Wait()
 
 	// Save after all concurrent writes complete
-	if err := sh.Save(path); err != nil {
+	if err := sh.Save(path, nil); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
 	// Load and verify
 	sh2 := NewStatsHistory()
-	if err := sh2.Load(path); err != nil {
+	if err := sh2.Load(path, nil); err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
 
@@ -611,13 +611,13 @@ func TestStatsHistory_PeerWithAllExpiredData(t *testing.T) {
 		BytesSentRate: 200,
 	})
 
-	if err := sh1.Save(path); err != nil {
+	if err := sh1.Save(path, nil); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
 	// Load
 	sh2 := NewStatsHistory()
-	if err := sh2.Load(path); err != nil {
+	if err := sh2.Load(path, nil); err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
 

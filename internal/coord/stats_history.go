@@ -5,6 +5,9 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 )
 
 // MaxHistoryPoints is the maximum number of stats data points to store per peer.
@@ -154,8 +157,9 @@ type persistedHistory struct {
 	Peers map[string][]StatsDataPoint `json:"peers"`
 }
 
-// Save persists the stats history to a JSON file.
-func (sh *StatsHistory) Save(path string) error {
+// Save persists the stats history to S3 or a JSON file.
+// If s3Store is provided, saves to S3; otherwise saves to local file.
+func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) error {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 
@@ -176,16 +180,47 @@ func (sh *StatsHistory) Save(path string) error {
 		}
 	}
 
+	// Save to S3 if available, otherwise use file
+	if s3Store != nil {
+		if err := s3Store.SaveStatsHistory(data); err != nil {
+			return err
+		}
+		log.Debug().Msg("saved stats history to S3")
+		return nil
+	}
+
+	// Fallback to file-based persistence
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(path, jsonData, 0600)
+	if err := os.WriteFile(path, jsonData, 0600); err != nil {
+		return err
+	}
+
+	log.Debug().Str("path", path).Msg("saved stats history to file")
+	return nil
 }
 
-// Load restores stats history from a JSON file.
-func (sh *StatsHistory) Load(path string) error {
+// Load restores stats history from S3 or a JSON file.
+// If s3Store is provided, attempts to load from S3 first, then falls back to file.
+func (sh *StatsHistory) Load(path string, s3Store *s3.SystemStore) error {
+	var data persistedHistory
+
+	// Try loading from S3 first if available
+	if s3Store != nil {
+		if err := s3Store.LoadStatsHistory(&data); err == nil && len(data.Peers) > 0 {
+			log.Debug().Int("peers", len(data.Peers)).Msg("loaded stats history from S3")
+			// Successfully loaded from S3, apply data and return
+			sh.applyLoadedData(&data)
+			return nil
+		} else if err != nil {
+			log.Debug().Err(err).Msg("failed to load stats history from S3, trying file fallback")
+		}
+	}
+
+	// Fallback to file-based loading
 	jsonData, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -194,11 +229,18 @@ func (sh *StatsHistory) Load(path string) error {
 		return err
 	}
 
-	var data persistedHistory
 	if err := json.Unmarshal(jsonData, &data); err != nil {
 		return err
 	}
 
+	log.Debug().Int("peers", len(data.Peers)).Str("path", path).Msg("loaded stats history from file")
+	sh.applyLoadedData(&data)
+	return nil
+}
+
+// applyLoadedData applies the loaded data to the stats history.
+// This is extracted as a helper to support both S3 and file-based loading.
+func (sh *StatsHistory) applyLoadedData(data *persistedHistory) {
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
 
@@ -220,6 +262,4 @@ func (sh *StatsHistory) Load(path string) error {
 			sh.peers[peerID] = rb
 		}
 	}
-
-	return nil
 }

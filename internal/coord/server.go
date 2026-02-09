@@ -246,33 +246,84 @@ func (s *Server) statsHistoryPath() string {
 	return filepath.Join(s.cfg.DataDir, "stats_history.json")
 }
 
-// LoadStatsHistory loads stats history from disk.
+// LoadStatsHistory loads stats history from S3 or disk.
 func (s *Server) LoadStatsHistory() error {
-	// Ensure data directory exists
+	// Ensure data directory exists (needed for file fallback)
 	if err := os.MkdirAll(s.cfg.DataDir, 0755); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
 
 	path := s.statsHistoryPath()
-	if err := s.statsHistory.Load(path); err != nil {
+	if err := s.statsHistory.Load(path, s.s3SystemStore); err != nil {
 		return err
 	}
 
 	peerCount := s.statsHistory.PeerCount()
 	if peerCount > 0 {
-		log.Info().Int("peers", peerCount).Str("path", path).Msg("loaded stats history")
+		source := "file"
+		if s.s3SystemStore != nil {
+			source = "S3"
+		}
+		log.Info().Int("peers", peerCount).Str("source", source).Msg("loaded stats history")
 	}
 	return nil
 }
 
-// SaveStatsHistory persists stats history to disk.
+// SaveStatsHistory persists stats history to S3 or disk.
 func (s *Server) SaveStatsHistory() error {
 	path := s.statsHistoryPath()
-	if err := s.statsHistory.Save(path); err != nil {
+	if err := s.statsHistory.Save(path, s.s3SystemStore); err != nil {
 		return fmt.Errorf("save stats history: %w", err)
 	}
-	log.Debug().Str("path", path).Msg("saved stats history")
+
+	destination := "file"
+	if s.s3SystemStore != nil {
+		destination = "S3"
+	}
+	log.Debug().Str("destination", destination).Msg("saved stats history")
 	return nil
+}
+
+// saveDNSData persists DNS cache and aliases to S3.
+// This is called asynchronously after peer registration changes.
+func (s *Server) saveDNSData() {
+	if s.s3SystemStore == nil {
+		return
+	}
+
+	// Copy data while holding lock to avoid blocking peer operations during S3 writes
+	s.peersMu.RLock()
+	dnsCache := make(map[string]string, len(s.dnsCache))
+	for k, v := range s.dnsCache {
+		dnsCache[k] = v
+	}
+
+	peerAliases := make(map[string][]string)
+	for peerName, info := range s.peers {
+		if len(info.aliases) > 0 {
+			// Copy slice to avoid sharing references
+			peerAliases[peerName] = append([]string{}, info.aliases...)
+		}
+	}
+
+	aliasOwner := make(map[string]string, len(s.aliasOwner))
+	for k, v := range s.aliasOwner {
+		aliasOwner[k] = v
+	}
+	s.peersMu.RUnlock()
+
+	// Perform S3 operations without holding lock
+	if err := s.s3SystemStore.SaveDNSCache(dnsCache); err != nil {
+		log.Warn().Err(err).Msg("failed to persist DNS cache")
+	} else {
+		log.Debug().Int("entries", len(dnsCache)).Msg("persisted DNS cache to S3")
+	}
+
+	if err := s.s3SystemStore.SaveDNSAliases(aliasOwner, peerAliases); err != nil {
+		log.Warn().Err(err).Msg("failed to persist DNS aliases")
+	} else {
+		log.Debug().Int("aliases", len(aliasOwner)).Msg("persisted DNS aliases to S3")
+	}
 }
 
 // Shutdown gracefully shuts down the server, persisting state.
@@ -593,6 +644,9 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	s.fileShareMgr = s3.NewFileShareManager(store, systemStore, s.s3Authorizer)
 	log.Info().Int("shares", len(s.fileShareMgr.List())).Msg("file share manager initialized")
 
+	// Recover coordinator state from S3
+	s.recoverCoordinatorState(cfg, systemStore)
+
 	// Add coordinator service user to all_service_users group
 	_ = s.s3Authorizer.Groups.AddMember(auth.GroupAllServiceUsers, serviceUserID)
 
@@ -609,6 +663,54 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 		Msg("S3 storage initialized")
 
 	return nil
+}
+
+// recoverCoordinatorState recovers ephemeral coordinator state from S3.
+// This includes stats history, WG concentrator assignment, and DNS cache/aliases.
+func (s *Server) recoverCoordinatorState(cfg *config.ServerConfig, systemStore *s3.SystemStore) {
+	// Migrate stats history from file to S3 if needed
+	statsHistoryFile := filepath.Join(cfg.DataDir, "stats_history.json")
+	if migrated, err := systemStore.MigrateFromFile(statsHistoryFile, s3.StatsHistoryPath); err != nil {
+		log.Warn().Err(err).Msg("failed to migrate stats history to S3")
+	} else if migrated {
+		log.Info().Msg("migrated stats history from file to S3")
+		// Delete local file after successful migration
+		if err := os.Remove(statsHistoryFile); err != nil {
+			log.Debug().Err(err).Msg("failed to remove old stats history file")
+		}
+	}
+
+	// Recover WireGuard concentrator assignment
+	if concentrator, err := systemStore.LoadWGConcentrator(); err == nil && concentrator != "" {
+		log.Info().Str("peer", concentrator).Msg("recovering WireGuard concentrator assignment")
+		// Store in relay manager - will be validated when peer reconnects
+		s.relay.RecoverWGConcentrator(concentrator)
+	}
+
+	// Recover DNS cache if available
+	if dnsCache, err := systemStore.LoadDNSCache(); err == nil && len(dnsCache) > 0 {
+		log.Info().Int("entries", len(dnsCache)).Msg("recovering DNS cache")
+		s.peersMu.Lock()
+		for hostname, meshIP := range dnsCache {
+			s.dnsCache[hostname] = meshIP
+		}
+		s.peersMu.Unlock()
+	}
+
+	// Recover DNS aliases if available
+	if _, aliasOwner, err := systemStore.LoadDNSAliases(); err == nil && len(aliasOwner) > 0 {
+		log.Info().Int("aliases", len(aliasOwner)).Msg("recovering DNS aliases")
+		s.peersMu.Lock()
+		for alias, owner := range aliasOwner {
+			s.aliasOwner[alias] = owner
+			// Also add to dnsCache if we have the peer's IP
+			if meshIP, ok := s.dnsCache[owner]; ok {
+				s.dnsCache[alias] = meshIP
+			}
+		}
+		// Note: peerInfo.aliases will be updated when peers reconnect
+		s.peersMu.Unlock()
+	}
 }
 
 // ensureBuiltinGroupBindings sets up the built-in group bindings if not already present.
@@ -1020,6 +1122,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		userID:       userID,
 	}
 	s.dnsCache[req.Name] = meshIP
+
+	// Persist DNS data to S3 if enabled (async to avoid blocking registration)
+	if s.s3SystemStore != nil {
+		go s.saveDNSData()
+	}
 
 	// Auto-register user: add to "everyone" group and create user record on first registration
 	// User identity is derived from peer's SSH key - no separate registration needed
