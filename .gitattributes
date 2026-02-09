@@ -1,0 +1,2 @@
+# Exclude vendor directory from PR diffs and language statistics
+vendor/** linguist-vendored
