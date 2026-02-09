@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -166,9 +167,7 @@ func (s *Server) handleDockerControl(w http.ResponseWriter, r *http.Request) {
 
 	// Remove /control suffix to get container ID
 	containerID := path[len("/api/docker/containers/"):]
-	if len(containerID) > 8 && containerID[len(containerID)-8:] == "/control" {
-		containerID = containerID[:len(containerID)-8]
-	}
+	containerID = strings.TrimSuffix(containerID, "/control")
 
 	if containerID == "" {
 		s.jsonError(w, "Container ID required", http.StatusBadRequest)

@@ -1716,6 +1716,12 @@ func (s *Server) SetDockerManager(mgr *docker.Manager) {
 	log.Info().Msg("Docker manager initialized on coordinator")
 }
 
+// GetSystemStore returns the S3 system store for the coordinator.
+// Returns nil if S3 is not enabled.
+func (s *Server) GetSystemStore() *s3.SystemStore {
+	return s.s3SystemStore
+}
+
 // StartAdminServer starts the admin interface on the specified address.
 // If tlsCert is provided, the server uses HTTPS; otherwise HTTP.
 // This is called after join_mesh completes to bind admin to the mesh IP.

@@ -73,15 +73,19 @@ func (m *Manager) collectAndPersistStats(ctx context.Context, s3Store *s3.System
 		Networks:   []NetworkInfo{},
 	}
 
-	// Collect container info and stats
-	containers, err := m.ListContainers(ctx)
+	// Collect container info and stats with timeout
+	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	containers, err := m.ListContainers(listCtx)
+	cancel()
 	if err != nil {
 		return err
 	}
 
 	for _, container := range containers {
-		// Get full inspect data
-		fullInfo, err := m.InspectContainer(ctx, container.ID)
+		// Get full inspect data with timeout per container
+		inspectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		fullInfo, err := m.InspectContainer(inspectCtx, container.ID)
+		cancel()
 		if err != nil {
 			log.Warn().Err(err).Str("container", container.Name).Msg("Failed to inspect container")
 			continue
@@ -97,7 +101,10 @@ func (m *Manager) collectAndPersistStats(ctx context.Context, s3Store *s3.System
 		}
 
 		if fullInfo.State == "running" {
-			stats, err := m.client.GetContainerStats(ctx, container.ID)
+			// Use timeout per container to prevent hung stats calls from blocking entire collection
+			statsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			stats, err := m.client.GetContainerStats(statsCtx, container.ID)
+			cancel()
 			if err != nil {
 				log.Warn().Err(err).Str("container", container.Name).Msg("Failed to get container stats")
 			} else if stats != nil {
@@ -113,8 +120,10 @@ func (m *Manager) collectAndPersistStats(ctx context.Context, s3Store *s3.System
 		snapshot.Containers = append(snapshot.Containers, containerSnapshot)
 	}
 
-	// Collect Docker networks
-	networks, err := m.client.ListNetworks(ctx)
+	// Collect Docker networks with timeout
+	networksCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	networks, err := m.client.ListNetworks(networksCtx)
+	cancel()
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to list Docker networks")
 	} else {

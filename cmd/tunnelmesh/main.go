@@ -438,7 +438,8 @@ func runServeFromService(ctx context.Context, configPath string) error {
 				log.Info().Str("socket", cfg.JoinMesh.Docker.Socket).Msg("Docker socket already configured")
 			}
 			if cfg.JoinMesh.Docker.Socket != "" {
-				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, nil)
+				// Coordinator doesn't have a packet filter (nil), but pass systemStore for stats persistence
+				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, srv.GetSystemStore())
 				if err := dockerMgr.Start(ctx); err != nil {
 					log.Warn().Err(err).Msg("failed to start coordinator Docker manager")
 				} else {
@@ -672,7 +673,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				log.Info().Str("socket", cfg.JoinMesh.Docker.Socket).Msg("Docker socket already configured")
 			}
 			if cfg.JoinMesh.Docker.Socket != "" {
-				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, nil)
+				// Coordinator doesn't have a packet filter (nil), but pass systemStore for stats persistence
+				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, srv.GetSystemStore())
 				if err := dockerMgr.Start(ctx); err != nil {
 					log.Warn().Err(err).Msg("failed to start coordinator Docker manager")
 				} else {
