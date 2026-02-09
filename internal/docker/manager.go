@@ -22,6 +22,8 @@ type packetFilter interface {
 type dockerClient interface {
 	ListContainers(ctx context.Context) ([]ContainerInfo, error)
 	InspectContainer(ctx context.Context, id string) (*ContainerInfo, error)
+	GetContainerStats(ctx context.Context, id string) (*ContainerStats, error)
+	ListNetworks(ctx context.Context) ([]NetworkInfo, error)
 	WatchEvents(ctx context.Context, handler func(ContainerEvent)) error
 	Close() error
 }
@@ -85,6 +87,11 @@ func (m *Manager) Start(ctx context.Context) error {
 			log.Error().Err(err).Msg("Docker event watcher stopped with error")
 		}
 	}()
+
+	// Start periodic stats collection if S3 store is available
+	if m.systemStore != nil {
+		go m.StartPeriodicStatsCollection(ctx, m.systemStore)
+	}
 
 	return nil
 }

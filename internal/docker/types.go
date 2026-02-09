@@ -64,3 +64,14 @@ type ContainerEvent struct {
 	ContainerID string
 	Timestamp   time.Time
 }
+
+// NetworkInfo represents Docker network information.
+type NetworkInfo struct {
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Driver     string            `json:"driver"`
+	Scope      string            `json:"scope"`
+	Internal   bool              `json:"internal"`
+	Containers []string          `json:"containers"` // Container IDs
+	Labels     map[string]string `json:"labels"`
+}

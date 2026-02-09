@@ -33,6 +33,40 @@ func (m *mockDockerClient) InspectContainer(ctx context.Context, id string) (*Co
 	return nil, nil
 }
 
+func (m *mockDockerClient) GetContainerStats(ctx context.Context, id string) (*ContainerStats, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	// Return mock stats for testing
+	return &ContainerStats{
+		ContainerID:   id,
+		ContainerName: "test",
+		Timestamp:     time.Now(),
+		CPUPercent:    25.5,
+		MemoryBytes:   268435456,
+		MemoryLimit:   536870912,
+		MemoryPercent: 50.0,
+		DiskBytes:     1073741824,
+		PIDs:          10,
+	}, nil
+}
+
+func (m *mockDockerClient) ListNetworks(ctx context.Context) ([]NetworkInfo, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	// Return mock networks for testing
+	return []NetworkInfo{
+		{
+			ID:       "net1",
+			Name:     "bridge",
+			Driver:   "bridge",
+			Scope:    "local",
+			Internal: false,
+		},
+	}, nil
+}
+
 func (m *mockDockerClient) WatchEvents(ctx context.Context, handler func(ContainerEvent)) error {
 	// Mock implementation - just block until context cancelled
 	<-ctx.Done()

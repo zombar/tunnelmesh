@@ -263,9 +263,10 @@ docker_container_info{peer, container_id, container_name, image, status, network
 ### Implementation Details
 
 **Files:**
-- `internal/docker/` - Docker manager, events watcher, port forwarding, metrics
+- `internal/docker/` - Docker manager, events watcher, port forwarding, metrics, stats persistence
 - `internal/coord/docker.go` - Coordinator API handlers
 - `internal/coord/web/js/docker.js` - Frontend panel implementation
+- `internal/coord/s3/system.go` - S3 persistence for Docker stats
 
 **Architecture:**
 - Each coordinator/peer monitors its own local Docker daemon (no cross-peer aggregation)
@@ -273,6 +274,19 @@ docker_container_info{peer, container_id, container_name, image, status, network
 - Automatically syncs port forwards on container start events (bridge networks only)
 - Debounces rapid events (100ms window) to prevent duplicate processing
 - Filter rules expire naturally via TTL mechanism (24h)
+- **Stats persistence**: Collects comprehensive Docker stats every 30 seconds to S3
+
+**Stats Persistence:**
+- **Collection interval**: 30 seconds
+- **Storage location**: S3 system bucket at `stats/{peer_name}.docker.json`
+- **Data collected**:
+  - Full `docker inspect` output for all containers
+  - Runtime stats (CPU%, memory, disk usage) for running containers
+  - Docker network information with container associations
+- **Naming convention**: `{peer_name}.{function}.json`
+  - Example: `oldie.docker.json` for Docker stats
+  - Example: `oldie.network.json` for network stats (if implemented)
+- **Format**: JSON with checksum validation for corruption detection
 
 **Testing:**
 - 20+ unit tests with mock Docker client

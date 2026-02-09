@@ -240,6 +240,17 @@ func (ss *SystemStore) LoadStatsHistory(target interface{}) error {
 	return ss.loadJSONWithChecksum(StatsHistoryPath, target, 3)
 }
 
+// SaveJSON saves arbitrary JSON data to a specified path in the system bucket with checksum validation.
+// This is a generic method for saving any stats or data to custom paths like "stats/{peer}.docker.json".
+func (ss *SystemStore) SaveJSON(path string, data interface{}) error {
+	return ss.saveJSONWithChecksum(path, data)
+}
+
+// LoadJSON loads arbitrary JSON data from a specified path in the system bucket with automatic rollback on corruption.
+func (ss *SystemStore) LoadJSON(path string, target interface{}) error {
+	return ss.loadJSONWithChecksum(path, target, 3)
+}
+
 // --- WireGuard Clients ---
 
 // SaveWireGuardClients saves WireGuard client configs to S3 with checksum validation.

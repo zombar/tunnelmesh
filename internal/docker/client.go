@@ -2,12 +2,14 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/rs/zerolog/log"
 )
@@ -86,6 +88,87 @@ func (c *realDockerClient) WatchEvents(ctx context.Context, handler func(Contain
 			return ctx.Err()
 		}
 	}
+}
+
+// GetContainerStats returns resource usage statistics for a container.
+func (c *realDockerClient) GetContainerStats(ctx context.Context, id string) (*ContainerStats, error) {
+	stats, err := c.cli.ContainerStats(ctx, id, false) // false = one-shot, not streaming
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := stats.Body.Close(); err != nil {
+			log.Warn().Err(err).Msg("Failed to close stats body")
+		}
+	}()
+
+	var v container.StatsResponse
+	if err := json.NewDecoder(stats.Body).Decode(&v); err != nil {
+		return nil, err
+	}
+
+	// Calculate CPU percentage
+	cpuPercent := calculateCPUPercent(&v)
+
+	// Calculate memory percentage
+	memPercent := 0.0
+	if v.MemoryStats.Limit > 0 {
+		memPercent = float64(v.MemoryStats.Usage) / float64(v.MemoryStats.Limit) * 100.0
+	}
+
+	// Get disk usage (sum of all storage layers)
+	diskBytes := v.StorageStats.ReadSizeBytes
+
+	return &ContainerStats{
+		ContainerID:   v.ID,
+		ContainerName: v.Name,
+		Timestamp:     v.Read,
+		CPUPercent:    cpuPercent,
+		MemoryBytes:   v.MemoryStats.Usage,
+		MemoryLimit:   v.MemoryStats.Limit,
+		MemoryPercent: memPercent,
+		DiskBytes:     diskBytes,
+		PIDs:          v.PidsStats.Current,
+	}, nil
+}
+
+// calculateCPUPercent calculates CPU usage percentage from stats.
+func calculateCPUPercent(stats *container.StatsResponse) float64 {
+	cpuDelta := float64(stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage)
+	systemDelta := float64(stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage)
+
+	if systemDelta > 0.0 && cpuDelta > 0.0 {
+		return (cpuDelta / systemDelta) * float64(stats.CPUStats.OnlineCPUs) * 100.0
+	}
+	return 0.0
+}
+
+// ListNetworks returns all Docker networks.
+func (c *realDockerClient) ListNetworks(ctx context.Context) ([]NetworkInfo, error) {
+	networks, err := c.cli.NetworkList(ctx, network.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]NetworkInfo, 0, len(networks))
+	for _, n := range networks {
+		containerIDs := make([]string, 0, len(n.Containers))
+		for id := range n.Containers {
+			containerIDs = append(containerIDs, id)
+		}
+
+		result = append(result, NetworkInfo{
+			ID:         n.ID,
+			Name:       n.Name,
+			Driver:     n.Driver,
+			Scope:      n.Scope,
+			Internal:   n.Internal,
+			Containers: containerIDs,
+			Labels:     n.Labels,
+		})
+	}
+
+	return result, nil
 }
 
 // Close closes the Docker client connection.
