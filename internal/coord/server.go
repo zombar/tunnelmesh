@@ -199,6 +199,12 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("create IP allocator: %w", err)
 	}
 
+	// Determine coordinator name for stats organization
+	coordinatorName := "coordinator"
+	if cfg.JoinMesh != nil && cfg.JoinMesh.Name != "" {
+		coordinatorName = cfg.JoinMesh.Name
+	}
+
 	srv := &Server{
 		cfg:          cfg,
 		mux:          http.NewServeMux(),
@@ -206,7 +212,7 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		ipAlloc:      ipAlloc,
 		dnsCache:     make(map[string]string),
 		aliasOwner:   make(map[string]string),
-		statsHistory: NewStatsHistory(),
+		statsHistory: NewStatsHistory(coordinatorName),
 		serverStats: serverStats{
 			startTime: time.Now(),
 		},

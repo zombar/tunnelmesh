@@ -94,7 +94,7 @@ func TestRingBuffer_GetSince(t *testing.T) {
 }
 
 func TestStatsHistory_RecordAndGet(t *testing.T) {
-	sh := NewStatsHistory()
+	sh := NewStatsHistory("test-coord")
 
 	sh.RecordStats("peer1", StatsDataPoint{BytesSentRate: 100})
 	sh.RecordStats("peer1", StatsDataPoint{BytesSentRate: 200})
@@ -121,7 +121,7 @@ func TestStatsHistory_RecordAndGet(t *testing.T) {
 }
 
 func TestStatsHistory_CleanupPeer(t *testing.T) {
-	sh := NewStatsHistory()
+	sh := NewStatsHistory("test-coord")
 
 	sh.RecordStats("peer1", StatsDataPoint{BytesSentRate: 100})
 	sh.CleanupPeer("peer1")
@@ -137,7 +137,7 @@ func TestStatsHistory_CleanupPeer(t *testing.T) {
 }
 
 func TestStatsHistory_ConcurrentAccess(t *testing.T) {
-	sh := NewStatsHistory()
+	sh := NewStatsHistory("test-coord")
 
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
@@ -162,7 +162,7 @@ func TestStatsHistory_SaveLoad(t *testing.T) {
 	path := filepath.Join(tempDir, "stats.json")
 
 	// Create history and add data
-	sh1 := NewStatsHistory()
+	sh1 := NewStatsHistory("test-coord")
 	now := time.Now()
 
 	sh1.RecordStats("peer1", StatsDataPoint{
@@ -189,7 +189,7 @@ func TestStatsHistory_SaveLoad(t *testing.T) {
 	}
 
 	// Load into new instance
-	sh2 := NewStatsHistory()
+	sh2 := NewStatsHistory("test-coord")
 	if err := sh2.Load(path, nil); err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestStatsHistory_SaveLoad(t *testing.T) {
 }
 
 func TestStatsHistory_LoadNonExistent(t *testing.T) {
-	sh := NewStatsHistory()
+	sh := NewStatsHistory("test-coord")
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "nonexistent.json")
 
@@ -230,7 +230,7 @@ func TestStatsHistory_LoadExpiredData(t *testing.T) {
 	path := filepath.Join(tempDir, "stats.json")
 
 	// Create history with old data (more than 3 days ago)
-	sh1 := NewStatsHistory()
+	sh1 := NewStatsHistory("test-coord")
 	now := time.Now()
 
 	// Add data from 4 days ago (should be filtered out on load)
@@ -249,7 +249,7 @@ func TestStatsHistory_LoadExpiredData(t *testing.T) {
 	}
 
 	// Load into new instance
-	sh2 := NewStatsHistory()
+	sh2 := NewStatsHistory("test-coord")
 	if err := sh2.Load(path, nil); err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestStatsHistory_FileSizeLimit(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "stats.json")
 
-	sh := NewStatsHistory()
+	sh := NewStatsHistory("test-coord")
 	now := time.Now()
 
 	// Add maximum data points for multiple peers (simulating 3 days of data)
@@ -312,7 +312,7 @@ func TestStatsHistory_FileSizeLimit(t *testing.T) {
 }
 
 func TestStatsHistory_RingBufferCapacity(t *testing.T) {
-	sh := NewStatsHistory()
+	sh := NewStatsHistory("test-coord")
 	now := time.Now()
 
 	// Add more than MaxHistoryPoints to verify ring buffer wraps correctly
@@ -346,7 +346,7 @@ func TestStatsHistory_SaveLoadRoundTrip(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "stats.json")
 
-	sh1 := NewStatsHistory()
+	sh1 := NewStatsHistory("test-coord")
 	now := time.Now()
 
 	// Add data with all fields populated
@@ -377,7 +377,7 @@ func TestStatsHistory_SaveLoadRoundTrip(t *testing.T) {
 	}
 
 	// Load
-	sh2 := NewStatsHistory()
+	sh2 := NewStatsHistory("test-coord")
 	if err := sh2.Load(path, nil); err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestStatsHistory_MultipleSaveLoadCycles(t *testing.T) {
 
 	// Simulate multiple server restarts with data accumulation
 	for cycle := 0; cycle < 5; cycle++ {
-		sh := NewStatsHistory()
+		sh := NewStatsHistory("test-coord")
 
 		// Load existing data
 		if err := sh.Load(path, nil); err != nil {
@@ -433,7 +433,7 @@ func TestStatsHistory_MultipleSaveLoadCycles(t *testing.T) {
 	}
 
 	// Final load and verify
-	shFinal := NewStatsHistory()
+	shFinal := NewStatsHistory("test-coord")
 	if err := shFinal.Load(path, nil); err != nil {
 		t.Fatalf("final load failed: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestStatsHistory_LoadCorruptJSON(t *testing.T) {
 		t.Fatalf("failed to write corrupt file: %v", err)
 	}
 
-	sh := NewStatsHistory()
+	sh := NewStatsHistory("test-coord")
 	err := sh.Load(path, nil)
 	if err == nil {
 		t.Error("expected error loading corrupt JSON, got nil")
@@ -469,7 +469,7 @@ func TestStatsHistory_LoadEmptyFile(t *testing.T) {
 		t.Fatalf("failed to write empty file: %v", err)
 	}
 
-	sh := NewStatsHistory()
+	sh := NewStatsHistory("test-coord")
 	err := sh.Load(path, nil)
 	if err == nil {
 		t.Error("expected error loading empty file, got nil")
@@ -485,7 +485,7 @@ func TestStatsHistory_LoadEmptyJSON(t *testing.T) {
 		t.Fatalf("failed to write empty JSON file: %v", err)
 	}
 
-	sh := NewStatsHistory()
+	sh := NewStatsHistory("test-coord")
 	if err := sh.Load(path, nil); err != nil {
 		t.Errorf("loading empty JSON should not error: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestStatsHistory_SaveOverwritesExisting(t *testing.T) {
 	now := time.Now()
 
 	// First save
-	sh1 := NewStatsHistory()
+	sh1 := NewStatsHistory("test-coord")
 	sh1.RecordStats("peer1", StatsDataPoint{
 		Timestamp:     now,
 		BytesSentRate: 100,
@@ -512,7 +512,7 @@ func TestStatsHistory_SaveOverwritesExisting(t *testing.T) {
 	}
 
 	// Second save with different data (should overwrite)
-	sh2 := NewStatsHistory()
+	sh2 := NewStatsHistory("test-coord")
 	sh2.RecordStats("peer2", StatsDataPoint{
 		Timestamp:     now,
 		BytesSentRate: 200,
@@ -522,7 +522,7 @@ func TestStatsHistory_SaveOverwritesExisting(t *testing.T) {
 	}
 
 	// Load and verify only second data exists
-	sh3 := NewStatsHistory()
+	sh3 := NewStatsHistory("test-coord")
 	if err := sh3.Load(path, nil); err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestStatsHistory_ConcurrentRecordAndSave(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "stats.json")
 
-	sh := NewStatsHistory()
+	sh := NewStatsHistory("test-coord")
 	now := time.Now()
 
 	// Concurrent recording of stats
@@ -573,7 +573,7 @@ func TestStatsHistory_ConcurrentRecordAndSave(t *testing.T) {
 	}
 
 	// Load and verify
-	sh2 := NewStatsHistory()
+	sh2 := NewStatsHistory("test-coord")
 	if err := sh2.Load(path, nil); err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
@@ -596,7 +596,7 @@ func TestStatsHistory_PeerWithAllExpiredData(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "stats.json")
 
-	sh1 := NewStatsHistory()
+	sh1 := NewStatsHistory("test-coord")
 	now := time.Now()
 
 	// Add data for peer1 that's all expired
@@ -616,7 +616,7 @@ func TestStatsHistory_PeerWithAllExpiredData(t *testing.T) {
 	}
 
 	// Load
-	sh2 := NewStatsHistory()
+	sh2 := NewStatsHistory("test-coord")
 	if err := sh2.Load(path, nil); err != nil {
 		t.Fatalf("load failed: %v", err)
 	}

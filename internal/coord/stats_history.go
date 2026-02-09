@@ -90,14 +90,17 @@ func (rb *RingBuffer) Count() int {
 
 // StatsHistory manages per-peer stats history with thread-safe access.
 type StatsHistory struct {
-	mu    sync.RWMutex
-	peers map[string]*RingBuffer
+	mu              sync.RWMutex
+	peers           map[string]*RingBuffer
+	coordinatorName string // Coordinator's peer name for organizing S3 stats
 }
 
 // NewStatsHistory creates a new stats history store.
-func NewStatsHistory() *StatsHistory {
+// coordinatorName is used to organize stats in S3 as stats/{coordinator}/{peer}.network.json
+func NewStatsHistory(coordinatorName string) *StatsHistory {
 	return &StatsHistory{
-		peers: make(map[string]*RingBuffer),
+		peers:           make(map[string]*RingBuffer),
+		coordinatorName: coordinatorName,
 	}
 }
 
@@ -158,13 +161,13 @@ type persistedHistory struct {
 }
 
 // Save persists the stats history to S3 or a JSON file.
-// If s3Store is provided, saves each peer to stats/{peer_name}.network.json.
+// If s3Store is provided, saves each peer to stats/{coordinator}/{peer_name}.network.json.
 // Otherwise saves aggregated data to local file (fallback for non-S3 setups).
 func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) error {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 
-	// Save to S3 - one file per peer as stats/{peer_name}.network.json
+	// Save to S3 - one file per peer as stats/{coordinator}/{peer_name}.network.json
 	if s3Store != nil {
 		for peerName, rb := range sh.peers {
 			points := rb.GetLast(rb.Count())
@@ -177,11 +180,12 @@ func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) error {
 				"history":   points,
 			}
 
-			peerPath := "stats/" + peerName + ".network.json"
+			// Use coordinator subfolder to organize stats by which coordinator collected them
+			peerPath := "stats/" + sh.coordinatorName + "/" + peerName + ".network.json"
 			if err := s3Store.SaveJSON(peerPath, peerHistory); err != nil {
 				log.Warn().Err(err).Str("peer", peerName).Msg("failed to save peer network stats to S3")
 			} else {
-				log.Debug().Str("peer", peerName).Int("points", len(points)).Msg("saved peer network stats to S3")
+				log.Debug().Str("peer", peerName).Str("path", peerPath).Int("points", len(points)).Msg("saved peer network stats to S3")
 			}
 		}
 		return nil
