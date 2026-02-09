@@ -677,17 +677,19 @@ func (s *Server) handleFilterRuleAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Push the rule to peer(s) via relay
-	if req.PeerName == "__all__" {
-		// Broadcast to all connected peers (skip self-referencing rules)
-		for _, peerName := range s.relay.GetConnectedPeerNames() {
-			if req.SourcePeer != "" && req.SourcePeer == peerName {
-				continue // Skip: peer can't filter traffic from itself
+	// Push the rule to peer(s) via relay (if relay is enabled)
+	if s.relay != nil {
+		if req.PeerName == "__all__" {
+			// Broadcast to all connected peers (skip self-referencing rules)
+			for _, peerName := range s.relay.GetConnectedPeerNames() {
+				if req.SourcePeer != "" && req.SourcePeer == peerName {
+					continue // Skip: peer can't filter traffic from itself
+				}
+				s.relay.PushFilterRuleAdd(peerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
 			}
-			s.relay.PushFilterRuleAdd(peerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
+		} else {
+			s.relay.PushFilterRuleAdd(req.PeerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
 		}
-	} else {
-		s.relay.PushFilterRuleAdd(req.PeerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
 	}
 
 	// Validate TTL bounds
@@ -749,17 +751,19 @@ func (s *Server) handleFilterRuleRemove(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Push the rule removal to peer(s) via relay
-	if req.PeerName == "__all__" {
-		// Broadcast to all connected peers (skip self-referencing rules)
-		for _, peerName := range s.relay.GetConnectedPeerNames() {
-			if req.SourcePeer != "" && req.SourcePeer == peerName {
-				continue
+	// Push the rule removal to peer(s) via relay (if relay is enabled)
+	if s.relay != nil {
+		if req.PeerName == "__all__" {
+			// Broadcast to all connected peers (skip self-referencing rules)
+			for _, peerName := range s.relay.GetConnectedPeerNames() {
+				if req.SourcePeer != "" && req.SourcePeer == peerName {
+					continue
+				}
+				s.relay.PushFilterRuleRemove(peerName, req.Port, req.Protocol, req.SourcePeer)
 			}
-			s.relay.PushFilterRuleRemove(peerName, req.Port, req.Protocol, req.SourcePeer)
+		} else {
+			s.relay.PushFilterRuleRemove(req.PeerName, req.Port, req.Protocol, req.SourcePeer)
 		}
-	} else {
-		s.relay.PushFilterRuleRemove(req.PeerName, req.Port, req.Protocol, req.SourcePeer)
 	}
 
 	// Update coordinator's filter and persist to S3

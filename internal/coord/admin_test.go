@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
@@ -1046,4 +1047,185 @@ func TestUserPermissions_Admin(t *testing.T) {
 	assert.Equal(t, "guest", resp.UserID)
 	assert.True(t, resp.IsAdmin)
 	assert.GreaterOrEqual(t, len(resp.Panels), 10) // Admin gets all panels
+}
+
+// --- Filter API Tests ---
+
+func TestFilterAdd_TTLValidation(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.adminMux)
+	require.NotNil(t, srv.filter)
+
+	tests := []struct {
+		name         string
+		ttl          int64
+		expectedCode int
+		errorMsg     string
+	}{
+		{
+			name:         "permanent rule (ttl=0)",
+			ttl:          0,
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:         "1 hour ttl",
+			ttl:          3600,
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:         "1 day ttl",
+			ttl:          86400,
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:         "1 year ttl (max)",
+			ttl:          365 * 24 * 3600,
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:         "negative ttl",
+			ttl:          -1,
+			expectedCode: http.StatusBadRequest,
+			errorMsg:     "ttl cannot be negative",
+		},
+		{
+			name:         "ttl exceeds maximum",
+			ttl:          365*24*3600 + 1,
+			expectedCode: http.StatusBadRequest,
+			errorMsg:     "ttl exceeds maximum",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqBody := FilterRulesRequest{
+				PeerName: "test-peer",
+				Port:     22,
+				Protocol: "tcp",
+				Action:   "allow",
+				TTL:      tt.ttl,
+			}
+			body, _ := json.Marshal(reqBody)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/filter/rules", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			srv.adminMux.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.expectedCode, rec.Code)
+			if tt.errorMsg != "" {
+				assert.Contains(t, rec.Body.String(), tt.errorMsg)
+			}
+		})
+	}
+}
+
+func TestFilterAdd_WithTTL(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.adminMux)
+	require.NotNil(t, srv.filter)
+
+	// Add a rule with TTL
+	reqBody := FilterRulesRequest{
+		PeerName: "test-peer",
+		Port:     22,
+		Protocol: "tcp",
+		Action:   "allow",
+		TTL:      3600, // 1 hour
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/filter/rules", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Verify rule was added with correct expiry
+	rules := srv.filter.ListRules()
+	var found bool
+	for _, r := range rules {
+		if r.Source == routing.SourceTemporary && r.Rule.Port == 22 {
+			found = true
+			assert.Greater(t, r.Rule.Expires, time.Now().Unix(), "expires should be in the future")
+			assert.LessOrEqual(t, r.Rule.Expires, time.Now().Unix()+3601, "expires should be approximately 1 hour from now")
+			break
+		}
+	}
+	assert.True(t, found, "rule should have been added")
+}
+
+func TestFilterAdd_WithoutTTL(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.adminMux)
+	require.NotNil(t, srv.filter)
+
+	// Add a permanent rule (TTL=0)
+	reqBody := FilterRulesRequest{
+		PeerName: "test-peer",
+		Port:     80,
+		Protocol: "tcp",
+		Action:   "allow",
+		TTL:      0,
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/filter/rules", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Verify rule was added with no expiry
+	rules := srv.filter.ListRules()
+	var found bool
+	for _, r := range rules {
+		if r.Source == routing.SourceTemporary && r.Rule.Port == 80 {
+			found = true
+			assert.Equal(t, int64(0), r.Rule.Expires, "permanent rule should have expires=0")
+			break
+		}
+	}
+	assert.True(t, found, "rule should have been added")
+}
+
+func TestFilterAdd_WithSourcePeer(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.adminMux)
+	require.NotNil(t, srv.filter)
+
+	// Add a peer-specific rule
+	reqBody := FilterRulesRequest{
+		PeerName:   "test-peer",
+		Port:       22,
+		Protocol:   "tcp",
+		Action:     "allow",
+		SourcePeer: "trusted-peer",
+		TTL:        0,
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/filter/rules", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Verify rule was added with source peer
+	rules := srv.filter.ListRules()
+	var found bool
+	for _, r := range rules {
+		if r.Source == routing.SourceTemporary && r.Rule.Port == 22 && r.Rule.SourcePeer == "trusted-peer" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "peer-specific rule should have been added")
 }

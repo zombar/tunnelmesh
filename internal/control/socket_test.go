@@ -194,3 +194,40 @@ func TestDefaultSocketPath(t *testing.T) {
 	path := DefaultSocketPath()
 	assert.Equal(t, "/var/run/tunnelmesh.sock", path)
 }
+
+func TestFilterChangedCallback(t *testing.T) {
+	dir := t.TempDir()
+	socketPath := filepath.Join(dir, "test.sock")
+
+	filter := routing.NewPacketFilter(true)
+	server := NewServer(socketPath, filter, "test-peer")
+
+	// Track callback invocations
+	callbackCount := 0
+	server.SetFilterChangedHandler(func() {
+		callbackCount++
+	})
+
+	require.NoError(t, server.Start())
+	defer func() { _ = server.Stop() }()
+
+	time.Sleep(10 * time.Millisecond)
+
+	client := NewClient(socketPath)
+
+	// Add a rule - should trigger callback
+	err := client.FilterAdd(8080, "tcp", "allow", 0)
+	require.NoError(t, err)
+
+	time.Sleep(10 * time.Millisecond)
+	assert.Greater(t, callbackCount, 0, "callback should have been invoked after FilterAdd")
+
+	initialCount := callbackCount
+
+	// Remove a rule - should trigger callback again
+	err = client.FilterRemove(8080, "tcp")
+	require.NoError(t, err)
+
+	time.Sleep(10 * time.Millisecond)
+	assert.Greater(t, callbackCount, initialCount, "callback should have been invoked after FilterRemove")
+}
