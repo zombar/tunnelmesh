@@ -16,7 +16,7 @@ services.
 
 Rules come from four sources, merged with "most restrictive wins" logic:
 
-```text
+```
 ┌─────────────────────────────────────────────────────────┐
 │  Coordinator Config (server.yaml)                       │
 │  → Global defaults pushed to ALL peers on connect       │
@@ -41,7 +41,7 @@ Rules come from four sources, merged with "most restrictive wins" logic:
 Conflict Resolution: MOST RESTRICTIVE WINS
   - If any source says "deny", the port is denied
   - "allow" only wins if no source denies
-```text
+```
 
 ## Service Ports
 
@@ -82,7 +82,7 @@ filter:
       protocol: tcp
       action: deny
       source_peer: untrusted-peer
-```text
+```
 
 ### Peer Config (peer.yaml)
 
@@ -106,7 +106,7 @@ filter:
       protocol: tcp
       action: deny
       source_peer: dev-workstation
-```text
+```
 
 ### Rule Fields
 
@@ -132,7 +132,7 @@ tunnelmesh filter list
 #
 # Default policy: deny (allowlist mode - only allowed ports are accessible)
 # Total rules: 3
-```text
+```
 
 ### Add Temporary Rule
 
@@ -148,7 +148,7 @@ tunnelmesh filter add --port 22 --protocol tcp --action deny --source-peer badpe
 
 # Block UDP port from any peer
 tunnelmesh filter add --port 53 --protocol udp --action deny
-```text
+```
 
 ### Remove Temporary Rule
 
@@ -158,7 +158,7 @@ tunnelmesh filter remove --port 22 --protocol tcp
 
 # Remove peer-specific rule
 tunnelmesh filter remove --port 22 --protocol tcp --source-peer badpeer
-```text
+```
 
 **Note**: Only temporary rules (added via CLI or admin panel) can be removed. Rules from config files must be removed by
 editing the config.
@@ -198,7 +198,7 @@ filter:
       protocol: tcp
       action: allow
       source_peer: admin-workstation
-```text
+```
 
 ### Block untrusted peer from sensitive ports
 
@@ -213,7 +213,7 @@ filter:
       protocol: tcp
       action: deny
       source_peer: contractor-laptop
-```text
+```
 
 ### Peer-specific rules take precedence
 
@@ -229,7 +229,7 @@ rules:
     protocol: tcp
     action: deny
     source_peer: badpeer    # Deny SSH from badpeer
-```text
+```
 
 Traffic from `badpeer` to port 22 is denied, while all other peers are allowed.
 
@@ -251,7 +251,7 @@ rate(tunnelmesh_dropped_filtered_total[5m])
 
 # Top blocked source peers
 topk(5, sum by (source_peer) (rate(tunnelmesh_dropped_filtered_total[5m])))
-```text
+```
 
 ### Alerts
 
@@ -275,7 +275,7 @@ Default alerts in `monitoring/prometheus/alerts.yml`:
     severity: warning
   annotations:
     description: "{{ $value }} different source peers being blocked on {{ $labels.peer }}"
-```text
+```
 
 ## ICMP Handling
 
@@ -305,13 +305,13 @@ Check if `default_deny` is enabled:
 ```bash
 tunnelmesh filter list
 # Look for "Default policy: deny"
-```text
+```
 
 Add an allow rule:
 
 ```bash
 tunnelmesh filter add --port 8080 --protocol tcp
-```text
+```
 
 ### Rule not taking effect
 
@@ -327,4 +327,4 @@ Enable debug logging to see filter decisions:
 ```bash
 tunnelmesh join --log-level debug
 # Look for "filter" or "dropped" in logs
-```text
+```

@@ -5,7 +5,7 @@ phones, tablets, and laptops to connect to the mesh without running the full Tun
 
 ## How It Works
 
-```text
+```
                                    TunnelMesh Mesh Network
     ┌─────────────────────────────────────────────────────────────────────────┐
     │                                                                         │
@@ -31,7 +31,7 @@ phones, tablets, and laptops to connect to the mesh without running the full Tun
          │ iPhone  │              │ Android │              │ Laptop  │
          │   App   │              │   App   │              │  Client │
          └─────────┘              └─────────┘              └─────────┘
-```text
+```
 
 **Key concepts:**
 
@@ -55,7 +55,7 @@ sudo tunnelmesh join \
   --name wg-gateway \
   --wireguard \
   --context wg-gateway
-```text
+```
 
 This creates a context named "wg-gateway" that you can manage with `tunnelmesh context` commands.
 
@@ -76,7 +76,7 @@ wireguard:
   # This is YOUR public IP or hostname, not the coordinator!
   # If empty, clients will use this peer's detected public IP
   endpoint: "203.0.113.50:51820"  # or "wg.example.com:51820"
-```text
+```
 
 **Important distinction:**
 
@@ -134,7 +134,7 @@ wireguard:
   # Persistent storage for client keys and assignments
   # Default: ~/.tunnelmesh/wireguard/
   data_dir: "/var/lib/tunnelmesh/wireguard"
-```text
+```
 
 ### Terraform/Cloud Configuration
 
@@ -147,7 +147,7 @@ nodes = {
     region    = "nyc3"
   }
 }
-```text
+```
 
 ---
 
@@ -189,7 +189,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 # Delete client
 curl -X DELETE -H "Authorization: Bearer $TOKEN" \
   https://this.tm/api/v1/wireguard/clients/CLIENT_ID
-```text
+```
 
 ---
 
@@ -218,11 +218,11 @@ WireGuard clients receive IPs from a dedicated subnet within the mesh CIDR:
 
 WireGuard clients get mesh DNS names:
 
-```text
+```
 iphone.tunnelmesh    -> 172.30.100.2
 android.tunnelmesh   -> 172.30.100.3
 laptop.tunnelmesh    -> 172.30.100.4
-```text
+```
 
 ---
 
@@ -242,11 +242,11 @@ join_mesh:
   wireguard:
     enabled: true
     listen_port: 51820
-```text
+```
 
 ```bash
 sudo tunnelmesh serve --config server.yaml
-```text
+```
 
 **Pros:** Simplest setup, single server to maintain
 **Cons:** Single point of failure, all traffic through one node
@@ -255,7 +255,7 @@ sudo tunnelmesh serve --config server.yaml
 
 Separate the WireGuard concentrator from the coordinator:
 
-```text
+```
 ┌────────────────────┐          ┌────────────────────┐
 │    Coordinator     │          │   WireGuard Peer   │
 │   (no WireGuard)   │◄────────►│   (concentrator)   │
@@ -268,7 +268,7 @@ Separate the WireGuard concentrator from the coordinator:
                                     │   📱📱💻  │
                                     │  Clients  │
                                     └───────────┘
-```text
+```
 
 **Coordinator:**
 
@@ -278,7 +278,7 @@ auth_token: "your-token"
 join_mesh:
   name: "coordinator"
   # No wireguard here
-```text
+```
 
 **WireGuard Peer:**
 
@@ -290,7 +290,7 @@ wireguard:
   enabled: true
   listen_port: 51820
   endpoint: "wg.example.com:51820"
-```text
+```
 
 **Pros:** Scale WireGuard independently, better isolation
 **Cons:** More infrastructure to manage
@@ -299,7 +299,7 @@ wireguard:
 
 WireGuard gateways in multiple regions for low-latency access:
 
-```text
+```
                          ┌─────────────────────┐
                          │     Coordinator     │
                          │      Amsterdam      │
@@ -314,7 +314,7 @@ WireGuard gateways in multiple regions for low-latency access:
 └───────┬───────┘          └────────┬────────┘         └────────┬────────┘
         │                           │                           │
    US Clients               EU Clients                 Asia Clients
-```text
+```
 
 **Terraform configuration:**
 
@@ -341,7 +341,7 @@ nodes = {
     region    = "sgp1"
   }
 }
-```text
+```
 
 **Client configuration:**
 Users connect to their nearest gateway for lowest latency. All gateways provide access to the full mesh.
@@ -369,7 +369,7 @@ PublicKey = <concentrator-public-key>
 AllowedIPs = 172.30.0.0/16
 Endpoint = wg.example.com:51820
 PersistentKeepalive = 25
-```text
+```
 
 ### macOS
 
@@ -396,7 +396,7 @@ sudo wg-quick up tunnelmesh
 
 # Disconnect
 sudo wg-quick down tunnelmesh
-```text
+```
 
 ### Linux
 
@@ -417,7 +417,7 @@ sudo systemctl enable wg-quick@tunnelmesh
 
 # Disconnect
 sudo wg-quick down tunnelmesh
-```text
+```
 
 ### Windows
 
@@ -443,7 +443,7 @@ To route all internet traffic through the mesh:
 ```ini
 [Peer]
 AllowedIPs = 0.0.0.0/0, ::/0
-```text
+```
 
 This sends all traffic through the WireGuard tunnel, then through the exit peer.
 
@@ -454,7 +454,7 @@ Route specific subnets through the tunnel:
 ```ini
 [Peer]
 AllowedIPs = 172.30.0.0/16, 10.0.0.0/8, 192.168.1.0/24
-```text
+```
 
 ---
 
@@ -467,7 +467,7 @@ AllowedIPs = 172.30.0.0/16, 10.0.0.0/8, 192.168.1.0/24
 ```bash
 tunnelmesh status
 # Look for "WireGuard: enabled"
-```text
+```
 
 **Check UDP port is open:**
 
@@ -477,7 +477,7 @@ tunnelmesh status
 
 # Test from client network
 nc -zvu wg.example.com 51820
-```text
+```
 
 **Check firewall:**
 
@@ -486,7 +486,7 @@ nc -zvu wg.example.com 51820
 sudo ufw allow 51820/udp
 
 # DigitalOcean/AWS - check security groups
-```text
+```
 
 ### Client Connected But No Traffic
 
@@ -497,7 +497,7 @@ sudo ufw allow 51820/udp
 wg show
 
 # Should show handshake and transfer stats
-```text
+```
 
 **Test DNS:**
 
@@ -505,7 +505,7 @@ wg show
 # From WireGuard client
 ping 172.30.0.1  # Coordinator IP
 dig @172.30.0.1 peer-name.tunnelmesh
-```text
+```
 
 **Check routing:**
 
@@ -514,7 +514,7 @@ dig @172.30.0.1 peer-name.tunnelmesh
  ip route | grep 172.30 
 
 # Should show route via WireGuard interface
-```text
+```
 
 ### Handshake Fails
 
@@ -543,14 +543,14 @@ If using multi-region deployment, connect to nearest WireGuard gateway.
 ```bash
 # On client, try smaller MTU
 ping -s 1400 172.30.0.1
-```text
+```
 
 If packets fragment, reduce MTU in client config:
 
 ```ini
 [Interface]
 MTU = 1380
-```text
+```
 
 ---
 
@@ -593,7 +593,7 @@ Override DNS servers for WireGuard clients:
 ```ini
 [Interface]
 DNS = 172.30.0.1, 1.1.1.1
-```text
+```
 
 ### Persistent Keepalive
 
@@ -602,7 +602,7 @@ Required for NAT traversal. Default is 25 seconds:
 ```ini
 [Peer]
 PersistentKeepalive = 25
-```text
+```
 
 Increase for very stable connections, decrease for battery savings on mobile.
 
@@ -656,4 +656,4 @@ For enterprise deployments, WireGuard configs can be distributed via MDM:
     </dict>
   </dict>
 </dict>
-```text
+```

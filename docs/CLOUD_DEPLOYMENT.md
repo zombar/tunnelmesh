@@ -27,7 +27,7 @@ openssl rand -hex 32  # For auth_token
 # Deploy
 terraform init
 terraform apply
-```text
+```
 
 ---
 
@@ -41,7 +41,7 @@ network with exit peers, there's a configuration for you.
 **The simplest deployment.** A single $4/month droplet runs everything: coordinator, mesh peer, and WireGuard
 concentrator. Perfect for personal use, small teams, or testing.
 
-```text
+```
                     ┌─────────────────────────────────────┐
                     │         tunnelmesh.example.com      │
                     │         ━━━━━━━━━━━━━━━━━━━━━        │
@@ -61,7 +61,7 @@ concentrator. Perfect for personal use, small teams, or testing.
       │ iPhone  │                │  Laptop   │              │  Home PC    │
       │ (WG)    │                │  (native) │              │  (native)   │
       └─────────┘                └───────────┘              └─────────────┘
-```text
+```
 
 **Use cases:**
 
@@ -81,7 +81,7 @@ nodes = {
     allow_exit_traffic = true
   }
 }
-```text
+```
 
 **Cost:** ~$4/month
 
@@ -92,7 +92,7 @@ nodes = {
 **Separate concerns.** The coordinator handles orchestration while a dedicated peer provides WireGuard access for mobile
 devices. Better isolation and the ability to place the WireGuard endpoint closer to your users.
 
-```text
+```
 ┌─────────────────────────────┐          ┌─────────────────────────────┐
 │     tunnelmesh.example.com  │          │       wg.example.com        │
 │     ━━━━━━━━━━━━━━━━━━━━━   │          │       ━━━━━━━━━━━━━━        │
@@ -110,7 +110,7 @@ devices. Better isolation and the ability to place the WireGuard endpoint closer
                                          │   📱   │ │  📱   │ │  💻   │
                                          │ Phone  │ │ Tablet│ │Laptop │
                                          └────────┘ └───────┘ └───────┘
-```text
+```
 
 **Use cases:**
 
@@ -132,7 +132,7 @@ nodes = {
     region    = "nyc3"  # Closer to US users
   }
 }
-```text
+```
 
 **Cost:** ~$8/month (2 droplets)
 
@@ -144,7 +144,7 @@ nodes = {
 mesh-to-mesh communication stays direct. Great for privacy, accessing geo-restricted content, or compliance
 requirements.
 
-```text
+```
 ┌──────────────────┐                               ┌──────────────────┐
 │   Your Laptop    │                               │   Exit Peer      │
 │   London, UK     │                               │   Singapore      │
@@ -161,7 +161,7 @@ requirements.
 │   Other Peer     │
 │   Amsterdam      │
 └──────────────────┘
-```text
+```
 
 **Use cases:**
 
@@ -192,13 +192,13 @@ nodes = {
     }
   }
 }
-```text
+```
 
 On your local machine:
 
 ```bash
 sudo tunnelmesh join --config peer.yaml --exit-node tm-exit-sgp --context work
-```text
+```
 
 ---
 
@@ -207,7 +207,7 @@ sudo tunnelmesh join --config peer.yaml --exit-node tm-exit-sgp --context work
 **Global presence.** WireGuard entry points in multiple regions provide low-latency access for a distributed team. Users
 connect to their nearest gateway and gain access to the entire mesh.
 
-```text
+```
                               ┌─────────────────────────────────┐
                               │         Coordinator             │
                               │         Amsterdam               │
@@ -230,7 +230,7 @@ connect to their nearest gateway and gain access to the entire mesh.
        │   US Team   │                 │   EU Team   │                 │   APAC Team  │
        │   📱💻💻    │                 │   📱📱💻    │                 │   💻📱       │
        └─────────────┘                 └─────────────┘                 └──────────────┘
-```text
+```
 
 **Use cases:**
 
@@ -260,7 +260,7 @@ nodes = {
     region    = "sgp1"
   }
 }
-```text
+```
 
 **Cost:** ~$12/month (3 droplets)
 
@@ -271,7 +271,7 @@ nodes = {
 **Access your home network from anywhere.** Run a cloud coordinator and connect your home server as a peer. Mobile
 devices connect via WireGuard and can reach everything on your home LAN.
 
-```text
+```
                           Cloud (DigitalOcean)
         ┌─────────────────────────────────────────────────┐
         │                                                 │
@@ -306,7 +306,7 @@ devices connect via WireGuard and can reach everything on your home LAN.
                │(coffee  │              │ (hotel)   │
                │ shop)   │              │           │
                └─────────┘              └───────────┘
-```text
+```
 
 **Use cases:**
 
@@ -326,7 +326,7 @@ nodes = {
     wireguard   = true
   }
 }
-```text
+```
 
 ```yaml
 # Home server peer config
@@ -338,7 +338,7 @@ dns:
     - "nas"
     - "plex"
     - "homeassistant"
-```text
+```
 
 On the home server:
 
@@ -346,7 +346,7 @@ On the home server:
 sudo tunnelmesh join --config peer.yaml --context homelab
 sudo tunnelmesh service install
 sudo tunnelmesh service start
-```text
+```
 
 ---
 
@@ -355,7 +355,7 @@ sudo tunnelmesh service start
 **Connect developer machines directly.** No VPN concentrator bottleneck. Developers can SSH into each other's machines,
 share local development servers, and collaborate as if on the same LAN.
 
-```text
+```
                               ┌─────────────────────────────────┐
                               │         Coordinator             │
                               │    (minimal cloud instance)     │
@@ -374,7 +374,7 @@ share local development servers, and collaborate as if on the same LAN.
        │  alice$ ssh bob.tunnelmesh                                                    │
        │  alice$ curl http://eve.tunnelmesh:3000   # Access Eve's dev server           │
        │  eve$ psql -h alice.tunnelmesh            # Connect to Alice's local Postgres │
-```text
+```
 
 **Use cases:**
 
@@ -392,7 +392,7 @@ nodes = {
     coordinator = true
   }
 }
-```text
+```
 
 Each developer runs:
 
@@ -401,7 +401,7 @@ sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
   --token team-token \
   --context team
-```text
+```
 
 ---
 
@@ -410,7 +410,7 @@ sudo tunnelmesh join \
 **Direct connections for multiplayer gaming.** Skip the public internet. Peers connect directly via UDP for minimal
 latency. Host game servers on any peer's machine.
 
-```text
+```
                               ┌─────────────────────────────────┐
                               │         Coordinator             │
                               │    (handles discovery only)     │
@@ -432,7 +432,7 @@ latency. Host game servers on any peer's machine.
 
                     ═════  UDP tunnel (game traffic, ~10-30ms between peers)
                     ─────  Control plane (HTTPS to coordinator)
-```text
+```
 
 **Use cases:**
 
@@ -449,7 +449,7 @@ nodes = {
     coordinator = true  # Just coordination, no game traffic
   }
 }
-```text
+```
 
 Players join from their gaming PCs:
 
@@ -460,7 +460,7 @@ sudo tunnelmesh join \
   --token game-token \
   --name player1 \
   --context gaming
-```text
+```
 
 ---
 
@@ -523,7 +523,7 @@ Set your DigitalOcean API token via environment:
 
 ```bash
 export TF_VAR_do_token="dop_v1_xxx"
-```text
+```
 
 ### Default Settings
 
@@ -561,7 +561,7 @@ Enable observability with `monitoring_enabled = true`:
 monitoring_enabled        = true
 prometheus_retention_days = 7
 loki_retention_days       = 7
-```text
+```
 
 ### Included Services
 
@@ -581,9 +581,9 @@ loki_retention_days       = 7
 
 Access Grafana from within the mesh:
 
-```text
+```
 https://tunnelmesh.example.com/grafana/
-```text
+```
 
 ---
 
@@ -613,7 +613,7 @@ nodes = {
     }
   }
 }
-```text
+```
 
 ---
 
@@ -623,7 +623,7 @@ After `terraform apply`:
 
 ```bash
 terraform output
-```text
+```
 
 | Output | Description |
 | -------- | ------------- |
@@ -641,19 +641,19 @@ terraform output
 ```bash
 vim terraform.tfvars
 terraform apply
-```text
+```
 
 ### View Logs
 
 ```bash
 ssh root@<node-ip> journalctl -u tunnelmesh -f
-```text
+```
 
 ### Destroy
 
 ```bash
 terraform destroy
-```text
+```
 
 ---
 
@@ -744,4 +744,4 @@ monitoring_enabled = true
 # Retention
 prometheus_retention_days = 14
 loki_retention_days       = 7
-```text
+```

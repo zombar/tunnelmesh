@@ -31,7 +31,7 @@ tunnelmesh benchmark peer-name --size 50MB --direction download
 
 # Save results to JSON
 tunnelmesh benchmark peer-name --output results.json
-```text
+```
 
 ### Docker Automated Benchmarks
 
@@ -45,11 +45,11 @@ docker compose logs -f benchmarker
 
 # Results are saved to the benchmark-results volume
 docker compose exec server ls /results/
-```text
+```
 
 ## CLI Reference
 
-```text
+```
 tunnelmesh benchmark <peer-name> [flags]
 
 Flags:
@@ -76,7 +76,7 @@ Chaos Testing Flags:
 
   --bandwidth string   Bandwidth limit (default unlimited)
                        Examples: 1mbps, 10mbps, 100mbps, 1gbps
-```text
+```
 
 ## Chaos Testing
 
@@ -113,7 +113,7 @@ tunnelmesh benchmark peer-1 --size 20MB \
 # Save results for comparison
 tunnelmesh benchmark peer-1 --size 50MB --output baseline.json
 tunnelmesh benchmark peer-1 --size 50MB --packet-loss 5 --output with-loss.json
-```text
+```
 
 ## Docker Benchmarker
 
@@ -162,7 +162,7 @@ OUTPUT_DIR: /results                      # Where to save JSON results
 # Chaos randomization
 RANDOMIZE_CHAOS: true                     # Random preset per transfer (default)
 # Set RANDOMIZE_CHAOS=false for all clean benchmarks
-```text
+```
 
 ### Controlling the Benchmarker
 
@@ -181,7 +181,7 @@ docker compose run -e RANDOMIZE_CHAOS=false benchmarker
 
 # Faster interval (more overlap)
 docker compose run -e BENCHMARK_INTERVAL=15s benchmarker
-```text
+```
 
 ### Viewing Results
 
@@ -194,7 +194,7 @@ docker compose exec server ls -la /results/
 
 # Copy results to host
 docker cp tunnelmesh-server:/results ./benchmark-results/
-```text
+```
 
 ## Understanding Results
 
@@ -222,7 +222,7 @@ docker cp tunnelmesh-server:/results ./benchmark-results/
     "jitter": 1000000
   }
 }
-```text
+```
 
 ### Key Metrics
 
@@ -242,15 +242,15 @@ docker cp tunnelmesh-server:/results ./benchmark-results/
        {baseline: $base, with_chaos: $chaos,
         degradation_pct: (($base - $chaos) / $base * 100)}' \
   baseline.json with-loss.json
-```text
+```
 
 ## Troubleshooting
 
 ### Benchmark Fails to Connect
 
-```text
+```
 Error: cannot resolve peer "peer-1": is the mesh daemon running?
-```text
+```
 
 - Ensure the mesh daemon is running: `tunnelmesh status`
 - Check peer is online: `tunnelmesh peers`

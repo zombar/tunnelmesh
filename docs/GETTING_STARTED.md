@@ -22,7 +22,7 @@ sudo mv tunnelmesh /usr/local/bin/
 
 # Verify installation
 tunnelmesh version
-```text
+```
 
 ### Linux (arm64)
 
@@ -30,7 +30,7 @@ tunnelmesh version
 wget https://github.com/zombar/tunnelmesh/releases/latest/download/tunnelmesh-linux-arm64 -O tunnelmesh
 chmod +x tunnelmesh
 sudo mv tunnelmesh /usr/local/bin/
-```text
+```
 
 ### macOS (Apple Silicon)
 
@@ -38,7 +38,7 @@ sudo mv tunnelmesh /usr/local/bin/
 curl -L https://github.com/zombar/tunnelmesh/releases/latest/download/tunnelmesh-darwin-arm64 -o tunnelmesh
 chmod +x tunnelmesh
 sudo mv tunnelmesh /usr/local/bin/
-```text
+```
 
 ### macOS (Intel)
 
@@ -46,7 +46,7 @@ sudo mv tunnelmesh /usr/local/bin/
 curl -L https://github.com/zombar/tunnelmesh/releases/latest/download/tunnelmesh-darwin-amd64 -o tunnelmesh
 chmod +x tunnelmesh
 sudo mv tunnelmesh /usr/local/bin/
-```text
+```
 
 ### Windows (PowerShell as Administrator)
 
@@ -62,7 +62,7 @@ Invoke-WebRequest -Uri "https://github.com/zombar/tunnelmesh/releases/latest/dow
 
 # Verify installation (in new terminal)
 tunnelmesh version
-```text
+```
 
 ---
 
@@ -79,7 +79,7 @@ tunnelmesh init --server --output /etc/tunnelmesh/server.yaml
 
 # Edit and set a secure auth token
 sudo nano /etc/tunnelmesh/server.yaml
-```text
+```
 
 #### Windows (PowerShell as Administrator)
 
@@ -92,7 +92,7 @@ tunnelmesh init --server --output "C:\ProgramData\TunnelMesh\server.yaml"
 
 # Edit and set a secure auth token
 notepad "C:\ProgramData\TunnelMesh\server.yaml"
-```text
+```
 
 ---
 
@@ -116,7 +116,7 @@ tunnelmesh service status
 
 # View logs
 tunnelmesh service logs --follow
-```text
+```
 
 #### Windows (PowerShell as Administrator)
 
@@ -132,7 +132,7 @@ tunnelmesh service start
 
 # Check status
 tunnelmesh service status
-```text
+```
 
 **Note:** The service name is derived from the context name. The "server" context creates a service named
 "tunnelmesh-server".
@@ -167,7 +167,7 @@ Each peer needs an SSH keypair for secure connections:
 
 ```bash
 tunnelmesh init
-```text
+```
 
 This creates:
 
@@ -207,7 +207,7 @@ tunnelmesh init --peer --output "C:\ProgramData\TunnelMesh\peer.yaml"
 #   - server: URL of your coordination server
 #   - auth_token: must match server's token
 notepad "C:\ProgramData\TunnelMesh\peer.yaml"
-```text
+```
 
 ---
 
@@ -230,7 +230,7 @@ tunnelmesh service status
 
 # View logs
 tunnelmesh service logs --follow
-```text
+```
 
 #### Windows (PowerShell as Administrator)
 
@@ -246,7 +246,7 @@ tunnelmesh service start
 
 # Check status
 tunnelmesh service status
-```text
+```
 
 **Tip:** When joining, if the mesh CA certificate isn't installed, TunnelMesh will prompt you to install it for HTTPS access to mesh services.
 
@@ -263,7 +263,7 @@ tunnelmesh peers
 
 # Once other peers are connected, ping them by name
 ping otherpeer.tunnelmesh
-```text
+```
 
 Check the admin dashboard on the server—your peer should now appear in the list.
 
@@ -296,16 +296,16 @@ You can be a member of multiple meshes simultaneously. Each mesh runs as a separ
 
 ```bash
 tunnelmesh context list
-```text
+```
 
 Example output:
 
-```text
+```
 NAME      SERVER                      STATUS     ACTIVE
 home      http://home-server:8080     running    *
 work      https://work.mesh.io        stopped
 dev       http://192.168.1.10:8080    -
-```text
+```
 
 ### Switch active context
 
@@ -313,7 +313,7 @@ When you switch contexts, system DNS resolution switches to that mesh:
 
 ```bash
 tunnelmesh context use work
-```text
+```
 
 This changes which mesh's DNS resolver handles `.tunnelmesh` domains. The previous mesh's tunnels remain active—only the "focus" changes.
 
@@ -326,14 +326,14 @@ tunnelmesh service stop --context home
 
 # Status of specific context
 tunnelmesh service status --context work
-```text
+```
 
 ### Delete a context
 
 ```bash
 # This prompts to stop/uninstall the service and optionally remove the config
 tunnelmesh context delete dev
-```text
+```
 
 ---
 
@@ -347,7 +347,7 @@ tunnelmesh service logs --lines 100
 
 # Verify config file syntax
 cat /etc/tunnelmesh/peer.yaml
-```text
+```
 
 ### Peer not appearing on server
 
@@ -391,19 +391,19 @@ On the peer that will serve as the exit peer:
 ```bash
 # Edit the peer config
 sudo nano /etc/tunnelmesh/peer.yaml
-```text
+```
 
 Add:
 
 ```yaml
 allow_exit_traffic: true
-```text
+```
 
 Restart the service:
 
 ```bash
 tunnelmesh service restart
-```text
+```
 
 TunnelMesh automatically configures IP forwarding and NAT when `allow_exit_traffic` is enabled.
 
@@ -413,18 +413,18 @@ On peers that should route through the exit peer:
 
 ```bash
 sudo nano /etc/tunnelmesh/peer.yaml
-```text
+```
 
 Add:
 
 ```yaml
 exit_node: "exit-peer-name"  # Name of your exit peer peer
-```text
+```
 
 Restart:
 
 ```bash
 sudo tunnelmesh service restart
-```text
+```
 
 Internet traffic will now route through the exit peer, while mesh traffic stays direct.

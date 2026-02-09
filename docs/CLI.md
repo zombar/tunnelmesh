@@ -32,7 +32,7 @@ tunnelmesh benchmark other-peer --size 100MB
 # Install as system service (uses active context)
 sudo tunnelmesh service install
 sudo tunnelmesh service start
-```text
+```
 
 > **Contexts simplify management:** After joining with `--context`, TunnelMesh remembers your configuration. Subsequent commands use the active context automatically—no need to specify `-c` every time.
 >
@@ -63,7 +63,7 @@ sudo mv tunnelmesh-darwin-amd64 /usr/local/bin/tunnelmesh
 # Windows (PowerShell as Administrator)
 Invoke-WebRequest -Uri "https://github.com/zombar/tunnelmesh/releases/latest/download/tunnelmesh-windows-amd64.exe" -OutFile "tunnelmesh.exe"
 Move-Item tunnelmesh.exe C:\Windows\System32\
-```text
+```
 
 Or build from source:
 
@@ -72,7 +72,7 @@ git clone https://github.com/zombar/tunnelmesh.git
 cd tunnelmesh
 make build
 sudo mv tunnelmesh /usr/local/bin/
-```text
+```
 
 ---
 
@@ -114,7 +114,7 @@ Initialize TunnelMesh by generating SSH keys.
 
 ```bash
 tunnelmesh init
-```text
+```
 
 **What it does:**
 
@@ -125,10 +125,10 @@ tunnelmesh init
 
 **Example output:**
 
-```text
+```
 INF keys generated path=~/.tunnelmesh/id_ed25519
 INF public key path=~/.tunnelmesh/id_ed25519.pub
-```text
+```
 
 ---
 
@@ -138,7 +138,7 @@ Run the coordination server.
 
 ```bash
 tunnelmesh serve [flags]
-```text
+```
 
 **Flags:**
 
@@ -151,19 +151,19 @@ tunnelmesh serve [flags]
 
 ```bash
 tunnelmesh serve --config server.yaml
-```text
+```
 
 **Example - With location tracking:**
 
 ```bash
 tunnelmesh serve --config server.yaml --locations
-```text
+```
 
 **Generate a config:**
 
 ```bash
 tunnelmesh init --server --peer --output server.yaml
-```text
+```
 
 See [server.yaml.example](../server.yaml.example) for all configuration options.
 
@@ -175,7 +175,7 @@ Connect to the mesh as a peer.
 
 ```bash
 tunnelmesh join [flags]
-```text
+```
 
 **Flags:**
 
@@ -199,7 +199,7 @@ tunnelmesh join [flags]
 sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
   --token your-secure-token
-```text
+```
 
 **Example - Join with exit peer:**
 
@@ -208,7 +208,7 @@ sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
   --token your-secure-token \
   --exit-node server-peer
-```text
+```
 
 **Example - Join as exit peer:**
 
@@ -220,7 +220,7 @@ sudo tunnelmesh join \
   --latitude 1.3521 \
   --longitude 103.8198 \
   --city Singapore
-```text
+```
 
 **Example - Join with WireGuard concentrator:**
 
@@ -229,13 +229,13 @@ sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
   --token your-secure-token \
   --wireguard
-```text
+```
 
 **Generate a config:**
 
 ```bash
 tunnelmesh init --peer --output peer.yaml
-```text
+```
 
 See [peer.yaml.example](../peer.yaml.example) for all configuration options.
 
@@ -248,7 +248,7 @@ multiple meshes.
 
 ```bash
 tunnelmesh context <subcommand>
-```text
+```
 
 **Subcommands:**
 
@@ -268,7 +268,7 @@ Create a new context from a configuration file.
 
 ```bash
  tunnelmesh context create <name> --config <path> [--mode serve | join] 
-```text
+```
 
 **Flags:**
 
@@ -285,7 +285,7 @@ tunnelmesh context create home --config ~/.tunnelmesh/home.yaml
 
 # Create a server context
 tunnelmesh context create coordinator --config /etc/tunnelmesh/server.yaml --mode serve
-```text
+```
 
 ---
 
@@ -295,16 +295,16 @@ List all contexts with their status.
 
 ```bash
 tunnelmesh context list
-```text
+```
 
 **Example output:**
 
-```text
+```
 NAME         SERVER                      STATUS     ACTIVE
 home         http://home-server:8080     running    *
 work         https://work.mesh.io        stopped
 dev          http://192.168.1.10:8080    -
-```text
+```
 
 - `STATUS`: Service status (`running`, `stopped`, or `-` if no service installed)
 - `ACTIVE`: `*` marks the currently active context
@@ -317,13 +317,13 @@ Switch the active context. This changes which mesh's DNS resolver handles `.tunn
 
 ```bash
 tunnelmesh context use <name>
-```text
+```
 
 **Example:**
 
 ```bash
 tunnelmesh context use work
-```text
+```
 
 **What happens:**
 
@@ -342,13 +342,13 @@ Delete a context. Prompts to stop/uninstall service if running.
 
 ```bash
 tunnelmesh context delete <name>
-```text
+```
 
 **Example:**
 
 ```bash
 tunnelmesh context delete dev
-```text
+```
 
 **Prompts:**
 
@@ -363,13 +363,13 @@ Show details of a specific context.
 
 ```bash
 tunnelmesh context show [name]
-```text
+```
 
 If no name is provided, shows the active context.
 
 **Example output:**
 
-```text
+```
 Context: home
   Config:     /home/user/.tunnelmesh/home.yaml
   Server:     http://home-server:8080
@@ -377,7 +377,7 @@ Context: home
   Domain:     .tunnelmesh
   DNS Listen: 127.0.0.53:5353
   Service:    tunnelmesh-home (running)
-```text
+```
 
 ---
 
@@ -387,11 +387,11 @@ Show current mesh status.
 
 ```bash
 tunnelmesh status
-```text
+```
 
 **Example output:**
 
-```text
+```
 TunnelMesh Status
 =================
 
@@ -420,7 +420,7 @@ DNS:
   Enabled:     yes
   Listen:      127.0.0.53:5353
   Cache TTL:   300s
-```text
+```
 
 ---
 
@@ -430,18 +430,18 @@ List all peers in the mesh.
 
 ```bash
 tunnelmesh peers
-```text
+```
 
 **Example output:**
 
-```text
+```
 NAME                 MESH IP         PUBLIC IP            LAST SEEN
 -------------------- --------------- -------------------- --------------------
 coordinator          172.30.0.1      203.0.113.10         2024-01-15 10:30:45
 my-laptop            172.30.0.5      198.51.100.20        2024-01-15 10:30:42
 server-eu            172.30.0.3      192.0.2.50           2024-01-15 10:30:40
 mobile-client        172.30.0.10     -                    2024-01-15 10:25:00
-```text
+```
 
 ---
 
@@ -451,7 +451,7 @@ Resolve a mesh hostname to its IP address.
 
 ```bash
 tunnelmesh resolve <hostname>
-```text
+```
 
 **Examples:**
 
@@ -467,7 +467,7 @@ tunnelmesh resolve coordinator.tunnelmesh
 # Resolve a DNS alias
 tunnelmesh resolve nas
 # Output: nas -> 172.30.0.2
-```text
+```
 
 ---
 
@@ -477,7 +477,7 @@ Deregister from the mesh network.
 
 ```bash
 tunnelmesh leave
-```text
+```
 
 **Note:** This removes your peer record from the coordinator. Your mesh IP will be released and may be assigned to
 another peer. Use this when permanently leaving the mesh, not for temporary disconnects.
@@ -490,7 +490,7 @@ Run speed tests between peers.
 
 ```bash
 tunnelmesh benchmark <peer-name> [flags]
-```text
+```
 
 **Flags:**
 
@@ -510,24 +510,24 @@ tunnelmesh benchmark <peer-name> [flags]
 
 ```bash
 tunnelmesh benchmark server-peer
-```text
+```
 
 **Example output:**
 
-```text
+```
 Benchmarking server-peer (172.30.0.1)...
   Direction:  upload
   Size:       10 MB
   Duration:   125 ms
   Throughput: 640.00 Mbps
   Latency:    1.23 ms (avg), 0.95 ms (min), 2.10 ms (max)
-```text
+```
 
 **Example - Large transfer with JSON output:**
 
 ```bash
 tunnelmesh benchmark server-peer --size 100MB --output results.json
-```text
+```
 
 **Example - Chaos testing (simulate poor network):**
 
@@ -547,7 +547,7 @@ tunnelmesh benchmark server-peer --size 20MB \
   --latency 50ms \
   --jitter 20ms \
   --bandwidth 20mbps
-```text
+```
 
 See [Benchmarking Guide](BENCHMARKING.md) for detailed documentation.
 
@@ -559,7 +559,7 @@ Manage TunnelMesh as a system service.
 
 ```bash
 tunnelmesh service <subcommand> [flags]
-```text
+```
 
 **Subcommands:**
 
@@ -610,7 +610,7 @@ tunnelmesh service status
 
 # View logs
 tunnelmesh service logs --follow
-```text
+```
 
 **Example - Install server service:**
 
@@ -619,7 +619,7 @@ tunnelmesh service logs --follow
 tunnelmesh context create coordinator --config /etc/tunnelmesh/server.yaml --mode serve
 sudo tunnelmesh service install
 sudo tunnelmesh service start
-```text
+```
 
 **Example - Multiple meshes:**
 
@@ -639,7 +639,7 @@ sudo tunnelmesh service start --context work
 # Control specific context
 tunnelmesh service status --context work
 tunnelmesh service logs --context home --follow
-```text
+```
 
 **Service naming:** Service names are derived from context names:
 
@@ -663,7 +663,7 @@ Self-update to the latest version.
 
 ```bash
 tunnelmesh update [flags]
-```text
+```
 
 **Flags:**
 
@@ -677,19 +677,19 @@ tunnelmesh update [flags]
 
 ```bash
 tunnelmesh update --check
-```text
+```
 
 **Example - Update to latest:**
 
 ```bash
 sudo tunnelmesh update
-```text
+```
 
 **Example - Update to specific version:**
 
 ```bash
 sudo tunnelmesh update --version v1.2.3
-```text
+```
 
 ---
 
@@ -699,15 +699,15 @@ Show version information.
 
 ```bash
 tunnelmesh version
-```text
+```
 
 **Example output:**
 
-```text
+```
 tunnelmesh v1.5.0
   Commit:     abc123def
   Build Time: 2024-01-15T10:00:00Z
-```text
+```
 
 ---
 
@@ -743,7 +743,7 @@ Generate config files with:
 tunnelmesh init --server --peer    # Both configs
 tunnelmesh init --server           # Server only
 tunnelmesh init --peer             # Peer only
-```text
+```
 
 ---
 
@@ -768,7 +768,7 @@ sudo nano /etc/tunnelmesh/server.yaml
 tunnelmesh context create vpn --config /etc/tunnelmesh/server.yaml --mode serve
 sudo tunnelmesh service install
 sudo tunnelmesh service start
-```text
+```
 
 **Step 2: Connect laptop**
 
@@ -781,7 +781,7 @@ nano ~/.tunnelmesh/vpn.yaml
 
 # Join and save as context
 sudo tunnelmesh join --config ~/.tunnelmesh/vpn.yaml --context vpn
-```text
+```
 
 **Step 3: Verify connection**
 
@@ -794,7 +794,7 @@ ping cloud-server.tunnelmesh
 
 # Your internet now routes through the cloud server
 curl ifconfig.me
-```text
+```
 
 ### Walkthrough 2: Team Development Mesh
 
@@ -812,7 +812,7 @@ nano server.yaml
 tunnelmesh context create team --config server.yaml --mode serve
 sudo tunnelmesh service install
 sudo tunnelmesh service start
-```text
+```
 
 **Step 2: Each developer joins**
 
@@ -824,7 +824,7 @@ sudo tunnelmesh join \
   --server http://coordinator-ip:8080 \
   --token team-secret-token \
   --context team
-```text
+```
 
 **Step 3: Team collaboration**
 
@@ -837,7 +837,7 @@ curl http://bob.tunnelmesh:3000
 
 # Connect to teammate's database
 psql -h charlie.tunnelmesh mydb
-```text
+```
 
 ### Walkthrough 3: Home Lab Remote Access
 
@@ -854,7 +854,7 @@ tunnelmesh init --server --peer --output server.yaml
 nano server.yaml
 
 sudo tunnelmesh serve --config server.yaml
-```text
+```
 
 **Step 2: Home server joins**
 
@@ -868,7 +868,7 @@ nano peer.yaml
 sudo tunnelmesh join --config peer.yaml --context homelab
 sudo tunnelmesh service install
 sudo tunnelmesh service start
-```text
+```
 
 **Step 3: Mobile access via WireGuard**
 
@@ -892,7 +892,7 @@ tunnelmesh context use home
 
 # Or specify context for commands
 tunnelmesh status --context home
-```text
+```
 
 ### "Config file required"
 
@@ -902,7 +902,7 @@ sudo tunnelmesh join --config /path/to/config.yaml --context mycontext
 
 # Or create context manually
 tunnelmesh context create mycontext --config /path/to/config.yaml
-```text
+```
 
 ### "Failed to create TUN device"
 
@@ -912,7 +912,7 @@ sudo tunnelmesh join
 
 # Or check TUN device availability
 ls -la /dev/net/tun
-```text
+```
 
 ### "Connection refused" to coordinator
 
@@ -922,7 +922,7 @@ curl http://coordinator:8080/health
 
 # Check firewall
 sudo ufw allow 8080/tcp  # Linux
-```text
+```
 
 ### DNS not resolving mesh names
 
@@ -936,7 +936,7 @@ cat /etc/resolver/tunnelmesh
 
 # Linux:
 resolvectl status
-```text
+```
 
 ### Slow or unreliable connections
 
@@ -949,7 +949,7 @@ tunnelmesh benchmark peer-name --size 10MB
 
 # Check if using relay (slower)
 # Look for "relay" in peers output
-```text
+```
 
 ---
 

@@ -39,7 +39,7 @@ sudo mount -t nfs this.tm:/myshare /mnt/myshare
 
 # Or with explicit options
 sudo mount -t nfs -o vers=3,tcp this.tm:/myshare /mnt/myshare
-```text
+```
 
 ### macOS
 
@@ -49,7 +49,7 @@ sudo mkdir -p /Volumes/myshare
 
 # Mount the share
 sudo mount -t nfs this.tm:/myshare /Volumes/myshare
-```text
+```
 
 Or use Finder: Go → Connect to Server → `nfs://this.tm/myshare`
 
@@ -57,15 +57,15 @@ Or use Finder: Go → Connect to Server → `nfs://this.tm/myshare`
 
 **Linux (`/etc/fstab`):**
 
-```text
+```
 this.tm:/myshare /mnt/myshare nfs vers=3,tcp,_netdev 0 0
-```text
+```
 
 **macOS (`/etc/fstab`):**
 
-```text
+```
 this.tm:/myshare /Volumes/myshare nfs vers=3,tcp 0 0
-```text
+```
 
 ## Authentication
 
@@ -152,7 +152,7 @@ tunnelmesh status
 
 # Check available shares
  tunnelmesh buckets list | grep fs+ 
-```text
+```
 
 ### Mount fails with "Connection refused"
 
@@ -176,13 +176,13 @@ NFS caches directory listings. Force a refresh:
 
 ```bash
 ls -la /mnt/myshare  # Triggers cache refresh
-```text
+```
 
 Or remount:
 
 ```bash
 sudo umount /mnt/myshare && sudo mount ...
-```text
+```
 
 ## Security
 

@@ -25,7 +25,7 @@ s3:
   data_dir: /var/lib/tunnelmesh/s3   # Storage directory
   port: 9000                         # S3 API port
 
-```text
+```
 
 ### Configuration Options
 
@@ -105,7 +105,7 @@ tunnelmesh bucket delete my-bucket
 # Get bucket info
 tunnelmesh bucket info my-bucket
 
-```text
+```
 
 ### Object Operations
 
@@ -123,13 +123,13 @@ tunnelmesh object list my-bucket --prefix docs/
 # Delete an object
 tunnelmesh object delete my-bucket/path/to/file.txt
 
-```text
+```
 
 ## System Bucket
 
 The coordinator uses a reserved `_tunnelmesh` bucket for internal state:
 
-```text
+```
 _tunnelmesh/
   auth/
     users.json      # Registered users
@@ -140,7 +140,7 @@ _tunnelmesh/
   wireguard/
     clients.json    # WireGuard clients
 
-```text
+```
 
 This bucket is only accessible to service users with the `system` role.
 
@@ -160,7 +160,7 @@ curl -X POST https://this.tm/api/shares \
   -H "Content-Type: application/json" \
   -d '{"name": "team-files", "description": "Shared team files", "quota_bytes": 10737418240}'
 
-```text
+```
 
 ### Share Properties
 
@@ -191,14 +191,14 @@ File shares are backed by S3 buckets with a `fs+` prefix. Access them via:
 ```bash
 aws s3 ls s3://fs+team-files/ --endpoint-url https://this.tm:9000
 
-```text
+```
 
 **NFS Mount:**
 
 ```bash
 sudo mount -t nfs this.tm:/team-files /mnt/team-files
 
-```text
+```
 
 **S3 Explorer:** Browse in the admin panel's Data tab.
 
@@ -230,7 +230,7 @@ aws s3 ls --profile tunnelmesh --endpoint-url $AWS_ENDPOINT_URL
 # Upload a file
 aws s3 cp file.txt s3://my-bucket/file.txt --profile tunnelmesh --endpoint-url $AWS_ENDPOINT_URL
 
-```text
+```
 
 ## Using with SDKs
 
@@ -254,7 +254,7 @@ client := s3.NewFromConfig(cfg, func(o *s3.Options) {
     o.UsePathStyle = true
 })
 
-```text
+```
 
 ### Python (boto3)
 
@@ -270,7 +270,7 @@ s3 = boto3.client('s3',
 # List buckets
 response = s3.list_buckets()
 
-```text
+```
 
 ## Storage Quotas
 
@@ -290,13 +290,13 @@ tunnelmesh storage status
 #   my-bucket:     30.1 GB
 #   backups:       15.1 GB
 
-```text
+```
 
 ## Data Persistence
 
 All S3 data is stored in the configured `data_dir`:
 
-```text
+```
 {data_dir}/
   buckets/
     {bucket}/
@@ -306,7 +306,7 @@ All S3 data is stored in the configured `data_dir`:
       meta/
         {key}.json         # Object metadata
 
-```text
+```
 
 ### Backup
 
@@ -315,7 +315,7 @@ To backup S3 data, copy the entire `data_dir`:
 ```bash
 tar -czf s3-backup.tar.gz /var/lib/tunnelmesh/s3
 
-```text
+```
 
 ### Restore
 
@@ -323,4 +323,4 @@ tar -czf s3-backup.tar.gz /var/lib/tunnelmesh/s3
 tar -xzf s3-backup.tar.gz -C /
 systemctl restart tunnelmesh-server
 
-```text
+```

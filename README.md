@@ -53,7 +53,7 @@ a system service, see the **[Getting Started Guide](docs/GETTING_STARTED.md)**.
 
 ## Architecture
 
-```text
+```
 ┌─────────────────┐                      ┌─────────────────┐
 │   Peer Node A   │                      │   Peer Node B   │
 │   (172.30.0.1)   │                      │   (172.30.0.2)   │
@@ -84,8 +84,7 @@ a system service, see the **[Getting Started Guide](docs/GETTING_STARTED.md)**.
               │ • WebSocket     │
               │   Relay         │
               └─────────────────┘
-
-```text
+```
 
 **Key points:**
 - Traffic flows directly between peers via encrypted tunnels
@@ -100,7 +99,7 @@ a system service, see the **[Getting Started Guide](docs/GETTING_STARTED.md)**.
 Standard WireGuard clients on mobile devices can connect to the mesh via a WireGuard concentrator peer. Manage clients
 through the admin panel with QR codes for easy mobile setup.
 
-```text
+```
                                     ┌─────────────────────────────────┐
                                     │      Coordination Server        │
                                     │    (Stateless, App Platform)    │
@@ -126,8 +125,7 @@ through the admin panel with QR codes for easy mobile setup.
                                │ iPhone  │   │ Android │   │  Laptop  │
                                │   App   │   │   App   │   │  Client  │
                                └─────────┘   └─────────┘   └──────────┘
-
-```text
+```
 
 **Features:**
 - Scan QR code in admin panel to configure mobile device
@@ -167,8 +165,7 @@ join_mesh:
   name: "coordinator"
   dns:
     enabled: true
-
-```text
+```
 
 ### Peer Configuration
 
@@ -179,8 +176,7 @@ auth_token: "your-secure-token"
 
 dns:
   enabled: true
-
-```text
+```
 
 ### Transport Layer
 
@@ -208,7 +204,7 @@ Route internet traffic through a designated peer while keeping mesh-to-mesh traf
 - Privacy: route external traffic through a trusted exit point
 - Compliance: ensure internet traffic egresses from a specific location
 
-```text
+```
 ┌─────────────────┐                      ┌─────────────────┐
 │   Client Peer   │                      │   Exit Peer     │
 │   (172.30.0.1)   │                      │   (172.30.0.2)   │
@@ -218,36 +214,31 @@ Route internet traffic through a designated peer while keeping mesh-to-mesh traf
 │                 │                      │                 │
 │  Mesh traffic ──┼──── Direct ─────────►│  Other peers    │
 └─────────────────┘                      └─────────────────┘
-
-```text
+```
 
 **On the exit peer** (the peer that will forward internet traffic):
 
 ```bash
 tunnelmesh join --allow-exit-traffic
-
-```text
+```
 
 Or in config:
 
 ```yaml
 allow_exit_traffic: true
-
-```text
+```
 
 **On the client** (the peer that wants to route through the exit):
 
 ```bash
 tunnelmesh join --exit-node exit-peer-name
-
-```text
+```
 
 Or in config:
 
 ```yaml
 exit_node: "exit-peer-name"
-
-```text
+```
 
 TunnelMesh automatically configures:
 
@@ -274,16 +265,14 @@ filter:
       protocol: tcp
       action: deny
       source_peer: untrusted-peer  # Block specific peer
-
-```text
+```
 
 ```bash
 # CLI commands
 tunnelmesh filter list
 tunnelmesh filter add --port 80 --protocol tcp --action allow
 tunnelmesh filter add --port 22 --action deny --source-peer badpeer
-
-```text
+```
 
 See **[Internal Packet Filter Guide](docs/INTERNAL_PACKET_FILTER.md)** for full documentation including coordinator
 rules, metrics, and alerts.
@@ -324,8 +313,7 @@ tunnelmesh buckets objects my-data # List objects
 # System service
 sudo tunnelmesh service install
 sudo tunnelmesh service start
-
-```text
+```
 
 See **[CLI Reference](docs/CLI.md)** for complete documentation, all flags, and walkthroughs.
 
@@ -339,8 +327,7 @@ cd docker
 docker compose up -d        # Start the full mesh stack
 docker compose logs -f      # View logs
 make docker-test            # Run connectivity tests
-
-```text
+```
 
 ## Cloud Deployment
 
@@ -352,8 +339,7 @@ cd terraform
 cp terraform.tfvars.example terraform.tfvars
 export TF_VAR_do_token="dop_v1_xxx"
 terraform init && terraform apply
-
-```text
+```
 
 ## Development
 
@@ -363,24 +349,21 @@ terraform init && terraform apply
 make test           # Run tests
 make test-verbose   # Verbose output
 make test-coverage  # With coverage report
-
-```text
+```
 
 ### Code Quality
 
 ```bash
 make lint  # Run golangci-lint
 make fmt   # Format code
-
-```text
+```
 
 ### Development Servers
 
 ```bash
 make dev-server  # Build and run server
 make dev-peer    # Build and run peer (with sudo)
-
-```text
+```
 
 ## License
 
