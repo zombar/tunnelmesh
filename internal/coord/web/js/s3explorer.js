@@ -411,6 +411,7 @@
                             key: obj.key,
                             size: obj.size,
                             quota: null,
+                            owner: obj.owner,
                             lastModified: obj.last_modified,
                             expires: obj.expires,
                             tombstonedAt: obj.tombstoned_at,
@@ -427,6 +428,12 @@
         const quotaCol = document.querySelector('.s3-col-quota');
         if (quotaCol) {
             quotaCol.style.display = state.currentBucket ? 'none' : '';
+        }
+
+        // Toggle owner column visibility (only show for files within bucket, not bucket list)
+        const ownerCol = document.querySelector('.s3-col-owner');
+        if (ownerCol) {
+            ownerCol.style.display = state.currentBucket ? '' : 'none';
         }
 
         // Always render breadcrumb for navigation
@@ -468,12 +475,15 @@
 
                 // Only show quota column for bucket list (not when inside a bucket)
                 const quotaCell = state.currentBucket ? '' : `<td>${item.quota ? formatBytes(item.quota) : '-'}</td>`;
+                // Only show owner column when inside a bucket (not for bucket list)
+                const ownerCell = state.currentBucket ? `<td>${escapeHtml(item.owner || '-')}</td>` : '';
                 return `
                 <tr class="${rowClass}" onclick="${onclick}">
                     <td>${checkbox}</td>
                     <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span>${tombstoneBadge}</div></td>
                     <td>${item.size !== null ? formatBytes(item.size) : '-'}</td>
                     ${quotaCell}
+                    ${ownerCell}
                     <td>${formatDate(item.lastModified)}</td>
                     <td>${formatExpiry(item.expires)}</td>
                 </tr>

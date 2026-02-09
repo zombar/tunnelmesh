@@ -2526,7 +2526,7 @@ function renderSharesTable() {
         <tr>
             <td><strong>${escapeHtml(s.name)}</strong></td>
             <td>${escapeHtml(s.description || '-')}</td>
-            <td>${escapeHtml(s.owner)}</td>
+            <td>${escapeHtml(s.owner_name || s.owner || '-')}</td>
             <td>${s.quota_bytes ? formatBytes(s.quota_bytes) : 'Unlimited'}</td>
             <td>${s.created_at ? new Date(s.created_at).toLocaleDateString() : '-'}</td>
             <td>${s.expires_at ? formatExpiry(s.expires_at) : 'Never'}</td>

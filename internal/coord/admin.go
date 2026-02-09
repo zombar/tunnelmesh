@@ -1063,6 +1063,12 @@ func (s *Server) handleShares(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// FileShareResponse extends FileShare with additional computed fields.
+type FileShareResponse struct {
+	*s3.FileShare
+	OwnerName string `json:"owner_name,omitempty"` // Human-readable owner name (looked up from peer ID)
+}
+
 // handleSharesList returns all file shares.
 func (s *Server) handleSharesList(w http.ResponseWriter, _ *http.Request) {
 	if s.fileShareMgr == nil {
@@ -1072,8 +1078,28 @@ func (s *Server) handleSharesList(w http.ResponseWriter, _ *http.Request) {
 
 	shares := s.fileShareMgr.List()
 
+	// Build peer ID -> name lookup map
+	peerNameMap := make(map[string]string)
+	if s.s3SystemStore != nil {
+		if peers, err := s.s3SystemStore.LoadPeers(); err == nil {
+			for _, peer := range peers {
+				peerNameMap[peer.ID] = peer.Name
+			}
+		}
+	}
+
+	// Convert shares to response format with owner names
+	response := make([]FileShareResponse, len(shares))
+	for i, share := range shares {
+		response[i] = FileShareResponse{
+			FileShare: share,
+			OwnerName: peerNameMap[share.Owner],
+		}
+		// If owner name not found, leave empty (frontend will fall back to owner ID)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(shares)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // ShareCreateRequest is the request body for creating a file share.
@@ -1569,6 +1595,7 @@ type S3ObjectInfo struct {
 	Key          string `json:"key"`
 	Size         int64  `json:"size"`
 	LastModified string `json:"last_modified"`
+	Owner        string `json:"owner,omitempty"`         // Owner peer name (derived from bucket owner)
 	Expires      string `json:"expires,omitempty"`       // Optional expiration date
 	TombstonedAt string `json:"tombstoned_at,omitempty"` // When the object was deleted (tombstoned)
 	ContentType  string `json:"content_type,omitempty"`
@@ -1792,6 +1819,27 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 		return
 	}
 
+	// Get bucket metadata to find owner
+	bucketMeta, err := s.s3Store.HeadBucket(bucket)
+	var ownerName string
+	if err == nil && bucketMeta.Owner != "" {
+		// Look up peer name from owner ID
+		if s.s3SystemStore != nil {
+			if peers, err := s.s3SystemStore.LoadPeers(); err == nil {
+				for _, peer := range peers {
+					if peer.ID == bucketMeta.Owner {
+						ownerName = peer.Name
+						break
+					}
+				}
+			}
+		}
+		// If peer not found, use the owner ID itself
+		if ownerName == "" {
+			ownerName = bucketMeta.Owner
+		}
+	}
+
 	result := make([]S3ObjectInfo, 0)
 	prefixSet := make(map[string]bool)
 
@@ -1817,6 +1865,7 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 			Key:          obj.Key,
 			Size:         obj.Size,
 			LastModified: obj.LastModified.Format(time.RFC3339),
+			Owner:        ownerName,
 			ContentType:  obj.ContentType,
 		}
 		if obj.Expires != nil {
