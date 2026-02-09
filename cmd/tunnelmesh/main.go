@@ -425,6 +425,18 @@ func runServeFromService(ctx context.Context, configPath string) error {
 			srv.SetCoordMeshIP(meshIP)
 
 			// Initialize Docker manager for coordinator (for API endpoints)
+			// Auto-detect Docker socket if not configured
+			log.Info().Msg("Checking for Docker socket for coordinator")
+			if cfg.JoinMesh.Docker.Socket == "" {
+				if _, err := os.Stat("/var/run/docker.sock"); err == nil {
+					cfg.JoinMesh.Docker.Socket = "unix:///var/run/docker.sock"
+					log.Info().Msg("Auto-detected Docker socket at /var/run/docker.sock")
+				} else {
+					log.Info().Err(err).Msg("Docker socket not found at /var/run/docker.sock")
+				}
+			} else {
+				log.Info().Str("socket", cfg.JoinMesh.Docker.Socket).Msg("Docker socket already configured")
+			}
 			if cfg.JoinMesh.Docker.Socket != "" {
 				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, nil)
 				if err := dockerMgr.Start(ctx); err != nil {
@@ -645,6 +657,29 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 			// Set coordinator's mesh IP for "this.tunnelmesh" resolution
 			srv.SetCoordMeshIP(meshIP)
+
+			// Initialize Docker manager for coordinator (for API endpoints)
+			// Auto-detect Docker socket if not configured
+			log.Info().Msg("Checking for Docker socket for coordinator")
+			if cfg.JoinMesh.Docker.Socket == "" {
+				if _, err := os.Stat("/var/run/docker.sock"); err == nil {
+					cfg.JoinMesh.Docker.Socket = "unix:///var/run/docker.sock"
+					log.Info().Msg("Auto-detected Docker socket at /var/run/docker.sock")
+				} else {
+					log.Info().Err(err).Msg("Docker socket not found at /var/run/docker.sock")
+				}
+			} else {
+				log.Info().Str("socket", cfg.JoinMesh.Docker.Socket).Msg("Docker socket already configured")
+			}
+			if cfg.JoinMesh.Docker.Socket != "" {
+				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, nil)
+				if err := dockerMgr.Start(ctx); err != nil {
+					log.Warn().Err(err).Msg("failed to start coordinator Docker manager")
+				} else {
+					srv.SetDockerManager(dockerMgr)
+					log.Info().Msg("Coordinator Docker manager started")
+				}
+			}
 
 			if cfg.Admin.Enabled && tlsMgr != nil {
 				// Load TLS cert for admin HTTPS
@@ -1107,6 +1142,13 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	}
 
 	// Initialize Docker manager for automatic port forwarding
+	// Auto-detect Docker socket if not configured
+	if cfg.Docker.Socket == "" {
+		if _, err := os.Stat("/var/run/docker.sock"); err == nil {
+			cfg.Docker.Socket = "unix:///var/run/docker.sock"
+			log.Debug().Msg("Auto-detected Docker socket at /var/run/docker.sock")
+		}
+	}
 	if cfg.Docker.Socket != "" {
 		dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, nil)
 		if err := dockerMgr.Start(ctx); err != nil {
