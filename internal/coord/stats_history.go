@@ -158,11 +158,42 @@ type persistedHistory struct {
 }
 
 // Save persists the stats history to S3 or a JSON file.
-// If s3Store is provided, saves to S3; otherwise saves to local file.
+// If s3Store is provided, saves each peer to stats/{peer_name}.network.json.
+// Otherwise saves aggregated data to local file (fallback for non-S3 setups).
 func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) error {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 
+	// Save to S3 - one file per peer as stats/{peer_name}.network.json
+	if s3Store != nil {
+		for peerName, rb := range sh.peers {
+			points := rb.GetLast(rb.Count())
+			if len(points) == 0 {
+				continue
+			}
+
+			// Reverse to get oldest first
+			reversed := make([]StatsDataPoint, len(points))
+			for i, dp := range points {
+				reversed[len(points)-1-i] = dp
+			}
+
+			peerHistory := map[string]interface{}{
+				"peer_name": peerName,
+				"history":   reversed,
+			}
+
+			peerPath := "stats/" + peerName + ".network.json"
+			if err := s3Store.SaveJSON(peerPath, peerHistory); err != nil {
+				log.Warn().Err(err).Str("peer", peerName).Msg("failed to save peer network stats to S3")
+			} else {
+				log.Debug().Str("peer", peerName).Int("points", len(reversed)).Msg("saved peer network stats to S3")
+			}
+		}
+		return nil
+	}
+
+	// Fallback to file-based persistence (aggregated)
 	data := persistedHistory{
 		Peers: make(map[string][]StatsDataPoint),
 	}
@@ -180,16 +211,6 @@ func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) error {
 		}
 	}
 
-	// Save to S3 if available, otherwise use file
-	if s3Store != nil {
-		if err := s3Store.SaveStatsHistory(data); err != nil {
-			return err
-		}
-		log.Debug().Msg("saved stats history to S3")
-		return nil
-	}
-
-	// Fallback to file-based persistence
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return err

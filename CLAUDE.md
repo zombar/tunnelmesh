@@ -277,16 +277,20 @@ docker_container_info{peer, container_id, container_name, image, status, network
 - **Stats persistence**: Collects comprehensive Docker stats every 30 seconds to S3
 
 **Stats Persistence:**
-- **Collection interval**: 30 seconds
-- **Storage location**: S3 system bucket at `stats/{peer_name}.docker.json`
+- **Collection interval**:
+  - Docker stats: 30 seconds
+  - Network stats: 10 seconds (via heartbeat)
+- **Storage location**: S3 system bucket at `stats/{peer_name}.{function}.json`
+- **Naming convention**:
+  - `stats/{peer_name}.docker.json` - Docker container stats (peer-side collection)
+  - `stats/{peer_name}.network.json` - Network transmission stats (coordinator-side collection)
 - **Data collected**:
-  - Full `docker inspect` output for all containers
-  - Runtime stats (CPU%, memory, disk usage) for running containers
-  - Docker network information with container associations
-- **Naming convention**: `{peer_name}.{function}.json`
-  - Example: `oldie.docker.json` for Docker stats
-  - Example: `oldie.network.json` for network stats (if implemented)
+  - **Docker stats**: Full `docker inspect` output, runtime stats (CPU%, memory, disk), Docker networks
+  - **Network stats**: Bytes/packets sent/received rates, active tunnels, dropped packets
 - **Format**: JSON with checksum validation for corruption detection
+- **Architecture**:
+  - Docker stats: Collected by each peer with Docker installed
+  - Network stats: Collected by coordinator from all peer heartbeats
 
 **Testing:**
 - 20+ unit tests with mock Docker client
