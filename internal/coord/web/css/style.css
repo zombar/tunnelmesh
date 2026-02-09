@@ -550,7 +550,8 @@ main {
 #peers-mgmt-section .section-header h2,
 #groups-section .section-header h2,
 #shares-section .section-header h2,
-#bindings-section .section-header h2 {
+#bindings-section .section-header h2,
+#docker-section .section-header h2 {
     border-bottom: none;
 }
 
@@ -871,7 +872,7 @@ td {
 .status-badge {
     display: inline-block;
     padding: 0.125rem 0.5rem;
-    border-radius: 2rem;
+    border-radius: 0;
     font-size: 0.75rem;
     font-weight: 500;
     border: 1px solid transparent;
@@ -889,18 +890,6 @@ td {
     border-color: rgba(248, 81, 73, 0.4);
 }
 
-.nat-badge {
-    display: inline-block;
-    padding: 0 0.35rem;
-    border-radius: 2rem;
-    font-size: 0.6rem;
-    font-weight: 500;
-    background: rgba(210, 153, 34, 0.15);
-    color: var(--color-accent-orange);
-    border: 1px solid rgba(210, 153, 34, 0.4);
-    vertical-align: middle;
-    margin-left: 0.25rem;
-}
 
 /* Exit node badge (square corners, compact) */
 .status-badge.exit {
@@ -959,70 +948,6 @@ td {
     font-size: 0.85em;
 }
 
-/* Visually obscured public IPs - stipple overlay effect */
-.obscured-ip {
-    position: relative;
-    user-select: text; /* Still copyable */
-}
-
-.obscured-ip::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    pointer-events: none; /* Allow text selection through overlay */
-    /* Solid stipple pattern - dots are fully opaque */
-    background-image:
-        radial-gradient(circle at 15% 25%, #161b22 1.5px, transparent 1.5px),
-        radial-gradient(circle at 45% 15%, #161b22 1.5px, transparent 1.5px),
-        radial-gradient(circle at 75% 35%, #161b22 1.5px, transparent 1.5px),
-        radial-gradient(circle at 25% 55%, #161b22 1.5px, transparent 1.5px),
-        radial-gradient(circle at 55% 45%, #161b22 1.5px, transparent 1.5px),
-        radial-gradient(circle at 85% 65%, #161b22 1.5px, transparent 1.5px),
-        radial-gradient(circle at 35% 85%, #161b22 1.5px, transparent 1.5px),
-        radial-gradient(circle at 65% 75%, #161b22 1.5px, transparent 1.5px),
-        radial-gradient(circle at 95% 95%, #161b22 1.5px, transparent 1.5px),
-        radial-gradient(circle at 5% 5%, #161b22 1.5px, transparent 1.5px);
-    background-size: 6px 6px, 7px 7px, 6px 8px, 8px 6px, 7px 7px, 6px 6px, 8px 7px, 7px 8px, 6px 7px, 7px 6px;
-    /* Use negative delay to start at random point in cycle, longer duration */
-    animation: stipple-drift 8s linear infinite;
-    animation-delay: calc(-1s * var(--stipple-seed, 0));
-}
-
-/* Vary animation start position per row using nth-child */
-tr:nth-child(1) .obscured-ip { --stipple-seed: 0; }
-tr:nth-child(2) .obscured-ip { --stipple-seed: 2.3; }
-tr:nth-child(3) .obscured-ip { --stipple-seed: 5.1; }
-tr:nth-child(4) .obscured-ip { --stipple-seed: 1.7; }
-tr:nth-child(5) .obscured-ip { --stipple-seed: 6.4; }
-tr:nth-child(6) .obscured-ip { --stipple-seed: 3.8; }
-tr:nth-child(7) .obscured-ip { --stipple-seed: 7.2; }
-tr:nth-child(8) .obscured-ip { --stipple-seed: 4.5; }
-tr:nth-child(9) .obscured-ip { --stipple-seed: 0.9; }
-tr:nth-child(10) .obscured-ip { --stipple-seed: 5.6; }
-
-@keyframes stipple-drift {
-    0%, 100% {
-        background-position: 0 0, 1px 1px, 0 2px, 2px 0, 1px 2px, 0 1px, 2px 1px, 1px 0, 0 0, 2px 2px;
-    }
-    25% {
-        background-position: 2px 1px, 0 2px, 1px 0, 0 1px, 2px 0, 1px 2px, 0 0, 2px 2px, 1px 1px, 0 0;
-    }
-    50% {
-        background-position: 1px 2px, 2px 0, 0 1px, 1px 1px, 0 0, 2px 2px, 1px 0, 0 2px, 2px 1px, 1px 0;
-    }
-    75% {
-        background-position: 0 1px, 1px 0, 2px 2px, 0 0, 1px 1px, 0 2px, 2px 0, 1px 2px, 0 0, 2px 1px;
-    }
-}
-
-/* Reveal on hover for usability */
-.obscured-ip:hover::after {
-    opacity: 0;
-    transition: opacity 0.2s ease;
-}
 
 .empty-state {
     text-align: center;
@@ -1059,29 +984,6 @@ tr:nth-child(10) .obscured-ip { --stipple-seed: 5.6; }
     color: var(--color-border-primary);
 }
 
-.ips-cell,
-.ports-cell {
-    font-size: 0.75rem;
-    line-height: 1.4;
-}
-
-.ips-cell code,
-.ports-cell code {
-    background: var(--color-bg-tertiary);
-    padding: 0.1rem 0.3rem;
-    border-radius: 3px;
-    font-size: 0.7rem;
-}
-
-.ips-cell .ip-label,
-.ports-cell .port-label {
-    color: var(--color-text-secondary);
-    font-weight: 500;
-}
-
-.ips-cell .no-ips {
-    color: var(--color-text-secondary);
-}
 
 /* Transport select dropdown */
 .transport-select {
@@ -1870,7 +1772,7 @@ a.logs-container {
 
 /* Resizable content container */
 .s3-content {
-    height: 320px;
+    height: 448px;
     overflow-y: auto;
     overflow-x: hidden;
 }

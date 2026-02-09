@@ -52,7 +52,7 @@ func (c *realDockerClient) ListContainers(ctx context.Context) ([]ContainerInfo,
 
 // InspectContainer returns detailed information about a specific container.
 func (c *realDockerClient) InspectContainer(ctx context.Context, id string) (*ContainerInfo, error) {
-	inspect, err := c.cli.ContainerInspect(ctx, id)
+	inspect, _, err := c.cli.ContainerInspectWithRaw(ctx, id, true) // getSize=true
 	if err != nil {
 		if cerrdefs.IsNotFound(err) {
 			return nil, nil
@@ -266,6 +266,12 @@ func convertInspect(inspect container.InspectResponse) ContainerInfo {
 	// Timestamps
 	info.CreatedAt = parseDockerTime(inspect.Created)
 	info.StartedAt = parseDockerTime(inspect.State.StartedAt)
+
+	// Container size (populated when getSize=true in inspect call)
+	// SizeRootFs is the total size of all layers (read-only + writable)
+	if inspect.SizeRootFs != nil {
+		info.DiskBytes = uint64(*inspect.SizeRootFs)
+	}
 
 	// Convert port bindings
 	if inspect.NetworkSettings != nil && inspect.NetworkSettings.Ports != nil {

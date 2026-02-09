@@ -548,8 +548,6 @@ function renderPeersTable() {
         <tr>
             <td><strong>${peerNameEscaped}</strong>${alertBadge}${exitBadge}${exitVia}</td>
             <td><code>${peer.mesh_ip}</code>${tunnelSuffix}</td>
-            <td class="ips-cell">${formatAdvertisedIPs(peer)}</td>
-            <td class="ports-cell">${formatPorts(peer)}</td>
             <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
             <td>${formatLatency(peer.coordinator_rtt_ms)}</td>
             <td class="sparkline-cell">
@@ -1135,40 +1133,6 @@ function rebuildChartDatasets() {
     }
 }
 
-function formatAdvertisedIPs(peer) {
-    const parts = [];
-
-    if (peer.public_ips && peer.public_ips.length > 0) {
-        const natBadge = peer.behind_nat ? '<span class="nat-badge">NAT</span>' : '';
-        parts.push(
-            `<span class="ip-label">Public:</span> ${peer.public_ips.map((ip) => `<code class="obscured-ip">${ip}</code>`).join(', ')}${natBadge}`,
-        );
-    }
-    if (peer.private_ips && peer.private_ips.length > 0) {
-        parts.push(
-            `<span class="ip-label">Private:</span> ${peer.private_ips.map((ip) => `<code>${ip}</code>`).join(', ')}`,
-        );
-    }
-    // Show IPv6 external address if available (visually obscured)
-    if (peer.udp_external_addr6) {
-        // Extract just the IP from [ip]:port format
-        const ipv6Match = peer.udp_external_addr6.match(/^\[([^\]]+)\]/);
-        const ipv6 = ipv6Match ? ipv6Match[1] : peer.udp_external_addr6;
-        parts.push(`<span class="ip-label">IPv6:</span> <code class="obscured-ip">${ipv6}</code>`);
-    }
-
-    return parts.length > 0 ? parts.join('<br>') : '<span class="no-ips">-</span>';
-}
-
-function formatPorts(peer) {
-    const sshPort = peer.ssh_port || 2222;
-    const udpPort = peer.udp_port || 0;
-    const parts = [`<span class="port-label">SSH:</span> <code>${sshPort}</code>`];
-    if (udpPort > 0) {
-        parts.push(`<span class="port-label">UDP:</span> <code>${udpPort}</code>`);
-    }
-    return parts.join('<br>');
-}
 
 // WireGuard Client Management
 

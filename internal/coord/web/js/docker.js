@@ -139,11 +139,11 @@ function showLessDocker() {
 // Get status badge HTML for container state
 function getDockerStatusBadge(state) {
     const stateMap = {
-        'running': '<span class="status-badge online">● running</span>',
-        'exited': '<span class="status-badge offline">● exited</span>',
-        'paused': '<span class="status-badge">● paused</span>',
-        'restarting': '<span class="status-badge">● restarting</span>',
-        'dead': '<span class="status-badge offline">● dead</span>',
+        'running': '<span class="status-badge online">running</span>',
+        'exited': '<span class="status-badge offline">exited</span>',
+        'paused': '<span class="status-badge">paused</span>',
+        'restarting': '<span class="status-badge">restarting</span>',
+        'dead': '<span class="status-badge offline">dead</span>',
     };
     return stateMap[state] || `<span class="status-badge">${escapeHtml(state)}</span>`;
 }
