@@ -2077,7 +2077,7 @@ function registerBuiltinPanels() {
             sortOrder: 20,
         },
         {
-            id: 'peer-mgmt',
+            id: 'peers-mgmt',
             sectionId: 'peers-mgmt-section',
             tab: 'data',
             title: 'Peers',
