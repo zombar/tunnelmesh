@@ -1,88 +1,63 @@
 # User Identity and RBAC
 
-TunnelMesh provides a portable cryptographic identity system with Kubernetes-style RBAC for access control.
+TunnelMesh provides automatic identity management with Kubernetes-style RBAC for access control.
 
 ## Overview
 
-The user identity system provides:
-- **Portable Identity**: Same identity works across multiple meshes
-- **Cryptographic Authentication**: ED25519 keypair derived from mnemonic
-- **Simple Recovery**: 3-word mnemonic phrase for backup
-- **Per-Mesh Registration**: Register with each mesh independently
-- **RBAC Authorization**: Fine-grained access control
+Your user identity is **derived from your peer's SSH key** - the same key used for mesh networking. This means:
 
-## User Setup
+- **Automatic Identity**: No separate user setup needed - just `join` the mesh
+- **First User = Admin**: The first peer to join becomes admin automatically
+- **Share Across Devices**: Copy `~/.tunnelmesh/id_ed25519` to use the same identity on multiple machines
+- **RBAC Authorization**: Fine-grained access control for S3 buckets and dashboard panels
 
-### Create a New Identity
+## How Identity Works
 
-Generate a new identity with a 3-word recovery phrase:
+When you run `tunnelmesh join`, your identity is automatically created:
 
-```bash
-tunnelmesh user setup --name "Alice"
-```
-
-Output:
-```
-Your recovery phrase is: apple river mountain
-Store this safely - you need it to recover your identity.
-
-User ID: a1b2c3d4e5f67890
-Public Key: AQID...
-```
-
-The identity is stored in `~/.tunnelmesh/user.json`.
-
-### Recover an Identity
-
-Restore an existing identity from your recovery phrase:
+1. **SSH Key Generated**: On first join, an ED25519 keypair is created at `~/.tunnelmesh/id_ed25519`
+2. **User ID Derived**: `SHA256(public_key)[:8]` as hex (16 characters)
+3. **Auto-Registered**: Added to the "everyone" group with default permissions
+4. **First User = Admin**: If you're the first to join, you get admin privileges
 
 ```bash
-tunnelmesh user recover
-# Enter your 3-word recovery phrase: apple river mountain
+# Join the mesh - identity is automatic
+tunnelmesh join --server coord.example.com --token <token> --context work
+
+# View your identity
+tunnelmesh status
 ```
 
-### View Current Identity
+## Sharing Identity Across Devices
+
+To use the same identity on multiple devices, copy your SSH key:
 
 ```bash
-tunnelmesh user info
+# On your original device
+scp ~/.tunnelmesh/id_ed25519* user@new-device:~/.tunnelmesh/
+
+# On the new device, join with a different peer name
+tunnelmesh join --server coord.example.com --token <token> --context work --name laptop-2
 ```
 
-Output:
-```
-Identity:
-  User ID: a1b2c3d4e5f67890
-  Name: Alice
-  Public Key: AQID...
+Both devices will have:
+- **Same User ID** - same RBAC permissions
+- **Different Peer Names** - separate mesh identities
+- **Different Mesh IPs** - unique network addresses
 
-Current Context: work
-  Registered: Yes
-  Roles: admin
-  S3 Access Key: A1B2C3D4E5F67890ABCD
-```
-
-## Mesh Registration
-
-Your identity must be registered with each mesh you want to access.
-
-### Register with Current Context
-
-```bash
-# Switch to a context
-tunnelmesh context use work
-
-# Register with that mesh
-tunnelmesh user register
-```
-
-Registration data is stored in `~/.tunnelmesh/contexts/{name}/registration.json`.
-
-### First User = Admin
-
-The first user to register with a mesh automatically becomes an admin.
+If you try to join with the same hostname as an existing peer with a different key, the coordinator will auto-suffix your name (e.g., `laptop` becomes `laptop-2`).
 
 ## RBAC System
 
 TunnelMesh uses Kubernetes-style Role-Based Access Control.
+
+### Built-in Groups
+
+| Group | Description |
+|-------|-------------|
+| `everyone` | All registered users - default group for new peers |
+| `all_admin_users` | Admin users with full access |
+| `all_service_users` | Service accounts (internal use) |
 
 ### Built-in Roles
 
@@ -157,85 +132,60 @@ Service users authenticate to S3 like regular users but have their keypair deriv
 
 ## Identity Architecture
 
-### Global vs Per-Mesh
+### File Layout
 
 ```
 ~/.tunnelmesh/
-  user.json                    # Global identity (portable)
+  id_ed25519                     # SSH private key (your identity)
+  id_ed25519.pub                 # SSH public key
   contexts/
     work/
-      config.yaml              # Peer config
-      registration.json        # Mesh-specific registration
+      config.yaml                # Peer config
     home/
       config.yaml
-      registration.json
 ```
-
-- **Global Identity** (`user.json`): Your ED25519 keypair, derived from mnemonic
-- **Per-Mesh Registration**: Certificate, roles, and S3 credentials for each mesh
 
 ### Key Derivation
 
 ```
-Mnemonic (3 words)
-       ↓
-    SHA256
-       ↓
-  ED25519 Seed (32 bytes)
-       ↓
-  ED25519 Keypair
-       ↓
-  User ID (first 16 chars of SHA256(pubkey))
+SSH Key (id_ed25519)
+       |
+       v
+ED25519 Public Key
+       |
+       v
+SHA256(public_key)[:8] as hex
+       |
+       v
+User ID (16 characters)
 ```
 
 S3 credentials are derived from the public key:
 ```
-Public Key → HKDF("s3-access-key") → Access Key (20 chars)
-Public Key → HKDF("s3-secret-key") → Secret Key (40 chars)
+Public Key -> HKDF("s3-access-key") -> Access Key (20 chars)
+Public Key -> HKDF("s3-secret-key") -> Secret Key (40 chars)
 ```
 
 ## Security Considerations
 
-### Mnemonic Security
-
-The 3-word mnemonic provides approximately 33 bits of entropy (2048^3 combinations). This is sufficient because:
-
-1. Mesh access already requires network authentication
-2. The coordinator rate-limits registration attempts
-3. The mnemonic is never transmitted over the network
-
-For higher security, you can use a longer BIP39 mnemonic with the `--mnemonic-words` flag:
-
-```bash
-tunnelmesh user setup --mnemonic-words 12
-```
-
 ### Key Storage
 
-- Private keys are stored in `~/.tunnelmesh/user.json` with 0600 permissions
-- Never share your mnemonic or private key
-- Registration files contain derived credentials, not the master key
+- Private keys are stored in `~/.tunnelmesh/id_ed25519` with 0600 permissions
+- Never share your private key
+- Treat your SSH key like any other SSH private key
 
 ### Revoking Access
 
-To revoke a user's access to a mesh:
+To revoke a user's access to a mesh, an admin can remove them from groups:
 
 ```bash
-# As admin on the mesh
-tunnelmesh user revoke alice
+# Via dashboard admin panel, or API
+# Remove user from groups / delete their bindings
 ```
-
-This removes the user's registration and role bindings.
 
 ## CLI Reference
 
 ```bash
-# Identity management
-tunnelmesh user setup [--name NAME]     # Create new identity
-tunnelmesh user recover                  # Recover from mnemonic
-tunnelmesh user info                     # Show current identity
-tunnelmesh user register                 # Register with current mesh
-
 # Role management (admin only)
 tunnelmesh role list                     # List all roles
 tunnelmesh role create NAME [--verbs V] [--resources R]
@@ -246,7 +196,9 @@ tunnelmesh role bind USER ROLE [--bucket B]
 tunnelmesh role unbind USER ROLE [--bucket B]
 tunnelmesh role bindings [--user U]
 
-# User management (admin only)
-tunnelmesh user list                     # List all users on mesh
-tunnelmesh user revoke USER              # Revoke user access
+# Group management (admin only)
+tunnelmesh group list                    # List all groups
+tunnelmesh group members GROUP           # List group members
+tunnelmesh group add-member GROUP USER   # Add user to group
+tunnelmesh group remove-member GROUP USER # Remove user from group
 ```

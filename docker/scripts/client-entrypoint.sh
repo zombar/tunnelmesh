@@ -111,24 +111,8 @@ cat /etc/resolv.conf.backup >> /etc/resolv.conf
 echo "DNS configured:"
 cat /etc/resolv.conf
 
-# Set up user identity and schedule registration
-USER_JSON="/root/.tunnelmesh/user.json"
-if [ ! -f "$USER_JSON" ]; then
-    # Pick a random first name based on hostname hash
-    NAME_INDEX=$((HOSTNAME_HASH % ${#FIRST_NAMES[@]}))
-    USER_NAME="${FIRST_NAMES[$NAME_INDEX]}"
-    echo "Setting up user identity: $USER_NAME"
-    tunnelmesh user setup --name "$USER_NAME"
-fi
-
-# Register user in background after 1 minute
-(
-    sleep 60  # Wait 1 minute
-    echo ""
-    echo "=== Registering user with mesh ==="
-    tunnelmesh user register --server "$SERVER_URL" || echo "User registration failed (may already be registered)"
-) &
-echo "User registration scheduled in 1 minute"
+# User identity is now derived from SSH key - no separate setup needed
+# User is automatically registered when peer joins the mesh
 
 # Give time for initial peer discovery (Go code handles jitter and fast retries)
 echo "Waiting for initial peer discovery..."

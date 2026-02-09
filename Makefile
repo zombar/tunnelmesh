@@ -184,9 +184,6 @@ docker-up: docker-build
 	@echo "TunnelMesh Docker environment started"
 	@echo "Use 'make docker-logs' to follow logs"
 	@echo ""
-	@echo "=== User Registration ==="
-	@tunnelmesh user register --server http://localhost:8081 || true
-	@echo ""
 	@echo "=== Join from this machine ==="
 	@read -p "Run 'sudo tunnelmesh join --context docker'? [Y/n] " answer; \
 	if [ "$$answer" != "n" ] && [ "$$answer" != "N" ]; then \

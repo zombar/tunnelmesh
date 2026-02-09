@@ -1014,11 +1014,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	s.dnsCache[req.Name] = meshIP
 
-	// Auto-register user: add to "everyone" group on first registration
+	// Auto-register user: add to "everyone" group and create user record on first registration
 	// User identity is derived from peer's SSH key - no separate registration needed
 	var isFirstUser bool
 	if userID != "" && s.s3Authorizer != nil && s.s3Authorizer.Groups != nil {
-		if !s.s3Authorizer.Groups.IsMember(auth.GroupEveryone, userID) {
+		isNewUser := !s.s3Authorizer.Groups.IsMember(auth.GroupEveryone, userID)
+		if isNewUser {
 			// Check if this is the first user (no one in admin group yet)
 			adminGroup := s.s3Authorizer.Groups.Get(auth.GroupAllAdminUsers)
 			if adminGroup != nil && len(adminGroup.Members) == 0 {
@@ -1037,6 +1038,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			} else {
 				log.Debug().Str("peer", req.Name).Str("user_id", userID).Msg("added user to everyone group")
 			}
+		}
+
+		// Create or update user record in user store
+		if s.s3SystemStore != nil {
+			s.updateUserRecord(userID, req.Name, req.PublicKey, isNewUser)
 		}
 	}
 
@@ -1187,6 +1193,47 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 	resp := proto.DNSUpdateNotification{Records: records}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// updateUserRecord creates or updates a user record in the user store.
+// This is called during peer registration to ensure the user exists in the user list.
+func (s *Server) updateUserRecord(userID, peerName, publicKey string, isNewUser bool) {
+	users, err := s.s3SystemStore.LoadUsers()
+	if err != nil {
+		log.Warn().Err(err).Str("user_id", userID).Msg("failed to load users for update")
+		users = []*auth.User{}
+	}
+
+	now := time.Now()
+	var found bool
+	for _, u := range users {
+		if u.ID == userID {
+			// Update existing user: refresh last seen time and update name if this is the same device
+			u.LastSeen = now
+			// Update name if current peer provides one and user name is empty or matches this peer
+			if peerName != "" && (u.Name == "" || u.Name == peerName) {
+				u.Name = peerName
+			}
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		// Create new user
+		users = append(users, &auth.User{
+			ID:        userID,
+			Name:      peerName,
+			PublicKey: publicKey,
+			CreatedAt: now,
+			LastSeen:  now,
+		})
+		log.Debug().Str("user_id", userID).Str("name", peerName).Msg("created user record")
+	}
+
+	if err := s.s3SystemStore.SaveUsers(users); err != nil {
+		log.Warn().Err(err).Str("user_id", userID).Msg("failed to save users")
+	}
 }
 
 func (s *Server) jsonError(w http.ResponseWriter, message string, code int) {

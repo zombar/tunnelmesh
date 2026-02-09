@@ -2358,7 +2358,7 @@ function renderUsersTable() {
             <td>${escapeHtml(u.name || '-')}</td>
             <td><code>${escapeHtml(u.id)}</code></td>
             <td><span class="status-badge ${u.is_service ? 'service' : 'user'}">${u.is_service ? 'Service' : 'User'}</span></td>
-            <td>${u.groups ? u.groups.map((g) => `<span class="group-badge">${escapeHtml(g)}</span>`).join(' ') : '-'}</td>
+            <td>${u.groups && u.groups.length > 0 ? u.groups.map((g) => escapeHtml(g)).join(', ') : '-'}</td>
             <td>${u.last_seen ? formatLastSeen(u.last_seen) : '-'}</td>
             <td>${u.is_service ? 'Never' : u.expires_at ? formatExpiry(u.expires_at) : '-'}</td>
             <td><span class="status-badge ${u.expired ? 'expired' : 'active'}">${u.expired ? 'Expired' : 'Active'}</span></td>
