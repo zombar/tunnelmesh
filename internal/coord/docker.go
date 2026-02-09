@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,6 +17,16 @@ import (
 type DockerContainerResponse struct {
 	Containers []docker.ContainerInfo `json:"containers"`
 	Total      int                    `json:"total"`
+}
+
+// Docker container ID validation pattern (64-char hex or 12-char short form)
+var dockerIDPattern = regexp.MustCompile(`^[a-f0-9]{12}(?:[a-f0-9]{52})?$`)
+
+// isValidDockerID validates that a string matches Docker's container ID format.
+// Docker IDs are 64-character hexadecimal strings (or 12-character short form).
+// This prevents path traversal attacks via malformed container IDs.
+func isValidDockerID(id string) bool {
+	return dockerIDPattern.MatchString(id)
 }
 
 // handleDockerContainers returns all Docker containers from the local Docker daemon.
@@ -171,6 +182,13 @@ func (s *Server) handleDockerControl(w http.ResponseWriter, r *http.Request) {
 
 	if containerID == "" {
 		s.jsonError(w, "Container ID required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate container ID format (Docker IDs are 64-char hex or 12-char short form)
+	// This prevents path traversal attacks via malformed container IDs
+	if !isValidDockerID(containerID) {
+		s.jsonError(w, "Invalid container ID format", http.StatusBadRequest)
 		return
 	}
 
