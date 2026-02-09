@@ -2358,6 +2358,10 @@ func (s *Server) handlePanelDelete(w http.ResponseWriter, r *http.Request, panel
 // handleSystemHealth checks the integrity of system metadata stored in S3.
 // Returns version information and metadata health status for each critical file.
 //
+// Security: This endpoint is mounted on adminMux, which is only accessible from
+// within the mesh network via HTTPS. Network-level access control is enforced by
+// binding to the coordinator's mesh IP address.
+//
 // GET /api/system/health
 func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -2406,8 +2410,10 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "ok",
 		"files":  results,
-	})
+	}); err != nil {
+		log.Warn().Err(err).Msg("failed to encode health response")
+	}
 }

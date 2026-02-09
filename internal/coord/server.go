@@ -291,29 +291,38 @@ func (s *Server) saveDNSData() {
 		return
 	}
 
+	// Copy data while holding lock to avoid blocking peer operations during S3 writes
 	s.peersMu.RLock()
-	defer s.peersMu.RUnlock()
-
-	// Save DNS cache
-	if err := s.s3SystemStore.SaveDNSCache(s.dnsCache); err != nil {
-		log.Warn().Err(err).Msg("failed to persist DNS cache")
-	} else {
-		log.Debug().Int("entries", len(s.dnsCache)).Msg("persisted DNS cache to S3")
+	dnsCache := make(map[string]string, len(s.dnsCache))
+	for k, v := range s.dnsCache {
+		dnsCache[k] = v
 	}
 
-	// Build peer->aliases map for storage
 	peerAliases := make(map[string][]string)
 	for peerName, info := range s.peers {
 		if len(info.aliases) > 0 {
-			peerAliases[peerName] = info.aliases
+			// Copy slice to avoid sharing references
+			peerAliases[peerName] = append([]string{}, info.aliases...)
 		}
 	}
 
-	// Save aliases
-	if err := s.s3SystemStore.SaveDNSAliases(s.aliasOwner, peerAliases); err != nil {
+	aliasOwner := make(map[string]string, len(s.aliasOwner))
+	for k, v := range s.aliasOwner {
+		aliasOwner[k] = v
+	}
+	s.peersMu.RUnlock()
+
+	// Perform S3 operations without holding lock
+	if err := s.s3SystemStore.SaveDNSCache(dnsCache); err != nil {
+		log.Warn().Err(err).Msg("failed to persist DNS cache")
+	} else {
+		log.Debug().Int("entries", len(dnsCache)).Msg("persisted DNS cache to S3")
+	}
+
+	if err := s.s3SystemStore.SaveDNSAliases(aliasOwner, peerAliases); err != nil {
 		log.Warn().Err(err).Msg("failed to persist DNS aliases")
 	} else {
-		log.Debug().Int("aliases", len(s.aliasOwner)).Msg("persisted DNS aliases to S3")
+		log.Debug().Int("aliases", len(aliasOwner)).Msg("persisted DNS aliases to S3")
 	}
 }
 
@@ -675,9 +684,7 @@ func (s *Server) recoverCoordinatorState(cfg *config.ServerConfig, systemStore *
 	if concentrator, err := systemStore.LoadWGConcentrator(); err == nil && concentrator != "" {
 		log.Info().Str("peer", concentrator).Msg("recovering WireGuard concentrator assignment")
 		// Store in relay manager - will be validated when peer reconnects
-		s.relay.mu.Lock()
-		s.relay.wgConcentrator = concentrator
-		s.relay.mu.Unlock()
+		s.relay.RecoverWGConcentrator(concentrator)
 	}
 
 	// Recover DNS cache if available

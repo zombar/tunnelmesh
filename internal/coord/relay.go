@@ -144,6 +144,14 @@ func (r *relayManager) GetWGConcentrator() string {
 	return r.wgConcentrator
 }
 
+// RecoverWGConcentrator restores the WireGuard concentrator assignment from persistence.
+// This is used during startup to restore state without triggering a save operation.
+func (r *relayManager) RecoverWGConcentrator(peerName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wgConcentrator = peerName
+}
+
 // ClearWGConcentrator clears the concentrator if it matches the given peer.
 func (r *relayManager) ClearWGConcentrator(peerName string) {
 	r.mu.Lock()
