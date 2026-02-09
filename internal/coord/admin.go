@@ -721,35 +721,6 @@ func (s *Server) handleFilterRuleAdd(w http.ResponseWriter, r *http.Request) {
 		s.saveFilterRulesAsync()
 	}
 
-	// Validate TTL bounds
-	if req.TTL < 0 {
-		s.jsonError(w, "ttl cannot be negative", http.StatusBadRequest)
-		return
-	}
-	if req.TTL > 365*24*3600 { // Max 1 year
-		s.jsonError(w, "ttl exceeds maximum (1 year)", http.StatusBadRequest)
-		return
-	}
-
-	// Update coordinator's filter and persist to S3
-	if s.filter != nil {
-		// Calculate expiry if TTL specified
-		var expires int64
-		if req.TTL > 0 {
-			expires = time.Now().Unix() + req.TTL
-		}
-
-		rule := routing.FilterRule{
-			Port:       req.Port,
-			Protocol:   routing.ProtocolFromString(req.Protocol),
-			Action:     routing.ParseFilterAction(req.Action),
-			Expires:    expires,
-			SourcePeer: req.SourcePeer,
-		}
-		s.filter.AddTemporaryRule(rule)
-		s.saveFilterRulesAsync()
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -793,13 +764,6 @@ func (s *Server) handleFilterRuleRemove(w http.ResponseWriter, r *http.Request) 
 		} else {
 			s.relay.PushFilterRuleRemove(req.PeerName, req.Port, req.Protocol, req.SourcePeer)
 		}
-	}
-
-	// Update coordinator's filter and persist to S3
-	if s.filter != nil {
-		proto := routing.ProtocolFromString(req.Protocol)
-		s.filter.RemoveTemporaryRuleForPeer(req.Port, proto, req.SourcePeer)
-		s.saveFilterRulesAsync()
 	}
 
 	// Update coordinator's filter and persist to S3
