@@ -111,7 +111,7 @@ func TestWriteBenchmarkJSON_InvalidPath(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestPrintBenchmarkResult_Success(t *testing.T) {
+func TestPrintBenchmarkResult_Success(_ *testing.T) {
 	result := &benchmark.Result{
 		Success:         true,
 		TransferredSize: 10 * 1024 * 1024, // 10 MB
@@ -127,7 +127,7 @@ func TestPrintBenchmarkResult_Success(t *testing.T) {
 	printBenchmarkResult(result)
 }
 
-func TestPrintBenchmarkResult_Failure(t *testing.T) {
+func TestPrintBenchmarkResult_Failure(_ *testing.T) {
 	result := &benchmark.Result{
 		Success: false,
 		Error:   "connection refused",
@@ -143,6 +143,7 @@ func TestGetPeerMeshIP_Success(t *testing.T) {
 	defer func() { lookupHost = originalLookup }()
 
 	// Mock the lookup function
+	// nolint:revive // ctx required by benchmark signature but not used in this test
 	lookupHost = func(ctx context.Context, host string) ([]string, error) {
 		if host == "peer1.tunnelmesh" {
 			return []string{"10.99.0.5"}, nil
@@ -159,6 +160,7 @@ func TestGetPeerMeshIP_FallbackToDirectName(t *testing.T) {
 	originalLookup := lookupHost
 	defer func() { lookupHost = originalLookup }()
 
+	// nolint:revive // ctx required by benchmark signature but not used in this test
 	// First lookup fails, fallback succeeds
 	lookupHost = func(ctx context.Context, host string) ([]string, error) {
 		if host == "peer1" {
@@ -174,6 +176,7 @@ func TestGetPeerMeshIP_FallbackToDirectName(t *testing.T) {
 
 func TestGetPeerMeshIP_BothFail(t *testing.T) {
 	originalLookup := lookupHost
+	// nolint:revive // ctx required by benchmark signature but not used in this test
 	defer func() { lookupHost = originalLookup }()
 
 	lookupHost = func(ctx context.Context, host string) ([]string, error) {

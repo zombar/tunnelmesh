@@ -116,15 +116,16 @@ func newS3Client() (*s3Client, error) {
 
 	// Get server URL from context or config file
 	var serverURL string
-	if activeCtx.Server != "" {
+	switch {
+	case activeCtx.Server != "":
 		serverURL = activeCtx.Server
-	} else if activeCtx.ConfigPath != "" {
+	case activeCtx.ConfigPath != "":
 		peerCfg, err := config.LoadPeerConfig(activeCtx.ConfigPath)
 		if err != nil {
 			return nil, fmt.Errorf("load peer config: %w", err)
 		}
 		serverURL = peerCfg.Server
-	} else {
+	default:
 		return nil, fmt.Errorf("context %q has no server URL or config path", activeCtx.Name)
 	}
 
@@ -139,7 +140,7 @@ func newS3Client() (*s3Client, error) {
 		if idx := strings.LastIndex(endpoint, ":"); idx > 8 { // after https://
 			endpoint = endpoint[:idx] + ":9000"
 		} else {
-			endpoint = endpoint + ":9000"
+			endpoint += ":9000"
 		}
 	}
 
@@ -159,10 +160,10 @@ func newS3Client() (*s3Client, error) {
 }
 
 // doRequest makes an authenticated S3 request.
-func (c *s3Client) doRequest(method, path string, body io.Reader) (*http.Response, error) {
+func (c *s3Client) doRequest(method, path string) (*http.Response, error) {
 	url := c.endpoint + path
 
-	req, err := http.NewRequest(method, url, body)
+	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +210,7 @@ func runBucketsList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	resp, err := client.doRequest(http.MethodGet, "/", nil)
+	resp, err := client.doRequest(http.MethodGet, "/")
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -253,6 +254,7 @@ func runBucketsList(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// nolint:dupl // Create and delete operations follow similar pattern with different HTTP methods
 func runBucketsCreate(cmd *cobra.Command, args []string) error {
 	bucketName := args[0]
 
@@ -261,7 +263,7 @@ func runBucketsCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	resp, err := client.doRequest(http.MethodPut, "/"+bucketName, nil)
+	resp, err := client.doRequest(http.MethodPut, "/"+bucketName)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -281,6 +283,7 @@ func runBucketsCreate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// nolint:dupl // Companion to create - similar pattern with different method
 func runBucketsDelete(cmd *cobra.Command, args []string) error {
 	bucketName := args[0]
 
@@ -289,7 +292,7 @@ func runBucketsDelete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	resp, err := client.doRequest(http.MethodDelete, "/"+bucketName, nil)
+	resp, err := client.doRequest(http.MethodDelete, "/"+bucketName)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -326,7 +329,7 @@ func runBucketsObjects(cmd *cobra.Command, args []string) error {
 		path += "?prefix=" + prefix
 	}
 
-	resp, err := client.doRequest(http.MethodGet, path, nil)
+	resp, err := client.doRequest(http.MethodGet, path)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}

@@ -385,7 +385,10 @@ func TestServer_HolePunchBidirectionalCoordination(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/udp/register", bytes.NewReader(body))
 		req.Header.Set("Authorization", "Bearer test-token")
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Real-IP", peerData.externalAddr[:strings.Index(peerData.externalAddr, ":")])
+		colonIdx := strings.Index(peerData.externalAddr, ":")
+		if colonIdx > 0 {
+			req.Header.Set("X-Real-IP", peerData.externalAddr[:colonIdx])
+		}
 		w := httptest.NewRecorder()
 		srv.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -155,7 +156,7 @@ func TestDiscoveryClient_RequestMapping_NoActiveClient(t *testing.T) {
 
 	// Try to request mapping without probing first
 	_, err := client.RequestMapping(ctx, UDP, 51820, 2*time.Hour)
-	if err != ErrNoActiveClient {
+	if !errors.Is(err, ErrNoActiveClient) {
 		t.Errorf("expected ErrNoActiveClient, got %v", err)
 	}
 }

@@ -101,6 +101,7 @@ func TestWGDeviceSetPacketHandler(t *testing.T) {
 	dev := &WGDevice{}
 
 	var called bool
+	// nolint:revive // packet required by callback signature but not used in test
 	handler := func(packet []byte) {
 		called = true
 	}
@@ -125,6 +126,7 @@ func TestWGDeviceSetPacketHandlerConcurrency(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
+	// nolint:revive // packet required by callback signature but not used in test
 		wg.Go(func() {
 			dev.SetPacketHandler(func(packet []byte) {
 				// Different handler for each goroutine

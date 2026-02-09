@@ -868,6 +868,7 @@ func (s *Server) validateAliases(aliases []string, requestingPeer string) error 
 	return nil
 }
 
+// nolint:gocyclo // Peer registration handles many edge cases and states
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -929,29 +930,35 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	existing, isExisting := s.peers[req.Name]
 
 	if s.cfg.Locations {
-		if req.Location != nil {
+		switch {
+		case req.Location != nil:
 			// Manual location provided - use it
 			location = req.Location
-		} else if isExisting && existing.peer.Location != nil {
+		case isExisting && existing.peer.Location != nil:
 			// Existing peer has location - check if we should keep it
 			existingLoc := existing.peer.Location
-			if existingLoc.Source == "manual" {
+			switch existingLoc.Source {
+			case "manual":
 				// Always preserve manual locations
 				location = existingLoc
-			} else if existingLoc.Source == "ip" && len(req.PublicIPs) > 0 && len(existing.peer.PublicIPs) > 0 {
-				// IP-based location - keep if IP hasn't changed
-				if req.PublicIPs[0] == existing.peer.PublicIPs[0] {
-					location = existingLoc
+			case "ip":
+				if len(req.PublicIPs) > 0 && len(existing.peer.PublicIPs) > 0 {
+					// IP-based location - keep if IP hasn't changed
+					if req.PublicIPs[0] == existing.peer.PublicIPs[0] {
+						location = existingLoc
+					} else {
+						// IP changed - need new lookup
+						needsGeoLookup = true
+						geoLookupIP = req.PublicIPs[0]
+					}
 				} else {
-					// IP changed - need new lookup
-					needsGeoLookup = true
-					geoLookupIP = req.PublicIPs[0]
+					location = existingLoc
 				}
-			} else {
+			default:
 				// Keep existing location as fallback
 				location = existingLoc
 			}
-		} else if len(req.PublicIPs) > 0 {
+		case len(req.PublicIPs) > 0:
 			// New peer with public IPs - need geolocation lookup
 			needsGeoLookup = true
 			geoLookupIP = req.PublicIPs[0]

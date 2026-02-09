@@ -1,4 +1,4 @@
-.PHONY: all build build-force test test-verbose test-coverage test-js test-js-coverage test-all clean install lint fmt hooks hooks-install \
+.PHONY: all build build-force test test-verbose test-coverage test-js test-js-coverage test-all clean install lint fmt hooks hooks-install vendor \
         dev-server dev-peer gen-keys release release-all push-release \
         docker-build docker-up docker-down docker-logs docker-clean docker-test docker-admin \
         ghcr-login ghcr-build ghcr-push deploy deploy-plan deploy-destroy deploy-taint-coordinator \
@@ -82,6 +82,11 @@ lint:
 fmt:
 	$(GO) fmt ./...
 	goimports -w .
+
+# Vendoring
+vendor:
+	go mod vendor
+	@echo "Vendor directory updated. Commit the changes."
 
 # Git hooks with lefthook
 LEFTHOOK=$(shell $(GO) env GOPATH)/bin/lefthook

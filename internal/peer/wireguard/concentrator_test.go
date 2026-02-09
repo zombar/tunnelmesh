@@ -212,6 +212,7 @@ func TestClientsDiff(t *testing.T) {
 		{ID: "1", PublicKey: "key1", MeshIP: "172.30.100.1"},
 		{ID: "2", PublicKey: "key2", MeshIP: "172.30.100.2"},
 	}
+	// nolint:revive // new variable name is clear in context of old/new comparison
 	new := []Client{
 		{ID: "2", PublicKey: "key2", MeshIP: "172.30.100.2"},
 		{ID: "3", PublicKey: "key3", MeshIP: "172.30.100.3"},
@@ -248,6 +249,7 @@ func TestConcentratorSetOnPacketFromWG(t *testing.T) {
 		t.Fatalf("failed to create concentrator: %v", err)
 	}
 
+	// nolint:revive // packet required by callback signature but not used in test
 	var callbackCalled bool
 	conc.SetOnPacketFromWG(func(packet []byte) {
 		callbackCalled = true

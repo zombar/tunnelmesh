@@ -228,6 +228,7 @@ func TestWriter_Flush_SendsCorrectPayload(t *testing.T) {
 func TestWriter_Flush_EmptyBuffer(t *testing.T) {
 	var requestCount atomic.Int32
 
+// nolint:revive // r required by http.HandlerFunc signature
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		w.WriteHeader(http.StatusNoContent)
@@ -249,6 +250,7 @@ func TestWriter_Flush_EmptyBuffer(t *testing.T) {
 
 func TestWriter_StartStop_PeriodicFlush(t *testing.T) {
 	var requestCount atomic.Int32
+// nolint:revive // r required by http.HandlerFunc signature
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
@@ -279,6 +281,7 @@ func TestWriter_StartStop_PeriodicFlush(t *testing.T) {
 }
 
 func TestWriter_Stop_FinalFlush(t *testing.T) {
+// nolint:revive // r required by http.HandlerFunc signature
 	var requestCount atomic.Int32
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -353,6 +356,7 @@ func TestWriter_HandlesLokiUnavailable(t *testing.T) {
 	}
 
 	// Flush should not panic or return error
+// nolint:revive // t required by callback signature but not used in test
 	w.flush()
 }
 

@@ -53,6 +53,7 @@ type mockConnection struct {
 	closeCalled bool
 }
 
+	// nolint:revive // p required by io.Reader interface but not used in mock
 func (c *mockConnection) Read(p []byte) (int, error) {
 	return 0, nil
 }

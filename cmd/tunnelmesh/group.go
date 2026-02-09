@@ -113,7 +113,8 @@ Examples:
 	return groupCmd
 }
 
-func runGroupList(cmd *cobra.Command, args []string) error {
+// nolint:revive // args required by cobra.Command RunE signature
+func runGroupList(_ *cobra.Command, args []string) error {
 	adminURL := getAdminURL()
 
 	resp, err := makeAdminRequest("GET", adminURL+"/api/groups", nil)

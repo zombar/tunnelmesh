@@ -108,6 +108,7 @@ type AdminPeerInfo struct {
 //   - history=N: include last N stats data points per peer (default: 0)
 //   - since=<RFC3339>: include stats data points since this timestamp
 //   - maxPoints=N: downsample history to at most N points (for chart display)
+// nolint:gocyclo // Admin overview aggregates data from multiple sources
 func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1727,10 +1728,10 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 
 	objects, _, _, err := s.s3Store.ListObjects(bucket, prefix, "", 1000)
 	if err != nil {
-		switch err {
-		case s3.ErrBucketNotFound:
+		switch {
+		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)
-		case s3.ErrAccessDenied:
+		case errors.Is(err, s3.ErrAccessDenied):
 			s.jsonError(w, "access denied", http.StatusForbidden)
 		default:
 			s.jsonError(w, "failed to list objects", http.StatusInternalServerError)
@@ -1804,12 +1805,12 @@ func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, 
 func (s *Server) handleS3GetObject(w http.ResponseWriter, bucket, key string) {
 	reader, meta, err := s.s3Store.GetObject(bucket, key)
 	if err != nil {
-		switch err {
-		case s3.ErrBucketNotFound:
+		switch {
+		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)
-		case s3.ErrObjectNotFound:
+		case errors.Is(err, s3.ErrObjectNotFound):
 			s.jsonError(w, "object not found", http.StatusNotFound)
-		case s3.ErrAccessDenied:
+		case errors.Is(err, s3.ErrAccessDenied):
 			s.jsonError(w, "access denied", http.StatusForbidden)
 		default:
 			s.jsonError(w, "failed to get object", http.StatusInternalServerError)
@@ -1830,12 +1831,12 @@ func (s *Server) handleS3GetObject(w http.ResponseWriter, bucket, key string) {
 func (s *Server) handleS3GetObjectVersion(w http.ResponseWriter, bucket, key, versionID string) {
 	reader, meta, err := s.s3Store.GetObjectVersion(bucket, key, versionID)
 	if err != nil {
-		switch err {
-		case s3.ErrBucketNotFound:
+		switch {
+		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)
-		case s3.ErrObjectNotFound:
+		case errors.Is(err, s3.ErrObjectNotFound):
 			s.jsonError(w, "version not found", http.StatusNotFound)
-		case s3.ErrAccessDenied:
+		case errors.Is(err, s3.ErrAccessDenied):
 			s.jsonError(w, "access denied", http.StatusForbidden)
 		default:
 			s.jsonError(w, "failed to get object version", http.StatusInternalServerError)
@@ -1910,12 +1911,12 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, bucket, key string)
 
 	err := s.s3Store.DeleteObject(bucket, key)
 	if err != nil {
-		switch err {
-		case s3.ErrBucketNotFound:
+		switch {
+		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)
-		case s3.ErrObjectNotFound:
+		case errors.Is(err, s3.ErrObjectNotFound):
 			s.jsonError(w, "object not found", http.StatusNotFound)
-		case s3.ErrAccessDenied:
+		case errors.Is(err, s3.ErrAccessDenied):
 			s.jsonError(w, "access denied", http.StatusForbidden)
 		default:
 			s.jsonError(w, "failed to delete object", http.StatusInternalServerError)
@@ -1930,10 +1931,10 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, bucket, key string)
 func (s *Server) handleS3HeadObject(w http.ResponseWriter, bucket, key string) {
 	meta, err := s.s3Store.HeadObject(bucket, key)
 	if err != nil {
-		switch err {
-		case s3.ErrBucketNotFound, s3.ErrObjectNotFound:
+		switch {
+		case errors.Is(err, s3.ErrBucketNotFound), errors.Is(err, s3.ErrObjectNotFound):
 			w.WriteHeader(http.StatusNotFound)
-		case s3.ErrAccessDenied:
+		case errors.Is(err, s3.ErrAccessDenied):
 			w.WriteHeader(http.StatusForbidden)
 		default:
 			w.WriteHeader(http.StatusInternalServerError)
@@ -1968,12 +1969,12 @@ func (s *Server) handleS3ListVersions(w http.ResponseWriter, r *http.Request, bu
 
 	versions, err := s.s3Store.ListVersions(bucket, key)
 	if err != nil {
-		switch err {
-		case s3.ErrBucketNotFound:
+		switch {
+		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)
-		case s3.ErrObjectNotFound:
+		case errors.Is(err, s3.ErrObjectNotFound):
 			s.jsonError(w, "object not found", http.StatusNotFound)
-		case s3.ErrAccessDenied:
+		case errors.Is(err, s3.ErrAccessDenied):
 			s.jsonError(w, "access denied", http.StatusForbidden)
 		default:
 			s.jsonError(w, "failed to list versions", http.StatusInternalServerError)
@@ -2028,12 +2029,12 @@ func (s *Server) handleS3RestoreVersion(w http.ResponseWriter, r *http.Request, 
 
 	meta, err := s.s3Store.RestoreVersion(bucket, key, req.VersionID)
 	if err != nil {
-		switch err {
-		case s3.ErrBucketNotFound:
+		switch {
+		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)
-		case s3.ErrObjectNotFound:
+		case errors.Is(err, s3.ErrObjectNotFound):
 			s.jsonError(w, "version not found", http.StatusNotFound)
-		case s3.ErrAccessDenied:
+		case errors.Is(err, s3.ErrAccessDenied):
 			s.jsonError(w, "access denied", http.StatusForbidden)
 		default:
 			s.jsonError(w, "failed to restore version: "+err.Error(), http.StatusInternalServerError)

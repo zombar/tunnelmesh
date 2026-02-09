@@ -2,6 +2,7 @@ package nfs
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"testing"
@@ -100,25 +101,25 @@ func TestS3Filesystem_ReadOnly(t *testing.T) {
 
 	// Try to create - should fail
 	_, err := fs.Create("test.txt")
-	if err != errReadOnly {
+	if !errors.Is(err, errReadOnly) {
 		t.Errorf("Create on read-only fs returned %v, want errReadOnly", err)
 	}
 
 	// Try to rename
 	err = fs.Rename("a.txt", "b.txt")
-	if err != errReadOnly {
+	if !errors.Is(err, errReadOnly) {
 		t.Errorf("Rename on read-only fs returned %v, want errReadOnly", err)
 	}
 
 	// Try to remove
 	err = fs.Remove("test.txt")
-	if err != errReadOnly {
+	if !errors.Is(err, errReadOnly) {
 		t.Errorf("Remove on read-only fs returned %v, want errReadOnly", err)
 	}
 
 	// Try to TempFile
 	_, err = fs.TempFile("", "prefix")
-	if err != errReadOnly {
+	if !errors.Is(err, errReadOnly) {
 		t.Errorf("TempFile on read-only fs returned %v, want errReadOnly", err)
 	}
 }
@@ -289,7 +290,7 @@ func TestS3File_Seek(t *testing.T) {
 	// Read from position 5
 	buf := make([]byte, 5)
 	n, err := f.Read(buf)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("Read failed: %v", err)
 	}
 	if string(buf[:n]) != "56789" {

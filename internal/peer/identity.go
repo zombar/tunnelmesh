@@ -8,6 +8,7 @@ import (
 
 // PeerIdentity holds the immutable identity of this peer in the mesh.
 // This information is established at startup and doesn't change during runtime.
+// nolint:revive // PeerIdentity name kept for clarity despite stuttering
 type PeerIdentity struct {
 	Name          string
 	PubKeyEncoded string

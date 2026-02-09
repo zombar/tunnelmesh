@@ -265,16 +265,19 @@ func (f *S3Filesystem) ReadDir(path string) ([]os.FileInfo, error) {
 }
 
 // MkdirAll creates a directory and all parents.
+// nolint:revive // path required by billy.Filesystem interface
 func (f *S3Filesystem) MkdirAll(path string, perm os.FileMode) error {
 	// S3 doesn't have real directories - they're implied by object prefixes
 	// We can optionally create a placeholder object
 	return nil
 }
 
+// nolint:revive // target required by billy.Filesystem interface
 // Symlink creates a symbolic link (not supported for S3).
 func (f *S3Filesystem) Symlink(target, link string) error {
 	return errors.New("symlinks not supported")
 }
+// nolint:revive // link required by billy.Filesystem interface
 
 // Readlink reads a symbolic link (not supported for S3).
 func (f *S3Filesystem) Readlink(link string) (string, error) {

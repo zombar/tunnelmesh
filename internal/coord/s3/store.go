@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -1043,7 +1044,7 @@ func (s *Store) versionMetaPath(bucket, key, versionID string) string {
 // This is called before overwriting an object to preserve its history.
 func (s *Store) archiveCurrentVersion(bucket, key string) error {
 	meta, err := s.getObjectMeta(bucket, key)
-	if err == ErrObjectNotFound {
+	if errors.Is(err, ErrObjectNotFound) {
 		return nil // No current version to archive
 	}
 	if err != nil {
@@ -1089,6 +1090,7 @@ func (s *Store) archiveCurrentVersion(bucket, key string) error {
 // versionRetentionDays cutoff.
 //
 // Returns the number of versions pruned.
+// nolint:gocyclo // Version pruning has complex retention logic
 func (s *Store) pruneExpiredVersions(bucket, key string) int {
 	versionDir := s.versionDir(bucket, key)
 	entries, err := os.ReadDir(versionDir)
@@ -1697,7 +1699,7 @@ func (s *Store) GetObjectVersion(bucket, key, versionID string) (io.ReadCloser, 
 
 	// Check if it's the current version
 	currentMeta, err := s.getObjectMeta(bucket, key)
-	if err != nil && err != ErrObjectNotFound {
+	if err != nil && !errors.Is(err, ErrObjectNotFound) {
 		return nil, nil, err
 	}
 

@@ -187,6 +187,7 @@ func TestLogAuthz(t *testing.T) {
 	}
 }
 
+// nolint:dupl // Audit test cases follow similar structure for different scenarios
 func TestLogS3Op(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -277,6 +278,7 @@ func TestLogS3Op(t *testing.T) {
 	}
 }
 
+// nolint:dupl // Companion test case
 func TestLogNFSOp(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -473,6 +475,7 @@ func TestLogRoleBinding(t *testing.T) {
 	}
 }
 
+	// nolint:revive // t required by test helper signature but not used
 func TestNilLogger(t *testing.T) {
 	// Test that calling methods on a logger with noop logger doesn't panic
 	logger := zerolog.Nop()

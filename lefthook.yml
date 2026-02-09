@@ -1,17 +1,53 @@
 pre-commit:
   parallel: true
   commands:
+    # Go formatting
     fmt:
       glob: "*.go"
+      exclude: "vendor/**"
       run: gofmt -l {staged_files} | xargs -r false
       fail_text: "Run 'gofmt -w .' to fix formatting"
+
+    # Go module checks
     tidy:
       run: go mod tidy && git diff --exit-code go.mod go.sum
       fail_text: "Run 'go mod tidy' and stage the changes"
+    mod-verify:
+      run: go mod verify
+      fail_text: "Module verification failed. Run 'go clean -modcache' and retry."
+    vendor-check:
+      run: |
+        go mod vendor
+        if ! git diff --exit-code vendor/; then
+          echo "vendor/ is out of sync. Run 'go mod vendor' and commit changes."
+          exit 1
+        fi
+      fail_text: "vendor/ out of sync. Run 'go mod vendor' and stage changes."
+
+    # Generated code check
+    generated:
+      run: |
+        # Check if any go:generate directives exist (exclude vendor/)
+        if git grep -q '//go:generate' -- '*.go' ':!vendor'; then
+          echo "Checking generated code is up to date..."
+          go generate ./...
+          if ! git diff --exit-code --name-only | grep -E '\\.go$' > /dev/null; then
+            exit 0
+          else
+            echo "Generated files are out of date. Run 'go generate ./...' and commit."
+            exit 1
+          fi
+        fi
+      fail_text: "Generated code out of date. Run 'go generate ./...' and stage changes"
+
+    # Go linting
     lint:
       glob: "*.go"
+      exclude: "vendor/**"
       run: golangci-lint run --new-from-rev=HEAD
       fail_text: "Fix linting errors before committing"
+
+    # JavaScript linting and tests
     js-lint:
       glob: "internal/coord/web/js/**/*.js"
       run: biome check internal/coord/web/js/
@@ -20,6 +56,44 @@ pre-commit:
       glob: "internal/coord/web/js/**/*.js"
       run: cd internal/coord/web && (command -v bun >/dev/null 2>&1 && bun test || ~/.bun/bin/bun test)
       fail_text: "JS tests failed"
+
+    # Dockerfile linting
+    dockerfile-lint:
+      glob: "**/Dockerfile*"
+      run: |
+        if command -v hadolint >/dev/null 2>&1; then
+          hadolint {staged_files}
+        else
+          echo "hadolint not installed. Install: brew install hadolint"
+          exit 1
+        fi
+      fail_text: "Dockerfile linting failed. Fix errors or install hadolint."
+
+    # YAML linting
+    yaml-lint:
+      glob: "**/*.{yml,yaml}"
+      exclude: "vendor/**"
+      run: |
+        if command -v yamllint >/dev/null 2>&1; then
+          yamllint {staged_files}
+        else
+          echo "yamllint not installed. Install: brew install yamllint"
+          exit 1
+        fi
+      fail_text: "YAML linting failed. Fix errors or install yamllint."
+
+    # Markdown linting
+    markdown-lint:
+      glob: "**/*.md"
+      exclude: "vendor/**"
+      run: |
+        if command -v markdownlint >/dev/null 2>&1; then
+          markdownlint {staged_files}
+        else
+          echo "markdownlint not installed. Install: npm install -g markdownlint-cli"
+          exit 1
+        fi
+      fail_text: "Markdown linting failed. Fix errors or install markdownlint-cli."
 
 pre-push:
   parallel: true

@@ -3,6 +3,7 @@ package wireguard
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -159,7 +160,7 @@ func (h *APIHandler) createClient(body []byte) []byte {
 
 func (h *APIHandler) getClient(id string) []byte {
 	client, err := h.store.Get(id)
-	if err == ErrClientNotFound {
+	if errors.Is(err, ErrClientNotFound) {
 		return h.errorResponse(404, "client not found")
 	}
 	if err != nil {
@@ -176,7 +177,7 @@ func (h *APIHandler) updateClient(id string, body []byte) []byte {
 	}
 
 	client, err := h.store.Update(id, req.Enabled)
-	if err == ErrClientNotFound {
+	if errors.Is(err, ErrClientNotFound) {
 		return h.errorResponse(404, "client not found")
 	}
 	if err != nil {
@@ -193,7 +194,7 @@ func (h *APIHandler) updateClient(id string, body []byte) []byte {
 
 func (h *APIHandler) deleteClient(id string) []byte {
 	err := h.store.Delete(id)
-	if err == ErrClientNotFound {
+	if errors.Is(err, ErrClientNotFound) {
 		return h.errorResponse(404, "client not found")
 	}
 	if err != nil {

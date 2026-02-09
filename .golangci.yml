@@ -1,0 +1,133 @@
+version: 2
+
+linters:
+  enable:
+    # Enabled by default (keep)
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # Dead code detection (aggressive)
+    # unparam disabled - 1 issue in test utility (tracked in GitHub issue)
+    - gocritic
+    # revive disabled - tracked in GitHub issue (too noisy for interface implementations and missing comments)
+
+    # Code quality
+    - errorlint
+    # gosec disabled - 50 warnings tracked in GitHub issue (intentional TLS/SSH settings, integer conversions, file permissions)
+    - misspell
+    - gocyclo
+    - dupl
+    - unconvert
+    - prealloc
+
+linters-settings:
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+  gocyclo:
+    min-complexity: 15
+  goconst:
+    min-len: 4
+    min-occurrences: 8
+    ignore-tests: true
+  dupl:
+    threshold: 100
+  gosec:
+    excludes:
+      - G307  # Allow deferred Close without error check when obvious
+      # Tracked in GitHub issue - intentional or false positives:
+      - G402  # TLS InsecureSkipVerify intentional for mesh CA certs
+      - G106  # SSH InsecureIgnoreHostKey intentional for tests
+      - G404  # math/rand in benchmarks (not security-critical)
+      - G101  # Hardcoded credentials in test files
+      - G501  # MD5 used for S3 ETag (not cryptographic use)
+      - G401  # MD5 used for S3 ETag (not cryptographic use)
+      - G304  # File inclusion via variable (intentional config loading)
+      - G115  # Integer conversions (protocol requires specific sizes)
+      - G602  # Slice index (bounds checked elsewhere)
+      - G301  # Directory permissions (tracked for review)
+      - G306  # File permissions (tracked for review)
+      - G104  # Unhandled errors (tracked for review)
+      - G112  # HTTP ReadHeaderTimeout (tracked for review)
+      - G114  # HTTP timeouts (tracked for review)
+      - G204  # Subprocess with variable (intentional for log viewing)
+  revive:
+    rules:
+      # Disable noisy rules - tracked in GitHub issue
+      - name: unreachable-code  # Keep important dead code detection
+      - name: unused-receiver   # Keep unused receiver detection
+      # Disabled: unused-parameter (too noisy for interface implementations)
+      # Disabled: exported (missing comments - cosmetic)
+      # Disabled: package-comments (missing package docs - cosmetic)
+      # Disabled: var-naming (stuttering types would require API breaking changes)
+      # Disabled: redefines-builtin-id (intentional in some contexts)
+
+issues:
+  exclude-rules:
+    # Allow complex setup in tests
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - dupl
+        - goconst
+    # Suppress noisy revive rules (tracked in GitHub issue)
+    - text: "unused-parameter:"
+      linters:
+        - revive
+    - text: "exported:"
+      linters:
+        - revive
+    - text: "package-comments:"
+      linters:
+        - revive
+    - text: "var-naming:"
+      linters:
+        - revive
+    - text: "redefines-builtin-id:"
+      linters:
+        - revive
+    # Suppress unparam for test utilities
+    - text: "is unused"
+      linters:
+        - unparam
+    # Suppress all gosec warnings (tracked in GitHub issue for review)
+    - linters:
+        - gosec
+      text: ".*"
+    # Allow crypto package to have complexity
+    - path: internal/transport/udp/
+      linters:
+        - gocyclo
+    # Suppress goconst for OS names and common protocol strings
+    - text: "string `(darwin|linux|windows|yes|error|Bearer|denied|allow|serve|natpmp|\\.json|127\\.0\\.0\\.53:5353)` has .* occurrences"
+      linters:
+        - goconst
+    # Main coordination/protocol handlers are inherently complex
+    - text: "cyclomatic complexity.*of func.*run(Join|Update)"
+      linters:
+        - gocyclo
+    - text: "cyclomatic complexity.*of func.*LoadServerConfig"
+      linters:
+        - gocyclo
+    - text: "cyclomatic complexity.*of func.*handleAdminOverview"
+      linters:
+        - gocyclo
+    - text: "cyclomatic complexity.*of func.*handlePersistentRelayMessage"
+      linters:
+        - gocyclo
+    - text: "cyclomatic complexity.*of func.*handleRegister"
+      linters:
+        - gocyclo
+    - text: "cyclomatic complexity.*of func.*handleMessage"
+      linters:
+        - gocyclo
+    - text: "cyclomatic complexity.*of func.*pruneExpiredVersions"
+      linters:
+        - gocyclo

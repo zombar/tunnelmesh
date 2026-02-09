@@ -2,8 +2,10 @@
 package mesh
 
 const (
-	// Domain suffixes - canonical and aliases
+	// DomainSuffix is the canonical .tunnelmesh domain for mesh nodes.
 	DomainSuffix = ".tunnelmesh" // Canonical domain suffix
+	// AliasTM is a short alias for .tunnelmesh domain.
+
 	AliasTM      = ".tm"         // Short alias
 	AliasMesh    = ".mesh"       // Alternative alias
 
