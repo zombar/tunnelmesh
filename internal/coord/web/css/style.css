@@ -2239,3 +2239,13 @@ a.logs-container {
     justify-content: flex-end;
     margin-top: 1rem;
 }
+
+/* Docker table - right-align status, ports, network columns */
+#docker-containers th:nth-child(2),
+#docker-containers td:nth-child(2),
+#docker-containers th:nth-child(3),
+#docker-containers td:nth-child(3),
+#docker-containers th:nth-child(4),
+#docker-containers td:nth-child(4) {
+    text-align: right;
+}

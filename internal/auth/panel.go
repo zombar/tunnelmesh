@@ -27,8 +27,9 @@ const (
 
 // Panel tabs
 const (
-	PanelTabMesh = "mesh"
+	PanelTabApp  = "app"
 	PanelTabData = "data"
+	PanelTabMesh = "mesh"
 )
 
 // Panel categories
@@ -43,7 +44,7 @@ const (
 type PanelDefinition struct {
 	ID          string    `json:"id"`                    // Unique identifier
 	Name        string    `json:"name"`                  // Display name
-	Tab         string    `json:"tab"`                   // "mesh" or "data"
+	Tab         string    `json:"tab"`                   // "app", "data", or "mesh"
 	Category    string    `json:"category,omitempty"`    // For grouping: network, storage, admin
 	Description string    `json:"description,omitempty"` // Help text
 	Icon        string    `json:"icon,omitempty"`        // Optional icon identifier
@@ -83,15 +84,17 @@ func (r *PanelRegistry) registerBuiltinPanels() {
 		{ID: PanelLogs, Name: "Peer Logs", Tab: PanelTabMesh, Category: PanelCategoryMonitoring, SortOrder: 50, Builtin: true},
 		{ID: PanelWireGuard, Name: "WireGuard Peers", Tab: PanelTabMesh, Category: PanelCategoryNetwork, SortOrder: 60, Builtin: true},
 		{ID: PanelFilter, Name: "Packet Filter", Tab: PanelTabMesh, Category: PanelCategoryAdmin, SortOrder: 70, Builtin: true},
-		{ID: PanelDNS, Name: "DNS Records", Tab: PanelTabMesh, Category: PanelCategoryNetwork, SortOrder: 80, Builtin: true},
+
+		// App tab panels
+		{ID: PanelS3, Name: "Objects", Tab: PanelTabApp, Category: PanelCategoryStorage, SortOrder: 10, Builtin: true},
+		{ID: PanelShares, Name: "Shares", Tab: PanelTabApp, Category: PanelCategoryStorage, SortOrder: 20, Builtin: true},
+		{ID: PanelDocker, Name: "Docker Containers", Tab: PanelTabApp, Category: PanelCategoryAdmin, SortOrder: 30, Builtin: true},
 
 		// Data tab panels
-		{ID: PanelS3, Name: "Objects", Tab: PanelTabData, Category: PanelCategoryStorage, SortOrder: 10, Builtin: true},
-		{ID: PanelShares, Name: "Shares", Tab: PanelTabData, Category: PanelCategoryStorage, SortOrder: 20, Builtin: true},
-		{ID: PanelPeerMgmt, Name: "Peers", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 30, Builtin: true},
-		{ID: PanelGroups, Name: "Groups", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 40, Builtin: true},
-		{ID: PanelBindings, Name: "Role Bindings", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 50, Builtin: true},
-		{ID: PanelDocker, Name: "Docker Containers", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 60, Builtin: true},
+		{ID: PanelPeerMgmt, Name: "Peers", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 10, Builtin: true},
+		{ID: PanelGroups, Name: "Groups", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 20, Builtin: true},
+		{ID: PanelBindings, Name: "Role Bindings", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 30, Builtin: true},
+		{ID: PanelDNS, Name: "DNS Records", Tab: PanelTabData, Category: PanelCategoryNetwork, SortOrder: 40, Builtin: true},
 	}
 
 	for _, p := range builtins {
@@ -117,8 +120,8 @@ func (r *PanelRegistry) Register(panel PanelDefinition) error {
 		// Allow re-registration of external panels (update)
 	}
 
-	if panel.Tab != PanelTabMesh && panel.Tab != PanelTabData {
-		return fmt.Errorf("invalid panel tab: %s (must be 'mesh' or 'data')", panel.Tab)
+	if panel.Tab != PanelTabApp && panel.Tab != PanelTabData && panel.Tab != PanelTabMesh {
+		return fmt.Errorf("invalid panel tab: %s (must be 'app', 'data', or 'mesh')", panel.Tab)
 	}
 
 	if panel.CreatedAt.IsZero() {

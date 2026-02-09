@@ -2053,11 +2053,11 @@ function registerBuiltinPanels() {
             hasActionButton: true,
             sortOrder: 70,
         },
-        { id: 'dns', sectionId: 'dns-section', tab: 'mesh', title: 'DNS Records', category: 'network', sortOrder: 80 },
+        { id: 'dns', sectionId: 'dns-section', tab: 'data', title: 'DNS Records', category: 'data', sortOrder: 80 },
         {
             id: 's3',
             sectionId: 's3-section',
-            tab: 'data',
+            tab: 'app',
             title: 'Object Viewer',
             category: 'storage',
             resizable: true,
@@ -2066,7 +2066,7 @@ function registerBuiltinPanels() {
         {
             id: 'shares',
             sectionId: 'shares-section',
-            tab: 'data',
+            tab: 'app',
             title: 'Shares',
             category: 'storage',
             hasActionButton: true,
@@ -2094,11 +2094,11 @@ function registerBuiltinPanels() {
         {
             id: 'docker',
             sectionId: 'docker-section',
-            tab: 'data',
+            tab: 'app',
             title: 'Docker Containers',
             category: 'admin',
             hasActionButton: true,
-            sortOrder: 60,
+            sortOrder: 30,
             onInit: () => loadDockerContainers(),
         },
     ];
