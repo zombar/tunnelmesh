@@ -83,13 +83,14 @@ type FilterRuleDetail struct {
 
 // Server is a Unix socket control server.
 type Server struct {
-	socketPath    string
-	filter        *routing.PacketFilter
-	localPeerName string
-	listener      net.Listener
-	mu            sync.RWMutex
-	ctx           context.Context
-	cancel        context.CancelFunc
+	socketPath      string
+	filter          *routing.PacketFilter
+	localPeerName   string
+	listener        net.Listener
+	onFilterChanged func() // Called after filter changes (for persistence)
+	mu              sync.RWMutex
+	ctx             context.Context
+	cancel          context.CancelFunc
 }
 
 // NewServer creates a new control server.
@@ -110,6 +111,13 @@ func (s *Server) SetFilter(filter *routing.PacketFilter) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.filter = filter
+}
+
+// SetFilterChangedHandler sets the callback for filter changes.
+func (s *Server) SetFilterChangedHandler(handler func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onFilterChanged = handler
 }
 
 // Start begins listening on the control socket.
@@ -277,6 +285,15 @@ func (s *Server) handleFilterAdd(filter *routing.PacketFilter, payload json.RawM
 	}
 
 	filter.AddTemporaryRule(rule)
+
+	// Notify persistence layer
+	s.mu.RLock()
+	handler := s.onFilterChanged
+	s.mu.RUnlock()
+	if handler != nil {
+		handler()
+	}
+
 	log.Info().
 		Uint16("port", req.Port).
 		Str("protocol", req.Protocol).
@@ -300,6 +317,15 @@ func (s *Server) handleFilterRemove(filter *routing.PacketFilter, payload json.R
 	}
 
 	filter.RemoveTemporaryRuleForPeer(req.Port, proto, req.SourcePeer)
+
+	// Notify persistence layer
+	s.mu.RLock()
+	handler := s.onFilterChanged
+	s.mu.RUnlock()
+	if handler != nil {
+		handler()
+	}
+
 	log.Info().
 		Uint16("port", req.Port).
 		Str("protocol", req.Protocol).

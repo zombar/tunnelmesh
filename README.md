@@ -1,3 +1,8 @@
+![Admin Dashboard](docs/images/tunnelmesh_banner.webp)
+
+> [!WARNING]
+> **Expect breaking changes**: Parts of this early experimental project are in flux, expect some flake.
+
 # TunnelMesh
 
 [![CI](https://github.com/zombar/tunnelmesh/actions/workflows/ci.yml/badge.svg)](https://github.com/zombar/tunnelmesh/actions/workflows/ci.yml)
@@ -23,8 +28,6 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 - **Server-as-Client** - Coordination server can also participate as a mesh node
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
 - **Internal Packet Filter** - Port-based firewall with per-peer rules, configurable via config, CLI, or admin UI
-
-![Admin Dashboard](docs/images/admin-dashboard.webp)
 
 ## Getting Started
 

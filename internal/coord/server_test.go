@@ -7,11 +7,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	s3 "github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
+	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
@@ -1211,4 +1214,162 @@ func TestServer_BindingsAPI_DeleteBindingNotFound(t *testing.T) {
 	srv.adminMux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestServer_FilterRulesPersistence(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.filter)
+	require.NotNil(t, srv.s3SystemStore)
+
+	// Add some temporary rules
+	srv.filter.AddTemporaryRule(routing.FilterRule{
+		Port:       22,
+		Protocol:   routing.ProtoTCP,
+		Action:     routing.ActionAllow,
+		Expires:    0,
+		SourcePeer: "",
+	})
+	srv.filter.AddTemporaryRule(routing.FilterRule{
+		Port:       80,
+		Protocol:   routing.ProtoTCP,
+		Action:     routing.ActionAllow,
+		Expires:    time.Now().Unix() + 3600,
+		SourcePeer: "peer1",
+	})
+
+	// Save filter rules
+	err := srv.SaveFilterRules()
+	require.NoError(t, err)
+
+	// Verify rules were saved
+	assert.True(t, srv.s3SystemStore.Exists(s3.FilterRulesPath))
+
+	// Load and verify
+	loaded, err := srv.s3SystemStore.LoadFilterRules()
+	require.NoError(t, err)
+	assert.Len(t, loaded.Temporary, 2)
+}
+
+func TestServer_FilterRulesRecoveryFiltersExpired(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := &config.ServerConfig{
+		Listen:    ":0",
+		AuthToken: "test-token",
+		DataDir:   tempDir,
+		Admin:     config.AdminConfig{Enabled: true},
+		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
+		S3: config.S3Config{
+			Enabled: true,
+			DataDir: tempDir + "/s3",
+			Port:    9000,
+			MaxSize: 1 * 1024 * 1024 * 1024,
+		},
+	}
+
+	// Create first server
+	srv1, err := NewServer(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, srv1.filter)
+	require.NotNil(t, srv1.s3SystemStore)
+
+	// Add rules with different expiries
+	pastTime := time.Now().Unix() - 1000   // Already expired
+	futureTime := time.Now().Unix() + 3600 // Expires in 1 hour
+
+	srv1.filter.AddTemporaryRule(routing.FilterRule{
+		Port:       22,
+		Protocol:   routing.ProtoTCP,
+		Action:     routing.ActionAllow,
+		Expires:    pastTime,
+		SourcePeer: "",
+	})
+	srv1.filter.AddTemporaryRule(routing.FilterRule{
+		Port:       80,
+		Protocol:   routing.ProtoTCP,
+		Action:     routing.ActionAllow,
+		Expires:    futureTime,
+		SourcePeer: "",
+	})
+	srv1.filter.AddTemporaryRule(routing.FilterRule{
+		Port:       443,
+		Protocol:   routing.ProtoTCP,
+		Action:     routing.ActionAllow,
+		Expires:    0, // Permanent
+		SourcePeer: "",
+	})
+
+	// Save rules
+	err = srv1.SaveFilterRules()
+	require.NoError(t, err)
+
+	// Create second server (simulating restart)
+	srv2, err := NewServer(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, srv2.filter)
+
+	// Verify only non-expired rules were recovered
+	rules := srv2.filter.ListRules()
+	temporaryRules := make([]routing.FilterRuleWithSource, 0)
+	for _, r := range rules {
+		if r.Source == routing.SourceTemporary {
+			temporaryRules = append(temporaryRules, r)
+		}
+	}
+
+	// Should have 2 rules (expired one was filtered out)
+	assert.Len(t, temporaryRules, 2)
+
+	// Verify port 22 (expired) is not present
+	for _, r := range temporaryRules {
+		assert.NotEqual(t, uint16(22), r.Rule.Port, "expired rule should not be recovered")
+	}
+
+	// Verify port 80 and 443 are present
+	foundPort80 := false
+	foundPort443 := false
+	for _, r := range temporaryRules {
+		if r.Rule.Port == 80 {
+			foundPort80 = true
+		}
+		if r.Rule.Port == 443 {
+			foundPort443 = true
+		}
+	}
+	assert.True(t, foundPort80, "non-expired rule should be recovered")
+	assert.True(t, foundPort443, "permanent rule should be recovered")
+}
+
+func TestServer_SaveFilterRulesFiltersExpired(t *testing.T) {
+	srv := newTestServerWithS3(t)
+	require.NotNil(t, srv.filter)
+	require.NotNil(t, srv.s3SystemStore)
+
+	// Add expired rule
+	pastTime := time.Now().Unix() - 1000
+	srv.filter.AddTemporaryRule(routing.FilterRule{
+		Port:       22,
+		Protocol:   routing.ProtoTCP,
+		Action:     routing.ActionAllow,
+		Expires:    pastTime,
+		SourcePeer: "",
+	})
+
+	// Add non-expired rule
+	srv.filter.AddTemporaryRule(routing.FilterRule{
+		Port:       80,
+		Protocol:   routing.ProtoTCP,
+		Action:     routing.ActionAllow,
+		Expires:    0,
+		SourcePeer: "",
+	})
+
+	// Save - should filter out expired rule
+	err := srv.SaveFilterRules()
+	require.NoError(t, err)
+
+	// Load and verify expired rule was not persisted
+	loaded, err := srv.s3SystemStore.LoadFilterRules()
+	require.NoError(t, err)
+	assert.Len(t, loaded.Temporary, 1, "expired rule should not be saved")
+	assert.Equal(t, uint16(80), loaded.Temporary[0].Port)
 }

@@ -188,3 +188,86 @@ func TestSystemStoreDeleteNotFound(t *testing.T) {
 	err = ss.Delete("nonexistent.json")
 	assert.ErrorIs(t, err, ErrObjectNotFound)
 }
+
+func TestSystemStoreSaveLoadFilterRules(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	// Test basic save/load
+	rules := FilterRulesData{
+		Temporary: []FilterRulePersisted{
+			{Port: 22, Protocol: "tcp", Action: "allow", Expires: 0, SourcePeer: ""},
+			{Port: 80, Protocol: "tcp", Action: "allow", Expires: time.Now().Unix() + 3600, SourcePeer: "peer1"},
+			{Port: 443, Protocol: "tcp", Action: "deny", Expires: time.Now().Unix() + 7200, SourcePeer: ""},
+		},
+	}
+
+	err = ss.SaveFilterRules(rules)
+	require.NoError(t, err)
+
+	loaded, err := ss.LoadFilterRules()
+	require.NoError(t, err)
+	require.Len(t, loaded.Temporary, 3)
+	assert.Equal(t, uint16(22), loaded.Temporary[0].Port)
+	assert.Equal(t, "tcp", loaded.Temporary[0].Protocol)
+	assert.Equal(t, "allow", loaded.Temporary[0].Action)
+	assert.Equal(t, int64(0), loaded.Temporary[0].Expires)
+	assert.Equal(t, "", loaded.Temporary[0].SourcePeer)
+	assert.Equal(t, uint16(80), loaded.Temporary[1].Port)
+	assert.Equal(t, "peer1", loaded.Temporary[1].SourcePeer)
+}
+
+func TestSystemStoreLoadFilterRulesNotFound(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	// Should return empty struct (not error) when not found
+	loaded, err := ss.LoadFilterRules()
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Nil(t, loaded.Temporary)
+}
+
+func TestSystemStoreFilterRulesWithExpiry(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	// Save rule with past expiry (already expired)
+	pastTime := time.Now().Unix() - 1000
+	rules := FilterRulesData{
+		Temporary: []FilterRulePersisted{
+			{Port: 22, Protocol: "tcp", Action: "allow", Expires: pastTime, SourcePeer: ""},
+		},
+	}
+
+	err = ss.SaveFilterRules(rules)
+	require.NoError(t, err)
+
+	// Verify expired rules are still in storage (filtering happens in server.go recoverFilterRules)
+	loaded, err := ss.LoadFilterRules()
+	require.NoError(t, err)
+	require.Len(t, loaded.Temporary, 1)
+	assert.Equal(t, pastTime, loaded.Temporary[0].Expires)
+}
+
+func TestSystemStoreFilterRulesEmptyArray(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	// Save empty rules
+	rules := FilterRulesData{
+		Temporary: []FilterRulePersisted{},
+	}
+
+	err = ss.SaveFilterRules(rules)
+	require.NoError(t, err)
+
+	loaded, err := ss.LoadFilterRules()
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Temporary)
+	assert.Len(t, loaded.Temporary, 0)
+}

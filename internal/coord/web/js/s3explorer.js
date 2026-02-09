@@ -572,7 +572,20 @@
                 throw new Error('Binary file - not for human eyes');
             }
 
-            state.originalContent = content;
+            // Auto-format JSON files for better readability
+            let displayContent = content;
+            const ext = getExtension(fileName);
+            if (ext === 'json') {
+                try {
+                    const parsed = JSON.parse(content);
+                    displayContent = JSON.stringify(parsed, null, 2);
+                } catch (e) {
+                    // If JSON parsing fails, show original content
+                    displayContent = content;
+                }
+            }
+
+            state.originalContent = displayContent;
 
             if (viewer) viewer.style.display = 'block';
             if (preview) preview.style.display = 'none';
@@ -582,7 +595,7 @@
             if (readonlyBadge) readonlyBadge.style.display = isReadOnly ? 'block' : 'none';
 
             if (editor) {
-                editor.value = content;
+                editor.value = displayContent;
                 editor.readOnly = isReadOnly;
             }
             updateLineNumbers();

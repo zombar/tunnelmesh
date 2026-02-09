@@ -1851,6 +1851,7 @@ async function addFilterRule() {
     const protocol = document.getElementById('filter-rule-protocol')?.value;
     const action = document.getElementById('filter-rule-action')?.value;
     const sourcePeer = document.getElementById('filter-rule-source-peer')?.value || '';
+    const ttl = parseInt(document.getElementById('filter-rule-ttl')?.value || '0', 10);
 
     if (!port || !protocol || !action) {
         showToast('Please fill in all fields', 'warning');
@@ -1880,7 +1881,7 @@ async function addFilterRule() {
         const resp = await fetch('api/filter/rules', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ peer: destPeer, port, protocol, action, source_peer: sourcePeer }),
+            body: JSON.stringify({ peer: destPeer, port, protocol, action, source_peer: sourcePeer, ttl }),
         });
 
         if (!resp.ok) {

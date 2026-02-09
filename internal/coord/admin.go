@@ -22,6 +22,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/web"
 	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
+	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
@@ -547,6 +548,7 @@ type FilterRulesRequest struct {
 	Protocol   string `json:"protocol"`    // "tcp" or "udp"
 	Action     string `json:"action"`      // "allow" or "deny"
 	SourcePeer string `json:"source_peer"` // Source peer (optional, empty = any peer)
+	TTL        int64  `json:"ttl"`         // Time to live in seconds (0 = permanent)
 }
 
 // FilterRulesResponse is the response for listing filter rules.
@@ -675,17 +677,48 @@ func (s *Server) handleFilterRuleAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Push the rule to peer(s) via relay
-	if req.PeerName == "__all__" {
-		// Broadcast to all connected peers (skip self-referencing rules)
-		for _, peerName := range s.relay.GetConnectedPeerNames() {
-			if req.SourcePeer != "" && req.SourcePeer == peerName {
-				continue // Skip: peer can't filter traffic from itself
+	// Push the rule to peer(s) via relay (if relay is enabled)
+	if s.relay != nil {
+		if req.PeerName == "__all__" {
+			// Broadcast to all connected peers (skip self-referencing rules)
+			for _, peerName := range s.relay.GetConnectedPeerNames() {
+				if req.SourcePeer != "" && req.SourcePeer == peerName {
+					continue // Skip: peer can't filter traffic from itself
+				}
+				s.relay.PushFilterRuleAdd(peerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
 			}
-			s.relay.PushFilterRuleAdd(peerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
+		} else {
+			s.relay.PushFilterRuleAdd(req.PeerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
 		}
-	} else {
-		s.relay.PushFilterRuleAdd(req.PeerName, req.Port, req.Protocol, req.Action, req.SourcePeer)
+	}
+
+	// Validate TTL bounds
+	if req.TTL < 0 {
+		s.jsonError(w, "ttl cannot be negative", http.StatusBadRequest)
+		return
+	}
+	if req.TTL > 365*24*3600 { // Max 1 year
+		s.jsonError(w, "ttl exceeds maximum (1 year)", http.StatusBadRequest)
+		return
+	}
+
+	// Update coordinator's filter and persist to S3
+	if s.filter != nil {
+		// Calculate expiry if TTL specified
+		var expires int64
+		if req.TTL > 0 {
+			expires = time.Now().Unix() + req.TTL
+		}
+
+		rule := routing.FilterRule{
+			Port:       req.Port,
+			Protocol:   routing.ProtocolFromString(req.Protocol),
+			Action:     routing.ParseFilterAction(req.Action),
+			Expires:    expires,
+			SourcePeer: req.SourcePeer,
+		}
+		s.filter.AddTemporaryRule(rule)
+		s.saveFilterRulesAsync()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -718,17 +751,26 @@ func (s *Server) handleFilterRuleRemove(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Push the rule removal to peer(s) via relay
-	if req.PeerName == "__all__" {
-		// Broadcast to all connected peers (skip self-referencing rules)
-		for _, peerName := range s.relay.GetConnectedPeerNames() {
-			if req.SourcePeer != "" && req.SourcePeer == peerName {
-				continue
+	// Push the rule removal to peer(s) via relay (if relay is enabled)
+	if s.relay != nil {
+		if req.PeerName == "__all__" {
+			// Broadcast to all connected peers (skip self-referencing rules)
+			for _, peerName := range s.relay.GetConnectedPeerNames() {
+				if req.SourcePeer != "" && req.SourcePeer == peerName {
+					continue
+				}
+				s.relay.PushFilterRuleRemove(peerName, req.Port, req.Protocol, req.SourcePeer)
 			}
-			s.relay.PushFilterRuleRemove(peerName, req.Port, req.Protocol, req.SourcePeer)
+		} else {
+			s.relay.PushFilterRuleRemove(req.PeerName, req.Port, req.Protocol, req.SourcePeer)
 		}
-	} else {
-		s.relay.PushFilterRuleRemove(req.PeerName, req.Port, req.Protocol, req.SourcePeer)
+	}
+
+	// Update coordinator's filter and persist to S3
+	if s.filter != nil {
+		proto := routing.ProtocolFromString(req.Protocol)
+		s.filter.RemoveTemporaryRuleForPeer(req.Port, proto, req.SourcePeer)
+		s.saveFilterRulesAsync()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
