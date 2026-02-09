@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -37,12 +38,16 @@ func TestEventWatcher(t *testing.T) {
 
 	stream := &mockEventStream{events: mockEvents}
 
+	var mu sync.Mutex
 	eventCount := 0
 	done := make(chan struct{})
 
 	handler := func(event ContainerEvent) {
+		mu.Lock()
 		eventCount++
-		if eventCount == 3 {
+		count := eventCount
+		mu.Unlock()
+		if count == 3 {
 			close(done)
 		}
 	}
@@ -66,11 +71,17 @@ func TestEventWatcher(t *testing.T) {
 	case <-done:
 		// Success
 	case <-time.After(500 * time.Millisecond):
-		t.Fatalf("timeout waiting for events, got %d/%d", eventCount, 3)
+		mu.Lock()
+		count := eventCount
+		mu.Unlock()
+		t.Fatalf("timeout waiting for events, got %d/%d", count, 3)
 	}
 
-	if eventCount != 3 {
-		t.Fatalf("expected 3 events, got %d", eventCount)
+	mu.Lock()
+	count := eventCount
+	mu.Unlock()
+	if count != 3 {
+		t.Fatalf("expected 3 events, got %d", count)
 	}
 }
 
@@ -128,9 +139,12 @@ func TestEventTypeFiltering(t *testing.T) {
 
 func TestEventDebounce(t *testing.T) {
 	// Test that rapid events from the same container are debounced
+	var mu sync.Mutex
 	receivedEvents := []ContainerEvent{}
 	handler := func(event ContainerEvent) {
+		mu.Lock()
 		receivedEvents = append(receivedEvents, event)
+		mu.Unlock()
 	}
 
 	watcher := newEventWatcher(handler)
@@ -147,7 +161,10 @@ func TestEventDebounce(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Should only have received 1 event due to debouncing
-	if len(receivedEvents) > 1 {
-		t.Errorf("expected at most 1 event due to debouncing, got %d", len(receivedEvents))
+	mu.Lock()
+	count := len(receivedEvents)
+	mu.Unlock()
+	if count > 1 {
+		t.Errorf("expected at most 1 event due to debouncing, got %d", count)
 	}
 }

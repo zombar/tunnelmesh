@@ -172,22 +172,16 @@ func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) error {
 				continue
 			}
 
-			// Reverse to get oldest first
-			reversed := make([]StatsDataPoint, len(points))
-			for i, dp := range points {
-				reversed[len(points)-1-i] = dp
-			}
-
 			peerHistory := map[string]interface{}{
 				"peer_name": peerName,
-				"history":   reversed,
+				"history":   points,
 			}
 
 			peerPath := "stats/" + peerName + ".network.json"
 			if err := s3Store.SaveJSON(peerPath, peerHistory); err != nil {
 				log.Warn().Err(err).Str("peer", peerName).Msg("failed to save peer network stats to S3")
 			} else {
-				log.Debug().Str("peer", peerName).Int("points", len(reversed)).Msg("saved peer network stats to S3")
+				log.Debug().Str("peer", peerName).Int("points", len(points)).Msg("saved peer network stats to S3")
 			}
 		}
 		return nil
@@ -199,15 +193,9 @@ func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) error {
 	}
 
 	for peerID, rb := range sh.peers {
-		// Get all data points, oldest first (for proper chronological order)
 		points := rb.GetLast(rb.Count())
 		if len(points) > 0 {
-			// Reverse to get oldest first
-			reversed := make([]StatsDataPoint, len(points))
-			for i, dp := range points {
-				reversed[len(points)-1-i] = dp
-			}
-			data.Peers[peerID] = reversed
+			data.Peers[peerID] = points
 		}
 	}
 
@@ -272,7 +260,11 @@ func (sh *StatsHistory) applyLoadedData(data *persistedHistory) {
 	cutoff := time.Now().Add(-3 * 24 * time.Hour) // Only load last 3 days
 	for peerID, points := range data.Peers {
 		rb := NewRingBuffer(MaxHistoryPoints)
-		for _, dp := range points {
+
+		// Data is saved newest-first, but ring buffer needs oldest-first for Push()
+		// to maintain correct temporal order. Reverse before pushing.
+		for i := len(points) - 1; i >= 0; i-- {
+			dp := points[i]
 			// Skip data older than 3 days
 			if dp.Timestamp.Before(cutoff) {
 				continue
