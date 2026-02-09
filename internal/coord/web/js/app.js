@@ -19,6 +19,7 @@ const { createSparklineSVG } = TM.table;
 const { createModalController } = TM.modal;
 
 // Panel refresh lists - defines which panels to refresh for each tab
+const PANELS_MESH_TAB = ['peers', 'wg-clients', 'logs', 'alerts', 'filter']; // Mesh tab panels (visualizer/charts/map loaded via fetchData)
 const PANELS_APP_TAB = ['s3', 'shares']; // App tab panels (docker disabled)
 const PANELS_DATA_TAB = ['peers-mgmt', 'groups', 'shares', 'bindings', 's3']; // Data tab panels
 
@@ -2253,8 +2254,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             TM.refresh.triggerMultiple(PANELS_APP_TAB, { cascade: false });
         } else if (tabName === 'data') {
             TM.refresh.triggerMultiple(PANELS_DATA_TAB, { cascade: false });
+        } else if (tabName === 'mesh') {
+            // Mesh tab panels are updated via SSE/polling from fetchData(true) called above
+            // No explicit refresh trigger needed here
         }
-        // Mesh tab loads via fetchData(true) which is already called above
     }
 });
 
@@ -2708,6 +2711,8 @@ function switchTab(tabName) {
     // Handle tab-specific initialization
     if (tabName === 'mesh') {
         // Defer visualizer resize until after DOM updates to get correct dimensions
+        // Note: Mesh panels (peers, logs, filter, etc.) are updated via SSE/polling
+        // from fetchData(), not via refresh coordinator
         requestAnimationFrame(() => {
             if (state.visualizer) {
                 state.visualizer.resize();
