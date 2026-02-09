@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 )
 
 // mockDockerClient is a mock implementation for testing.
@@ -394,6 +395,184 @@ func TestGetComposeService(t *testing.T) {
 			result := getComposeService(tt.labels)
 			if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestSetFilter(t *testing.T) {
+	mgr := NewManager(&config.DockerConfig{}, "test-peer", nil, nil)
+
+	filter := &mockFilter{}
+	mgr.SetFilter(filter)
+
+	if mgr.filter != filter {
+		t.Error("SetFilter did not set the filter")
+	}
+}
+
+func TestStart_NoDocker(t *testing.T) {
+	mgr := NewManager(&config.DockerConfig{
+		Socket: "unix:///nonexistent/docker.sock",
+	}, "test-peer", nil, nil)
+
+	err := mgr.Start(context.Background())
+	if err != nil {
+		t.Errorf("Start() should not error when Docker not available, got %v", err)
+	}
+
+	if mgr.client != nil {
+		t.Error("Start() should not create client when Docker not available")
+	}
+}
+
+func TestStop_NilClient(t *testing.T) {
+	mgr := NewManager(&config.DockerConfig{}, "test-peer", nil, nil)
+
+	err := mgr.Stop()
+	if err != nil {
+		t.Errorf("Stop() with nil client should not error, got %v", err)
+	}
+}
+
+func TestStartContainer(t *testing.T) {
+	mockDockerClient := &mockDockerClient{}
+	mgr := &Manager{
+		peerName: "test-peer",
+		client:   mockDockerClient,
+	}
+
+	err := mgr.StartContainer(context.Background(), "abc123")
+	if err != nil {
+		t.Errorf("StartContainer() error = %v", err)
+	}
+}
+
+func TestStartContainer_NilClient(t *testing.T) {
+	mgr := &Manager{
+		peerName: "test-peer",
+		client:   nil,
+	}
+
+	err := mgr.StartContainer(context.Background(), "abc123")
+	if err == nil {
+		t.Error("StartContainer() with nil client should error")
+	}
+}
+
+func TestStopContainer(t *testing.T) {
+	mockDockerClient := &mockDockerClient{}
+	mgr := &Manager{
+		peerName: "test-peer",
+		client:   mockDockerClient,
+	}
+
+	err := mgr.StopContainer(context.Background(), "abc123")
+	if err != nil {
+		t.Errorf("StopContainer() error = %v", err)
+	}
+}
+
+func TestStopContainer_NilClient(t *testing.T) {
+	mgr := &Manager{
+		peerName: "test-peer",
+		client:   nil,
+	}
+
+	err := mgr.StopContainer(context.Background(), "abc123")
+	if err == nil {
+		t.Error("StopContainer() with nil client should error")
+	}
+}
+
+func TestRestartContainer(t *testing.T) {
+	mockDockerClient := &mockDockerClient{}
+	mgr := &Manager{
+		peerName: "test-peer",
+		client:   mockDockerClient,
+	}
+
+	err := mgr.RestartContainer(context.Background(), "abc123")
+	if err != nil {
+		t.Errorf("RestartContainer() error = %v", err)
+	}
+}
+
+func TestRestartContainer_NilClient(t *testing.T) {
+	mgr := &Manager{
+		peerName: "test-peer",
+		client:   nil,
+	}
+
+	err := mgr.RestartContainer(context.Background(), "abc123")
+	if err == nil {
+		t.Error("RestartContainer() with nil client should error")
+	}
+}
+
+func TestIsDockerAvailable_TCPSocket(t *testing.T) {
+	mgr := &Manager{
+		cfg: &config.DockerConfig{
+			Socket: "tcp://localhost:2375",
+		},
+	}
+
+	// TCP sockets always return true (will fail on connect)
+	if !mgr.isDockerAvailable() {
+		t.Error("isDockerAvailable() should return true for TCP socket")
+	}
+}
+
+func TestIsDockerAvailable_InvalidSocket(t *testing.T) {
+	mgr := &Manager{
+		cfg: &config.DockerConfig{
+			Socket: "http://invalid",
+		},
+	}
+
+	if mgr.isDockerAvailable() {
+		t.Error("isDockerAvailable() should return false for invalid socket format")
+	}
+}
+
+func TestParseProtocol(t *testing.T) {
+	tests := []struct {
+		name  string
+		proto string
+		want  uint8
+	}{
+		{
+			name:  "tcp",
+			proto: "tcp",
+			want:  routing.ProtoTCP,
+		},
+		{
+			name:  "TCP uppercase",
+			proto: "TCP",
+			want:  routing.ProtoTCP,
+		},
+		{
+			name:  "udp",
+			proto: "udp",
+			want:  routing.ProtoUDP,
+		},
+		{
+			name:  "UDP uppercase",
+			proto: "UDP",
+			want:  routing.ProtoUDP,
+		},
+		{
+			name:  "unknown defaults to tcp",
+			proto: "sctp",
+			want:  routing.ProtoTCP,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseProtocol(tt.proto)
+			if got != tt.want {
+				t.Errorf("parseProtocol() = %v, want %v", got, tt.want)
 			}
 		})
 	}
