@@ -80,9 +80,9 @@ docker compose logs --tail=100 server
 | Service | URL | Notes |
 |---------|-----|-------|
 | Coordination API | http://localhost:8081 | Peers connect here |
-| Admin Dashboard | https://server-node.tunnelmesh/ | Mesh-only (requires joining the mesh) |
-| Grafana | https://server-node.tunnelmesh/grafana/ | Metrics dashboards (mesh-only) |
-| Prometheus | https://server-node.tunnelmesh/prometheus/ | Raw metrics (mesh-only) |
+| Admin Dashboard | https://server-peer.tunnelmesh/ | Mesh-only (requires joining the mesh) |
+| Grafana | https://server-peer.tunnelmesh/grafana/ | Metrics dashboards (mesh-only) |
+| Prometheus | https://server-peer.tunnelmesh/prometheus/ | Raw metrics (mesh-only) |
 
 **Note:** The admin panel and monitoring tools are only accessible from within the mesh network for security.
 

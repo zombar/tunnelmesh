@@ -77,7 +77,7 @@ filter:
     - port: 3306
       protocol: tcp
       action: deny
-      source_peer: untrusted-node
+      source_peer: untrusted-peer
 ```
 
 ### Peer Config (peer.yaml)
@@ -124,7 +124,7 @@ tunnelmesh filter list
 # PORT  PROTOCOL  ACTION  SOURCE PEER  SOURCE       EXPIRES
 # 22    TCP       allow   *            coordinator  -
 # 80    TCP       allow   *            config       -
-# 3306  TCP       deny    dev-node     temporary    2h
+# 3306  TCP       deny    dev-peer     temporary    2h
 #
 # Default policy: deny (allowlist mode - only allowed ports are accessible)
 # Total rules: 3

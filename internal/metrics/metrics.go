@@ -43,8 +43,8 @@ type PeerMetrics struct {
 	RelayConnected prometheus.Gauge // 1 if connected, 0 if not
 
 	// Exit node info
-	ExitNodeConfigured prometheus.Gauge     // 1 if using exit node
-	ExitNodeInfo       *prometheus.GaugeVec // labels: exit_node
+	ExitPeerConfigured prometheus.Gauge     // 1 if using exit node
+	ExitPeerInfo       *prometheus.GaugeVec // labels: exit_node
 	AllowsExitTraffic  prometheus.Gauge     // 1 if this node is an exit node
 
 	// WireGuard concentrator metrics
@@ -183,12 +183,12 @@ func InitMetrics(peerName, meshIP, version string) *PeerMetrics {
 		}),
 
 		// Exit node info
-		ExitNodeConfigured: promauto.With(Registry).NewGauge(prometheus.GaugeOpts{
+		ExitPeerConfigured: promauto.With(Registry).NewGauge(prometheus.GaugeOpts{
 			Name:        "tunnelmesh_exit_node_configured",
 			Help:        "Whether an exit node is configured (1) or not (0)",
 			ConstLabels: constLabels,
 		}),
-		ExitNodeInfo: promauto.With(Registry).NewGaugeVec(prometheus.GaugeOpts{
+		ExitPeerInfo: promauto.With(Registry).NewGaugeVec(prometheus.GaugeOpts{
 			Name:        "tunnelmesh_exit_node_info",
 			Help:        "Exit node information (value is always 1 when exit node is configured)",
 			ConstLabels: constLabels,

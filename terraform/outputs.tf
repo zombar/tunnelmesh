@@ -49,7 +49,7 @@ output "coordinator_url" {
 output "wireguard_endpoints" {
   description = "WireGuard endpoints for peer nodes running concentrator"
   value = {
-    for name, cfg in var.nodes : name => module.node[name].wireguard_endpoint
+    for name, cfg in var.peers : name => module.node[name].wireguard_endpoint
     if lookup(cfg, "wireguard", false) && lookup(cfg, "peer", false)
   }
 }

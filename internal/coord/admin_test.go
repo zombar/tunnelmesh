@@ -147,7 +147,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 	assert.Equal(t, "United Kingdom", overview.Peers[0].Location.Country)
 }
 
-func TestAdminOverview_ExitNodeInfo(t *testing.T) {
+func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Listen:    ":0",
 		AuthToken: "test-token",
@@ -201,12 +201,12 @@ func TestAdminOverview_ExitNodeInfo(t *testing.T) {
 
 	// Verify exit node info
 	assert.True(t, exitNodeInfo.AllowsExitTraffic, "exit-node should allow exit traffic")
-	assert.Equal(t, "", exitNodeInfo.ExitNode, "exit-node should not have an exit node")
+	assert.Equal(t, "", exitNodeInfo.ExitPeer, "exit-node should not have an exit node")
 	assert.Contains(t, exitNodeInfo.ExitClients, "client1", "exit-node should have client1 as exit client")
 
 	// Verify client info
 	assert.False(t, clientInfo.AllowsExitTraffic, "client1 should not allow exit traffic")
-	assert.Equal(t, "exit-node", clientInfo.ExitNode, "client1 should use exit-node")
+	assert.Equal(t, "exit-node", clientInfo.ExitPeer, "client1 should use exit-node")
 	assert.Empty(t, clientInfo.ExitClients, "client1 should not have exit clients")
 }
 

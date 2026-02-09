@@ -50,7 +50,7 @@ type Collector struct {
 // ForwarderStats interface for getting forwarder statistics.
 type ForwarderStats interface {
 	Stats() routing.ForwarderStats
-	ExitNode() string
+	ExitPeer() string
 }
 
 // TunnelManager interface for getting tunnel statistics.
@@ -132,7 +132,7 @@ func (c *Collector) Collect() {
 	c.collectConnectionStats()
 	c.collectRelayStats()
 	c.collectLatencyStats()
-	c.collectExitNodeStats()
+	c.collectExitPeerStats()
 	c.collectWireGuardStats()
 	c.collectGeolocationStats()
 	c.collectFilterStats()
@@ -254,7 +254,7 @@ func (c *Collector) collectLatencyStats() {
 	}
 }
 
-func (c *Collector) collectExitNodeStats() {
+func (c *Collector) collectExitPeerStats() {
 	// Set allows exit traffic flag
 	if c.allowsExit {
 		c.metrics.AllowsExitTraffic.Set(1)
@@ -264,16 +264,16 @@ func (c *Collector) collectExitNodeStats() {
 
 	// Check if exit node is configured
 	if c.forwarder == nil {
-		c.metrics.ExitNodeConfigured.Set(0)
+		c.metrics.ExitPeerConfigured.Set(0)
 		return
 	}
 
-	exitNode := c.forwarder.ExitNode()
+	exitNode := c.forwarder.ExitPeer()
 	if exitNode != "" {
-		c.metrics.ExitNodeConfigured.Set(1)
-		c.metrics.ExitNodeInfo.WithLabelValues(exitNode).Set(1)
+		c.metrics.ExitPeerConfigured.Set(1)
+		c.metrics.ExitPeerInfo.WithLabelValues(exitNode).Set(1)
 	} else {
-		c.metrics.ExitNodeConfigured.Set(0)
+		c.metrics.ExitPeerConfigured.Set(0)
 	}
 }
 

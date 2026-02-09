@@ -94,8 +94,8 @@ var (
 	longitude float64
 	city      string
 
-	// Exit node flags
-	exitNodeFlag     string
+	// Exit peer flags
+	exitPeerFlag     string
 	allowExitTraffic bool
 
 	// Context flag for join command
@@ -194,8 +194,8 @@ It does not route traffic - peers connect directly to each other.`,
 	joinCmd.Flags().Float64Var(&latitude, "latitude", 0, "manual geolocation latitude (-90 to 90)")
 	joinCmd.Flags().Float64Var(&longitude, "longitude", 0, "manual geolocation longitude (-180 to 180)")
 	joinCmd.Flags().StringVar(&city, "city", "", "city name for manual geolocation (shown in admin UI)")
-	joinCmd.Flags().StringVar(&exitNodeFlag, "exit-node", "", "name of peer to route internet traffic through")
-	joinCmd.Flags().BoolVar(&allowExitTraffic, "allow-exit-traffic", false, "allow this node to act as exit node for other peers")
+	joinCmd.Flags().StringVar(&exitPeerFlag, "exit-peer", "", "name of peer to route internet traffic through")
+	joinCmd.Flags().BoolVar(&allowExitTraffic, "allow-exit-traffic", false, "allow this peer to act as exit peer for other peers")
 	joinCmd.Flags().BoolVar(&enableTracing, "enable-tracing", false, "enable runtime tracing (exposes /debug/trace endpoint)")
 	joinCmd.Flags().StringVar(&joinContext, "context", "", "save/update context with this name after joining")
 	rootCmd.AddCommand(joinCmd)
@@ -831,8 +831,8 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	if city != "" {
 		cfg.Geolocation.City = city
 	}
-	if exitNodeFlag != "" {
-		cfg.ExitNode = exitNodeFlag
+	if exitPeerFlag != "" {
+		cfg.ExitPeer = exitPeerFlag
 	}
 	if allowExitTraffic {
 		cfg.AllowExitTraffic = true
@@ -924,7 +924,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	}
 
 	// Register with retry and exponential backoff
-	resp, err := client.RegisterWithRetry(ctx, cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version, location, cfg.ExitNode, cfg.AllowExitTraffic, cfg.DNS.Aliases, coord.DefaultRetryConfig())
+	resp, err := client.RegisterWithRetry(ctx, cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version, location, cfg.ExitPeer, cfg.AllowExitTraffic, cfg.DNS.Aliases, coord.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}
@@ -1109,13 +1109,13 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			}
 
 			// Configure exit node routing (client side)
-			if cfg.ExitNode != "" {
+			if cfg.ExitPeer != "" {
 				// Strip domain suffix if present (allow both "peer" and "peer.tunnelmesh")
-				exitNodeName := cfg.ExitNode
+				exitNodeName := cfg.ExitPeer
 				if resp.Domain != "" && strings.HasSuffix(exitNodeName, resp.Domain) {
 					exitNodeName = strings.TrimSuffix(exitNodeName, resp.Domain)
 				}
-				forwarder.SetExitNode(exitNodeName)
+				forwarder.SetExitPeer(exitNodeName)
 				log.Info().Str("exit_node", exitNodeName).Msg("exit node configured, internet traffic will route through peer")
 
 				if err := tun.ConfigureExitRoutes(exitCfg); err != nil {
@@ -1128,7 +1128,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			// Configure NAT for exit node (server side)
 			if cfg.AllowExitTraffic {
 				log.Info().Msg("this node allows exit traffic from other peers")
-				exitCfg.IsExitNode = true
+				exitCfg.IsExitPeer = true
 
 				if err := tun.ConfigureExitNAT(exitCfg); err != nil {
 					log.Warn().Err(err).Msg("failed to configure exit NAT, manual setup may be required")
@@ -1416,6 +1416,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 					Action:     r.Rule.Action.String(),
 					SourcePeer: r.Rule.SourcePeer,
 					Source:     r.Source.String(),
+					Expires:    r.Rule.Expires,
 				})
 			}
 			return wireRules

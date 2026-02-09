@@ -17,15 +17,15 @@ A peer-to-peer mesh networking tool that creates encrypted tunnels between nodes
 - **P2P Encrypted Tunnels** - Direct connections between peers using pluggable transports
 - **Pluggable Transport Layer** - Supports SSH, UDP (WireGuard-like), and WebSocket relay transports with automatic fallback
 - **Coordination Server** - Central hub for peer discovery, IP allocation, and NAT traversal coordination (not a traffic router)
-- **Exit Nodes** - Split-tunnel VPN routing: route internet traffic through designated peers while keeping mesh traffic direct
+- **Exit Peers** - Split-tunnel VPN routing: route internet traffic through designated peers while keeping mesh traffic direct
 - **TUN Interface** - Virtual network interface for transparent IP routing
 - **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh`)
 - **Network Monitoring** - Automatic detection of network changes with re-connection
 - **NAT Traversal** - UDP hole-punching with STUN-like endpoint discovery, plus relay fallback
 - **Multi-Platform** - Linux, macOS, and Windows support
 - **Admin Dashboard** - Web interface showing mesh status, peers, traffic statistics, and per-peer transport controls
-- **Node Location Map** - Optional geographic visualization of mesh nodes (requires `--locations` flag)
-- **Server-as-Client** - Coordination server can also participate as a mesh node
+- **Node Location Map** - Optional geographic visualization of mesh peers (requires `--locations` flag)
+- **Server-as-Client** - Coordination server can also participate as a mesh peer
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
 - **Internal Packet Filter** - Port-based firewall with per-peer rules, configurable via config, CLI, or admin UI
 
@@ -186,7 +186,7 @@ The default transport order is: UDP → SSH → Relay. The system automatically 
 - NAT traversal: Built-in STUN-like endpoint discovery and UDP hole-punching
 - Zero-copy forwarding: Optimized packet path for high throughput
 
-### Exit Nodes (Split-Tunnel VPN)
+### Exit Peers (Split-Tunnel VPN)
 
 Route internet traffic through a designated peer while keeping mesh-to-mesh traffic direct. This is useful for:
 - Accessing geo-restricted content through a peer in another region
@@ -195,7 +195,7 @@ Route internet traffic through a designated peer while keeping mesh-to-mesh traf
 
 ```
 ┌─────────────────┐                      ┌─────────────────┐
-│   Client Peer   │                      │   Exit Node     │
+│   Client Peer   │                      │   Exit Peer     │
 │   (172.30.0.1)   │                      │   (172.30.0.2)   │
 │                 │                      │                 │
 │  Internet ──────┼──── Tunnel ─────────►│──► Internet     │
@@ -205,7 +205,7 @@ Route internet traffic through a designated peer while keeping mesh-to-mesh traf
 └─────────────────┘                      └─────────────────┘
 ```
 
-**On the exit node** (the peer that will forward internet traffic):
+**On the exit peer** (the peer that will forward internet traffic):
 ```bash
 tunnelmesh join --allow-exit-traffic
 ```
@@ -245,7 +245,7 @@ filter:
     - port: 3306
       protocol: tcp
       action: deny
-      source_peer: untrusted-node  # Block specific peer
+      source_peer: untrusted-peer  # Block specific peer
 ```
 
 ```bash

@@ -151,7 +151,7 @@ func TestExitRouteConfig_Validate(t *testing.T) {
 			cfg: ExitRouteConfig{
 				InterfaceName: "utun5",
 				MeshCIDR:      "172.30.0.0/16",
-				IsExitNode:    false,
+				IsExitPeer:    false,
 			},
 			wantErr: false,
 		},
@@ -160,7 +160,7 @@ func TestExitRouteConfig_Validate(t *testing.T) {
 			cfg: ExitRouteConfig{
 				InterfaceName: "utun5",
 				MeshCIDR:      "172.30.0.0/16",
-				IsExitNode:    true,
+				IsExitPeer:    true,
 			},
 			wantErr: false,
 		},
@@ -244,7 +244,7 @@ func TestBuildExitNATCommands_Linux(t *testing.T) {
 	cfg := ExitRouteConfig{
 		InterfaceName: "tun0",
 		MeshCIDR:      "172.30.0.0/16",
-		IsExitNode:    true,
+		IsExitPeer:    true,
 	}
 
 	addCmds, removeCmds := buildExitNATCommands(cfg, "linux")
@@ -277,7 +277,7 @@ func TestBuildExitNATCommands_Darwin(t *testing.T) {
 	cfg := ExitRouteConfig{
 		InterfaceName: "utun5",
 		MeshCIDR:      "172.30.0.0/16",
-		IsExitNode:    true,
+		IsExitPeer:    true,
 	}
 
 	addCmds, removeCmds := buildExitNATCommands(cfg, "darwin")

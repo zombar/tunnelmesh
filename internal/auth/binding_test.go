@@ -2,26 +2,37 @@ package auth
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewRoleBinding(t *testing.T) {
+	before := time.Now().UTC()
 	binding := NewRoleBinding("alice", RoleAdmin, "")
+	after := time.Now().UTC()
 
 	assert.NotEmpty(t, binding.Name)
 	assert.Equal(t, "alice", binding.UserID)
 	assert.Equal(t, RoleAdmin, binding.RoleName)
 	assert.Empty(t, binding.BucketScope)
+	assert.False(t, binding.CreatedAt.IsZero(), "CreatedAt should be set")
+	assert.True(t, binding.CreatedAt.After(before) || binding.CreatedAt.Equal(before), "CreatedAt should be recent")
+	assert.True(t, binding.CreatedAt.Before(after) || binding.CreatedAt.Equal(after), "CreatedAt should be recent")
 }
 
 func TestNewRoleBindingWithScope(t *testing.T) {
+	before := time.Now().UTC()
 	binding := NewRoleBinding("bob", RoleBucketRead, "my-bucket")
+	after := time.Now().UTC()
 
 	assert.Equal(t, "bob", binding.UserID)
 	assert.Equal(t, RoleBucketRead, binding.RoleName)
 	assert.Equal(t, "my-bucket", binding.BucketScope)
+	assert.False(t, binding.CreatedAt.IsZero(), "CreatedAt should be set")
+	assert.True(t, binding.CreatedAt.After(before) || binding.CreatedAt.Equal(before), "CreatedAt should be recent")
+	assert.True(t, binding.CreatedAt.Before(after) || binding.CreatedAt.Equal(after), "CreatedAt should be recent")
 }
 
 func TestRoleBindingAppliesToBucket(t *testing.T) {

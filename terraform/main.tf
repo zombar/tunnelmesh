@@ -66,7 +66,7 @@ locals {
   ssh_key_ids = var.ssh_key_name != "" ? [data.digitalocean_ssh_key.main[0].id] : []
 
   # Find the coordinator node (there should be exactly one if any nodes need it)
-  coordinator_name = one([for name, cfg in var.nodes : name if lookup(cfg, "coordinator", false)])
+  coordinator_name = one([for name, cfg in var.peers : name if lookup(cfg, "coordinator", false)])
   # External API on configurable port (port 443 reserved for mesh-internal admin)
   coordinator_url  = local.coordinator_name != null ? "https://${local.coordinator_name}.${var.domain}:${var.external_api_port}" : var.external_coordinator_url
 }
@@ -74,7 +74,7 @@ locals {
 # Deploy all nodes using the tunnelmesh-node module
 module "node" {
   source   = "./modules/tunnelmesh-node"
-  for_each = var.nodes
+  for_each = var.peers
 
   name       = each.key
   domain     = var.domain

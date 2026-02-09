@@ -6,7 +6,7 @@ TunnelMesh is a P2P mesh networking tool written in Go that creates encrypted tu
 
 **Key components:**
 - **Coordinator**: Central server for peer discovery, IP allocation, DNS, and relay fallback
-- **Peer**: Mesh node with TUN interface for transparent IP routing
+- **Peer**: Mesh peer with TUN interface for transparent IP routing
 - **Transports**: UDP (primary, low-latency), SSH (fallback), WebSocket relay (last resort)
 
 ## Common Commands
@@ -45,7 +45,7 @@ internal/               # Core packages
   transport/            # SSH, UDP, relay transports
     udp/                # Noise protocol, encryption, handshake
   routing/              # Packet router, filter
-  peer/                 # Peer node logic, connection FSM
+  peer/                 # Peer peer logic, connection FSM
   coord/                # Coordinator server, API, relay
   tun/                  # TUN device (platform-specific)
   dns/                  # Mesh DNS resolver

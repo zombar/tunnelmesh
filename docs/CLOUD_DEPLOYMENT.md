@@ -32,7 +32,7 @@ terraform apply
 
 ## Deployment Scenarios
 
-TunnelMesh is flexible. Whether you need a simple personal VPN, a global team mesh, or a sophisticated multi-region network with exit nodes, there's a configuration for you.
+TunnelMesh is flexible. Whether you need a simple personal VPN, a global team mesh, or a sophisticated multi-region network with exit peers, there's a configuration for you.
 
 ### Scenario 1: All-in-One (Starter)
 
@@ -46,7 +46,7 @@ TunnelMesh is flexible. Whether you need a simple personal VPN, a global team me
                     │   ┌─────────────────────────────┐   │
                     │   │    Coordinator + Peer       │   │
                     │   │    + WireGuard Gateway      │   │
-                    │   │    + Exit Node              │   │
+                    │   │    + Exit Peer              │   │
                     │   └─────────────────────────────┘   │
                     │              172.30.0.1             │
                     └──────────────────┬──────────────────┘
@@ -130,13 +130,13 @@ nodes = {
 
 ---
 
-### Scenario 3: Exit Node (Split-Tunnel VPN)
+### Scenario 3: Exit Peer (Split-Tunnel VPN)
 
 **Route internet traffic through a specific location.** Your traffic exits from a peer in another region while mesh-to-mesh communication stays direct. Great for privacy, accessing geo-restricted content, or compliance requirements.
 
 ```
 ┌──────────────────┐                               ┌──────────────────┐
-│   Your Laptop    │                               │   Exit Node      │
+│   Your Laptop    │                               │   Exit Peer      │
 │   London, UK     │                               │   Singapore      │
 │                  │        Encrypted Mesh         │                  │
 │  ┌────────────┐  │◄──────────────────────────────│  ┌────────────┐  │
@@ -438,7 +438,7 @@ sudo tunnelmesh join \
 
 ## Node Configuration Reference
 
-Each node in the `nodes` map supports these options:
+Each peer in the `nodes` map supports these options:
 
 ### Core Options
 
@@ -448,11 +448,11 @@ Each node in the `nodes` map supports these options:
 | `peer` | bool | Join mesh as a peer |
 | `wireguard` | bool | Enable WireGuard concentrator for mobile clients |
 
-### Exit Node Options
+### Exit Peer Options
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `allow_exit_traffic` | bool | Allow other peers to route internet through this node |
+| `allow_exit_traffic` | bool | Allow other peers to route internet through this peer |
 | `exit_node` | string | Route this node's internet through specified peer |
 
 ### Infrastructure Options
@@ -510,7 +510,7 @@ export TF_VAR_do_token="dop_v1_xxx"
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `locations_enabled` | `false` | Geographic node visualization (uses ip-api.com) |
+| `locations_enabled` | `false` | Geographic peer visualization (uses ip-api.com) |
 | `monitoring_enabled` | `false` | Prometheus/Grafana/Loki stack |
 | `auto_update_enabled` | `true` | Automatic binary updates |
 | `auto_update_schedule` | `hourly` | Update check frequency |
@@ -559,11 +559,11 @@ https://tunnelmesh.example.com/grafana/
 
 ## Node Location Tracking
 
-The `locations_enabled` flag enables a world map visualization showing where your mesh nodes are located.
+The `locations_enabled` flag enables a world map visualization showing where your mesh peers are located.
 
 **Disabled by default** because it:
 1. Uses external API (ip-api.com) for geolocation
-2. Sends node public IPs to external service
+2. Sends peer public IPs to external service
 3. Requires coordinator internet access
 
 ### Manual Coordinates
@@ -599,7 +599,7 @@ terraform output
 | `coord_url` | Coordinator URL |
 | `admin_url` | Admin dashboard URL |
 | `peer_config_example` | Example peer configuration |
-| `node_ips` | Map of node names to IPs |
+| `node_ips` | Map of peer names to IPs |
 
 ---
 
@@ -667,7 +667,7 @@ All estimates use `s-1vcpu-512mb-10gb` ($4/mo) droplets. Monitoring adds minimal
 2. **Rotate periodically**: Update tokens and redeploy
 3. **Mesh-only admin**: Admin dashboard only accessible from within the mesh network
 4. **Enable monitoring**: Visibility into access patterns
-5. **Auto-updates**: Keep nodes patched
+5. **Auto-updates**: Keep peers patched
 
 ---
 
@@ -678,7 +678,7 @@ All estimates use `s-1vcpu-512mb-10gb` ($4/mo) droplets. Monitoring adds minimal
 domain      = "example.com"
 auth_token  = "your-64-char-hex-auth-token"
 
-# Nodes - Multi-region with exit node
+# Peers - Multi-region with exit peer
 nodes = {
   "tunnelmesh" = {
     coordinator        = true

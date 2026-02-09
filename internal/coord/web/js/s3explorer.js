@@ -579,7 +579,7 @@
                 try {
                     const parsed = JSON.parse(content);
                     displayContent = JSON.stringify(parsed, null, 2);
-                } catch (e) {
+                } catch (_e) {
                     // If JSON parsing fails, show original content
                     displayContent = content;
                 }

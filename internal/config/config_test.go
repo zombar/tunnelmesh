@@ -556,7 +556,7 @@ func TestPeerConfig_ValidateGeolocation(t *testing.T) {
 
 // Exit Node Feature Tests
 
-func TestLoadPeerConfig_WithExitNode(t *testing.T) {
+func TestLoadPeerConfig_WithExitPeer(t *testing.T) {
 	dir, cleanup := testutil.TempDir(t)
 	defer cleanup()
 
@@ -572,7 +572,7 @@ exit_node: "exit-server"
 	require.NoError(t, err)
 
 	assert.Equal(t, "client-node", cfg.Name)
-	assert.Equal(t, "exit-server", cfg.ExitNode)
+	assert.Equal(t, "exit-server", cfg.ExitPeer)
 }
 
 func TestLoadPeerConfig_WithAllowExitTraffic(t *testing.T) {
@@ -594,7 +594,7 @@ allow_exit_traffic: true
 	assert.True(t, cfg.AllowExitTraffic)
 }
 
-func TestLoadPeerConfig_ExitNodeDefaults(t *testing.T) {
+func TestLoadPeerConfig_ExitPeerDefaults(t *testing.T) {
 	dir, cleanup := testutil.TempDir(t)
 	defer cleanup()
 
@@ -609,7 +609,7 @@ auth_token: "token"
 	cfg, err := LoadPeerConfig(configPath)
 	require.NoError(t, err)
 
-	assert.Equal(t, "", cfg.ExitNode, "exit_node should default to empty string")
+	assert.Equal(t, "", cfg.ExitPeer, "exit_node should default to empty string")
 	assert.False(t, cfg.AllowExitTraffic, "allow_exit_traffic should default to false")
 }
 

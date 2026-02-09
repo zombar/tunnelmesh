@@ -3,7 +3,7 @@
 This guide walks you through setting up a TunnelMesh network from scratch. You'll need:
 
 1. **One coordination server** - Manages peer discovery and IP allocation
-2. **One or more peers** - Nodes that connect to form the mesh network
+2. **One or more peers** - Peers that connect to form the mesh network
 
 ## Part 1: Setting Up the Coordination Server
 
@@ -146,7 +146,7 @@ You should see an empty peer list—this will populate as peers join.
 
 ## Part 2: Setting Up Peers
 
-Peers are the nodes that form the mesh network. Each peer:
+Peers are the peers that form the mesh network. Each peer:
 - Registers with the coordination server
 - Gets assigned a mesh IP address
 - Establishes direct SSH tunnels with other peers
@@ -250,7 +250,7 @@ tunnelmesh service status
 ### Verify Peer Connectivity
 
 ```bash
-# Check node status
+# Check peer status
 tunnelmesh status
 
 # List connected peers
@@ -366,19 +366,19 @@ cat /etc/tunnelmesh/peer.yaml
 - **Add more peers**: Repeat Part 2 on additional machines
 - **Enable server as peer**: Add `join_mesh` section to server config (see main README)
 - **Secure the server**: Put behind a reverse proxy with TLS
-- **Set up exit nodes**: Route internet traffic through specific peers (see below)
+- **Set up exit peers**: Route internet traffic through specific peers (see below)
 
 For full configuration options, see the [main README](../README.md).
 
 ---
 
-## Part 3: Exit Node Setup (Optional)
+## Part 3: Exit Peer Setup (Optional)
 
-Exit nodes allow you to route internet traffic through a specific peer while keeping mesh traffic direct. This is useful for geo-unblocking or routing through a trusted exit point.
+Exit peers allow you to route internet traffic through a specific peer while keeping mesh traffic direct. This is useful for geo-unblocking or routing through a trusted exit point.
 
-### Configure the Exit Node
+### Configure the Exit Peer
 
-On the peer that will serve as the exit node:
+On the peer that will serve as the exit peer:
 
 ```bash
 # Edit the peer config
@@ -399,7 +399,7 @@ TunnelMesh automatically configures IP forwarding and NAT when `allow_exit_traff
 
 ### Configure the Client
 
-On peers that should route through the exit node:
+On peers that should route through the exit peer:
 
 ```bash
 sudo nano /etc/tunnelmesh/peer.yaml
@@ -407,7 +407,7 @@ sudo nano /etc/tunnelmesh/peer.yaml
 
 Add:
 ```yaml
-exit_node: "exit-peer-name"  # Name of your exit node peer
+exit_node: "exit-peer-name"  # Name of your exit peer peer
 ```
 
 Restart:
@@ -415,4 +415,4 @@ Restart:
 sudo tunnelmesh service restart
 ```
 
-Internet traffic will now route through the exit node, while mesh traffic stays direct.
+Internet traffic will now route through the exit peer, while mesh traffic stays direct.

@@ -49,7 +49,7 @@ func (c *Client) Register(name, publicKey string, publicIPs, privateIPs []string
 		BehindNAT:         behindNAT,
 		Version:           version,
 		Location:          location,
-		ExitNode:          exitNode,
+		ExitPeer:          exitNode,
 		AllowsExitTraffic: allowsExitTraffic,
 		Aliases:           aliases,
 	}

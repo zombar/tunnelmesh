@@ -379,7 +379,7 @@ func TestPeerStats_ConnectionsOmitEmpty(t *testing.T) {
 	assert.False(t, hasConnections, "connections should be omitted when nil")
 }
 
-func TestPeer_ExitNodeFields(t *testing.T) {
+func TestPeer_ExitPeerFields(t *testing.T) {
 	peer := Peer{
 		Name:              "exit-node-1",
 		MeshIP:            "172.30.0.5",
@@ -399,11 +399,11 @@ func TestPeer_ExitNodeFields(t *testing.T) {
 	assert.True(t, decoded.AllowsExitTraffic)
 }
 
-func TestPeer_UsingExitNode(t *testing.T) {
+func TestPeer_UsingExitPeer(t *testing.T) {
 	peer := Peer{
 		Name:     "client-1",
 		MeshIP:   "172.30.0.10",
-		ExitNode: "exit-node-1",
+		ExitPeer: "exit-node-1",
 	}
 
 	// Test marshaling
@@ -416,7 +416,7 @@ func TestPeer_UsingExitNode(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "client-1", decoded.Name)
-	assert.Equal(t, "exit-node-1", decoded.ExitNode)
+	assert.Equal(t, "exit-node-1", decoded.ExitPeer)
 }
 
 func TestPeer_ExitFieldsOmitEmpty(t *testing.T) {
@@ -434,12 +434,12 @@ func TestPeer_ExitFieldsOmitEmpty(t *testing.T) {
 	require.NoError(t, err)
 
 	_, hasAllowsExit := m["allows_exit_traffic"]
-	_, hasExitNode := m["exit_node"]
+	_, hasExitPeer := m["exit_node"]
 	assert.False(t, hasAllowsExit, "allows_exit_traffic should be omitted when false")
-	assert.False(t, hasExitNode, "exit_node should be omitted when empty")
+	assert.False(t, hasExitPeer, "exit_node should be omitted when empty")
 }
 
-func TestRegisterRequest_ExitNodeFields(t *testing.T) {
+func TestRegisterRequest_ExitPeerFields(t *testing.T) {
 	req := RegisterRequest{
 		Name:              "exit-node",
 		PublicKey:         "ssh-ed25519 AAAA...",
@@ -460,12 +460,12 @@ func TestRegisterRequest_ExitNodeFields(t *testing.T) {
 	assert.True(t, decoded.AllowsExitTraffic)
 }
 
-func TestRegisterRequest_UsingExitNode(t *testing.T) {
+func TestRegisterRequest_UsingExitPeer(t *testing.T) {
 	req := RegisterRequest{
 		Name:      "client",
 		PublicKey: "ssh-ed25519 BBBB...",
 		SSHPort:   2222,
-		ExitNode:  "exit-node",
+		ExitPeer:  "exit-node",
 	}
 
 	// Test marshaling
@@ -478,7 +478,7 @@ func TestRegisterRequest_UsingExitNode(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "client", decoded.Name)
-	assert.Equal(t, "exit-node", decoded.ExitNode)
+	assert.Equal(t, "exit-node", decoded.ExitPeer)
 }
 
 // Latency Metrics Tests

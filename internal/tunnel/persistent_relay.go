@@ -54,6 +54,7 @@ type FilterRuleWithSourceWire struct {
 	Action     string `json:"action"`      // "allow" or "deny"
 	SourcePeer string `json:"source_peer"` // Source peer (empty = any peer)
 	Source     string `json:"source"`      // "coordinator", "config", "temporary", or "service"
+	Expires    int64  `json:"expires"`     // Unix timestamp, 0=permanent
 }
 
 // relayPacketPool pools relay packet buffers to reduce GC pressure.

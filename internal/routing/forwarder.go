@@ -257,16 +257,16 @@ func (f *Forwarder) SetMeshCIDR(cidr *net.IPNet) {
 	f.meshCIDR = cidr
 }
 
-// SetExitNode configures the exit node for external traffic routing.
+// SetExitPeer configures the exit node for external traffic routing.
 // When set, traffic destined outside the mesh CIDR is routed through this peer.
-func (f *Forwarder) SetExitNode(peerName string) {
+func (f *Forwarder) SetExitPeer(peerName string) {
 	f.exitNodeMu.Lock()
 	defer f.exitNodeMu.Unlock()
 	f.exitNode = peerName
 }
 
-// ExitNode returns the currently configured exit node, or empty string if none.
-func (f *Forwarder) ExitNode() string {
+// ExitPeer returns the currently configured exit node, or empty string if none.
+func (f *Forwarder) ExitPeer() string {
 	f.exitNodeMu.RLock()
 	defer f.exitNodeMu.RUnlock()
 	return f.exitNode
@@ -392,7 +392,7 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 			Str("dst", info.DstIP.String()).
 			Str("exit_node", exitNode).
 			Msg("routing external traffic to exit node")
-		return f.forwardToExitNode(packet, info, exitNode)
+		return f.forwardToExitPeer(packet, info, exitNode)
 	}
 
 	// Debug: log when external traffic cannot be routed
@@ -483,9 +483,9 @@ func (f *Forwarder) ForwardPacket(packet []byte) error {
 	return fmt.Errorf("%w for peer %s", ErrNoTunnel, peerName)
 }
 
-// forwardToExitNode forwards external traffic to the configured exit node.
+// forwardToExitPeer forwards external traffic to the configured exit node.
 // It first tries to send via direct tunnel, then falls back to relay.
-func (f *Forwarder) forwardToExitNode(packet []byte, info *PacketInfo, exitNodeName string) error {
+func (f *Forwarder) forwardToExitPeer(packet []byte, info *PacketInfo, exitNodeName string) error {
 	// Try direct tunnel first
 	tunnel, ok := f.tunnels.Get(exitNodeName)
 	if ok {
@@ -692,7 +692,7 @@ func (f *Forwarder) ForwardPacketZeroCopy(zcBuf *ZeroCopyBuffer, packetLen int) 
 			Str("dst", info.DstIP.String()).
 			Str("exit_node", exitNode).
 			Msg("routing external traffic to exit node")
-		return f.forwardToExitNode(packet, info, exitNode)
+		return f.forwardToExitPeer(packet, info, exitNode)
 	}
 
 	// Look up the route

@@ -93,7 +93,7 @@ type AdminPeerInfo struct {
 	History             []StatsDataPoint   `json:"history,omitempty"`
 	// Exit node info
 	AllowsExitTraffic bool     `json:"allows_exit_traffic,omitempty"`
-	ExitNode          string   `json:"exit_node,omitempty"`
+	ExitPeer          string   `json:"exit_node,omitempty"`
 	ExitClients       []string `json:"exit_clients,omitempty"`
 	// Connection info (peer -> transport type)
 	Connections map[string]string `json:"connections,omitempty"`
@@ -161,8 +161,8 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 	// Build exit client map (which clients use which exit node)
 	exitClients := make(map[string][]string) // exitNodeName -> [clientNames]
 	for _, info := range s.peers {
-		if info.peer.ExitNode != "" {
-			exitClients[info.peer.ExitNode] = append(exitClients[info.peer.ExitNode], info.peer.Name)
+		if info.peer.ExitPeer != "" {
+			exitClients[info.peer.ExitPeer] = append(exitClients[info.peer.ExitPeer], info.peer.Name)
 		}
 	}
 
@@ -188,7 +188,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 			Stats:             info.stats,
 			Version:           info.peer.Version,
 			AllowsExitTraffic: info.peer.AllowsExitTraffic,
-			ExitNode:          info.peer.ExitNode,
+			ExitPeer:          info.peer.ExitPeer,
 			Aliases:           info.aliases,
 		}
 
@@ -555,6 +555,7 @@ type FilterRulesRequest struct {
 type FilterRulesResponse struct {
 	PeerName    string           `json:"peer"`
 	DefaultDeny bool             `json:"default_deny"`
+	S3Enabled   bool             `json:"s3_enabled"` // Whether coordinator has S3 persistence enabled
 	Rules       []FilterRuleInfo `json:"rules"`
 	Error       string           `json:"error,omitempty"` // Set when query failed (peer offline/timeout)
 }
@@ -602,6 +603,7 @@ func (s *Server) handleFilterRulesList(w http.ResponseWriter, r *http.Request) {
 		resp := FilterRulesResponse{
 			PeerName:    peerName,
 			DefaultDeny: s.cfg.Filter.IsDefaultDeny(),
+			S3Enabled:   s.s3SystemStore != nil,
 			Rules:       []FilterRuleInfo{},
 			Error:       "Peer offline or unreachable",
 		}
@@ -617,6 +619,7 @@ func (s *Server) handleFilterRulesList(w http.ResponseWriter, r *http.Request) {
 		Action     string `json:"action"`
 		SourcePeer string `json:"source_peer"`
 		Source     string `json:"source"`
+		Expires    int64  `json:"expires"`
 	}
 	if err := json.Unmarshal(rulesJSON, &peerRules); err != nil {
 		log.Error().Err(err).Str("peer", peerName).Msg("failed to parse peer filter rules")
@@ -632,7 +635,7 @@ func (s *Server) handleFilterRulesList(w http.ResponseWriter, r *http.Request) {
 			Protocol:   r.Protocol,
 			Action:     r.Action,
 			Source:     r.Source,
-			Expires:    0,
+			Expires:    r.Expires,
 			SourcePeer: r.SourcePeer,
 		})
 	}
@@ -640,6 +643,7 @@ func (s *Server) handleFilterRulesList(w http.ResponseWriter, r *http.Request) {
 	resp := FilterRulesResponse{
 		PeerName:    peerName,
 		DefaultDeny: s.cfg.Filter.IsDefaultDeny(),
+		S3Enabled:   s.s3SystemStore != nil,
 		Rules:       rules,
 	}
 
@@ -1373,13 +1377,14 @@ type RoleBindingRequest struct {
 // handleBindings handles GET (list) and POST (create) for user role bindings.
 // BindingInfo represents a role binding (user or group) for the UI.
 type BindingInfo struct {
-	Name         string `json:"name"`
-	UserID       string `json:"user_id,omitempty"`
-	GroupName    string `json:"group_name,omitempty"`
-	RoleName     string `json:"role_name"`
-	BucketScope  string `json:"bucket_scope,omitempty"`
-	ObjectPrefix string `json:"object_prefix,omitempty"`
-	Protected    bool   `json:"protected"`
+	Name         string    `json:"name"`
+	UserID       string    `json:"user_id,omitempty"`
+	GroupName    string    `json:"group_name,omitempty"`
+	RoleName     string    `json:"role_name"`
+	BucketScope  string    `json:"bucket_scope,omitempty"`
+	ObjectPrefix string    `json:"object_prefix,omitempty"`
+	Protected    bool      `json:"protected"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
@@ -1403,6 +1408,7 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 				BucketScope:  b.BucketScope,
 				ObjectPrefix: b.ObjectPrefix,
 				Protected:    protected,
+				CreatedAt:    b.CreatedAt,
 			})
 		}
 
@@ -1416,6 +1422,7 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 				BucketScope:  gb.BucketScope,
 				ObjectPrefix: gb.ObjectPrefix,
 				Protected:    protected,
+				CreatedAt:    gb.CreatedAt,
 			})
 		}
 

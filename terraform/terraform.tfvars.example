@@ -48,7 +48,7 @@ auth_token = ""
 
 # --- Example 1: All-in-One (recommended for getting started) ---
 # Single $4/month droplet with everything
-nodes = {
+peers = {
   "tunnelmesh" = {
     coordinator        = true
     peer               = true
@@ -60,7 +60,7 @@ nodes = {
 }
 
 # --- Example 2: Coordinator Peer (Exit Node) + Separate WireGuard Peer ---
-# nodes = {
+# peers = {
 #   "tunnelmesh" = {
 #     coordinator        = true
 #     peer               = true
@@ -75,7 +75,7 @@ nodes = {
 
 # --- Example 3: Multi-Region Deployment ---
 # Coordinator in Amsterdam, WireGuard peers in multiple regions
-# nodes = {
+# peers = {
 #   "tunnelmesh" = {
 #     coordinator = true
 #     peer        = true
@@ -97,7 +97,7 @@ nodes = {
 # --- Example 4: Exit Node Setup (Split-Tunnel VPN) ---
 # Route internet traffic through a designated exit node while keeping
 # mesh traffic direct. Great for privacy or geo-unblocking.
-# nodes = {
+# peers = {
 #   "tunnelmesh" = {
 #     coordinator = true
 #     peer        = true
@@ -127,7 +127,7 @@ nodes = {
 
 # --- Example 5: High Availability Setup ---
 # Larger coordinator, multiple WireGuard entry points
-# nodes = {
+# peers = {
 #   "tunnelmesh" = {
 #     coordinator = true
 #     peer        = true
@@ -149,7 +149,7 @@ nodes = {
 # --- Example 6: Peers Only (external coordinator) ---
 # For connecting to an existing coordinator
 # external_coordinator_url = "https://tunnelmesh.example.com"
-# nodes = {
+# peers = {
 #   "tm-office" = {
 #     peer      = true
 #     wireguard = true

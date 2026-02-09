@@ -3,18 +3,20 @@ package auth
 import (
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 // RoleBinding binds a user to a role with optional bucket, object prefix, or panel scope.
 type RoleBinding struct {
-	Name         string `json:"name"`                    // Unique binding name
-	UserID       string `json:"user_id"`                 // User being granted access
-	RoleName     string `json:"role_name"`               // Role being granted
-	BucketScope  string `json:"bucket_scope,omitempty"`  // Optional: scope to specific bucket
-	ObjectPrefix string `json:"object_prefix,omitempty"` // Optional: scope to object key prefix
-	PanelScope   string `json:"panel_scope,omitempty"`   // Optional: scope to specific panel ID
+	Name         string    `json:"name"`                    // Unique binding name
+	UserID       string    `json:"user_id"`                 // User being granted access
+	RoleName     string    `json:"role_name"`               // Role being granted
+	BucketScope  string    `json:"bucket_scope,omitempty"`  // Optional: scope to specific bucket
+	ObjectPrefix string    `json:"object_prefix,omitempty"` // Optional: scope to object key prefix
+	PanelScope   string    `json:"panel_scope,omitempty"`   // Optional: scope to specific panel ID
+	CreatedAt    time.Time `json:"created_at"`              // When this binding was created
 }
 
 // NewRoleBinding creates a new role binding.
@@ -30,6 +32,7 @@ func NewRoleBindingWithPrefix(userID, roleName, bucketScope, objectPrefix string
 		RoleName:     roleName,
 		BucketScope:  bucketScope,
 		ObjectPrefix: objectPrefix,
+		CreatedAt:    time.Now().UTC(),
 	}
 }
 
@@ -40,6 +43,7 @@ func NewRoleBindingForPanel(userID, panelID string) *RoleBinding {
 		UserID:     userID,
 		RoleName:   RolePanelViewer,
 		PanelScope: panelID,
+		CreatedAt:  time.Now().UTC(),
 	}
 }
 

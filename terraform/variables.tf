@@ -25,7 +25,7 @@ variable "auth_token" {
 # NODE DEFINITIONS
 # ============================================================================
 
-variable "nodes" {
+variable "peers" {
   description = <<-EOF
     Map of nodes to deploy. Each node can have:
     - coordinator: bool - Run coordination server (only one node should have this)
@@ -52,7 +52,7 @@ variable "nodes" {
 
   validation {
     condition = length([
-      for name, cfg in var.nodes : name
+      for name, cfg in var.peers : name
       if lookup(cfg, "coordinator", false)
     ]) <= 1
     error_message = "Only one node can have coordinator = true."

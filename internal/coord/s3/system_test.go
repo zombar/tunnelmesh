@@ -271,3 +271,154 @@ func TestSystemStoreFilterRulesEmptyArray(t *testing.T) {
 	require.NotNil(t, loaded.Temporary)
 	assert.Len(t, loaded.Temporary, 0)
 }
+
+func TestSystemStoreSaveLoadGroups(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	// Create groups with members
+	groups := []*auth.Group{
+		{
+			Name:      "admins",
+			Members:   []string{"alice", "bob"},
+			CreatedAt: time.Now().UTC(),
+		},
+		{
+			Name:      "developers",
+			Members:   []string{"charlie", "david", "eve"},
+			CreatedAt: time.Now().UTC(),
+		},
+	}
+
+	err = ss.SaveGroups(groups)
+	require.NoError(t, err)
+
+	loaded, err := ss.LoadGroups()
+	require.NoError(t, err)
+	require.Len(t, loaded, 2)
+	assert.Equal(t, "admins", loaded[0].Name)
+	assert.Len(t, loaded[0].Members, 2)
+	assert.Contains(t, loaded[0].Members, "alice")
+	assert.Contains(t, loaded[0].Members, "bob")
+	assert.Equal(t, "developers", loaded[1].Name)
+	assert.Len(t, loaded[1].Members, 3)
+	assert.Contains(t, loaded[1].Members, "charlie")
+}
+
+func TestSystemStoreLoadGroupsNotFound(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	// Should return nil (not error) when not found
+	loaded, err := ss.LoadGroups()
+	require.NoError(t, err)
+	assert.Nil(t, loaded)
+}
+
+func TestSystemStoreSaveGroupsEmpty(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	// Save empty group (no members)
+	groups := []*auth.Group{
+		{
+			Name:      "empty-group",
+			Members:   []string{},
+			CreatedAt: time.Now().UTC(),
+		},
+	}
+
+	err = ss.SaveGroups(groups)
+	require.NoError(t, err)
+
+	loaded, err := ss.LoadGroups()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	assert.Equal(t, "empty-group", loaded[0].Name)
+	assert.Len(t, loaded[0].Members, 0)
+}
+
+func TestSystemStoreSaveGroupsPersistence(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	// Create group with member
+	groups := []*auth.Group{
+		{
+			Name:      "everyone",
+			Members:   []string{"user1"},
+			CreatedAt: time.Now().UTC(),
+		},
+	}
+
+	err = ss.SaveGroups(groups)
+	require.NoError(t, err)
+
+	// Add another member
+	groups[0].Members = append(groups[0].Members, "user2")
+	err = ss.SaveGroups(groups)
+	require.NoError(t, err)
+
+	// Verify both members persisted
+	loaded, err := ss.LoadGroups()
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	assert.Len(t, loaded[0].Members, 2)
+	assert.Contains(t, loaded[0].Members, "user1")
+	assert.Contains(t, loaded[0].Members, "user2")
+}
+
+func TestSystemStoreSaveLoadGroupBindings(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	bindings := []*auth.GroupBinding{
+		{Name: "gb1", GroupName: "admins", RoleName: "admin"},
+		{Name: "gb2", GroupName: "developers", RoleName: "bucket-read", BucketScope: "dev-bucket"},
+		{Name: "gb3", GroupName: "testers", RoleName: "bucket-read", BucketScope: "test-bucket", ObjectPrefix: "data/"},
+	}
+
+	err = ss.SaveGroupBindings(bindings)
+	require.NoError(t, err)
+
+	loaded, err := ss.LoadGroupBindings()
+	require.NoError(t, err)
+	require.Len(t, loaded, 3)
+	assert.Equal(t, "admins", loaded[0].GroupName)
+	assert.Equal(t, "admin", loaded[0].RoleName)
+	assert.Equal(t, "developers", loaded[1].GroupName)
+	assert.Equal(t, "dev-bucket", loaded[1].BucketScope)
+	assert.Equal(t, "testers", loaded[2].GroupName)
+	assert.Equal(t, "data/", loaded[2].ObjectPrefix)
+}
+
+func TestSystemStoreLoadGroupBindingsNotFound(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	// Should return nil (not error) when not found
+	loaded, err := ss.LoadGroupBindings()
+	require.NoError(t, err)
+	assert.Nil(t, loaded)
+}
+
+func TestSystemStoreSaveGroupBindingsEmpty(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	// Save empty array
+	err = ss.SaveGroupBindings([]*auth.GroupBinding{})
+	require.NoError(t, err)
+
+	loaded, err := ss.LoadGroupBindings()
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Len(t, loaded, 0)
+}

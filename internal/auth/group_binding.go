@@ -3,18 +3,20 @@ package auth
 import (
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 // GroupBinding binds a group to a role with optional bucket, object prefix, or panel scope.
 type GroupBinding struct {
-	Name         string `json:"name"`                    // Unique binding name
-	GroupName    string `json:"group_name"`              // Group being granted access
-	RoleName     string `json:"role_name"`               // Role being granted
-	BucketScope  string `json:"bucket_scope,omitempty"`  // Optional: scope to specific bucket
-	ObjectPrefix string `json:"object_prefix,omitempty"` // Optional: scope to object key prefix
-	PanelScope   string `json:"panel_scope,omitempty"`   // Optional: scope to specific panel ID
+	Name         string    `json:"name"`                    // Unique binding name
+	GroupName    string    `json:"group_name"`              // Group being granted access
+	RoleName     string    `json:"role_name"`               // Role being granted
+	BucketScope  string    `json:"bucket_scope,omitempty"`  // Optional: scope to specific bucket
+	ObjectPrefix string    `json:"object_prefix,omitempty"` // Optional: scope to object key prefix
+	PanelScope   string    `json:"panel_scope,omitempty"`   // Optional: scope to specific panel ID
+	CreatedAt    time.Time `json:"created_at"`              // When this binding was created
 }
 
 // NewGroupBinding creates a new group binding.
@@ -30,6 +32,7 @@ func NewGroupBindingWithPrefix(groupName, roleName, bucketScope, objectPrefix st
 		RoleName:     roleName,
 		BucketScope:  bucketScope,
 		ObjectPrefix: objectPrefix,
+		CreatedAt:    time.Now().UTC(),
 	}
 }
 
@@ -40,6 +43,7 @@ func NewGroupBindingForPanel(groupName, panelID string) *GroupBinding {
 		GroupName:  groupName,
 		RoleName:   RolePanelViewer,
 		PanelScope: panelID,
+		CreatedAt:  time.Now().UTC(),
 	}
 }
 

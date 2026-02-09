@@ -52,7 +52,7 @@ func (m *MeshNode) HandleNetworkChange(event netmon.Event) {
 	resp, err := m.client.Register(
 		m.identity.Name, m.identity.PubKeyEncoded,
 		publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version, nil,
-		m.identity.Config.ExitNode, m.identity.Config.AllowExitTraffic, m.identity.Config.DNS.Aliases,
+		m.identity.Config.ExitPeer, m.identity.Config.AllowExitTraffic, m.identity.Config.DNS.Aliases,
 	)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to re-register after network change")

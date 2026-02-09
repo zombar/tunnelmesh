@@ -141,7 +141,7 @@ tunnelmesh serve [flags]
 
 | Flag | Description |
 |------|-------------|
-| `--locations` | Enable node location tracking (uses ip-api.com) |
+| `--locations` | Enable peer location tracking (uses ip-api.com) |
 | `--enable-tracing` | Enable runtime tracing (/debug/trace endpoint) |
 
 **Example - Basic server:**
@@ -181,7 +181,7 @@ tunnelmesh join [flags]
 | `--context` | | Save/update as named context |
 | `--wireguard` | | Enable WireGuard concentrator |
 | `--exit-node` | | Route internet through specified peer |
-| `--allow-exit-traffic` | | Allow this node as exit for others |
+| `--allow-exit-traffic` | | Allow this peer as exit for others |
 | `--latitude` | | Manual latitude (-90 to 90) |
 | `--longitude` | | Manual longitude (-180 to 180) |
 | `--city` | | City name for admin UI display |
@@ -194,15 +194,15 @@ sudo tunnelmesh join \
   --token your-secure-token
 ```
 
-**Example - Join with exit node:**
+**Example - Join with exit peer:**
 ```bash
 sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
   --token your-secure-token \
-  --exit-node server-node
+  --exit-node server-peer
 ```
 
-**Example - Join as exit node:**
+**Example - Join as exit peer:**
 ```bash
 sudo tunnelmesh join \
   --server https://tunnelmesh.example.com \
@@ -484,12 +484,12 @@ tunnelmesh benchmark <peer-name> [flags]
 
 **Example - Basic speed test:**
 ```bash
-tunnelmesh benchmark server-node
+tunnelmesh benchmark server-peer
 ```
 
 **Example output:**
 ```
-Benchmarking server-node (172.30.0.1)...
+Benchmarking server-peer (172.30.0.1)...
   Direction:  upload
   Size:       10 MB
   Duration:   125 ms
@@ -499,22 +499,22 @@ Benchmarking server-node (172.30.0.1)...
 
 **Example - Large transfer with JSON output:**
 ```bash
-tunnelmesh benchmark server-node --size 100MB --output results.json
+tunnelmesh benchmark server-peer --size 100MB --output results.json
 ```
 
 **Example - Chaos testing (simulate poor network):**
 ```bash
 # Simulate flaky WiFi
-tunnelmesh benchmark server-node --size 50MB --packet-loss 2
+tunnelmesh benchmark server-peer --size 50MB --packet-loss 2
 
 # Simulate mobile connection
-tunnelmesh benchmark server-node --size 10MB --latency 150ms --jitter 50ms
+tunnelmesh benchmark server-peer --size 10MB --latency 150ms --jitter 50ms
 
 # Simulate bandwidth-constrained link
-tunnelmesh benchmark server-node --size 100MB --bandwidth 10mbps
+tunnelmesh benchmark server-peer --size 100MB --bandwidth 10mbps
 
 # Combined stress test
-tunnelmesh benchmark server-node --size 20MB \
+tunnelmesh benchmark server-peer --size 20MB \
   --packet-loss 3 \
   --latency 50ms \
   --jitter 20ms \
@@ -719,7 +719,7 @@ Set up TunnelMesh for personal use with a cloud server and laptop.
 # On your cloud server
 sudo mkdir -p /etc/tunnelmesh
 
-# Generate config (server + peer mode for exit node capability)
+# Generate config (server + peer mode for exit peer capability)
 tunnelmesh init --server --peer --output /etc/tunnelmesh/server.yaml
 
 # Edit: set auth_token, enable allow_exit_traffic in join_mesh section

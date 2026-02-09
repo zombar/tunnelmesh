@@ -106,8 +106,8 @@ type PeerConfig struct {
 	DNS               DNSConfig           `yaml:"dns"`
 	WireGuard         WireGuardPeerConfig `yaml:"wireguard"`
 	Geolocation       GeolocationConfig   `yaml:"geolocation"`        // Manual geolocation coordinates
-	ExitNode          string              `yaml:"exit_node"`          // Name of peer to route internet traffic through
-	AllowExitTraffic  bool                `yaml:"allow_exit_traffic"` // Allow this node to act as exit node for other peers
+	ExitPeer          string              `yaml:"exit_peer"`          // Name of peer to route internet traffic through
+	AllowExitTraffic  bool                `yaml:"allow_exit_traffic"` // Allow this peer to act as exit peer for other peers
 	Filter            FilterConfig        `yaml:"filter"`             // Local packet filter rules
 	Loki              LokiConfig          `yaml:"loki"`               // Loki log shipping configuration
 }

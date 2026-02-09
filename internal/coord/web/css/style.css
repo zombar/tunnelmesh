@@ -34,9 +34,9 @@
     --input-border-radius: 0px;
 
     /* Visualizer colors - for canvas/D3 use */
-    --viz-node-online: #3fb950;
-    --viz-node-offline: #f85149;
-    --viz-node-coordinator: #58a6ff;
+    --viz-peer-online: #3fb950;
+    --viz-peer-offline: #f85149;
+    --viz-peer-coordinator: #58a6ff;
     --viz-edge-online: rgba(88, 166, 255, 0.4);
     --viz-edge-offline: rgba(248, 81, 73, 0.3);
     --viz-label-text: #e6edf3;

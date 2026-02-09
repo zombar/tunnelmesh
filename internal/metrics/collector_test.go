@@ -36,7 +36,7 @@ func (m *mockForwarder) SetStats(stats routing.ForwarderStats) {
 	m.stats = stats
 }
 
-func (m *mockForwarder) ExitNode() string {
+func (m *mockForwarder) ExitPeer() string {
 	return m.exitNode
 }
 
@@ -315,7 +315,7 @@ func TestCollector_CollectRelayStats(t *testing.T) {
 	}
 }
 
-func TestCollector_CollectExitNodeStats(t *testing.T) {
+func TestCollector_CollectExitPeerStats(t *testing.T) {
 	oldRegistry := Registry
 	Registry = prometheus.NewRegistry()
 	defer func() { Registry = oldRegistry }()

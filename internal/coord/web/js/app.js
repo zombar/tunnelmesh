@@ -1753,10 +1753,11 @@ function renderFilterRules(data) {
 
     if (dom.noFilterRules) dom.noFilterRules.style.display = 'none';
 
-    // Check for temporary rules and show warning if any exist
+    // Check for temporary rules and show warning if any exist (but not if S3 is enabled)
     const hasTemporaryRules = data.rules.some((r) => r.source === 'temporary');
+    const shouldShowWarning = hasTemporaryRules && !data.s3_enabled;
     if (dom.filterTempWarning) {
-        dom.filterTempWarning.style.display = hasTemporaryRules ? 'block' : 'none';
+        dom.filterTempWarning.style.display = shouldShowWarning ? 'block' : 'none';
     }
 
     // Sort rules: coordinator first, then config, temporary, service
@@ -1773,6 +1774,10 @@ function renderFilterRules(data) {
         .map((rule) => {
             const sourcePeerDisplay = rule.source_peer ? rule.source_peer : '<span class="text-muted">Any</span>';
             const sourcePeerEscaped = rule.source_peer || '';
+            const expiresDisplay =
+                rule.expires === 0
+                    ? '<span class="text-muted">Permanent</span>'
+                    : TM.format.formatExpiry(new Date(rule.expires * 1000));
             return `
         <tr>
             <td>${rule.port}</td>
@@ -1780,6 +1785,7 @@ function renderFilterRules(data) {
             <td><span class="action-badge ${rule.action}">${rule.action}</span></td>
             <td>${sourcePeerDisplay}</td>
             <td>${rule.source}</td>
+            <td>${expiresDisplay}</td>
             <td>
                 ${
                     rule.source === 'temporary'
@@ -2714,6 +2720,7 @@ function renderBindingsTable() {
             <td>${escapeHtml(b.role_name)}</td>
             <td>${escapeHtml(b.bucket_scope || 'All')}</td>
             <td>${escapeHtml(b.object_prefix || '-')}</td>
+            <td>${b.created_at ? TM.format.formatRelativeTime(b.created_at) : '-'}</td>
             <td>
                 ${
                     b.protected

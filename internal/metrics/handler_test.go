@@ -152,7 +152,7 @@ func TestHandler_LabeledMetrics(t *testing.T) {
 	// Set labeled metrics
 	m.ConnectionState.WithLabelValues("peer-a", "ssh").Set(2)
 	m.ConnectionState.WithLabelValues("peer-b", "udp").Set(1)
-	m.ExitNodeInfo.WithLabelValues("exit-server").Set(1)
+	m.ExitPeerInfo.WithLabelValues("exit-server").Set(1)
 
 	handler := Handler()
 

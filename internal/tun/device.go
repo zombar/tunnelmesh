@@ -335,7 +335,7 @@ func IsInNetwork(ip net.IP, network *net.IPNet) bool {
 type ExitRouteConfig struct {
 	InterfaceName string // TUN interface name
 	MeshCIDR      string // Mesh network CIDR (for NAT exclusion)
-	IsExitNode    bool   // True if this node accepts exit traffic
+	IsExitPeer    bool   // True if this node accepts exit traffic
 }
 
 // Validate checks if the exit route configuration is valid.
@@ -489,7 +489,7 @@ func ConfigureExitNAT(cfg ExitRouteConfig) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
-	if !cfg.IsExitNode {
+	if !cfg.IsExitPeer {
 		return nil // Nothing to do
 	}
 
@@ -518,7 +518,7 @@ func RemoveExitNAT(cfg ExitRouteConfig) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
-	if !cfg.IsExitNode {
+	if !cfg.IsExitPeer {
 		return nil // Nothing to do
 	}
 

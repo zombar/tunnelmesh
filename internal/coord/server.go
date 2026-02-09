@@ -824,6 +824,11 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 
 	// Add coordinator service user to all_service_users group
 	_ = s.s3Authorizer.Groups.AddMember(auth.GroupAllServiceUsers, serviceUserID)
+	if s.s3SystemStore != nil {
+		if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+			log.Warn().Err(err).Msg("failed to persist groups after service user creation")
+		}
+	}
 
 	// Register service user credentials (derived from a fixed key for now)
 	// In production, this would be derived from the CA private key
@@ -1256,7 +1261,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Version:           req.Version,
 		Location:          location,
 		AllowsExitTraffic: req.AllowsExitTraffic,
-		ExitNode:          req.ExitNode,
+		ExitPeer:          req.ExitPeer,
 	}
 
 	// Preserve registeredAt for existing peers
@@ -1318,6 +1323,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 					log.Warn().Err(err).Str("user_id", userID).Msg("failed to add first user to admin group")
 				} else {
 					log.Info().Str("peer", req.Name).Str("user_id", userID).Msg("first user - granted admin role")
+					if s.s3SystemStore != nil {
+						if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+							log.Warn().Err(err).Msg("failed to persist groups after admin assignment")
+						}
+					}
 				}
 			}
 
@@ -1326,6 +1336,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				log.Warn().Err(err).Str("peer", req.Name).Str("user_id", userID).Msg("failed to add user to everyone group")
 			} else {
 				log.Debug().Str("peer", req.Name).Str("user_id", userID).Msg("added user to everyone group")
+				if s.s3SystemStore != nil {
+					if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+						log.Warn().Err(err).Msg("failed to persist groups after adding to everyone")
+					}
+				}
 			}
 		}
 

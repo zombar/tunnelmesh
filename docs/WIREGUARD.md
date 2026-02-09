@@ -221,7 +221,7 @@ laptop.tunnelmesh    -> 172.30.100.4
 
 ### Scenario 1: All-in-One (Simplest)
 
-Single node acts as coordinator, peer, and WireGuard gateway:
+Single peer acts as coordinator, peer, and WireGuard gateway:
 
 ```yaml
 # server.yaml
@@ -421,7 +421,7 @@ By default, WireGuard clients only route mesh traffic (172.30.0.0/16) through th
 
 To route all internet traffic through the mesh:
 
-1. Configure an exit node in the mesh
+1. Configure an exit peer in the mesh
 2. Modify client config:
 
 ```ini
@@ -429,7 +429,7 @@ To route all internet traffic through the mesh:
 AllowedIPs = 0.0.0.0/0, ::/0
 ```
 
-This sends all traffic through the WireGuard tunnel, then through the exit node.
+This sends all traffic through the WireGuard tunnel, then through the exit peer.
 
 ### Custom Split Tunnel
 
@@ -538,7 +538,7 @@ MTU = 1380
 ### Network Isolation
 
 - WireGuard clients can only reach the mesh network
-- No direct internet access through concentrator (unless exit node configured)
+- No direct internet access through concentrator (unless exit peer configured)
 - Clients cannot communicate with each other directly (goes through mesh)
 
 ### Access Control

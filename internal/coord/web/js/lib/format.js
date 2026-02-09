@@ -136,10 +136,13 @@
 
     /**
      * Format expiry timestamp as relative time (for future dates)
-     * @param {string|Date} timestamp - ISO timestamp or Date object
-     * @returns {string} Relative time like "in 5d" or "in 3mo", or "Expired" if past
+     * @param {string|Date|number} timestamp - ISO timestamp, Date object, or Unix timestamp (0=permanent)
+     * @returns {string} Relative time like "in 5d" or "in 3mo", "Expired" if past, or "Permanent" if 0
      */
     function formatExpiry(timestamp) {
+        // Handle 0 as permanent (for filter rules)
+        if (timestamp === 0) return 'Permanent';
+
         const date = new Date(timestamp);
         const now = new Date();
         const diffMs = date - now; // Future dates have positive diff

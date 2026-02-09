@@ -103,7 +103,7 @@ USE_TUN=1 sudo go test ./internal/s3bench/simulator -run=TestStress -v
 **Status**: Not implemented (infrastructure work required)
 
 **What it would test**:
-- Real mesh peer nodes (alice, bob, eve) in Docker
+- Real mesh peer peers (alice, bob, eve) in Docker
 - UDP transport with Noise protocol encryption
 - Peer discovery and route propagation
 - Peer join/leave dynamics
