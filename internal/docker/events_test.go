@@ -163,9 +163,9 @@ func TestEventDebounce(t *testing.T) {
 		watcher.handleEvent(event)
 	}
 
-	// Wait for debounce window + processing time
-	// Use longer timeout for slower CI systems (Windows/Ubuntu)
-	time.Sleep(200 * time.Millisecond)
+	// Wait for all event handler goroutines to complete
+	// This ensures debouncing logic has fully executed
+	wg.Wait()
 
 	// Should only have received 1 event due to debouncing
 	mu.Lock()
