@@ -6,7 +6,7 @@ auth_token: "${AUTH_TOKEN}"
 ssh_port: 2222
 log_level: "info"
 private_key: "/root/.tunnelmesh/id_ed25519"
-exit_node: "server-node"  # Route internet traffic through the server
+exit_peer: "server-node"  # Route internet traffic through the server
 tun:
   name: "tun-mesh0"
   mtu: 1400

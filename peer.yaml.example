@@ -75,7 +75,7 @@ dns:
 #   - Compliance: ensure internet traffic egresses from a specific location
 
 # Use another peer as your exit node
-# exit_node: "server-node"     # Route internet through this peer
+# exit_peer: "server-node"     # Route internet through this peer
 
 # Allow other peers to use THIS node as an exit
 # Requires: IP forwarding and NAT rules (configured automatically)

@@ -7,7 +7,7 @@ auth_token: "${auth_token}"
 ssh_port: ${ssh_tunnel_port}
 private_key: /etc/tunnelmesh/peer.key
 %{ if exit_node != "" ~}
-exit_node: "${exit_node}"
+exit_peer: "${exit_node}"
 %{ endif ~}
 %{ if allow_exit_traffic ~}
 allow_exit_traffic: true
