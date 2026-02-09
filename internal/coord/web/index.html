@@ -557,6 +557,9 @@
                 <div id="no-docker-containers" class="empty-state" style="display: none;">
                     No Docker containers found.
                 </div>
+                <div id="docker-pagination" class="show-more-container" style="display: none;">
+                    <span id="docker-show-more"><button class="show-more-link" onclick="showMoreDocker()">show more (<span id="docker-shown-count">0</span> / <span id="docker-total-count">0</span>)</button></span><span id="docker-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessDocker()">show less</button></span>
+                </div>
             </div>
         </section>
 

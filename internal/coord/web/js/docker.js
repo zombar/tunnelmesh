@@ -1,7 +1,22 @@
 // Docker container orchestration panel
 
+const { createPaginationController } = TM.pagination;
+const { escapeHtml } = TM.utils;
+
 let dockerContainers = [];
 let dockerAvailable = true;
+let dockerVisibleCount = 7; // Initial page size
+
+// Pagination controller
+const dockerPagination = createPaginationController({
+    pageSize: 7,
+    getItems: () => dockerContainers,
+    getVisibleCount: () => dockerVisibleCount,
+    setVisibleCount: (n) => {
+        dockerVisibleCount = n;
+    },
+    onRender: () => renderDockerContainers(),
+});
 
 // Load Docker containers from the API
 async function loadDockerContainers() {
@@ -55,6 +70,7 @@ function renderDockerContainers() {
     if (dockerContainers.length === 0) {
         if (tableEl) tableEl.style.display = 'none';
         if (emptyStateEl) emptyStateEl.style.display = 'block';
+        updateDockerPagination();
         return;
     }
 
@@ -64,7 +80,10 @@ function renderDockerContainers() {
     // Sort by name
     dockerContainers.sort((a, b) => a.name.localeCompare(b.name));
 
-    tbody.innerHTML = dockerContainers.map(container => {
+    // Get visible items from pagination controller
+    const pageContainers = dockerPagination.getVisibleItems();
+
+    tbody.innerHTML = pageContainers.map(container => {
         const statusBadge = getDockerStatusBadge(container.state);
         const uptime = formatDockerUptime(container.uptime_seconds);
         const cpu = formatDockerPercent(container.cpu_percent);
@@ -87,6 +106,37 @@ function renderDockerContainers() {
             </tr>
         `;
     }).join('');
+
+    updateDockerPagination();
+}
+
+// Update pagination controls
+function updateDockerPagination() {
+    const uiState = dockerPagination.getUIState();
+    const paginationEl = document.getElementById('docker-pagination');
+
+    if (!paginationEl) return;
+
+    paginationEl.style.display = uiState.isEmpty ? 'none' : 'flex';
+
+    const showMore = document.getElementById('docker-show-more');
+    const showLess = document.getElementById('docker-show-less');
+    const shownCount = document.getElementById('docker-shown-count');
+    const totalCount = document.getElementById('docker-total-count');
+
+    if (showMore) showMore.style.display = uiState.hasMore ? 'inline' : 'none';
+    if (showLess) showLess.style.display = uiState.canShowLess ? 'inline' : 'none';
+    if (shownCount) shownCount.textContent = uiState.shown;
+    if (totalCount) totalCount.textContent = uiState.total;
+}
+
+// Pagination functions
+function showMoreDocker() {
+    dockerPagination.showMore();
+}
+
+function showLessDocker() {
+    dockerPagination.showLess();
 }
 
 // Get status badge HTML for container state
@@ -249,3 +299,5 @@ function refreshDockerContainers() {
 window.loadDockerContainers = loadDockerContainers;
 window.refreshDockerContainers = refreshDockerContainers;
 window.dockerControlContainer = dockerControlContainer;
+window.showMoreDocker = showMoreDocker;
+window.showLessDocker = showLessDocker;
