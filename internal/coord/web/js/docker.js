@@ -1,14 +1,11 @@
 // Docker container orchestration panel
 
-const { createPaginationController } = TM.pagination;
-const { escapeHtml } = TM.utils;
-
 let dockerContainers = [];
 let dockerAvailable = true;
 let dockerVisibleCount = 7; // Initial page size
 
 // Pagination controller
-const dockerPagination = createPaginationController({
+const dockerPagination = TM.pagination.createPaginationController({
     pageSize: 7,
     getItems: () => dockerContainers,
     getVisibleCount: () => dockerVisibleCount,
