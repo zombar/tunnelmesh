@@ -27,6 +27,12 @@ func GenerateKeyPair(privPath string) error {
 		return fmt.Errorf("generate key pair: %w", err)
 	}
 
+	return SaveKeyPairFromED25519(privPath, pubKey, privKey)
+}
+
+// SaveKeyPairFromED25519 saves an existing ED25519 keypair in SSH format.
+// The private key is saved to privPath and public key to privPath.pub
+func SaveKeyPairFromED25519(privPath string, pubKey ed25519.PublicKey, privKey ed25519.PrivateKey) error {
 	// Marshal private key to OpenSSH format
 	sshPubKey, err := ssh.NewPublicKey(pubKey)
 	if err != nil {

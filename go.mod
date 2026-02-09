@@ -19,7 +19,6 @@ require (
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
-	github.com/tyler-smith/go-bip39 v1.1.0
 	github.com/willscott/go-nfs v0.0.3
 	golang.org/x/crypto v0.47.0
 	golang.org/x/sys v0.40.0

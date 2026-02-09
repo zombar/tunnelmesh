@@ -294,9 +294,6 @@ Examples:
 	// Filter command - manage packet filter rules
 	rootCmd.AddCommand(newFilterCmd())
 
-	// User command - manage user identity
-	rootCmd.AddCommand(newUserCmd())
-
 	// Buckets command - manage S3 buckets
 	rootCmd.AddCommand(newBucketsCmd())
 
@@ -1056,6 +1053,14 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Create peer identity and mesh node
 	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, udpPort, Version, resp)
 	identity.Location = location // Set location for heartbeat reporting
+
+	// Log if peer was renamed due to hostname conflict
+	if resp.PeerName != "" && resp.PeerName != cfg.Name {
+		log.Info().
+			Str("original", cfg.Name).
+			Str("assigned", resp.PeerName).
+			Msg("hostname conflict - using assigned name")
+	}
 	node := peer.NewMeshNode(identity, client)
 
 	// Set up forwarder with node's tunnel manager and router

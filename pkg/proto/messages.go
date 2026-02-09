@@ -89,6 +89,9 @@ type RegisterResponse struct {
 	TLSKey        string `json:"tls_key,omitempty"`        // PEM-encoded TLS private key
 	CoordMeshIP   string `json:"coord_mesh_ip,omitempty"`  // Coordinator's mesh IP for "this.tunnelmesh" resolution
 	ServerVersion string `json:"server_version,omitempty"` // Server version for compatibility check
+	PeerName      string `json:"peer_name,omitempty"`      // Assigned peer name (may differ from request if renamed)
+	UserID        string `json:"user_id,omitempty"`        // Derived user ID for RBAC (SHA256(pubkey)[:8] hex)
+	IsFirstUser   bool   `json:"is_first_user,omitempty"`  // True if this is the first user (becomes admin)
 }
 
 // PeerStats contains traffic statistics reported by peers.
@@ -152,24 +155,6 @@ type ErrorResponse struct {
 	Error   string `json:"error"`
 	Code    int    `json:"code"`
 	Message string `json:"message"`
-}
-
-// UserRegisterRequest is sent by a user to register with the mesh.
-type UserRegisterRequest struct {
-	UserID    string `json:"user_id"`    // User's unique ID (derived from public key)
-	PublicKey string `json:"public_key"` // ED25519 public key (base64)
-	Name      string `json:"name"`       // Display name
-	Signature string `json:"signature"`  // Signature of user_id using private key (proves ownership)
-}
-
-// UserRegisterResponse is returned after successful user registration.
-type UserRegisterResponse struct {
-	UserID      string   `json:"user_id"`
-	Roles       []string `json:"roles,omitempty"`         // Assigned roles (legacy, for backwards compat)
-	Groups      []string `json:"groups,omitempty"`        // Assigned groups (everyone, all_admin_users, etc.)
-	S3AccessKey string   `json:"s3_access_key,omitempty"` // S3 access key
-	S3SecretKey string   `json:"s3_secret_key,omitempty"` // S3 secret key
-	IsFirstUser bool     `json:"is_first_user"`           // True if this was the first user (now admin)
 }
 
 // GetLocalIPs returns the local IP addresses of the machine.

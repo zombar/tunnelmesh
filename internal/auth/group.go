@@ -8,10 +8,9 @@ import (
 
 // Built-in group names.
 const (
-	GroupEveryone        = "everyone"          // All registered human users
+	GroupEveryone        = "everyone"          // All registered users (peer = user)
 	GroupAllServiceUsers = "all_service_users" // All service accounts (svc:*)
 	GroupAllAdminUsers   = "all_admin_users"   // All users with admin role
-	GroupMachines        = "machines"          // All connected peers/machines (by derived user ID)
 )
 
 // Group errors.
@@ -71,13 +70,6 @@ func NewGroupStore() *GroupStore {
 	store.groups[GroupAllAdminUsers] = &Group{
 		Name:        GroupAllAdminUsers,
 		Description: "All admin users",
-		Members:     []string{},
-		CreatedAt:   time.Now().UTC(),
-		Builtin:     true,
-	}
-	store.groups[GroupMachines] = &Group{
-		Name:        GroupMachines,
-		Description: "All connected peers/machines",
 		Members:     []string{},
 		CreatedAt:   time.Now().UTC(),
 		Builtin:     true,

@@ -23,8 +23,14 @@ type PeerIdentity struct {
 
 // NewPeerIdentity creates a PeerIdentity from config and registration response.
 func NewPeerIdentity(cfg *config.PeerConfig, pubKeyEncoded string, udpPort int, version string, resp *proto.RegisterResponse) *PeerIdentity {
+	// Use coordinator-assigned name if different from config (handles auto-suffix for duplicates)
+	name := cfg.Name
+	if resp.PeerName != "" && resp.PeerName != cfg.Name {
+		name = resp.PeerName
+	}
+
 	return &PeerIdentity{
-		Name:          cfg.Name,
+		Name:          name,
 		PubKeyEncoded: pubKeyEncoded,
 		SSHPort:       cfg.SSHPort,
 		UDPPort:       udpPort,
