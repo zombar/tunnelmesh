@@ -548,6 +548,7 @@ type FilterRulesRequest struct {
 	Protocol   string `json:"protocol"`    // "tcp" or "udp"
 	Action     string `json:"action"`      // "allow" or "deny"
 	SourcePeer string `json:"source_peer"` // Source peer (optional, empty = any peer)
+	TTL        int64  `json:"ttl"`         // Time to live in seconds (0 = permanent)
 }
 
 // FilterRulesResponse is the response for listing filter rules.
@@ -691,10 +692,17 @@ func (s *Server) handleFilterRuleAdd(w http.ResponseWriter, r *http.Request) {
 
 	// Update coordinator's filter and persist to S3
 	if s.filter != nil {
+		// Calculate expiry if TTL specified
+		var expires int64
+		if req.TTL > 0 {
+			expires = time.Now().Unix() + req.TTL
+		}
+
 		rule := routing.FilterRule{
 			Port:       req.Port,
 			Protocol:   routing.ProtocolFromString(req.Protocol),
 			Action:     routing.ParseFilterAction(req.Action),
+			Expires:    expires,
 			SourcePeer: req.SourcePeer,
 		}
 		s.filter.AddTemporaryRule(rule)

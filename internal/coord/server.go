@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -92,7 +94,8 @@ type Server struct {
 	// NFS server
 	nfsServer *nfs.Server // NFS server for file shares
 	// Packet filter
-	filter *routing.PacketFilter // Global packet filter
+	filter            *routing.PacketFilter // Global packet filter
+	filterSavePending atomic.Bool           // Debounce flag for async filter saves
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -389,32 +392,13 @@ func (s *Server) recoverFilterRules() error {
 		})
 	}
 
-	// Load service rules (skip expired)
-	serviceRules := make([]routing.FilterRule, 0, len(data.Service))
-	for _, r := range data.Service {
-		if r.Expires > 0 && r.Expires <= now {
-			log.Debug().Uint16("port", r.Port).Str("protocol", r.Protocol).
-				Msg("skipping expired service filter rule")
-			continue
-		}
-		serviceRules = append(serviceRules, routing.FilterRule{
-			Port:       r.Port,
-			Protocol:   routing.ProtocolFromString(r.Protocol),
-			Action:     routing.ParseFilterAction(r.Action),
-			Expires:    r.Expires,
-			SourcePeer: r.SourcePeer,
-		})
-	}
-
-	// Apply loaded rules
+	// Apply loaded temporary rules
+	// Note: Service rules are not persisted - they always come from config
 	for _, rule := range tempRules {
 		s.filter.AddTemporaryRule(rule)
 	}
-	if len(serviceRules) > 0 {
-		s.filter.SetServiceRules(serviceRules)
-	}
 
-	log.Info().Int("temporary", len(tempRules)).Int("service", len(serviceRules)).
+	log.Info().Int("temporary", len(tempRules)).
 		Msg("loaded filter rules from S3")
 	return nil
 }
@@ -430,23 +414,21 @@ func (s *Server) SaveFilterRules() error {
 
 	data := s3.FilterRulesData{
 		Temporary: make([]s3.FilterRulePersisted, 0),
-		Service:   make([]s3.FilterRulePersisted, 0),
+		Service:   make([]s3.FilterRulePersisted, 0), // Always empty - service rules not persisted
 	}
 
+	// Only persist temporary rules (CLI/API added)
+	// Service rules always come from config and are not persisted
 	for _, r := range allRules {
-		persisted := s3.FilterRulePersisted{
-			Port:       r.Rule.Port,
-			Protocol:   routing.ProtocolToString(r.Rule.Protocol),
-			Action:     r.Rule.Action.String(),
-			Expires:    r.Rule.Expires,
-			SourcePeer: r.Rule.SourcePeer,
-		}
-
-		switch r.Source {
-		case routing.SourceTemporary:
+		if r.Source == routing.SourceTemporary {
+			persisted := s3.FilterRulePersisted{
+				Port:       r.Rule.Port,
+				Protocol:   routing.ProtocolToString(r.Rule.Protocol),
+				Action:     r.Rule.Action.String(),
+				Expires:    r.Rule.Expires,
+				SourcePeer: r.Rule.SourcePeer,
+			}
 			data.Temporary = append(data.Temporary, persisted)
-		case routing.SourceService:
-			data.Service = append(data.Service, persisted)
 		}
 	}
 
@@ -454,18 +436,28 @@ func (s *Server) SaveFilterRules() error {
 		return err
 	}
 
-	log.Debug().Int("temporary", len(data.Temporary)).Int("service", len(data.Service)).
+	log.Debug().Int("temporary", len(data.Temporary)).
 		Msg("saved filter rules to S3")
 	return nil
 }
 
-// saveFilterRulesAsync saves filter rules asynchronously.
+// saveFilterRulesAsync saves filter rules asynchronously with debouncing.
+// Uses an atomic flag to prevent concurrent saves from racing.
 func (s *Server) saveFilterRulesAsync() {
 	if s.s3SystemStore == nil {
 		return
 	}
 
+	// Skip if a save is already pending (debounce)
+	if !s.filterSavePending.CompareAndSwap(false, true) {
+		return
+	}
+
 	go func() {
+		// Small delay to coalesce rapid changes
+		time.Sleep(100 * time.Millisecond)
+		s.filterSavePending.Store(false)
+
 		if err := s.SaveFilterRules(); err != nil {
 			log.Error().Err(err).Msg("failed to save filter rules")
 		}
@@ -473,19 +465,27 @@ func (s *Server) saveFilterRulesAsync() {
 }
 
 // Shutdown gracefully shuts down the server, persisting state.
+// Returns an error if any persistence operations fail.
 func (s *Server) Shutdown() error {
 	log.Info().Msg("saving data before shutdown")
+
+	var errs []error
 
 	// Save stats history
 	if err := s.SaveStatsHistory(); err != nil {
 		log.Error().Err(err).Msg("failed to save stats history")
+		errs = append(errs, fmt.Errorf("save stats history: %w", err))
 	}
 
 	// Save filter rules
 	if err := s.SaveFilterRules(); err != nil {
 		log.Error().Err(err).Msg("failed to save filter rules")
+		errs = append(errs, fmt.Errorf("save filter rules: %w", err))
 	}
 
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
 	return nil
 }
 
