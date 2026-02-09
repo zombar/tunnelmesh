@@ -178,20 +178,28 @@ func (m *Manager) ListContainers(ctx context.Context) ([]ContainerInfo, error) {
 		return nil, err
 	}
 
-	// Calculate uptime and fetch stats for running containers
+	// Inspect running containers to get StartedAt time and fetch stats
 	for i := range containers {
-		if containers[i].State == "running" && !containers[i].StartedAt.IsZero() {
-			containers[i].UptimeSeconds = calculateUptime(containers[i].StartedAt)
-
-			// Fetch resource usage stats for running containers
-			stats, err := m.client.GetContainerStats(ctx, containers[i].ID)
+		if containers[i].State == "running" {
+			// Inspect container to get full details including StartedAt
+			inspected, err := m.client.InspectContainer(ctx, containers[i].ID)
 			if err != nil {
-				log.Debug().Err(err).Str("container", containers[i].Name).Msg("Failed to get container stats")
-			} else if stats != nil {
-				containers[i].CPUPercent = stats.CPUPercent
-				containers[i].MemoryBytes = stats.MemoryBytes
-				containers[i].MemoryPercent = stats.MemoryPercent
-				containers[i].DiskBytes = stats.DiskBytes
+				log.Debug().Err(err).Str("container", containers[i].Name).Msg("Failed to inspect container")
+			} else if inspected != nil && !inspected.StartedAt.IsZero() {
+				// Update with inspected data
+				containers[i].StartedAt = inspected.StartedAt
+				containers[i].UptimeSeconds = calculateUptime(inspected.StartedAt)
+
+				// Fetch resource usage stats
+				stats, err := m.client.GetContainerStats(ctx, containers[i].ID)
+				if err != nil {
+					log.Debug().Err(err).Str("container", containers[i].Name).Msg("Failed to get container stats")
+				} else if stats != nil {
+					containers[i].CPUPercent = stats.CPUPercent
+					containers[i].MemoryBytes = stats.MemoryBytes
+					containers[i].MemoryPercent = stats.MemoryPercent
+					containers[i].DiskBytes = stats.DiskBytes
+				}
 			}
 		}
 		// Set short ID

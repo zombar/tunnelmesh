@@ -93,12 +93,12 @@ function renderDockerContainers() {
             <tr>
                 <td><strong>${escapeHtml(container.name)}</strong></td>
                 <td>${statusBadge}</td>
+                <td>${ports}</td>
+                <td><code>${escapeHtml(container.network_mode)}</code></td>
                 <td>${uptime}</td>
                 <td>${cpu}</td>
                 <td>${memory}</td>
                 <td>${disk}</td>
-                <td>${ports}</td>
-                <td><code>${escapeHtml(container.network_mode)}</code></td>
                 <td>${actions}</td>
             </tr>
         `;
