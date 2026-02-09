@@ -1,7 +1,7 @@
 ![Admin Dashboard](docs/images/tunnelmesh_banner.webp)
 
 > [!WARNING]
-> **Expect breaking changes**: Parts of this experimental project are in flux and specifications are continually changing.
+> **Expect breaking changes**: Parts of this early experimental project are in flux, expect some flake.
 
 # TunnelMesh
 
