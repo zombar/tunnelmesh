@@ -20,8 +20,8 @@ const { createModalController } = TM.modal;
 
 // Panel refresh lists - defines which panels to refresh for each tab
 const PANELS_MESH_TAB = ['peers', 'wg-clients', 'logs', 'alerts', 'filter']; // Mesh tab panels (visualizer/charts/map loaded via fetchData)
-const PANELS_APP_TAB = ['s3', 'shares']; // App tab panels (docker disabled)
-const PANELS_DATA_TAB = ['peers-mgmt', 'groups', 'shares', 'bindings', 's3']; // Data tab panels
+const PANELS_APP_TAB = ['s3', 'shares']; // App tab panels (dns loads via fetchData, docker disabled)
+const PANELS_DATA_TAB = ['peers-mgmt', 'groups', 'bindings']; // Data tab panels
 
 // Toggle collapsible section
 function toggleSection(header) {
