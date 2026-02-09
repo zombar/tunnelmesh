@@ -721,6 +721,18 @@ func (s *Server) handleFilterRuleAdd(w http.ResponseWriter, r *http.Request) {
 		s.saveFilterRulesAsync()
 	}
 
+	// Update coordinator's filter and persist to S3
+	if s.filter != nil {
+		rule := routing.FilterRule{
+			Port:       req.Port,
+			Protocol:   routing.ProtocolFromString(req.Protocol),
+			Action:     routing.ParseFilterAction(req.Action),
+			SourcePeer: req.SourcePeer,
+		}
+		s.filter.AddTemporaryRule(rule)
+		s.saveFilterRulesAsync()
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -764,6 +776,13 @@ func (s *Server) handleFilterRuleRemove(w http.ResponseWriter, r *http.Request) 
 		} else {
 			s.relay.PushFilterRuleRemove(req.PeerName, req.Port, req.Protocol, req.SourcePeer)
 		}
+	}
+
+	// Update coordinator's filter and persist to S3
+	if s.filter != nil {
+		proto := routing.ProtocolFromString(req.Protocol)
+		s.filter.RemoveTemporaryRuleForPeer(req.Port, proto, req.SourcePeer)
+		s.saveFilterRulesAsync()
 	}
 
 	// Update coordinator's filter and persist to S3
