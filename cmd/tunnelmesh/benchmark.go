@@ -76,7 +76,7 @@ Examples:
 	return cmd
 }
 
-func runBenchmark(cmd *cobra.Command, args []string) error {
+func runBenchmark(_ *cobra.Command, args []string) error {
 	peerName := args[0]
 
 	setupLogging()

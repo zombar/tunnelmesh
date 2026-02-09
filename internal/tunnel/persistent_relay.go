@@ -398,6 +398,7 @@ func (p *PersistentRelay) autoReconnect() {
 }
 
 // handleMessage processes an incoming message from the server.
+// nolint:gocyclo // Message handler processes multiple relay message types
 func (p *PersistentRelay) handleMessage(data []byte) {
 	if len(data) < 1 {
 		log.Debug().Msg("persistent relay: empty message")

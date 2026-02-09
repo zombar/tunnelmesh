@@ -100,6 +100,7 @@ func FetchClients(ctx context.Context, serverURL, authToken string) ([]Client, e
 }
 
 // DiffClients compares old and new client lists and returns added and removed clients.
+// nolint:revive // new variable name is clear in context of old/new comparison
 func DiffClients(old, new []Client) (added, removed []Client) {
 	oldMap := make(map[string]Client)
 	for _, c := range old {

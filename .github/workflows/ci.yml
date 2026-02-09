@@ -18,7 +18,8 @@ jobs:
       - name: Check go mod tidy
         run: |
           go mod tidy
-          git diff --exit-code go.mod go.sum || (echo "::error::go.mod or go.sum is not tidy. Run 'go mod tidy' and commit." && exit 1)
+          git diff --exit-code go.mod go.sum || \
+            (echo "::error::go.mod or go.sum is not tidy. Run 'go mod tidy' and commit." && exit 1)
       - name: Check gofmt
         run: |
           UNFORMATTED=$(gofmt -l . | grep -v vendor/ || true)
@@ -36,9 +37,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.7'
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.8.0
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.8.0
+      - name: Run golangci-lint
+        run: golangci-lint run ./...
 
   security:
     name: Security

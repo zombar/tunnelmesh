@@ -405,6 +405,7 @@ func runServeFromService(ctx context.Context, configPath string) error {
 	}()
 
 	// If JoinMesh is configured, join the mesh as a client
+	// nolint:dupl // Mesh join logic is duplicated for serve and standalone modes
 	if cfg.JoinMesh != nil {
 		cfg.JoinMesh.Server = "http://127.0.0.1" + cfg.Listen
 		cfg.JoinMesh.AuthToken = cfg.AuthToken
@@ -510,7 +511,7 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 	return runJoinWithConfig(ctx, cfg)
 }
 
-func runServe(cmd *cobra.Command, args []string) error {
+func runServe(cmd *cobra.Command, _ []string) error {
 	setupLogging()
 	logStartupBanner()
 
@@ -614,6 +615,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}()
 
 	// If JoinMesh is configured, join the mesh as a client
+	// nolint:dupl // Companion join logic for different mode
 	if cfg.JoinMesh != nil {
 		// Set server URL to localhost and copy auth token
 		cfg.JoinMesh.Server = "http://127.0.0.1" + cfg.Listen
@@ -675,6 +677,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// nolint:revive // args required by cobra.Command RunE signature
 func runInit(cmd *cobra.Command, args []string) error {
 	setupLogging()
 
@@ -863,6 +866,7 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	return runJoinWithConfigAndCallback(ctx, cfg, nil)
 }
 
+// nolint:gocyclo // Main join logic is inherently complex due to protocol state machine
 func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, onJoined OnJoinedFunc) error {
 	// Always use system hostname as node name
 	cfg.Name, _ = os.Hostname()
@@ -1728,9 +1732,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 
 	// Clean up system resolver
 	if dnsConfigured {
-		if err := removeSystemResolver(resp.Domain); err != nil {
-			log.Warn().Err(err).Msg("failed to remove system resolver")
-		}
+		removeSystemResolver(resp.Domain)
 	}
 
 	// Stop WireGuard device
@@ -2154,7 +2156,7 @@ func configureSystemResolver(_, dnsAddr string) error {
 }
 
 // removeSystemResolver removes the system resolver configuration for all mesh domains.
-func removeSystemResolver(_ string) error {
+func removeSystemResolver(_ string) {
 	// Remove all supported domain suffixes
 	for _, suffix := range mesh.AllSuffixes() {
 		domain := strings.TrimPrefix(suffix, ".")
@@ -2172,7 +2174,6 @@ func removeSystemResolver(_ string) error {
 			log.Warn().Err(err).Str("domain", domain).Msg("failed to remove resolver")
 		}
 	}
-	return nil
 }
 
 func configureDarwinResolver(domain, port string) error {
@@ -2329,7 +2330,7 @@ Domains=~%s
 	return nil
 }
 
-func removeLinuxResolver(domain string) error {
+func removeLinuxResolver(_ string) error {
 	// Try resolvectl first
 	if _, err := exec.LookPath("resolvectl"); err == nil {
 		cmd := exec.Command("sudo", "resolvectl", "revert", "lo")

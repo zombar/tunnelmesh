@@ -69,6 +69,7 @@ func TestAPIHandlerCallbackOnUpdate(t *testing.T) {
 
 	// Now set callback and update
 	var callbackCount int
+	// nolint:revive // clients required by callback signature but not used in test
 	handler.SetOnClientsChanged(func(clients []Client) {
 		callbackCount++
 	})
@@ -145,6 +146,7 @@ func TestAPIHandlerNoCallbackOnReadOperations(t *testing.T) {
 	clientID := createResult.Client.ID
 
 	// Now set callback
+	// nolint:revive // clients required by callback signature but not used in test
 	var callbackCount int
 	handler.SetOnClientsChanged(func(clients []Client) {
 		callbackCount++

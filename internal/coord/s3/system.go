@@ -4,6 +4,7 @@ package s3
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -32,7 +33,7 @@ func NewSystemStore(store *Store, serviceUserID string) (*SystemStore, error) {
 	}
 
 	// Create system bucket if it doesn't exist
-	if _, err := store.HeadBucket(SystemBucket); err == ErrBucketNotFound {
+	if _, err := store.HeadBucket(SystemBucket); errors.Is(err, ErrBucketNotFound) {
 		if err := store.CreateBucket(SystemBucket, serviceUserID); err != nil {
 			return nil, fmt.Errorf("create system bucket: %w", err)
 		}
@@ -243,7 +244,7 @@ func (ss *SystemStore) saveJSON(key string, v interface{}) error {
 func (ss *SystemStore) loadJSON(key string, target interface{}) error {
 	reader, _, err := ss.store.GetObject(SystemBucket, key)
 	if err != nil {
-		if err == ErrObjectNotFound {
+		if errors.Is(err, ErrObjectNotFound) {
 			return nil // Not found is OK - return nil with empty target
 		}
 		return fmt.Errorf("get %s: %w", key, err)
@@ -278,7 +279,7 @@ func (ss *SystemStore) MigrateFromFile(localPath, s3Key string) (bool, error) {
 	if err == nil {
 		return false, nil // Already migrated
 	}
-	if err != ErrObjectNotFound {
+	if !errors.Is(err, ErrObjectNotFound) {
 		return false, err
 	}
 

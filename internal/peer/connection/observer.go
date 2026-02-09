@@ -68,6 +68,7 @@ func (m *MultiObserver) OnTransition(t Transition) {
 type LoggingObserver struct{}
 
 // OnTransition logs the transition using zerolog.
+// nolint:revive // t required by Observer interface
 func (l *LoggingObserver) OnTransition(t Transition) {
 	// Import zerolog in the actual implementation
 	// For now, this is a placeholder that will be connected to zerolog

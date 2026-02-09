@@ -1059,7 +1059,7 @@ func TestForwarder_PacketFilter_DropsByDefault(t *testing.T) {
 	// Create incoming TCP packet to port 22
 	srcIP := net.ParseIP("172.30.0.2").To4()
 	dstIP := net.ParseIP("172.30.0.1").To4()
-	packet := buildTCPPacket(srcIP, dstIP, 12345, 22)
+	packet := buildTCPPacket(srcIP, dstIP, 22)
 
 	// Receive the packet - should be dropped (no allow rule for port 22)
 	err := fwd.ReceivePacket(packet)
@@ -1093,7 +1093,7 @@ func TestForwarder_PacketFilter_AllowsWithRule(t *testing.T) {
 	// Create incoming TCP packet to port 22
 	srcIP := net.ParseIP("172.30.0.2").To4()
 	dstIP := net.ParseIP("172.30.0.1").To4()
-	packet := buildTCPPacket(srcIP, dstIP, 12345, 22)
+	packet := buildTCPPacket(srcIP, dstIP, 22)
 
 	// Receive the packet - should be allowed
 	err := fwd.ReceivePacket(packet)
@@ -1147,7 +1147,7 @@ func TestForwarder_PacketFilter_Nil(t *testing.T) {
 	// Create incoming TCP packet
 	srcIP := net.ParseIP("172.30.0.2").To4()
 	dstIP := net.ParseIP("172.30.0.1").To4()
-	packet := buildTCPPacket(srcIP, dstIP, 12345, 22)
+	packet := buildTCPPacket(srcIP, dstIP, 22)
 
 	// Receive the packet - should pass (no filter)
 	err := fwd.ReceivePacket(packet)
@@ -1193,7 +1193,7 @@ func TestForwarder_PacketFilter_PeerSpecific(t *testing.T) {
 	// Create incoming TCP packet to port 22
 	srcIP := net.ParseIP("172.30.0.2").To4()
 	dstIP := net.ParseIP("172.30.0.1").To4()
-	packet := buildTCPPacket(srcIP, dstIP, 12345, 22)
+	packet := buildTCPPacket(srcIP, dstIP, 22)
 
 	t.Run("trusted peer allowed", func(t *testing.T) {
 		router := NewRouter()

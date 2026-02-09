@@ -1,3 +1,5 @@
+// Package audit provides security audit logging for coordinator operations.
+
 package audit
 
 import (

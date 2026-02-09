@@ -3,6 +3,7 @@ package svc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -66,7 +67,7 @@ func (p *Program) Stop(s service.Service) error {
 	if p.done != nil {
 		// Wait for the goroutine to finish
 		err := <-p.done
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			return err
 		}
 	}

@@ -101,7 +101,7 @@ func TestPacketFilter_SetServiceRules(t *testing.T) {
 	// Verify service rules allow traffic (SYN to port 8080)
 	src := net.ParseIP("10.0.0.1")
 	dst := net.ParseIP("10.0.0.2")
-	packet := buildTCPPacket(src, dst, 12345, 8080)
+	packet := buildTCPPacket(src, dst, 8080)
 	if f.ShouldDrop(packet) {
 		t.Error("expected service rule to allow SYN to port 8080")
 	}
@@ -194,8 +194,9 @@ func TestPacketFilter_ListRules(t *testing.T) {
 }
 
 // buildTCPPacket creates a minimal TCP SYN packet for testing (new connection attempt).
-func buildTCPPacket(srcIP, dstIP net.IP, srcPort, dstPort uint16) []byte {
-	return buildTCPPacketWithFlags(srcIP, dstIP, srcPort, dstPort, 0x02) // SYN flag
+// The source port is hardcoded to 12345 for simplicity.
+func buildTCPPacket(srcIP, dstIP net.IP, dstPort uint16) []byte {
+	return buildTCPPacketWithFlags(srcIP, dstIP, 12345, dstPort, 0x02) // SYN flag
 }
 
 // buildTCPPacketWithFlags creates a TCP packet with specific flags for testing.
@@ -250,7 +251,7 @@ func TestPacketFilter_ShouldDrop_DefaultDeny(t *testing.T) {
 	dst := net.ParseIP("10.0.0.2")
 
 	// No rules - should drop by default
-	packet := buildTCPPacket(src, dst, 12345, 22)
+	packet := buildTCPPacket(src, dst, 22)
 	if !f.ShouldDrop(packet) {
 		t.Error("expected packet to be dropped (default deny, no rules)")
 	}
@@ -263,7 +264,7 @@ func TestPacketFilter_ShouldDrop_DefaultDeny(t *testing.T) {
 	}
 
 	// Packet to different port should still be dropped
-	packet2 := buildTCPPacket(src, dst, 12345, 80)
+	packet2 := buildTCPPacket(src, dst, 80)
 	if !f.ShouldDrop(packet2) {
 		t.Error("expected packet to port 80 to be dropped")
 	}
@@ -276,7 +277,7 @@ func TestPacketFilter_ShouldDrop_DefaultAllow(t *testing.T) {
 	dst := net.ParseIP("10.0.0.2")
 
 	// No rules - should allow by default
-	packet := buildTCPPacket(src, dst, 12345, 22)
+	packet := buildTCPPacket(src, dst, 22)
 	if f.ShouldDrop(packet) {
 		t.Error("expected packet to be allowed (default allow)")
 	}
@@ -305,7 +306,7 @@ func TestPacketFilter_ShouldDrop_UDP(t *testing.T) {
 	}
 
 	// TCP to port 53 should be dropped (only UDP allowed)
-	tcpPacket := buildTCPPacket(src, dst, 12345, 53)
+	tcpPacket := buildTCPPacket(src, dst, 53)
 	if !f.ShouldDrop(tcpPacket) {
 		t.Error("expected TCP packet to port 53 to be dropped")
 	}
@@ -334,7 +335,7 @@ func TestPacketFilter_MostRestrictiveWins(t *testing.T) {
 	// Coordinator allows port 22
 	f.SetCoordinatorRules([]FilterRule{{Port: 22, Protocol: ProtoTCP, Action: ActionAllow}})
 
-	packet := buildTCPPacket(src, dst, 12345, 22)
+	packet := buildTCPPacket(src, dst, 22)
 
 	// Should be allowed (coordinator allows)
 	if f.ShouldDrop(packet) {
@@ -454,7 +455,7 @@ func TestPacketFilter_CheckPacket(t *testing.T) {
 	dst := net.ParseIP("10.0.0.2")
 
 	// TCP packet to blocked port
-	tcpPacket := buildTCPPacket(src, dst, 12345, 22)
+	tcpPacket := buildTCPPacket(src, dst, 22)
 	result := f.CheckPacket(tcpPacket)
 	if !result.Drop {
 		t.Error("expected TCP packet to be dropped (default deny)")
@@ -564,7 +565,7 @@ func TestPacketFilter_PeerSpecificRules(t *testing.T) {
 
 	src := net.ParseIP("10.0.0.1")
 	dst := net.ParseIP("10.0.0.2")
-	packet := buildTCPPacket(src, dst, 12345, 22)
+	packet := buildTCPPacket(src, dst, 22)
 
 	// Add global allow rule for port 22
 	f.SetCoordinatorRules([]FilterRule{
@@ -606,7 +607,7 @@ func TestPacketFilter_PeerSpecificAllow(t *testing.T) {
 
 	src := net.ParseIP("10.0.0.1")
 	dst := net.ParseIP("10.0.0.2")
-	packet := buildTCPPacket(src, dst, 12345, 22)
+	packet := buildTCPPacket(src, dst, 22)
 
 	// No global rule - should be denied by default
 	result := f.CheckPacketFromPeer(packet, "peer1")
@@ -640,7 +641,7 @@ func TestPacketFilter_PeerSpecificDenyOverridesGlobalAllow(t *testing.T) {
 
 	src := net.ParseIP("10.0.0.1")
 	dst := net.ParseIP("10.0.0.2")
-	packet := buildTCPPacket(src, dst, 12345, 22)
+	packet := buildTCPPacket(src, dst, 22)
 
 	// Global allow for port 22
 	f.SetCoordinatorRules([]FilterRule{
@@ -734,7 +735,7 @@ func TestPacketFilter_RemoveTemporaryRuleWithPeer(t *testing.T) {
 	// Global rule should still exist
 	src := net.ParseIP("10.0.0.1")
 	dst := net.ParseIP("10.0.0.2")
-	packet := buildTCPPacket(src, dst, 12345, 22)
+	packet := buildTCPPacket(src, dst, 22)
 	result := f.CheckPacketFromPeer(packet, "peer1")
 	if result.Drop {
 		t.Error("expected global allow rule to still be active")
@@ -746,7 +747,7 @@ func TestFilterResult_SourcePeer(t *testing.T) {
 
 	src := net.ParseIP("10.0.0.1")
 	dst := net.ParseIP("10.0.0.2")
-	packet := buildTCPPacket(src, dst, 12345, 22)
+	packet := buildTCPPacket(src, dst, 22)
 
 	// Add global allow rule
 	f.SetCoordinatorRules([]FilterRule{
@@ -835,7 +836,7 @@ func BenchmarkPacketFilter_ShouldDrop(b *testing.B) {
 
 	src := net.ParseIP("10.0.0.1")
 	dst := net.ParseIP("10.0.0.2")
-	packet := buildTCPPacket(src, dst, 12345, 443)
+	packet := buildTCPPacket(src, dst, 443)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -855,7 +856,7 @@ func BenchmarkPacketFilter_ShouldDrop_NoMatch(b *testing.B) {
 
 	src := net.ParseIP("10.0.0.1")
 	dst := net.ParseIP("10.0.0.2")
-	packet := buildTCPPacket(src, dst, 12345, 8080) // Port not in rules
+	packet := buildTCPPacket(src, dst, 8080) // Port not in rules
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

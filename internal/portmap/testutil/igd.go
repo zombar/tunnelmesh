@@ -403,6 +403,7 @@ func (igd *TestIGD) handlePCP(pkt []byte, addr net.Addr) {
 }
 
 // buildPCPAnnounceResponse creates a PCP announce response.
+// nolint:revive // req required by UPnP handler signature
 func buildPCPAnnounceResponse(cfg igdConfig, req []byte) []byte {
 	resp := make([]byte, 24)
 	resp[0] = pcpVersion

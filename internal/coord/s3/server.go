@@ -2,6 +2,7 @@ package s3
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,12 +61,12 @@ func classifyS3Status(httpStatus int) string {
 func classifyS3StatusWithError(httpStatus int, err error) string {
 	// Check error type first for semantic classification
 	if err != nil {
-		switch err {
-		case ErrQuotaExceeded:
+		switch {
+		case errors.Is(err, ErrQuotaExceeded):
 			return "quota_exceeded"
-		case ErrAccessDenied:
+		case errors.Is(err, ErrAccessDenied):
 			return "access_denied"
-		case ErrBucketNotFound, ErrObjectNotFound:
+		case errors.Is(err, ErrBucketNotFound), errors.Is(err, ErrObjectNotFound):
 			return "not_found"
 		}
 	}
@@ -232,7 +233,7 @@ func (s *Server) createBucket(w http.ResponseWriter, r *http.Request, bucket str
 	}
 
 	if err := s.store.CreateBucket(bucket, userID); err != nil {
-		if err == ErrBucketExists {
+		if errors.Is(err, ErrBucketExists) {
 			s.writeError(w, http.StatusConflict, "BucketAlreadyExists", "Bucket already exists")
 			return
 		}
@@ -252,10 +253,10 @@ func (s *Server) deleteBucket(w http.ResponseWriter, r *http.Request, bucket str
 	}
 
 	if err := s.store.DeleteBucket(bucket); err != nil {
-		switch err {
-		case ErrBucketNotFound:
+		switch {
+		case errors.Is(err, ErrBucketNotFound):
 			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
-		case ErrBucketNotEmpty:
+		case errors.Is(err, ErrBucketNotEmpty):
 			s.writeError(w, http.StatusConflict, "BucketNotEmpty", "Bucket is not empty")
 		default:
 			s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
@@ -275,7 +276,7 @@ func (s *Server) headBucket(w http.ResponseWriter, r *http.Request, bucket strin
 	}
 
 	if _, err := s.store.HeadBucket(bucket); err != nil {
-		if err == ErrBucketNotFound {
+		if errors.Is(err, ErrBucketNotFound) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -305,7 +306,7 @@ func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket stri
 
 	objects, isTruncated, nextMarker, err := s.store.ListObjects(bucket, prefix, marker, maxKeys)
 	if err != nil {
-		if err == ErrBucketNotFound {
+		if errors.Is(err, ErrBucketNotFound) {
 			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
 			return
 		}
@@ -370,7 +371,7 @@ func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket st
 
 	objects, isTruncated, nextMarker, err := s.store.ListObjects(bucket, prefix, marker, maxKeys)
 	if err != nil {
-		if err == ErrBucketNotFound {
+		if errors.Is(err, ErrBucketNotFound) {
 			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
 			return
 		}
@@ -433,10 +434,10 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key s
 	reader, meta, err := s.store.GetObject(bucket, key)
 	if err != nil {
 		storeErr = err // Capture for metrics
-		switch err {
-		case ErrBucketNotFound:
+		switch {
+		case errors.Is(err, ErrBucketNotFound):
 			s.writeError(rec, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
-		case ErrObjectNotFound:
+		case errors.Is(err, ErrObjectNotFound):
 			s.writeError(rec, http.StatusNotFound, "NoSuchKey", "Object not found")
 		default:
 			s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
@@ -500,10 +501,10 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 	meta, err := s.store.PutObject(bucket, key, r.Body, r.ContentLength, contentType, metadata)
 	if err != nil {
 		storeErr = err // Capture for metrics
-		switch err {
-		case ErrBucketNotFound:
+		switch {
+		case errors.Is(err, ErrBucketNotFound):
 			s.writeError(rec, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
-		case ErrQuotaExceeded:
+		case errors.Is(err, ErrQuotaExceeded):
 			s.writeError(rec, http.StatusForbidden, "QuotaExceeded", "Storage quota exceeded")
 		default:
 			s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
@@ -528,11 +529,10 @@ func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request, bucket, ke
 	}
 
 	if err := s.store.DeleteObject(bucket, key); err != nil {
-		switch err {
-		case ErrBucketNotFound:
+		switch {
+		case errors.Is(err, ErrBucketNotFound):
 			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
-		case ErrObjectNotFound:
-			// S3 returns 204 even for non-existent objects on DELETE
+		case errors.Is(err, ErrObjectNotFound):
 			w.WriteHeader(http.StatusNoContent)
 			return
 		default:
@@ -554,10 +554,10 @@ func (s *Server) headObject(w http.ResponseWriter, r *http.Request, bucket, key 
 
 	meta, err := s.store.HeadObject(bucket, key)
 	if err != nil {
-		switch err {
-		case ErrBucketNotFound:
+		switch {
+		case errors.Is(err, ErrBucketNotFound):
 			w.WriteHeader(http.StatusNotFound)
-		case ErrObjectNotFound:
+		case errors.Is(err, ErrObjectNotFound):
 			w.WriteHeader(http.StatusNotFound)
 		default:
 			w.WriteHeader(http.StatusInternalServerError)
@@ -579,7 +579,7 @@ func (s *Server) headObject(w http.ResponseWriter, r *http.Request, bucket, key 
 
 // handleAuthError writes the appropriate error response for auth errors.
 func (s *Server) handleAuthError(w http.ResponseWriter, err error) {
-	if err == ErrAccessDenied {
+	if errors.Is(err, ErrAccessDenied) {
 		s.writeError(w, http.StatusForbidden, "AccessDenied", "Access denied")
 		return
 	}

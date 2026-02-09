@@ -15,6 +15,7 @@ type mockTunnel struct {
 	mu     sync.Mutex
 }
 
+// nolint:revive // p required by io.Reader interface but not used in mock
 func (m *mockTunnel) Read(p []byte) (n int, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -153,12 +154,12 @@ func TestPeerConnection_TransitionWithError(t *testing.T) {
 	testErr := errors.New("connection refused")
 	_ = pc.TransitionTo(StateDisconnected, "dial failed", testErr)
 
-	if pc.LastError() != testErr {
+	if !errors.Is(pc.LastError(), testErr) {
 		t.Errorf("LastError() = %v, want %v", pc.LastError(), testErr)
 	}
 
 	last := recorder.Last()
-	if last.Error != testErr {
+	if !errors.Is(last.Error, testErr) {
 		t.Errorf("Transition.Error = %v, want %v", last.Error, testErr)
 	}
 }
