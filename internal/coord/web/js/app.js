@@ -2985,3 +2985,8 @@ function s3ToggleFullscreen() {
     if (TM.s3explorer) TM.s3explorer.toggleFullscreen();
 }
 window.s3ToggleFullscreen = s3ToggleFullscreen;
+
+function s3ToggleView() {
+    if (TM.s3explorer) TM.s3explorer.toggleView();
+}
+window.s3ToggleView = s3ToggleView;

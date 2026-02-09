@@ -37,6 +37,12 @@
         isFullscreen: false,
         // Quota info
         quota: null,
+        // View mode
+        viewMode: 'list', // 'list' or 'icon'
+        defaultViewByTab: {
+            app: 'icon',
+            data: 'list'
+        }
     };
 
     // Text file extensions
@@ -196,6 +202,61 @@
         }
     }
 
+    // Icon rendering utilities
+    function getItemIcon(item) {
+        if (item.isBucket) {
+            const isShare = item.name.startsWith('fs+');
+            return isShare ? 'share' : 'bucket';
+        }
+        if (item.isFolder) return 'folder';
+        return 'file';
+    }
+
+    function getItemDisplayName(item) {
+        if (item.isBucket && item.name.startsWith('fs+')) {
+            return item.name.substring(3); // Strip "fs+" prefix for shares
+        }
+        return item.name;
+    }
+
+    function getIconSVG(iconType) {
+        const svgs = {
+            file: '<svg class="s3-large-icon" width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>',
+            folder: '<svg class="s3-large-icon" width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>',
+            bucket: '<svg class="s3-large-icon" width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M18.06 23h-12c-.72 0-1.34-.5-1.47-1.2L2 6.2C1.87 5.5 2.42 5 3.14 5h17.72c.72 0 1.27.5 1.14 1.2l-2.59 15.6c-.13.7-.75 1.2-1.47 1.2zM9 9v6h2V9h2V7H7v2h2z"/></svg>',
+            share: '<svg class="s3-large-icon" width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/></svg>'
+        };
+        return svgs[iconType] || svgs.file;
+    }
+
+    function buildItemMetadata(item) {
+        const parts = [];
+
+        // Size/quota
+        if (item.size !== null && item.size !== undefined && !item.isFolder) {
+            parts.push(formatBytes(item.size));
+        } else if (item.quota) {
+            parts.push(`${formatBytes(item.size || 0)} / ${formatBytes(item.quota)}`);
+        }
+
+        // Date
+        if (item.lastModified) {
+            parts.push(formatDate(item.lastModified));
+        }
+
+        return parts.join(' • ');
+    }
+
+    function buildOnclickHandler(item) {
+        if (item.isBucket) {
+            return `TM.s3explorer.navigateTo('${escapeJsString(item.name)}', '')`;
+        }
+        if (item.isFolder) {
+            return `TM.s3explorer.navigateTo('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`;
+        }
+        return `TM.s3explorer.openFile('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`;
+    }
+
     // =========================================================================
     // API Functions
     // =========================================================================
@@ -334,6 +395,8 @@
 
     async function renderFileListing(resetPagination = true) {
         const tbody = document.getElementById('s3-files-body');
+        const table = document.getElementById('s3-files');
+        const iconGrid = document.getElementById('s3-icons');
         const browser = document.getElementById('s3-browser');
         const viewer = document.getElementById('s3-viewer');
         const preview = document.getElementById('s3-preview');
@@ -441,6 +504,7 @@
 
         if (items.length === 0) {
             tbody.innerHTML = '';
+            if (iconGrid) iconGrid.innerHTML = '';
             if (empty) empty.style.display = 'block';
             if (paginationEl) paginationEl.style.display = 'none';
             return;
@@ -451,7 +515,20 @@
         // Only show visible items
         const visibleItems = items.slice(0, state.visibleCount);
 
-        tbody.innerHTML = visibleItems
+        // Render based on view mode
+        if (state.viewMode === 'icon') {
+            // Hide table, show icon grid
+            if (table) table.style.display = 'none';
+            if (iconGrid) {
+                iconGrid.style.display = 'grid';
+                renderIconGrid(visibleItems);
+            }
+        } else {
+            // Show table, hide icon grid
+            if (table) table.style.display = 'table';
+            if (iconGrid) iconGrid.style.display = 'none';
+
+            tbody.innerHTML = visibleItems
             .map((item, index) => {
                 const icon = item.isFolder
                     ? '<svg class="s3-icon s3-icon-folder" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>'
@@ -490,6 +567,7 @@
             `;
             })
             .join('');
+        }
 
         // Update pagination UI using shared helper
         const total = state.currentItems.length;
@@ -502,6 +580,46 @@
                 canShowLess: state.visibleCount > PAGE_SIZE,
             });
         }
+    }
+
+    function renderIconGrid(items) {
+        const iconGrid = document.getElementById('s3-icons');
+        if (!iconGrid) return;
+
+        iconGrid.innerHTML = items.map((item) => {
+            const iconType = getItemIcon(item);
+            const displayName = getItemDisplayName(item);
+            const iconSVG = getIconSVG(iconType);
+            const metaHint = buildItemMetadata(item);
+
+            const isTombstoned = Boolean(item.tombstonedAt);
+            const itemId = item.key || item.name;
+            const isSelected = state.selectedItems.has(itemId);
+            const onclick = buildOnclickHandler(item);
+
+            // Checkbox (not for buckets)
+            const checkbox = item.isBucket ? '' :
+                `<input type="checkbox" class="s3-icon-checkbox"
+                        data-item-id="${escapeHtml(itemId)}"
+                        ${isSelected ? 'checked' : ''}
+                        ${state.writable && !isTombstoned ? '' : 'disabled'}
+                        onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeJsString(itemId)}')" />`;
+
+            // Tombstone badge
+            const tombstoneBadge = isTombstoned ?
+                '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
+
+            return `
+                <div class="s3-icon-item ${isSelected ? 's3-selected' : ''} ${isTombstoned ? 's3-tombstoned' : ''}"
+                     onclick="${onclick}">
+                    ${checkbox}
+                    ${tombstoneBadge}
+                    ${iconSVG}
+                    <div class="s3-icon-label">${escapeHtml(displayName)}</div>
+                    ${metaHint ? `<div class="s3-icon-meta">${metaHint}</div>` : ''}
+                </div>
+            `;
+        }).join('');
     }
 
     function showMore() {
@@ -676,6 +794,23 @@
                 ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>'
                 : '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>';
         }
+    }
+
+    function toggleView() {
+        state.viewMode = state.viewMode === 'list' ? 'icon' : 'list';
+        updateViewToggleButton();
+        renderFileListing(false);
+    }
+
+    function updateViewToggleButton() {
+        const btn = document.getElementById('s3-view-toggle-btn');
+        if (!btn) return;
+
+        const listIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M4 14h4v-4H4v4zm0 5h4v-4H4v4zM4 9h4V5H4v4zm5 5h12v-4H9v4zm0 5h12v-4H9v4zM9 5v4h12V5H9z"/></svg>';
+        const gridIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8v8H3v-8zm0-10h8v8H3V3zm10 0h8v8h-8V3zm0 10h8v8h-8v-8z"/></svg>';
+
+        btn.innerHTML = state.viewMode === 'list' ? gridIcon : listIcon;
+        btn.title = state.viewMode === 'list' ? 'Switch to icon view' : 'Switch to list view';
     }
 
     function updateSaveButton() {
@@ -1231,6 +1366,14 @@
     // Initialization
     // =========================================================================
 
+    function detectActiveTab() {
+        const activeTabButton = document.querySelector('#main-tabs .tab.active');
+        if (activeTabButton) {
+            return activeTabButton.dataset.tab; // 'app', 'data', or 'mesh'
+        }
+        return 'data'; // Fallback
+    }
+
     async function init() {
         const editor = document.getElementById('s3-editor');
         if (editor) {
@@ -1238,6 +1381,11 @@
             editor.addEventListener('scroll', syncScroll);
         }
 
+        // Detect active tab and set context-aware default view mode
+        const activeTab = detectActiveTab();
+        state.viewMode = state.defaultViewByTab[activeTab] || 'list';
+
+        updateViewToggleButton();
         initDragDrop();
         initKeyboardShortcuts();
 
@@ -1270,6 +1418,8 @@
         deleteSelected,
         setAutosave,
         toggleFullscreen,
+        toggleView,
+        updateViewToggleButton,
         // Version history
         showVersionHistory,
         restoreVersionAndRefresh,
