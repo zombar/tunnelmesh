@@ -2097,15 +2097,16 @@ function registerBuiltinPanels() {
             hasActionButton: true,
             sortOrder: 50,
         },
-        {
-            id: 'docker',
-            sectionId: 'docker-section',
-            tab: 'app',
-            title: 'Docker Containers',
-            category: 'admin',
-            hasActionButton: true,
-            sortOrder: 30,
-        },
+        // TEMPORARILY DISABLED: Docker panel causing page hang issues
+        // {
+        //     id: 'docker',
+        //     sectionId: 'docker-section',
+        //     tab: 'app',
+        //     title: 'Docker Containers',
+        //     category: 'admin',
+        //     hasActionButton: true,
+        //     sortOrder: 30,
+        // },
     ];
 
     panels.forEach((p) => {
@@ -2628,7 +2629,8 @@ function initRefreshCoordinator() {
     TM.refresh.register('groups', fetchGroups);
     TM.refresh.register('shares', fetchShares);
     TM.refresh.register('bindings', fetchBindings);
-    TM.refresh.register('docker', loadDockerContainers);
+    // TEMPORARILY DISABLED: Docker refresh registration
+    // TM.refresh.register('docker', loadDockerContainers);
 
     // Register S3 explorer refresh (init if needed, then refresh)
     // Use promise chain instead of async/await to avoid blocking
@@ -2692,12 +2694,15 @@ function switchTab(tabName) {
     } else if (tabName === 'data') {
         // Refresh all data panels without cascading (we're already listing all of them)
         TM.refresh.triggerMultiple(['peers-mgmt', 'groups', 'shares', 'bindings', 's3'], { cascade: false });
-    } else if (tabName === 'app') {
-        // Load Docker panel lazily when app tab is accessed
-        if (TM.refresh) {
-            TM.refresh.trigger('docker', { cascade: false });
-        }
     }
+    // TEMPORARILY DISABLED: Docker panel lazy loading
+    // else if (tabName === 'app') {
+    //     // Load Docker panel lazily when app tab is accessed
+    //     if (TM.refresh) {
+    //         TM.refresh.trigger('docker', { cascade: false });
+    //     }
+    // }
+
 }
 window.switchTab = switchTab;
 
