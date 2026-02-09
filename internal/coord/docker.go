@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/docker"
 )
 
@@ -22,6 +23,14 @@ type DockerContainerResponse struct {
 func (s *Server) handleDockerContainers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check RBAC authorization
+	peerID := s.getRequestOwner(r)
+	if !s.s3Authorizer.CanAccessPanel(peerID, auth.PanelDocker) {
+		log.Info().Str("peer_id", peerID).Msg("Docker API access denied")
+		s.jsonError(w, "access denied", http.StatusForbidden)
 		return
 	}
 
@@ -69,6 +78,14 @@ func (s *Server) handleDockerContainers(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleDockerContainerInspect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check RBAC authorization
+	peerID := s.getRequestOwner(r)
+	if !s.s3Authorizer.CanAccessPanel(peerID, auth.PanelDocker) {
+		log.Info().Str("peer_id", peerID).Msg("Docker API access denied")
+		s.jsonError(w, "access denied", http.StatusForbidden)
 		return
 	}
 
@@ -127,6 +144,14 @@ func (s *Server) handleDockerControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check RBAC authorization
+	peerID := s.getRequestOwner(r)
+	if !s.s3Authorizer.CanAccessPanel(peerID, auth.PanelDocker) {
+		log.Info().Str("peer_id", peerID).Msg("Docker API access denied")
+		s.jsonError(w, "access denied", http.StatusForbidden)
+		return
+	}
+
 	if s.dockerMgr == nil {
 		s.jsonError(w, "Docker not enabled on this coordinator", http.StatusServiceUnavailable)
 		return
@@ -165,19 +190,39 @@ func (s *Server) handleDockerControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement actual Docker control via Docker client
-	// For now, return success response (to be implemented when Docker client is added)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	var err error
+	switch req.Action {
+	case "start":
+		err = s.dockerMgr.StartContainer(ctx, containerID)
+	case "stop":
+		err = s.dockerMgr.StopContainer(ctx, containerID)
+	case "restart":
+		err = s.dockerMgr.RestartContainer(ctx, containerID)
+	}
+
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("container", containerID).
+			Str("action", req.Action).
+			Msg("Docker container control action failed")
+		s.jsonError(w, "Failed to "+req.Action+" container: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	log.Info().
 		Str("container", containerID).
 		Str("action", req.Action).
-		Msg("Docker container control action (not yet implemented)")
+		Msg("Docker container control action succeeded")
 
 	response := DockerControlResponse{
 		Success:     true,
 		ContainerID: containerID,
 		Action:      req.Action,
-		Message:     "Control action will be implemented when Docker client is integrated",
+		Message:     "Container " + req.Action + " succeeded",
 	}
 
 	w.Header().Set("Content-Type", "application/json")

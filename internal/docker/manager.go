@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -25,6 +26,9 @@ type dockerClient interface {
 	GetContainerStats(ctx context.Context, id string) (*ContainerStats, error)
 	ListNetworks(ctx context.Context) ([]NetworkInfo, error)
 	WatchEvents(ctx context.Context, handler func(ContainerEvent)) error
+	StartContainer(ctx context.Context, id string) error
+	StopContainer(ctx context.Context, id string) error
+	RestartContainer(ctx context.Context, id string) error
 	Close() error
 }
 
@@ -35,6 +39,9 @@ type Manager struct {
 	client      dockerClient
 	filter      packetFilter
 	systemStore *s3.SystemStore
+	wg          sync.WaitGroup
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 // NewManager creates a new Docker manager.
@@ -76,21 +83,30 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 	m.client = client
 
+	// Create cancellable context for background goroutines
+	m.ctx, m.cancel = context.WithCancel(ctx)
+
 	// Sync port forwards for existing containers
 	if err := m.syncAllPortForwards(ctx); err != nil {
 		log.Warn().Err(err).Msg("Failed to sync initial port forwards")
 	}
 
 	// Start event watcher in background
+	m.wg.Add(1)
 	go func() {
-		if err := m.watchEvents(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		defer m.wg.Done()
+		if err := m.watchEvents(m.ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error().Err(err).Msg("Docker event watcher stopped with error")
 		}
 	}()
 
 	// Start periodic stats collection if S3 store is available
 	if m.systemStore != nil {
-		go m.StartPeriodicStatsCollection(ctx, m.systemStore)
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.StartPeriodicStatsCollection(m.ctx, m.systemStore)
+		}()
 	}
 
 	return nil
@@ -135,6 +151,15 @@ func (m *Manager) isDockerAvailable() bool {
 
 // Stop gracefully stops the Docker manager.
 func (m *Manager) Stop() error {
+	// Cancel background goroutines
+	if m.cancel != nil {
+		m.cancel()
+	}
+
+	// Wait for all goroutines to finish
+	m.wg.Wait()
+
+	// Close Docker client
 	if m.client != nil {
 		return m.client.Close()
 	}
@@ -192,6 +217,36 @@ func (m *Manager) InspectContainer(ctx context.Context, id string) (*ContainerIn
 	}
 
 	return container, nil
+}
+
+// StartContainer starts a stopped container.
+func (m *Manager) StartContainer(ctx context.Context, id string) error {
+	if m.client == nil {
+		return errors.New("docker client not available")
+	}
+
+	log.Info().Str("container", id).Msg("Starting Docker container")
+	return m.client.StartContainer(ctx, id)
+}
+
+// StopContainer stops a running container.
+func (m *Manager) StopContainer(ctx context.Context, id string) error {
+	if m.client == nil {
+		return errors.New("docker client not available")
+	}
+
+	log.Info().Str("container", id).Msg("Stopping Docker container")
+	return m.client.StopContainer(ctx, id)
+}
+
+// RestartContainer restarts a container.
+func (m *Manager) RestartContainer(ctx context.Context, id string) error {
+	if m.client == nil {
+		return errors.New("docker client not available")
+	}
+
+	log.Info().Str("container", id).Msg("Restarting Docker container")
+	return m.client.RestartContainer(ctx, id)
 }
 
 // calculateUptime returns the number of seconds since the container started.

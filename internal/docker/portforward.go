@@ -85,19 +85,12 @@ func (m *Manager) syncPortForwards(ctx context.Context, containerID string) erro
 				CreatedAt:     time.Now(),
 				ExpiresAt:     expiresAt,
 			}
-			m.recordMapping(mapping)
+			log.Debug().
+				Str("container", mapping.ContainerName).
+				Uint16("port", mapping.Port).
+				Msg("Created port forward mapping")
 		}
 	}
 
 	return nil
-}
-
-// recordMapping stores a port forward mapping for persistence.
-func (m *Manager) recordMapping(mapping PortForwardMapping) {
-	// TODO: Implement persistence to S3 SystemStore
-	// This will be implemented when we add persistence support
-	log.Debug().
-		Str("container", mapping.ContainerName).
-		Uint16("port", mapping.Port).
-		Msg("Recorded port forward mapping")
 }

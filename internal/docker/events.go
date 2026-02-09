@@ -52,6 +52,20 @@ func (w *eventWatcher) handleEvent(event ContainerEvent) {
 	go w.handler(event)
 }
 
+// cleanup removes old entries from the debounce map to prevent unbounded growth.
+// Should be called periodically in a background goroutine.
+func (w *eventWatcher) cleanup(maxAge time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	cutoff := time.Now().Add(-maxAge)
+	for key, lastTime := range w.lastEvent {
+		if lastTime.Before(cutoff) {
+			delete(w.lastEvent, key)
+		}
+	}
+}
+
 // shouldHandleEvent returns true if we care about this event type.
 func shouldHandleEvent(event ContainerEvent) bool {
 	switch event.Type {
@@ -95,6 +109,21 @@ func (m *Manager) watchEvents(ctx context.Context) error {
 				Msg("Container stopped, port forwards will expire via TTL")
 		}
 	})
+
+	// Start periodic cleanup of debounce map to prevent memory growth
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				// Clean up entries older than 10 minutes
+				watcher.cleanup(10 * time.Minute)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	// Stream events from Docker daemon
 	return m.client.WatchEvents(ctx, watcher.handleEvent)

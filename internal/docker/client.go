@@ -171,6 +171,27 @@ func (c *realDockerClient) ListNetworks(ctx context.Context) ([]NetworkInfo, err
 	return result, nil
 }
 
+// StartContainer starts a stopped container.
+func (c *realDockerClient) StartContainer(ctx context.Context, id string) error {
+	return c.cli.ContainerStart(ctx, id, container.StartOptions{})
+}
+
+// StopContainer stops a running container.
+func (c *realDockerClient) StopContainer(ctx context.Context, id string) error {
+	timeout := 10 // seconds
+	return c.cli.ContainerStop(ctx, id, container.StopOptions{
+		Timeout: &timeout,
+	})
+}
+
+// RestartContainer restarts a container.
+func (c *realDockerClient) RestartContainer(ctx context.Context, id string) error {
+	timeout := 10 // seconds
+	return c.cli.ContainerRestart(ctx, id, container.StopOptions{
+		Timeout: &timeout,
+	})
+}
+
 // Close closes the Docker client connection.
 func (c *realDockerClient) Close() error {
 	return c.cli.Close()

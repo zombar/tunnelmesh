@@ -73,6 +73,18 @@ func (m *mockDockerClient) WatchEvents(ctx context.Context, handler func(Contain
 	return ctx.Err()
 }
 
+func (m *mockDockerClient) StartContainer(ctx context.Context, id string) error {
+	return m.err
+}
+
+func (m *mockDockerClient) StopContainer(ctx context.Context, id string) error {
+	return m.err
+}
+
+func (m *mockDockerClient) RestartContainer(ctx context.Context, id string) error {
+	return m.err
+}
+
 func (m *mockDockerClient) Close() error {
 	return m.err
 }
