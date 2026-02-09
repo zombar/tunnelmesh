@@ -314,6 +314,9 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("/api/panels/", s.handlePanelByID)
 	s.adminMux.HandleFunc("/api/user/permissions", s.handleUserPermissions)
 
+	// System health check
+	s.adminMux.HandleFunc("/api/system/health", s.handleSystemHealth)
+
 	// Expose metrics on admin interface for Prometheus scraping via mesh IP
 	s.adminMux.Handle("/metrics", promhttp.Handler())
 
@@ -2349,5 +2352,62 @@ func (s *Server) handlePanelDelete(w http.ResponseWriter, r *http.Request, panel
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "deleted",
+	})
+}
+
+// handleSystemHealth checks the integrity of system metadata stored in S3.
+// Returns version information and metadata health status for each critical file.
+//
+// GET /api/system/health
+func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.s3SystemStore == nil {
+		s.jsonError(w, "S3 not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	results := make(map[string]interface{})
+	store := s.s3SystemStore.Raw()
+
+	// Check each critical file
+	files := []string{
+		s3.UsersPath,
+		s3.BindingsPath,
+		s3.GroupsPath,
+		s3.GroupBindingsPath,
+		s3.StatsHistoryPath,
+		s3.WGConcentratorPath,
+		s3.DNSCachePath,
+		s3.DNSAliasPath,
+	}
+
+	for _, path := range files {
+		versions, err := store.ListVersions(s3.SystemBucket, path)
+
+		fileInfo := make(map[string]interface{})
+		fileInfo["exists"] = err == nil && len(versions) > 0
+		fileInfo["version_count"] = len(versions)
+
+		if len(versions) > 0 {
+			fileInfo["latest_version"] = versions[0].VersionID
+			fileInfo["latest_timestamp"] = versions[0].LastModified
+			fileInfo["latest_size_bytes"] = versions[0].Size
+		}
+
+		if err != nil {
+			fileInfo["error"] = err.Error()
+		}
+
+		results[path] = fileInfo
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ok",
+		"files":  results,
 	})
 }

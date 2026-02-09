@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
@@ -52,6 +53,7 @@ type relayManager struct {
 	persistent     map[string]*persistentConn // key: peerName (DERP-like routing)
 	wgConcentrator string                     // peerName of WireGuard concentrator (if any)
 	mu             sync.Mutex
+	s3SystemStore  *s3.SystemStore // For persisting concentrator assignment
 
 	// API request tracking
 	apiRequests   map[uint32]chan []byte // reqID -> response channel
@@ -99,17 +101,39 @@ func newRelayManager() *relayManager {
 		pending:     make(map[string]*relayConn),
 		persistent:  make(map[string]*persistentConn),
 		apiRequests: make(map[uint32]chan []byte),
+		// s3SystemStore will be set later via SetS3Store()
 	}
+}
+
+// SetS3Store sets the S3 system store for persistence.
+// This must be called after S3 initialization to enable WG concentrator persistence.
+func (r *relayManager) SetS3Store(store *s3.SystemStore) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.s3SystemStore = store
 }
 
 // SetWGConcentrator sets the peer that acts as WireGuard concentrator.
 func (r *relayManager) SetWGConcentrator(peerName string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	old := r.wgConcentrator
 	r.wgConcentrator = peerName
+	s3Store := r.s3SystemStore // Capture before unlocking
+	r.mu.Unlock()
+
 	if old != peerName {
 		log.Info().Str("peer", peerName).Str("old", old).Msg("WireGuard concentrator updated")
+	}
+
+	// Persist to S3 if enabled (async to avoid blocking)
+	if s3Store != nil {
+		go func() {
+			if err := s3Store.SaveWGConcentrator(peerName); err != nil {
+				log.Warn().Err(err).Msg("failed to persist WG concentrator")
+			} else {
+				log.Debug().Str("peer", peerName).Msg("persisted WG concentrator to S3")
+			}
+		}()
 	}
 }
 
@@ -123,10 +147,27 @@ func (r *relayManager) GetWGConcentrator() string {
 // ClearWGConcentrator clears the concentrator if it matches the given peer.
 func (r *relayManager) ClearWGConcentrator(peerName string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	cleared := false
+	s3Store := r.s3SystemStore // Capture before unlocking
 	if r.wgConcentrator == peerName {
 		r.wgConcentrator = ""
+		cleared = true
+	}
+	r.mu.Unlock()
+
+	if cleared {
 		log.Info().Str("peer", peerName).Msg("WireGuard concentrator disconnected")
+
+		// Clear from S3 if enabled
+		if s3Store != nil {
+			go func() {
+				if err := s3Store.ClearWGConcentrator(); err != nil {
+					log.Debug().Err(err).Msg("failed to clear WG concentrator from S3")
+				} else {
+					log.Debug().Msg("cleared WG concentrator from S3")
+				}
+			}()
+		}
 	}
 }
 
@@ -751,6 +792,10 @@ func (r *relayManager) PushServicePorts(peerName string, ports []uint16) {
 func (s *Server) setupRelayRoutes() {
 	if s.relay == nil {
 		s.relay = newRelayManager()
+		// Set S3 store if available (for WG concentrator persistence)
+		if s.s3SystemStore != nil {
+			s.relay.SetS3Store(s.s3SystemStore)
+		}
 	}
 	s.mux.HandleFunc("/api/v1/relay/persistent", s.handlePersistentRelay)
 	s.mux.HandleFunc("/api/v1/relay/", s.handleRelay)
