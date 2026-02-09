@@ -564,7 +564,7 @@ func TestLoadPeerConfig_WithExitPeer(t *testing.T) {
 name: "client-node"
 server: "http://localhost:8080"
 auth_token: "token"
-exit_node: "exit-server"
+exit_peer: "exit-server"
 `
 	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
 

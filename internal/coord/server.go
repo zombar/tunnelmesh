@@ -42,7 +42,7 @@ type peerInfo struct {
 	lastStatsTime  time.Time
 	prevStatsTime  time.Time
 	aliases        []string // DNS aliases registered by this peer
-	userID         string   // User ID derived from peer's public key (SHA256[:8] hex)
+	peerID         string   // Peer ID derived from peer's public key (SHA256[:8] hex)
 
 	// Latency metrics reported by peer
 	coordinatorRTT int64            // Peer's reported RTT to coordinator (ms)
@@ -214,9 +214,9 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		log.Info().Msg("node location tracking enabled (uses external IP geolocation API)")
 	}
 
-	// Set user expiration days from config
+	// Set peer expiration days from config
 	if cfg.UserExpirationDays > 0 {
-		auth.SetUserExpirationDays(cfg.UserExpirationDays)
+		auth.SetPeerExpirationDays(cfg.UserExpirationDays)
 	}
 
 	// Initialize WireGuard client store if enabled
@@ -764,20 +764,20 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	s.s3Server = s3.NewServer(store, rbacAuth, s3Metrics)
 
 	// Create system store for internal coordinator data
-	// Use a service user ID for the coordinator
-	serviceUserID := auth.ServiceUserPrefix + "coordinator"
-	systemStore, err := s3.NewSystemStore(store, serviceUserID)
+	// Use a service peer ID for the coordinator
+	servicePeerID := auth.ServicePeerPrefix + "coordinator"
+	systemStore, err := s3.NewSystemStore(store, servicePeerID)
 	if err != nil {
 		return fmt.Errorf("create system store: %w", err)
 	}
 	s.s3SystemStore = systemStore
 
-	// Recover users and credentials from previous runs
-	if users, err := systemStore.LoadUsers(); err == nil && len(users) > 0 {
-		log.Info().Int("count", len(users)).Msg("recovering registered users")
-		for _, user := range users {
-			if _, _, err := s.s3Credentials.RegisterUser(user.ID, user.PublicKey); err != nil {
-				log.Warn().Err(err).Str("user", user.ID).Msg("failed to recover user credentials")
+	// Recover peers and credentials from previous runs
+	if peers, err := systemStore.LoadPeers(); err == nil && len(peers) > 0 {
+		log.Info().Int("count", len(peers)).Msg("recovering registered peers")
+		for _, peer := range peers {
+			if _, _, err := s.s3Credentials.RegisterUser(peer.ID, peer.PublicKey); err != nil {
+				log.Warn().Err(err).Str("peer", peer.ID).Msg("failed to recover peer credentials")
 			}
 		}
 	}
@@ -822,18 +822,10 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	// Recover coordinator state from S3
 	s.recoverCoordinatorState(cfg, systemStore)
 
-	// Add coordinator service user to all_service_users group
-	_ = s.s3Authorizer.Groups.AddMember(auth.GroupAllServiceUsers, serviceUserID)
-	if s.s3SystemStore != nil {
-		if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
-			log.Warn().Err(err).Msg("failed to persist groups after service user creation")
-		}
-	}
-
-	// Register service user credentials (derived from a fixed key for now)
+	// Register service peer credentials (derived from a fixed key for now)
 	// In production, this would be derived from the CA private key
-	if _, _, err := s.s3Credentials.RegisterUser(serviceUserID, serviceUserID); err != nil {
-		return fmt.Errorf("register service user credentials: %w", err)
+	if _, _, err := s.s3Credentials.RegisterUser(servicePeerID, servicePeerID); err != nil {
+		return fmt.Errorf("register service peer credentials: %w", err)
 	}
 
 	log.Info().
@@ -894,23 +886,11 @@ func (s *Server) recoverCoordinatorState(cfg *config.ServerConfig, systemStore *
 }
 
 // ensureBuiltinGroupBindings sets up the built-in group bindings if not already present.
-// - all_service_users group gets system role on _tunnelmesh bucket
 // - all_admin_users group gets admin role (unscoped)
-// - everyone group gets panel-viewer for default user panels
+// - everyone group gets panel-viewer for default peer panels
 // - all_admin_users group gets panel-viewer for admin-only panels
 func (s *Server) ensureBuiltinGroupBindings() {
 	modified := false
-
-	// Check if bindings already exist
-	serviceBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllServiceUsers)
-	if len(serviceBindings) == 0 {
-		s.s3Authorizer.GroupBindings.Add(auth.NewGroupBinding(
-			auth.GroupAllServiceUsers,
-			auth.RoleSystem,
-			"", // Unscoped, but RoleSystem only applies to _tunnelmesh
-		))
-		modified = true
-	}
 
 	adminBindings := s.s3Authorizer.GroupBindings.GetForGroup(auth.GroupAllAdminUsers)
 	if len(adminBindings) == 0 {
@@ -930,7 +910,7 @@ func (s *Server) ensureBuiltinGroupBindings() {
 			everyonePanels[b.PanelScope] = true
 		}
 	}
-	for _, panelID := range auth.DefaultUserPanels() {
+	for _, panelID := range auth.DefaultPeerPanels() {
 		if !everyonePanels[panelID] {
 			s.s3Authorizer.GroupBindings.Add(auth.NewGroupBindingForPanel(
 				auth.GroupEveryone,
@@ -1056,15 +1036,15 @@ func (s *Server) StartNFSServer(addr string, tlsCert *tls.Certificate) error {
 	return nil
 }
 
-// RegisterS3User registers a user for S3 access.
-// Returns the user's S3 access key and secret key.
-func (s *Server) RegisterS3User(userID, publicKey string, roles []string) (accessKey, secretKey string, err error) {
+// RegisterS3User registers a peer for S3 access.
+// Returns the peer's S3 access key and secret key.
+func (s *Server) RegisterS3User(peerID, publicKey string, roles []string) (accessKey, secretKey string, err error) {
 	if s.s3Credentials == nil {
 		return "", "", fmt.Errorf("S3 storage not initialized")
 	}
 
 	// Register credentials
-	accessKey, secretKey, err = s.s3Credentials.RegisterUser(userID, publicKey)
+	accessKey, secretKey, err = s.s3Credentials.RegisterUser(peerID, publicKey)
 	if err != nil {
 		return "", "", fmt.Errorf("register S3 credentials: %w", err)
 	}
@@ -1072,8 +1052,8 @@ func (s *Server) RegisterS3User(userID, publicKey string, roles []string) (acces
 	// Bind roles
 	for _, role := range roles {
 		s.s3Authorizer.Bindings.Add(&auth.RoleBinding{
-			Name:     fmt.Sprintf("%s-%s", userID, role),
-			UserID:   userID,
+			Name:     fmt.Sprintf("%s-%s", peerID, role),
+			PeerID:   peerID,
 			RoleName: role,
 		})
 	}
@@ -1281,17 +1261,17 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.dnsCache[alias] = meshIP
 	}
 
-	// Compute user ID from peer's SSH public key for RBAC purposes
-	var userID string
-	if isExisting && existing.userID != "" {
-		// Preserve existing user ID
-		userID = existing.userID
+	// Compute peer ID from peer's SSH public key for RBAC purposes
+	var peerID string
+	if isExisting && existing.peerID != "" {
+		// Preserve existing peer ID
+		peerID = existing.peerID
 	} else if req.PublicKey != "" {
-		// Derive user ID from SSH public key
+		// Derive peer ID from SSH public key
 		if edPubKey, err := config.DecodeED25519PublicKey(req.PublicKey); err == nil {
-			userID = auth.ComputeUserID(edPubKey)
+			peerID = auth.ComputePeerID(edPubKey)
 		} else {
-			log.Debug().Err(err).Str("peer", req.Name).Msg("failed to derive user ID from public key")
+			log.Debug().Err(err).Str("peer", req.Name).Msg("failed to derive peer ID from public key")
 		}
 	}
 
@@ -1299,7 +1279,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		peer:         peer,
 		registeredAt: registeredAt,
 		aliases:      req.Aliases,
-		userID:       userID,
+		peerID:       peerID,
 	}
 	s.dnsCache[req.Name] = meshIP
 
@@ -1308,21 +1288,21 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		go s.saveDNSData()
 	}
 
-	// Auto-register user: add to "everyone" group and create user record on first registration
-	// User identity is derived from peer's SSH key - no separate registration needed
-	var isFirstUser bool
-	if userID != "" && s.s3Authorizer != nil && s.s3Authorizer.Groups != nil {
-		isNewUser := !s.s3Authorizer.Groups.IsMember(auth.GroupEveryone, userID)
-		if isNewUser {
-			// Check if this is the first user (no one in admin group yet)
+	// Auto-register peer: add to "everyone" group and create peer record on first registration
+	// Peer identity is derived from peer's SSH key - no separate registration needed
+	var isFirstPeer bool
+	if peerID != "" && s.s3Authorizer != nil && s.s3Authorizer.Groups != nil {
+		isNewPeer := !s.s3Authorizer.Groups.IsMember(auth.GroupEveryone, peerID)
+		if isNewPeer {
+			// Check if this is the first peer (no one in admin group yet)
 			adminGroup := s.s3Authorizer.Groups.Get(auth.GroupAllAdminUsers)
 			if adminGroup != nil && len(adminGroup.Members) == 0 {
-				isFirstUser = true
-				// First user becomes admin
-				if err := s.s3Authorizer.Groups.AddMember(auth.GroupAllAdminUsers, userID); err != nil {
-					log.Warn().Err(err).Str("user_id", userID).Msg("failed to add first user to admin group")
+				isFirstPeer = true
+				// First peer becomes admin
+				if err := s.s3Authorizer.Groups.AddMember(auth.GroupAllAdminUsers, peerID); err != nil {
+					log.Warn().Err(err).Str("peer_id", peerID).Msg("failed to add first peer to admin group")
 				} else {
-					log.Info().Str("peer", req.Name).Str("user_id", userID).Msg("first user - granted admin role")
+					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Msg("first peer - granted admin role")
 					if s.s3SystemStore != nil {
 						if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
 							log.Warn().Err(err).Msg("failed to persist groups after admin assignment")
@@ -1332,10 +1312,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Add to everyone group
-			if err := s.s3Authorizer.Groups.AddMember(auth.GroupEveryone, userID); err != nil {
-				log.Warn().Err(err).Str("peer", req.Name).Str("user_id", userID).Msg("failed to add user to everyone group")
+			if err := s.s3Authorizer.Groups.AddMember(auth.GroupEveryone, peerID); err != nil {
+				log.Warn().Err(err).Str("peer", req.Name).Str("peer_id", peerID).Msg("failed to add peer to everyone group")
 			} else {
-				log.Debug().Str("peer", req.Name).Str("user_id", userID).Msg("added user to everyone group")
+				log.Debug().Str("peer", req.Name).Str("peer_id", peerID).Msg("added peer to everyone group")
 				if s.s3SystemStore != nil {
 					if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
 						log.Warn().Err(err).Msg("failed to persist groups after adding to everyone")
@@ -1344,9 +1324,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Create or update user record in user store
+		// Create or update peer record in peer store
 		if s.s3SystemStore != nil {
-			s.updateUserRecord(userID, req.Name, req.PublicKey, isNewUser)
+			s.updatePeerRecord(peerID, req.Name, req.PublicKey, isNewPeer)
 		}
 	}
 
@@ -1378,8 +1358,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		CoordMeshIP:   s.coordMeshIP, // For "this.tunnelmesh" resolution
 		ServerVersion: s.version,
 		PeerName:      req.Name, // May differ from original request if renamed
-		UserID:        userID,
-		IsFirstUser:   isFirstUser,
+		PeerID:        peerID,
+		IsFirstPeer:   isFirstPeer,
 	}
 
 	// Generate TLS certificate for the peer
@@ -1499,22 +1479,22 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// updateUserRecord creates or updates a user record in the user store.
-// This is called during peer registration to ensure the user exists in the user list.
-func (s *Server) updateUserRecord(userID, peerName, publicKey string, isNewUser bool) {
-	users, err := s.s3SystemStore.LoadUsers()
+// updatePeerRecord creates or updates a peer record in the peer store.
+// This is called during peer registration to ensure the peer exists in the peer list.
+func (s *Server) updatePeerRecord(peerID, peerName, publicKey string, isNewPeer bool) {
+	peers, err := s.s3SystemStore.LoadPeers()
 	if err != nil {
-		log.Warn().Err(err).Str("user_id", userID).Msg("failed to load users for update")
-		users = []*auth.User{}
+		log.Warn().Err(err).Str("peer_id", peerID).Msg("failed to load peers for update")
+		peers = []*auth.Peer{}
 	}
 
 	now := time.Now()
 	var found bool
-	for _, u := range users {
-		if u.ID == userID {
-			// Update existing user: refresh last seen time and update name if this is the same device
+	for _, u := range peers {
+		if u.ID == peerID {
+			// Update existing peer: refresh last seen time and update name if this is the same device
 			u.LastSeen = now
-			// Update name if current peer provides one and user name is empty or matches this peer
+			// Update name if current peer provides one and peer name is empty or matches this peer
 			if peerName != "" && (u.Name == "" || u.Name == peerName) {
 				u.Name = peerName
 			}
@@ -1524,19 +1504,19 @@ func (s *Server) updateUserRecord(userID, peerName, publicKey string, isNewUser 
 	}
 
 	if !found {
-		// Create new user
-		users = append(users, &auth.User{
-			ID:        userID,
+		// Create new peer
+		peers = append(peers, &auth.Peer{
+			ID:        peerID,
 			Name:      peerName,
 			PublicKey: publicKey,
 			CreatedAt: now,
 			LastSeen:  now,
 		})
-		log.Debug().Str("user_id", userID).Str("name", peerName).Msg("created user record")
+		log.Debug().Str("peer_id", peerID).Str("name", peerName).Msg("created peer record")
 	}
 
-	if err := s.s3SystemStore.SaveUsers(users); err != nil {
-		log.Warn().Err(err).Str("user_id", userID).Msg("failed to save users")
+	if err := s.s3SystemStore.SavePeers(peers); err != nil {
+		log.Warn().Err(err).Str("peer_id", peerID).Msg("failed to save peers")
 	}
 }
 

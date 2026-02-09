@@ -90,8 +90,8 @@ type RegisterResponse struct {
 	CoordMeshIP   string `json:"coord_mesh_ip,omitempty"`  // Coordinator's mesh IP for "this.tunnelmesh" resolution
 	ServerVersion string `json:"server_version,omitempty"` // Server version for compatibility check
 	PeerName      string `json:"peer_name,omitempty"`      // Assigned peer name (may differ from request if renamed)
-	UserID        string `json:"user_id,omitempty"`        // Derived user ID for RBAC (SHA256(pubkey)[:8] hex)
-	IsFirstUser   bool   `json:"is_first_user,omitempty"`  // True if this is the first user (becomes admin)
+	PeerID        string `json:"peer_id,omitempty"`        // Derived peer ID for RBAC (SHA256(pubkey)[:8] hex)
+	IsFirstPeer   bool   `json:"is_first_peer,omitempty"`  // True if this is the first peer (becomes admin)
 }
 
 // PeerStats contains traffic statistics reported by peers.

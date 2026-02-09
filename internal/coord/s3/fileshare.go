@@ -237,7 +237,7 @@ func (m *FileShareManager) IsProtectedBinding(binding *auth.RoleBinding) bool {
 		return false
 	}
 
-	return share.Owner == binding.UserID
+	return share.Owner == binding.PeerID
 }
 
 // IsProtectedGroupBinding checks if a group binding is a file share's "everyone" binding.

@@ -121,13 +121,13 @@ func TestNewAuthorizerWithRoles(t *testing.T) {
 	assert.False(t, auth.Authorize("alice", "delete", "buckets", "", ""))
 }
 
-func TestAuthorizerGetUserRoles(t *testing.T) {
+func TestAuthorizerGetPeerRoles(t *testing.T) {
 	auth := NewAuthorizer()
 
 	auth.Bindings.Add(NewRoleBinding("alice", RoleAdmin, ""))
 	auth.Bindings.Add(NewRoleBinding("alice", RoleBucketRead, "bucket1"))
 
-	roles := auth.GetUserRoles("alice")
+	roles := auth.GetPeerRoles("alice")
 	require.Len(t, roles, 2)
 
 	roleNames := make(map[string]bool)
@@ -202,23 +202,6 @@ func TestAuthorizer_IsAdmin_ViaGroup(t *testing.T) {
 
 	// Now alice should be considered admin
 	assert.True(t, auth.IsAdmin("alice"))
-}
-
-func TestAuthorizer_ServiceUsersViaGroup(t *testing.T) {
-	auth := NewAuthorizerWithGroups()
-
-	// Add service user to all_service_users group
-	_ = auth.Groups.AddMember(GroupAllServiceUsers, "svc:coordinator")
-
-	// Grant system role to all_service_users group
-	auth.GroupBindings.Add(NewGroupBinding(GroupAllServiceUsers, RoleSystem, ""))
-
-	// Service user should access _tunnelmesh bucket
-	assert.True(t, auth.Authorize("svc:coordinator", "put", "objects", "_tunnelmesh", ""))
-	assert.True(t, auth.Authorize("svc:coordinator", "get", "objects", "_tunnelmesh", ""))
-
-	// But not other buckets
-	assert.False(t, auth.Authorize("svc:coordinator", "get", "objects", "user-bucket", ""))
 }
 
 func TestAuthorizer_GroupBindingPrecedence(t *testing.T) {

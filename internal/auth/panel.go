@@ -19,7 +19,7 @@ const (
 	PanelDNS        = "dns"
 	PanelS3         = "s3"
 	PanelShares     = "shares"
-	PanelUsers      = "users"
+	PanelPeerMgmt   = "peer-mgmt"
 	PanelGroups     = "groups"
 	PanelBindings   = "bindings"
 )
@@ -87,7 +87,7 @@ func (r *PanelRegistry) registerBuiltinPanels() {
 		// Data tab panels
 		{ID: PanelS3, Name: "Object Viewer", Tab: PanelTabData, Category: PanelCategoryStorage, SortOrder: 10, Builtin: true},
 		{ID: PanelShares, Name: "Shares", Tab: PanelTabData, Category: PanelCategoryStorage, SortOrder: 20, Builtin: true},
-		{ID: PanelUsers, Name: "Users", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 30, Builtin: true},
+		{ID: PanelPeerMgmt, Name: "Peers", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 30, Builtin: true},
 		{ID: PanelGroups, Name: "Groups", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 40, Builtin: true},
 		{ID: PanelBindings, Name: "Role Bindings", Tab: PanelTabData, Category: PanelCategoryAdmin, SortOrder: 50, Builtin: true},
 	}
@@ -317,12 +317,12 @@ func BuiltinPanelIDs() []string {
 	return []string{
 		PanelVisualizer, PanelMap, PanelCharts, PanelPeers,
 		PanelLogs, PanelWireGuard, PanelFilter, PanelDNS,
-		PanelS3, PanelShares, PanelUsers, PanelGroups, PanelBindings,
+		PanelS3, PanelShares, PanelPeerMgmt, PanelGroups, PanelBindings,
 	}
 }
 
-// DefaultUserPanels returns panel IDs that users get by default.
-func DefaultUserPanels() []string {
+// DefaultPeerPanels returns panel IDs that peers get by default.
+func DefaultPeerPanels() []string {
 	return []string{
 		PanelVisualizer, PanelMap, PanelCharts, PanelS3, PanelShares,
 	}
@@ -332,6 +332,6 @@ func DefaultUserPanels() []string {
 func DefaultAdminPanels() []string {
 	return []string{
 		PanelPeers, PanelLogs, PanelWireGuard, PanelFilter, PanelDNS,
-		PanelUsers, PanelGroups, PanelBindings,
+		PanelPeerMgmt, PanelGroups, PanelBindings,
 	}
 }

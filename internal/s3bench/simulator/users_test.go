@@ -113,7 +113,7 @@ func TestUserManager_Setup(t *testing.T) {
 			// Check for role binding
 			hasBinding := false
 			for _, binding := range authorizer.Bindings.List() {
-				if binding.UserID == memberID && binding.BucketScope == bucketName {
+				if binding.PeerID == memberID && binding.BucketScope == bucketName {
 					hasBinding = true
 					break
 				}
@@ -290,7 +290,7 @@ func TestUserManager_GrantPermission(t *testing.T) {
 	bucketName := s3.FileShareBucketPrefix + "testshare"
 	found := false
 	for _, binding := range authorizer.Bindings.List() {
-		if binding.UserID == "alice" && binding.RoleName == auth.RoleBucketAdmin && binding.BucketScope == bucketName {
+		if binding.PeerID == "alice" && binding.RoleName == auth.RoleBucketAdmin && binding.BucketScope == bucketName {
 			found = true
 			break
 		}
@@ -359,7 +359,7 @@ func TestUserManager_RevokePermission(t *testing.T) {
 	// Verify binding was removed
 	bucketName := s3.FileShareBucketPrefix + "testshare"
 	for _, binding := range authorizer.Bindings.List() {
-		if binding.UserID == "alice" && binding.BucketScope == bucketName {
+		if binding.PeerID == "alice" && binding.BucketScope == bucketName {
 			t.Error("Expected binding to be removed, but it still exists")
 		}
 	}
@@ -476,7 +476,7 @@ func TestUserManager_ClearanceBasedPermissions(t *testing.T) {
 	for _, tc := range testCases {
 		found := false
 		for _, binding := range authorizer.Bindings.List() {
-			if binding.UserID == tc.userID && binding.BucketScope == bucketName {
+			if binding.PeerID == tc.userID && binding.BucketScope == bucketName {
 				if binding.RoleName != tc.expectedRole {
 					t.Errorf("User %s (clearance %d) has role %s, want %s",
 						tc.userID, tc.clearance, binding.RoleName, tc.expectedRole)

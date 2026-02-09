@@ -8,9 +8,8 @@ import (
 
 // Built-in group names.
 const (
-	GroupEveryone        = "everyone"          // All registered users (peer = user)
-	GroupAllServiceUsers = "all_service_users" // All service accounts (svc:*)
-	GroupAllAdminUsers   = "all_admin_users"   // All users with admin role
+	GroupEveryone      = "everyone"        // All registered peers (peer = user)
+	GroupAllAdminUsers = "all_admin_users" // All peers with admin role
 )
 
 // Group errors.
@@ -20,7 +19,7 @@ var (
 	ErrBuiltinGroup  = errors.New("cannot modify built-in group")
 )
 
-// Group represents a collection of users that can be assigned roles together.
+// Group represents a collection of peers that can be assigned roles together.
 type Group struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description,omitempty"`
@@ -55,21 +54,14 @@ func NewGroupStore() *GroupStore {
 	// Initialize built-in groups
 	store.groups[GroupEveryone] = &Group{
 		Name:        GroupEveryone,
-		Description: "All registered users",
-		Members:     []string{},
-		CreatedAt:   time.Now().UTC(),
-		Builtin:     true,
-	}
-	store.groups[GroupAllServiceUsers] = &Group{
-		Name:        GroupAllServiceUsers,
-		Description: "All service accounts",
+		Description: "All registered peers",
 		Members:     []string{},
 		CreatedAt:   time.Now().UTC(),
 		Builtin:     true,
 	}
 	store.groups[GroupAllAdminUsers] = &Group{
 		Name:        GroupAllAdminUsers,
-		Description: "All admin users",
+		Description: "All admin peers",
 		Members:     []string{},
 		CreatedAt:   time.Now().UTC(),
 		Builtin:     true,
@@ -118,8 +110,8 @@ func (gs *GroupStore) Delete(name string) error {
 	return nil
 }
 
-// AddMember adds a user to a group.
-func (gs *GroupStore) AddMember(groupName, userID string) error {
+// AddMember adds a peer to a group.
+func (gs *GroupStore) AddMember(groupName, peerID string) error {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
@@ -130,17 +122,17 @@ func (gs *GroupStore) AddMember(groupName, userID string) error {
 
 	// Check if already a member
 	for _, m := range group.Members {
-		if m == userID {
+		if m == peerID {
 			return nil // Already a member, idempotent
 		}
 	}
 
-	group.Members = append(group.Members, userID)
+	group.Members = append(group.Members, peerID)
 	return nil
 }
 
-// RemoveMember removes a user from a group.
-func (gs *GroupStore) RemoveMember(groupName, userID string) error {
+// RemoveMember removes a peer from a group.
+func (gs *GroupStore) RemoveMember(groupName, peerID string) error {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
@@ -151,7 +143,7 @@ func (gs *GroupStore) RemoveMember(groupName, userID string) error {
 
 	// Find and remove the member
 	for i, m := range group.Members {
-		if m == userID {
+		if m == peerID {
 			group.Members = append(group.Members[:i], group.Members[i+1:]...)
 			return nil
 		}
@@ -160,15 +152,15 @@ func (gs *GroupStore) RemoveMember(groupName, userID string) error {
 	return nil // Not a member, idempotent
 }
 
-// GetGroupsForUser returns the names of all groups a user belongs to.
-func (gs *GroupStore) GetGroupsForUser(userID string) []string {
+// GetGroupsForPeer returns the names of all groups a peer belongs to.
+func (gs *GroupStore) GetGroupsForPeer(peerID string) []string {
 	gs.mu.RLock()
 	defer gs.mu.RUnlock()
 
 	var groups []string
 	for name, group := range gs.groups {
 		for _, member := range group.Members {
-			if member == userID {
+			if member == peerID {
 				groups = append(groups, name)
 				break
 			}
@@ -177,8 +169,8 @@ func (gs *GroupStore) GetGroupsForUser(userID string) []string {
 	return groups
 }
 
-// IsMember checks if a user is a member of a group.
-func (gs *GroupStore) IsMember(groupName, userID string) bool {
+// IsMember checks if a peer is a member of a group.
+func (gs *GroupStore) IsMember(groupName, peerID string) bool {
 	gs.mu.RLock()
 	defer gs.mu.RUnlock()
 
@@ -188,7 +180,7 @@ func (gs *GroupStore) IsMember(groupName, userID string) bool {
 	}
 
 	for _, m := range group.Members {
-		if m == userID {
+		if m == peerID {
 			return true
 		}
 	}
@@ -217,21 +209,14 @@ func (gs *GroupStore) LoadGroups(groups []*Group) {
 	gs.groups = make(map[string]*Group)
 	gs.groups[GroupEveryone] = &Group{
 		Name:        GroupEveryone,
-		Description: "All registered users",
-		Members:     []string{},
-		CreatedAt:   time.Now().UTC(),
-		Builtin:     true,
-	}
-	gs.groups[GroupAllServiceUsers] = &Group{
-		Name:        GroupAllServiceUsers,
-		Description: "All service accounts",
+		Description: "All registered peers",
 		Members:     []string{},
 		CreatedAt:   time.Now().UTC(),
 		Builtin:     true,
 	}
 	gs.groups[GroupAllAdminUsers] = &Group{
 		Name:        GroupAllAdminUsers,
-		Description: "All admin users",
+		Description: "All admin peers",
 		Members:     []string{},
 		CreatedAt:   time.Now().UTC(),
 		Builtin:     true,
@@ -248,15 +233,15 @@ func (gs *GroupStore) LoadGroups(groups []*Group) {
 	}
 }
 
-// RemoveUserFromAllGroups removes a user from all groups.
-// Used when expiring a user account.
-func (gs *GroupStore) RemoveUserFromAllGroups(userID string) {
+// RemovePeerFromAllGroups removes a peer from all groups.
+// Used when expiring a peer account.
+func (gs *GroupStore) RemovePeerFromAllGroups(peerID string) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
 	for _, group := range gs.groups {
 		for i, m := range group.Members {
-			if m == userID {
+			if m == peerID {
 				group.Members = append(group.Members[:i], group.Members[i+1:]...)
 				break
 			}

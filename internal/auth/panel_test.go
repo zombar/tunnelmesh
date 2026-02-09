@@ -147,7 +147,7 @@ func TestAuthorizer_CanAccessPanel_Admin(t *testing.T) {
 	// Admin can access all panels
 	assert.True(t, auth.CanAccessPanel("alice", PanelS3))
 	assert.True(t, auth.CanAccessPanel("alice", PanelPeers))
-	assert.True(t, auth.CanAccessPanel("alice", PanelUsers))
+	assert.True(t, auth.CanAccessPanel("alice", PanelPeerMgmt))
 }
 
 func TestAuthorizer_CanAccessPanel_DirectBinding(t *testing.T) {
@@ -161,7 +161,7 @@ func TestAuthorizer_CanAccessPanel_DirectBinding(t *testing.T) {
 
 	// Bob cannot access other panels
 	assert.False(t, auth.CanAccessPanel("bob", PanelPeers))
-	assert.False(t, auth.CanAccessPanel("bob", PanelUsers))
+	assert.False(t, auth.CanAccessPanel("bob", PanelPeerMgmt))
 }
 
 func TestAuthorizer_CanAccessPanel_GroupBinding(t *testing.T) {
@@ -180,7 +180,7 @@ func TestAuthorizer_CanAccessPanel_GroupBinding(t *testing.T) {
 
 	// Alice cannot access admin panels
 	assert.False(t, auth.CanAccessPanel("alice", PanelPeers))
-	assert.False(t, auth.CanAccessPanel("alice", PanelUsers))
+	assert.False(t, auth.CanAccessPanel("alice", PanelPeerMgmt))
 }
 
 func TestAuthorizer_CanAccessPanel_PublicPanel(t *testing.T) {
@@ -209,7 +209,7 @@ func TestAuthorizer_CanAccessPanel_UnrestrictedBinding(t *testing.T) {
 	// User can access all panels
 	assert.True(t, auth.CanAccessPanel("superuser", PanelS3))
 	assert.True(t, auth.CanAccessPanel("superuser", PanelPeers))
-	assert.True(t, auth.CanAccessPanel("superuser", PanelUsers))
+	assert.True(t, auth.CanAccessPanel("superuser", PanelPeerMgmt))
 }
 
 func TestAuthorizer_GetAccessiblePanels_Admin(t *testing.T) {
@@ -286,22 +286,22 @@ func TestAuthorizer_GetAccessiblePanels_AdminViaGroup(t *testing.T) {
 
 // --- Default panel tests ---
 
-func TestDefaultUserPanels(t *testing.T) {
-	defaults := DefaultUserPanels()
+func TestDefaultPeerPanels(t *testing.T) {
+	defaults := DefaultPeerPanels()
 	assert.Contains(t, defaults, PanelVisualizer)
 	assert.Contains(t, defaults, PanelMap)
 	assert.Contains(t, defaults, PanelCharts)
 	assert.Contains(t, defaults, PanelS3)
 	assert.Contains(t, defaults, PanelShares)
 	assert.NotContains(t, defaults, PanelPeers)
-	assert.NotContains(t, defaults, PanelUsers)
+	assert.NotContains(t, defaults, PanelPeerMgmt)
 }
 
 func TestDefaultAdminPanels(t *testing.T) {
 	defaults := DefaultAdminPanels()
 	assert.Contains(t, defaults, PanelPeers)
 	assert.Contains(t, defaults, PanelLogs)
-	assert.Contains(t, defaults, PanelUsers)
+	assert.Contains(t, defaults, PanelPeerMgmt)
 	assert.Contains(t, defaults, PanelBindings)
 	assert.NotContains(t, defaults, PanelS3)
 	assert.NotContains(t, defaults, PanelVisualizer)
@@ -317,7 +317,7 @@ func TestRoleBinding_AppliesToPanel(t *testing.T) {
 
 	// Binding without panel scope (all panels)
 	unscopedBinding := &RoleBinding{
-		UserID:   "bob",
+		PeerID:   "bob",
 		RoleName: RolePanelViewer,
 	}
 	assert.True(t, unscopedBinding.AppliesToPanel(PanelS3))

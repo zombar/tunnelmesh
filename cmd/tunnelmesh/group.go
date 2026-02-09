@@ -21,8 +21,8 @@ func newGroupCmd() *cobra.Command {
 		Short: "Manage groups",
 		Long: `Manage TunnelMesh groups.
 
-Groups allow you to assign permissions to multiple users at once.
-Built-in groups: everyone, all_service_users, all_admin_users
+Groups allow you to assign permissions to multiple peers at once.
+Built-in groups: everyone, all_admin_users
 
 Examples:
   # List all groups
@@ -32,10 +32,10 @@ Examples:
   tunnelmesh group create developers --description "Development team"
 
   # Add a member to a group
-  tunnelmesh group add-member developers user123
+  tunnelmesh group add-member developers peer123
 
   # Remove a member from a group
-  tunnelmesh group remove-member developers user123`,
+  tunnelmesh group remove-member developers peer123`,
 	}
 
 	// List subcommand
@@ -76,7 +76,7 @@ Examples:
 
 	// Add-member subcommand
 	addMemberCmd := &cobra.Command{
-		Use:   "add-member <group> <user-id>",
+		Use:   "add-member <group> <peer-id>",
 		Short: "Add a member to a group",
 		Args:  cobra.ExactArgs(2),
 		RunE:  runGroupAddMember,
@@ -85,7 +85,7 @@ Examples:
 
 	// Remove-member subcommand
 	removeMemberCmd := &cobra.Command{
-		Use:   "remove-member <group> <user-id>",
+		Use:   "remove-member <group> <peer-id>",
 		Short: "Remove a member from a group",
 		Args:  cobra.ExactArgs(2),
 		RunE:  runGroupRemoveMember,
@@ -230,11 +230,11 @@ func runGroupMembers(cmd *cobra.Command, args []string) error {
 
 func runGroupAddMember(cmd *cobra.Command, args []string) error {
 	groupName := args[0]
-	userID := args[1]
+	peerID := args[1]
 
 	adminURL := getAdminURL()
 
-	reqBody := map[string]string{"user_id": userID}
+	reqBody := map[string]string{"peer_id": peerID}
 	body, _ := json.Marshal(reqBody)
 
 	resp, err := makeAdminRequest("POST", adminURL+"/api/groups/"+groupName+"/members", bytes.NewReader(body))
@@ -248,17 +248,17 @@ func runGroupAddMember(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to add member: %s", string(respBody))
 	}
 
-	fmt.Printf("User '%s' added to group '%s'\n", userID, groupName)
+	fmt.Printf("Peer '%s' added to group '%s'\n", peerID, groupName)
 	return nil
 }
 
 func runGroupRemoveMember(cmd *cobra.Command, args []string) error {
 	groupName := args[0]
-	userID := args[1]
+	peerID := args[1]
 
 	adminURL := getAdminURL()
 
-	resp, err := makeAdminRequest("DELETE", adminURL+"/api/groups/"+groupName+"/members/"+userID, nil)
+	resp, err := makeAdminRequest("DELETE", adminURL+"/api/groups/"+groupName+"/members/"+peerID, nil)
 	if err != nil {
 		return err
 	}
@@ -269,7 +269,7 @@ func runGroupRemoveMember(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to remove member: %s", string(body))
 	}
 
-	fmt.Printf("User '%s' removed from group '%s'\n", userID, groupName)
+	fmt.Printf("Peer '%s' removed from group '%s'\n", peerID, groupName)
 	return nil
 }
 

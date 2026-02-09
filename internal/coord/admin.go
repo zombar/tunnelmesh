@@ -300,8 +300,8 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("/api/shares", s.handleShares)
 	s.adminMux.HandleFunc("/api/shares/", s.handleShareByName)
 
-	// User management API
-	s.adminMux.HandleFunc("/api/users", s.handleUsers)
+	// Peer management API
+	s.adminMux.HandleFunc("/api/users", s.handlePeersMgmt)
 
 	// Role binding management API
 	s.adminMux.HandleFunc("/api/bindings", s.handleBindings)
@@ -313,7 +313,7 @@ func (s *Server) setupAdminRoutes() {
 	// Panel management API
 	s.adminMux.HandleFunc("/api/panels", s.handlePanels)
 	s.adminMux.HandleFunc("/api/panels/", s.handlePanelByID)
-	s.adminMux.HandleFunc("/api/user/permissions", s.handleUserPermissions)
+	s.adminMux.HandleFunc("/api/user/permissions", s.handlePeerPermissions)
 
 	// System health check
 	s.adminMux.HandleFunc("/api/system/health", s.handleSystemHealth)
@@ -973,12 +973,12 @@ func (s *Server) handleGroupMembers(w http.ResponseWriter, r *http.Request, grou
 	case http.MethodDelete:
 		// Remove member - user ID in path
 		if len(pathParts) == 0 || pathParts[0] == "" {
-			s.jsonError(w, "user_id required in path", http.StatusBadRequest)
+			s.jsonError(w, "peer_id required in path", http.StatusBadRequest)
 			return
 		}
-		userID := pathParts[0]
+		peerID := pathParts[0]
 
-		if err := s.s3Authorizer.Groups.RemoveMember(groupName, userID); err != nil {
+		if err := s.s3Authorizer.Groups.RemoveMember(groupName, peerID); err != nil {
 			s.jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1237,8 +1237,8 @@ func (s *Server) handleShareByName(w http.ResponseWriter, r *http.Request) {
 
 // --- User API Handlers ---
 
-// UserInfo represents user information for the API.
-type UserInfo struct {
+// PeerInfo represents peer information for the API.
+type PeerInfo struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
 	PublicKey string   `json:"public_key,omitempty"`
@@ -1250,33 +1250,33 @@ type UserInfo struct {
 	CreatedAt string   `json:"created_at,omitempty"`
 }
 
-// handleUsers handles GET for listing users.
-func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
+// handlePeersMgmt handles GET for listing peers in peer management.
+func (s *Server) handlePeersMgmt(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	if s.s3SystemStore == nil {
-		s.jsonError(w, "user management not enabled", http.StatusServiceUnavailable)
+		s.jsonError(w, "peer management not enabled", http.StatusServiceUnavailable)
 		return
 	}
 
-	users, err := s.s3SystemStore.LoadUsers()
+	peers, err := s.s3SystemStore.LoadPeers()
 	if err != nil {
-		s.jsonError(w, "failed to load users", http.StatusInternalServerError)
+		s.jsonError(w, "failed to load peers", http.StatusInternalServerError)
 		return
 	}
 
-	// Build user info with groups
-	result := make([]UserInfo, 0, len(users))
-	for _, u := range users {
+	// Build peer info with groups
+	result := make([]PeerInfo, 0, len(peers))
+	for _, u := range peers {
 		groups := []string{}
 		if s.s3Authorizer != nil && s.s3Authorizer.Groups != nil {
-			groups = s.s3Authorizer.Groups.GetGroupsForUser(u.ID)
+			groups = s.s3Authorizer.Groups.GetGroupsForPeer(u.ID)
 		}
 
-		info := UserInfo{
+		info := PeerInfo{
 			ID:        u.ID,
 			Name:      u.Name,
 			IsService: u.IsService(),
@@ -1285,9 +1285,9 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if !u.LastSeen.IsZero() {
 			info.LastSeen = u.LastSeen.Format(time.RFC3339)
-			// Calculate expiration date for human users (service users don't auto-expire)
+			// Calculate expiration date for human peers (service peers don't auto-expire)
 			if !u.IsService() {
-				expiresAt := u.LastSeen.Add(time.Duration(auth.GetUserExpirationDays()) * 24 * time.Hour)
+				expiresAt := u.LastSeen.Add(time.Duration(auth.GetPeerExpirationDays()) * 24 * time.Hour)
 				info.ExpiresAt = expiresAt.Format(time.RFC3339)
 			}
 		}
@@ -1304,8 +1304,8 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 // getRequestOwner extracts the owner identity from the request.
 // It returns the peer name from the TLS client certificate, or looks up the peer
 // by their mesh IP if no certificate is available (browser access from within mesh).
-// Returns the user ID (derived from public key) for RBAC purposes, falling back to peer name
-// if user ID is not available.
+// Returns the peer ID (derived from public key) for RBAC purposes, falling back to peer name
+// if peer ID is not available.
 func (s *Server) getRequestOwner(r *http.Request) string {
 	var peerName string
 
@@ -1331,15 +1331,15 @@ func (s *Server) getRequestOwner(r *http.Request) string {
 		return ""
 	}
 
-	// Look up the user ID for this peer (derived from their public key)
+	// Look up the peer ID for this peer (derived from their public key)
 	s.peersMu.RLock()
 	defer s.peersMu.RUnlock()
 
-	if info, ok := s.peers[peerName]; ok && info.userID != "" {
-		return info.userID
+	if info, ok := s.peers[peerName]; ok && info.peerID != "" {
+		return info.peerID
 	}
 
-	// Fall back to peer name if user ID not available
+	// Fall back to peer name if peer ID not available
 	return peerName
 }
 
@@ -1366,19 +1366,19 @@ func (s *Server) getPeerByRemoteAddr(remoteAddr string) string {
 
 // --- Role Binding API Handlers ---
 
-// RoleBindingRequest is the request body for creating a user role binding.
+// RoleBindingRequest is the request body for creating a peer role binding.
 type RoleBindingRequest struct {
-	UserID       string `json:"user_id"`
+	PeerID       string `json:"peer_id"`
 	RoleName     string `json:"role_name"`
 	BucketScope  string `json:"bucket_scope,omitempty"`
 	ObjectPrefix string `json:"object_prefix,omitempty"`
 }
 
-// handleBindings handles GET (list) and POST (create) for user role bindings.
-// BindingInfo represents a role binding (user or group) for the UI.
+// handleBindings handles GET (list) and POST (create) for peer role bindings.
+// BindingInfo represents a role binding (peer or group) for the UI.
 type BindingInfo struct {
 	Name         string    `json:"name"`
-	UserID       string    `json:"user_id,omitempty"`
+	PeerID       string    `json:"peer_id,omitempty"`
 	GroupName    string    `json:"group_name,omitempty"`
 	RoleName     string    `json:"role_name"`
 	BucketScope  string    `json:"bucket_scope,omitempty"`
@@ -1395,15 +1395,15 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		// Collect both user and group bindings into a unified format
+		// Collect both peer and group bindings into a unified format
 		var result []BindingInfo
 
-		// Add user bindings
+		// Add peer bindings
 		for _, b := range s.s3Authorizer.Bindings.List() {
 			protected := s.fileShareMgr != nil && s.fileShareMgr.IsProtectedBinding(b)
 			result = append(result, BindingInfo{
 				Name:         b.Name,
-				UserID:       b.UserID,
+				PeerID:       b.PeerID,
 				RoleName:     b.RoleName,
 				BucketScope:  b.BucketScope,
 				ObjectPrefix: b.ObjectPrefix,
@@ -1435,8 +1435,8 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 			s.jsonError(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		if req.UserID == "" {
-			s.jsonError(w, "user_id is required", http.StatusBadRequest)
+		if req.PeerID == "" {
+			s.jsonError(w, "peer_id is required", http.StatusBadRequest)
 			return
 		}
 		if req.RoleName == "" {
@@ -1444,7 +1444,7 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		binding := auth.NewRoleBindingWithPrefix(req.UserID, req.RoleName, req.BucketScope, req.ObjectPrefix)
+		binding := auth.NewRoleBindingWithPrefix(req.PeerID, req.RoleName, req.BucketScope, req.ObjectPrefix)
 		s.s3Authorizer.Bindings.Add(binding)
 
 		// Persist
@@ -2104,15 +2104,15 @@ func (s *Server) handleS3RestoreVersion(w http.ResponseWriter, r *http.Request, 
 
 // --- Panel Management API ---
 
-// UserPermissions is the response for the user permissions endpoint.
-type UserPermissions struct {
-	UserID  string   `json:"user_id"`
+// PeerPermissions is the response for the peer permissions endpoint.
+type PeerPermissions struct {
+	PeerID  string   `json:"peer_id"`
 	IsAdmin bool     `json:"is_admin"`
 	Panels  []string `json:"panels"`
 }
 
-// handleUserPermissions returns the current user's accessible panels.
-func (s *Server) handleUserPermissions(w http.ResponseWriter, r *http.Request) {
+// handlePeerPermissions returns the current peer's accessible panels.
+func (s *Server) handlePeerPermissions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -2123,17 +2123,17 @@ func (s *Server) handleUserPermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := s.getRequestOwner(r)
-	if userID == "" {
-		userID = "guest"
+	peerID := s.getRequestOwner(r)
+	if peerID == "" {
+		peerID = "guest"
 	}
 
-	isAdmin := s.s3Authorizer.IsAdmin(userID)
-	panels := s.s3Authorizer.GetAccessiblePanels(userID)
+	isAdmin := s.s3Authorizer.IsAdmin(peerID)
+	panels := s.s3Authorizer.GetAccessiblePanels(peerID)
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(UserPermissions{
-		UserID:  userID,
+	_ = json.NewEncoder(w).Encode(PeerPermissions{
+		PeerID:  peerID,
 		IsAdmin: isAdmin,
 		Panels:  panels,
 	})
@@ -2228,8 +2228,8 @@ func (s *Server) handlePanelRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := s.getRequestOwner(r)
-	if !s.s3Authorizer.IsAdmin(userID) {
+	peerID := s.getRequestOwner(r)
+	if !s.s3Authorizer.IsAdmin(peerID) {
 		s.jsonError(w, "admin access required", http.StatusForbidden)
 		return
 	}
@@ -2242,7 +2242,7 @@ func (s *Server) handlePanelRegister(w http.ResponseWriter, r *http.Request) {
 
 	// Force external flag for API-registered panels
 	panel.External = true
-	panel.CreatedBy = userID
+	panel.CreatedBy = peerID
 
 	// Validate PluginURL for external panels (security: prevent javascript:, file://, etc.)
 	if panel.PluginURL != "" {
@@ -2319,8 +2319,8 @@ func (s *Server) handlePanelUpdate(w http.ResponseWriter, r *http.Request, panel
 		return
 	}
 
-	userID := s.getRequestOwner(r)
-	if !s.s3Authorizer.IsAdmin(userID) {
+	peerID := s.getRequestOwner(r)
+	if !s.s3Authorizer.IsAdmin(peerID) {
 		s.jsonError(w, "admin access required", http.StatusForbidden)
 		return
 	}
@@ -2370,8 +2370,8 @@ func (s *Server) handlePanelDelete(w http.ResponseWriter, r *http.Request, panel
 		return
 	}
 
-	userID := s.getRequestOwner(r)
-	if !s.s3Authorizer.IsAdmin(userID) {
+	peerID := s.getRequestOwner(r)
+	if !s.s3Authorizer.IsAdmin(peerID) {
 		s.jsonError(w, "admin access required", http.StatusForbidden)
 		return
 	}
@@ -2428,7 +2428,7 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 
 	// Check each critical file
 	files := []string{
-		s3.UsersPath,
+		s3.PeersPath,
 		s3.BindingsPath,
 		s3.GroupsPath,
 		s3.GroupBindingsPath,

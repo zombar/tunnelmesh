@@ -121,7 +121,7 @@ func TestGroupStore_RemoveMember(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestGroupStore_GetGroupsForUser(t *testing.T) {
+func TestGroupStore_GetGroupsForPeer(t *testing.T) {
 	store := NewGroupStore()
 
 	_, _ = store.Create("developers", "")
@@ -131,16 +131,16 @@ func TestGroupStore_GetGroupsForUser(t *testing.T) {
 	_ = store.AddMember("testers", "alice")
 	_ = store.AddMember("developers", "bob")
 
-	aliceGroups := store.GetGroupsForUser("alice")
+	aliceGroups := store.GetGroupsForPeer("alice")
 	assert.Len(t, aliceGroups, 2)
 	assert.Contains(t, aliceGroups, "developers")
 	assert.Contains(t, aliceGroups, "testers")
 
-	bobGroups := store.GetGroupsForUser("bob")
+	bobGroups := store.GetGroupsForPeer("bob")
 	assert.Len(t, bobGroups, 1)
 	assert.Contains(t, bobGroups, "developers")
 
-	charlieGroups := store.GetGroupsForUser("charlie")
+	charlieGroups := store.GetGroupsForPeer("charlie")
 	assert.Empty(t, charlieGroups)
 }
 
@@ -162,11 +162,7 @@ func TestGroupStore_BuiltinGroups(t *testing.T) {
 	everyone := store.Get(GroupEveryone)
 	require.NotNil(t, everyone)
 	assert.True(t, everyone.Builtin)
-	assert.Equal(t, "All registered users", everyone.Description)
-
-	allService := store.Get(GroupAllServiceUsers)
-	require.NotNil(t, allService)
-	assert.True(t, allService.Builtin)
+	assert.Equal(t, "All registered peers", everyone.Description)
 
 	allAdmin := store.Get(GroupAllAdminUsers)
 	require.NotNil(t, allAdmin)
@@ -178,13 +174,13 @@ func TestGroupStore_List(t *testing.T) {
 
 	// Should include built-in groups
 	groups := store.List()
-	assert.GreaterOrEqual(t, len(groups), 3) // everyone, all_service_users, all_admin_users
+	assert.GreaterOrEqual(t, len(groups), 2) // everyone, all_admin_users
 
 	_, _ = store.Create("developers", "")
 	_, _ = store.Create("testers", "")
 
 	groups = store.List()
-	assert.GreaterOrEqual(t, len(groups), 5)
+	assert.GreaterOrEqual(t, len(groups), 4) // everyone, all_admin_users, developers, testers
 }
 
 func TestGroupStore_LoadGroups(t *testing.T) {
@@ -215,7 +211,7 @@ func TestGroupStore_LoadGroups(t *testing.T) {
 	assert.Contains(t, everyone.Members, "bob")
 }
 
-func TestGroupStore_RemoveUserFromAllGroups(t *testing.T) {
+func TestGroupStore_RemovePeerFromAllGroups(t *testing.T) {
 	store := NewGroupStore()
 
 	_, _ = store.Create("developers", "")
@@ -226,9 +222,9 @@ func TestGroupStore_RemoveUserFromAllGroups(t *testing.T) {
 	_ = store.AddMember(GroupEveryone, "alice")
 
 	// Remove alice from all groups
-	store.RemoveUserFromAllGroups("alice")
+	store.RemovePeerFromAllGroups("alice")
 
-	assert.Empty(t, store.GetGroupsForUser("alice"))
+	assert.Empty(t, store.GetGroupsForPeer("alice"))
 	assert.False(t, store.IsMember("developers", "alice"))
 	assert.False(t, store.IsMember("testers", "alice"))
 	assert.False(t, store.IsMember(GroupEveryone, "alice"))

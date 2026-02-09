@@ -989,11 +989,11 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate user registration by directly adding to stores
-	testUserID := "testuser123"
+	testPeerID := "testuser123"
 	testPubKey := "dGVzdHB1YmxpY2tleQ==" // base64 "testpublickey"
 
 	// Register user credentials
-	accessKey, secretKey, err := srv1.s3Credentials.RegisterUser(testUserID, testPubKey)
+	accessKey, secretKey, err := srv1.s3Credentials.RegisterUser(testPeerID, testPubKey)
 	require.NoError(t, err)
 	require.NotEmpty(t, accessKey)
 	require.NotEmpty(t, secretKey)
@@ -1001,42 +1001,42 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 	// Add role binding
 	srv1.s3Authorizer.Bindings.Add(&auth.RoleBinding{
 		Name:     "test-binding",
-		UserID:   testUserID,
+		PeerID:   testPeerID,
 		RoleName: auth.RoleBucketRead,
 	})
 
 	// Persist to system store
-	users := []*auth.User{{ID: testUserID, PublicKey: testPubKey, Name: "Test User"}}
-	err = srv1.s3SystemStore.SaveUsers(users)
+	users := []*auth.Peer{{ID: testPeerID, PublicKey: testPubKey, Name: "Test User"}}
+	err = srv1.s3SystemStore.SavePeers(users)
 	require.NoError(t, err)
 
 	bindings := srv1.s3Authorizer.Bindings.List()
-	// Filter out service user binding for persistence
-	var userBindings []*auth.RoleBinding
+	// Filter out service peer binding for persistence
+	var peerBindings []*auth.RoleBinding
 	for _, b := range bindings {
-		if b.UserID == testUserID {
-			userBindings = append(userBindings, b)
+		if b.PeerID == testPeerID {
+			peerBindings = append(peerBindings, b)
 		}
 	}
-	err = srv1.s3SystemStore.SaveBindings(userBindings)
+	err = srv1.s3SystemStore.SaveBindings(peerBindings)
 	require.NoError(t, err)
 
 	// Create second server instance (simulating restart)
 	srv2, err := NewServer(cfg)
 	require.NoError(t, err)
 
-	// Verify user credentials were recovered
-	recoveredUserID, ok := srv2.s3Credentials.LookupUser(accessKey)
-	assert.True(t, ok, "user should be recovered after restart")
-	assert.Equal(t, testUserID, recoveredUserID)
+	// Verify peer credentials were recovered
+	recoveredPeerID, ok := srv2.s3Credentials.LookupUser(accessKey)
+	assert.True(t, ok, "peer should be recovered after restart")
+	assert.Equal(t, testPeerID, recoveredPeerID)
 
-	recoveredSecret, ok := srv2.s3Credentials.GetSecret(testUserID)
-	assert.True(t, ok, "user secret should be recovered after restart")
+	recoveredSecret, ok := srv2.s3Credentials.GetSecret(testPeerID)
+	assert.True(t, ok, "peer secret should be recovered after restart")
 	assert.Equal(t, secretKey, recoveredSecret)
 
 	// Verify role bindings were recovered
-	canRead := srv2.s3Authorizer.Authorize(testUserID, "get", "objects", "test-bucket", "")
-	assert.True(t, canRead, "user should have read permission after restart")
+	canRead := srv2.s3Authorizer.Authorize(testPeerID, "get", "objects", "test-bucket", "")
+	assert.True(t, canRead, "peer should have read permission after restart")
 }
 
 func newTestServerWithS3(t *testing.T) *Server {
@@ -1086,7 +1086,7 @@ func TestServer_BindingsAPI_CreateBinding(t *testing.T) {
 
 	// Create a new binding
 	reqBody := RoleBindingRequest{
-		UserID:       "alice",
+		PeerID:       "alice",
 		RoleName:     auth.RoleBucketRead,
 		BucketScope:  "test-bucket",
 		ObjectPrefix: "data/",
@@ -1105,7 +1105,7 @@ func TestServer_BindingsAPI_CreateBinding(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &created)
 	require.NoError(t, err)
 
-	assert.Equal(t, "alice", created.UserID)
+	assert.Equal(t, "alice", created.PeerID)
 	assert.Equal(t, auth.RoleBucketRead, created.RoleName)
 	assert.Equal(t, "test-bucket", created.BucketScope)
 	assert.Equal(t, "data/", created.ObjectPrefix)
@@ -1128,7 +1128,7 @@ func TestServer_BindingsAPI_CreateBindingValidation(t *testing.T) {
 		},
 		{
 			name:     "missing role_name",
-			req:      RoleBindingRequest{UserID: "alice"},
+			req:      RoleBindingRequest{PeerID: "alice"},
 			wantCode: http.StatusBadRequest,
 		},
 	}
@@ -1168,7 +1168,7 @@ func TestServer_BindingsAPI_GetBinding(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, binding.Name, got.Name)
-	assert.Equal(t, "bob", got.UserID)
+	assert.Equal(t, "bob", got.PeerID)
 	assert.Equal(t, auth.RoleBucketWrite, got.RoleName)
 }
 

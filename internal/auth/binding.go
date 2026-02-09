@@ -8,10 +8,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// RoleBinding binds a user to a role with optional bucket, object prefix, or panel scope.
+// RoleBinding binds a peer to a role with optional bucket, object prefix, or panel scope.
 type RoleBinding struct {
 	Name         string    `json:"name"`                    // Unique binding name
-	UserID       string    `json:"user_id"`                 // User being granted access
+	PeerID       string    `json:"peer_id"`                 // Peer being granted access
 	RoleName     string    `json:"role_name"`               // Role being granted
 	BucketScope  string    `json:"bucket_scope,omitempty"`  // Optional: scope to specific bucket
 	ObjectPrefix string    `json:"object_prefix,omitempty"` // Optional: scope to object key prefix
@@ -20,15 +20,15 @@ type RoleBinding struct {
 }
 
 // NewRoleBinding creates a new role binding.
-func NewRoleBinding(userID, roleName, bucketScope string) *RoleBinding {
-	return NewRoleBindingWithPrefix(userID, roleName, bucketScope, "")
+func NewRoleBinding(peerID, roleName, bucketScope string) *RoleBinding {
+	return NewRoleBindingWithPrefix(peerID, roleName, bucketScope, "")
 }
 
 // NewRoleBindingWithPrefix creates a new role binding with object prefix.
-func NewRoleBindingWithPrefix(userID, roleName, bucketScope, objectPrefix string) *RoleBinding {
+func NewRoleBindingWithPrefix(peerID, roleName, bucketScope, objectPrefix string) *RoleBinding {
 	return &RoleBinding{
 		Name:         uuid.New().String()[:8],
-		UserID:       userID,
+		PeerID:       peerID,
 		RoleName:     roleName,
 		BucketScope:  bucketScope,
 		ObjectPrefix: objectPrefix,
@@ -37,10 +37,10 @@ func NewRoleBindingWithPrefix(userID, roleName, bucketScope, objectPrefix string
 }
 
 // NewRoleBindingForPanel creates a new role binding for panel access.
-func NewRoleBindingForPanel(userID, panelID string) *RoleBinding {
+func NewRoleBindingForPanel(peerID, panelID string) *RoleBinding {
 	return &RoleBinding{
 		Name:       uuid.New().String()[:8],
-		UserID:     userID,
+		PeerID:     peerID,
 		RoleName:   RolePanelViewer,
 		PanelScope: panelID,
 		CreatedAt:  time.Now().UTC(),
@@ -113,14 +113,14 @@ func (bs *BindingStore) Get(name string) *RoleBinding {
 	return bs.bindings[name]
 }
 
-// GetForUser returns all bindings for a user.
-func (bs *BindingStore) GetForUser(userID string) []*RoleBinding {
+// GetForPeer returns all bindings for a peer.
+func (bs *BindingStore) GetForPeer(peerID string) []*RoleBinding {
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
 
 	var result []*RoleBinding
 	for _, b := range bs.bindings {
-		if b.UserID == userID {
+		if b.PeerID == peerID {
 			result = append(result, b)
 		}
 	}

@@ -63,13 +63,13 @@ const state = {
     peersVisibleCount: ROWS_PER_PAGE,
     dnsVisibleCount: ROWS_PER_PAGE,
     wgVisibleCount: ROWS_PER_PAGE,
-    usersVisibleCount: ROWS_PER_PAGE,
+    peersMgmtVisibleCount: ROWS_PER_PAGE,
     groupsVisibleCount: ROWS_PER_PAGE,
     sharesVisibleCount: ROWS_PER_PAGE,
     bindingsVisibleCount: ROWS_PER_PAGE,
     currentPeers: [], // Store current peers data for pagination
     currentDnsRecords: [], // Store current DNS records for pagination
-    currentUsers: [],
+    currentPeersMgmt: [],
     currentGroups: [],
     currentShares: [],
     currentBindings: [],
@@ -413,14 +413,14 @@ const wgPagination = createPaginationController({
     onRender: () => updateWGClientsTable(),
 });
 
-const usersPagination = createPaginationController({
+const peersMgmtPagination = createPaginationController({
     pageSize: ROWS_PER_PAGE,
-    getItems: () => state.currentUsers,
-    getVisibleCount: () => state.usersVisibleCount,
+    getItems: () => state.currentPeersMgmt,
+    getVisibleCount: () => state.peersMgmtVisibleCount,
     setVisibleCount: (n) => {
-        state.usersVisibleCount = n;
+        state.peersMgmtVisibleCount = n;
     },
-    onRender: () => renderUsersTable(),
+    onRender: () => renderPeersMgmtTable(),
 });
 
 const groupsPagination = createPaginationController({
@@ -479,8 +479,8 @@ window.showMoreDns = () => dnsPagination.showMore();
 window.showLessDns = () => dnsPagination.showLess();
 window.showMoreWg = () => wgPagination.showMore();
 window.showLessWg = () => wgPagination.showLess();
-window.showMoreUsers = () => usersPagination.showMore();
-window.showLessUsers = () => usersPagination.showLess();
+window.showMorePeersMgmt = () => peersMgmtPagination.showMore();
+window.showLessPeersMgmt = () => peersMgmtPagination.showLess();
 window.showMoreGroups = () => groupsPagination.showMore();
 window.showLessGroups = () => groupsPagination.showLess();
 window.showMoreShares = () => sharesPagination.showMore();
@@ -2108,7 +2108,7 @@ function registerBuiltinPanels() {
             hasActionButton: true,
             sortOrder: 20,
         },
-        { id: 'users', sectionId: 'users-section', tab: 'data', title: 'Users', category: 'admin', sortOrder: 30 },
+        { id: 'peer-mgmt', sectionId: 'peers-mgmt-section', tab: 'data', title: 'Peers', category: 'admin', sortOrder: 30 },
         {
             id: 'groups',
             sectionId: 'groups-section',
@@ -2200,8 +2200,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Check if Loki is available for logs
     checkLokiAvailable();
 
-    // Load user management (users, groups, shares)
-    checkUserManagement();
+    // Load peer management (peers, groups, shares)
+    checkPeerManagement();
 
     // Add client button handler
     if (dom.addWgClientBtn) {
@@ -2313,74 +2313,73 @@ function initPanelResize(handle, container) {
 
 // --- Users, Groups, and Shares Management ---
 
-// Check if S3/user management is enabled and show sections
-async function checkUserManagement() {
+// Check if S3/peer management is enabled and show sections
+async function checkPeerManagement() {
     try {
         const resp = await fetch('api/users');
         if (resp.ok) {
-            document.getElementById('users-section').style.display = 'block';
+            document.getElementById('peers-mgmt-section').style.display = 'block';
             document.getElementById('groups-section').style.display = 'block';
             document.getElementById('shares-section').style.display = 'block';
-            const users = await resp.json();
-            updateUsersTable(users);
+            const peers = await resp.json();
+            updatePeersMgmtTable(peers);
             fetchGroups();
             fetchShares();
         }
     } catch (_err) {
-        // User management not enabled
+        // Peer management not enabled
     }
 }
 
-async function fetchUsers() {
+async function fetchPeersMgmt() {
     try {
         const resp = await fetch('api/users');
         if (resp.ok) {
-            const users = await resp.json();
-            state.currentUsers = users || [];
-            renderUsersTable();
+            const peers = await resp.json();
+            state.currentPeersMgmt = peers || [];
+            renderPeersMgmtTable();
         }
     } catch (err) {
-        console.error('Failed to fetch users:', err);
+        console.error('Failed to fetch peers:', err);
     }
 }
 
-function renderUsersTable() {
-    const tbody = document.getElementById('users-body');
-    const noUsers = document.getElementById('no-users');
-    const users = state.currentUsers;
+function renderPeersMgmtTable() {
+    const tbody = document.getElementById('peers-mgmt-body');
+    const noPeers = document.getElementById('no-peers-mgmt');
+    const peers = state.currentPeersMgmt;
 
-    if (!users || users.length === 0) {
+    if (!peers || peers.length === 0) {
         tbody.innerHTML = '';
-        noUsers.style.display = 'block';
-        document.getElementById('users-pagination').style.display = 'none';
+        noPeers.style.display = 'block';
+        document.getElementById('peers-mgmt-pagination').style.display = 'none';
         return;
     }
 
-    noUsers.style.display = 'none';
-    const visibleUsers = usersPagination.getVisibleItems();
-    tbody.innerHTML = visibleUsers
+    noPeers.style.display = 'none';
+    const visiblePeers = peersMgmtPagination.getVisibleItems();
+    tbody.innerHTML = visiblePeers
         .map(
-            (u) => `
+            (p) => `
         <tr>
-            <td>${escapeHtml(u.name || '-')}</td>
-            <td><code>${escapeHtml(u.id)}</code></td>
-            <td><span class="status-badge ${u.is_service ? 'service' : 'user'}">${u.is_service ? 'Service' : 'User'}</span></td>
-            <td>${u.groups && u.groups.length > 0 ? u.groups.map((g) => escapeHtml(g)).join(', ') : '-'}</td>
-            <td>${u.last_seen ? formatLastSeen(u.last_seen) : '-'}</td>
-            <td>${u.is_service ? 'Never' : u.expires_at ? formatExpiry(u.expires_at) : '-'}</td>
-            <td><span class="status-badge ${u.expired ? 'expired' : 'active'}">${u.expired ? 'Expired' : 'Active'}</span></td>
+            <td>${escapeHtml(p.name || '-')}</td>
+            <td><span class="status-badge ${p.is_service ? 'service' : 'user'}">${p.is_service ? 'Service' : 'Peer'}</span></td>
+            <td>${p.groups && p.groups.length > 0 ? p.groups.map((g) => escapeHtml(g)).join(', ') : '-'}</td>
+            <td>${p.last_seen ? formatLastSeen(p.last_seen) : '-'}</td>
+            <td>${p.is_service ? 'Never' : p.expires_at ? formatExpiry(p.expires_at) : '-'}</td>
+            <td><span class="status-badge ${p.expired ? 'expired' : 'active'}">${p.expired ? 'Expired' : 'Active'}</span></td>
         </tr>
     `,
         )
         .join('');
 
-    updateSectionPagination('users', usersPagination);
+    updateSectionPagination('peers-mgmt', peersMgmtPagination);
 }
 
 // Alias for backward compat
-function updateUsersTable(users) {
-    state.currentUsers = users || [];
-    renderUsersTable();
+function updatePeersMgmtTable(peers) {
+    state.currentPeersMgmt = peers || [];
+    renderPeersMgmtTable();
 }
 
 async function fetchGroups() {
@@ -2667,7 +2666,7 @@ function switchTab(tabName) {
             }
         });
     } else if (tabName === 'data') {
-        fetchUsers();
+        fetchPeersMgmt();
         fetchGroups();
         fetchShares();
         fetchBindings();
@@ -2747,28 +2746,28 @@ function openBindingModal() {
     document.getElementById('binding-bucket').value = '';
     document.getElementById('binding-prefix').value = '';
 
-    // Populate user dropdown
-    populateBindingUsers();
+    // Populate peer dropdown
+    populateBindingPeers();
 }
 window.openBindingModal = openBindingModal;
 
-async function populateBindingUsers() {
-    const select = document.getElementById('binding-user');
-    select.innerHTML = '<option value="">Select a user...</option>';
+async function populateBindingPeers() {
+    const select = document.getElementById('binding-peer');
+    select.innerHTML = '<option value="">Select a peer...</option>';
 
     try {
         const resp = await fetch('api/users');
         if (resp.ok) {
-            const users = await resp.json();
-            users.forEach((u) => {
+            const peers = await resp.json();
+            peers.forEach((p) => {
                 const opt = document.createElement('option');
-                opt.value = u.id;
-                opt.textContent = u.name || u.id;
+                opt.value = p.id;
+                opt.textContent = p.name || p.id;
                 select.appendChild(opt);
             });
         }
     } catch (err) {
-        console.error('Failed to fetch users for binding:', err);
+        console.error('Failed to fetch peers for binding:', err);
     }
 }
 
@@ -2778,13 +2777,13 @@ function closeBindingModal() {
 window.closeBindingModal = closeBindingModal;
 
 async function createBinding() {
-    const userId = document.getElementById('binding-user').value;
+    const peerId = document.getElementById('binding-peer').value;
     const roleName = document.getElementById('binding-role').value;
     const bucketScope = document.getElementById('binding-bucket').value.trim();
     const objectPrefix = document.getElementById('binding-prefix').value.trim();
 
-    if (!userId) {
-        showToast('User is required', 'error');
+    if (!peerId) {
+        showToast('Peer is required', 'error');
         return;
     }
 
@@ -2793,7 +2792,7 @@ async function createBinding() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                user_id: userId,
+                user_id: peerId,
                 role_name: roleName,
                 bucket_scope: bucketScope,
                 object_prefix: objectPrefix,

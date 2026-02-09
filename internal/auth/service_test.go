@@ -45,29 +45,29 @@ func TestDeriveServiceKeypairDifferentServices(t *testing.T) {
 	assert.NotEqual(t, pub1, pub2, "different services should have different keys")
 }
 
-func TestNewServiceUser(t *testing.T) {
+func TestNewServicePeer(t *testing.T) {
 	caPrivKey := make([]byte, ed25519.SeedSize)
 	for i := range caPrivKey {
 		caPrivKey[i] = byte(i)
 	}
 
-	user, err := NewServiceUser(caPrivKey, "coordinator")
+	peer, err := NewServicePeer(caPrivKey, "coordinator")
 	require.NoError(t, err)
 
-	assert.Equal(t, "svc:coordinator", user.ID)
-	assert.Equal(t, "Coordinator Service", user.Name)
-	assert.NotEmpty(t, user.PublicKey)
-	assert.True(t, user.IsService())
+	assert.Equal(t, "svc:coordinator", peer.ID)
+	assert.Equal(t, "Coordinator Service", peer.Name)
+	assert.NotEmpty(t, peer.PublicKey)
+	assert.True(t, peer.IsService())
 }
 
-func TestServiceUserID(t *testing.T) {
-	assert.Equal(t, "svc:coordinator", ServiceUserID("coordinator"))
-	assert.Equal(t, "svc:backup-agent", ServiceUserID("backup-agent"))
+func TestServicePeerID(t *testing.T) {
+	assert.Equal(t, "svc:coordinator", ServicePeerID("coordinator"))
+	assert.Equal(t, "svc:backup-agent", ServicePeerID("backup-agent"))
 }
 
-func TestIsServiceUser(t *testing.T) {
-	assert.True(t, IsServiceUser("svc:coordinator"))
-	assert.True(t, IsServiceUser("svc:anything"))
-	assert.False(t, IsServiceUser("alice"))
-	assert.False(t, IsServiceUser("abc123def456"))
+func TestIsServicePeer(t *testing.T) {
+	assert.True(t, IsServicePeer("svc:coordinator"))
+	assert.True(t, IsServicePeer("svc:anything"))
+	assert.False(t, IsServicePeer("alice"))
+	assert.False(t, IsServicePeer("abc123def456"))
 }

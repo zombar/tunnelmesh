@@ -47,7 +47,7 @@ func NewSystemStore(store *Store, serviceUserID string) (*SystemStore, error) {
 
 // Auth paths
 const (
-	UsersPath         = "auth/users.json"
+	PeersPath         = "auth/peers.json"
 	RolesPath         = "auth/roles.json"
 	BindingsPath      = "auth/bindings.json"
 	GroupsPath        = "auth/groups.json"
@@ -93,20 +93,20 @@ type FilterRulesData struct {
 	Temporary []FilterRulePersisted `json:"temporary"`
 }
 
-// --- Users ---
+// --- Peers ---
 
-// SaveUsers saves the user list to S3 with checksum validation.
-func (ss *SystemStore) SaveUsers(users []*auth.User) error {
-	return ss.saveJSONWithChecksum(UsersPath, users)
+// SavePeers saves the peer list to S3 with checksum validation.
+func (ss *SystemStore) SavePeers(peers []*auth.Peer) error {
+	return ss.saveJSONWithChecksum(PeersPath, peers)
 }
 
-// LoadUsers loads the user list from S3 with automatic rollback on corruption.
-func (ss *SystemStore) LoadUsers() ([]*auth.User, error) {
-	var users []*auth.User
-	if err := ss.loadJSONWithChecksum(UsersPath, &users, 3); err != nil {
+// LoadPeers loads the peer list from S3 with automatic rollback on corruption.
+func (ss *SystemStore) LoadPeers() ([]*auth.Peer, error) {
+	var peers []*auth.Peer
+	if err := ss.loadJSONWithChecksum(PeersPath, &peers, 3); err != nil {
 		return nil, err
 	}
-	return users, nil
+	return peers, nil
 }
 
 // --- Roles ---
@@ -196,11 +196,11 @@ func (ss *SystemStore) LoadPanels() ([]*auth.PanelDefinition, error) {
 type FileShare struct {
 	Name        string    `json:"name"`                  // Share name (bucket will be "fs+{name}")
 	Description string    `json:"description"`           // Human-readable description
-	Owner       string    `json:"owner"`                 // UserID of creator
+	Owner       string    `json:"owner"`                 // PeerID of creator
 	CreatedAt   time.Time `json:"created_at"`            //
 	ExpiresAt   time.Time `json:"expires_at,omitempty"`  // When the share expires (0 = never)
 	QuotaBytes  int64     `json:"quota_bytes,omitempty"` // Per-share quota in bytes (0 = unlimited within global quota)
-	GuestRead   bool      `json:"guest_read"`            // Allow all mesh users to read (default: true)
+	GuestRead   bool      `json:"guest_read"`            // Allow all mesh peers to read (default: true)
 }
 
 // IsExpired returns true if the share has expired.

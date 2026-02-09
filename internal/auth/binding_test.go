@@ -14,7 +14,7 @@ func TestNewRoleBinding(t *testing.T) {
 	after := time.Now().UTC()
 
 	assert.NotEmpty(t, binding.Name)
-	assert.Equal(t, "alice", binding.UserID)
+	assert.Equal(t, "alice", binding.PeerID)
 	assert.Equal(t, RoleAdmin, binding.RoleName)
 	assert.Empty(t, binding.BucketScope)
 	assert.False(t, binding.CreatedAt.IsZero(), "CreatedAt should be set")
@@ -27,7 +27,7 @@ func TestNewRoleBindingWithScope(t *testing.T) {
 	binding := NewRoleBinding("bob", RoleBucketRead, "my-bucket")
 	after := time.Now().UTC()
 
-	assert.Equal(t, "bob", binding.UserID)
+	assert.Equal(t, "bob", binding.PeerID)
 	assert.Equal(t, RoleBucketRead, binding.RoleName)
 	assert.Equal(t, "my-bucket", binding.BucketScope)
 	assert.False(t, binding.CreatedAt.IsZero(), "CreatedAt should be set")
@@ -127,13 +127,13 @@ func TestBindingStore(t *testing.T) {
 	binding := NewRoleBinding("alice", RoleAdmin, "")
 	store.Add(binding)
 
-	// Get bindings for user
-	bindings := store.GetForUser("alice")
+	// Get bindings for peer
+	bindings := store.GetForPeer("alice")
 	require.Len(t, bindings, 1)
 	assert.Equal(t, RoleAdmin, bindings[0].RoleName)
 
-	// Get bindings for different user
-	bindings = store.GetForUser("bob")
+	// Get bindings for different peer
+	bindings = store.GetForPeer("bob")
 	assert.Empty(t, bindings)
 }
 
@@ -146,7 +146,7 @@ func TestBindingStoreRemove(t *testing.T) {
 	// Remove by name
 	store.Remove(binding.Name)
 
-	bindings := store.GetForUser("alice")
+	bindings := store.GetForPeer("alice")
 	assert.Empty(t, bindings)
 }
 

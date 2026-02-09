@@ -34,29 +34,29 @@ func DeriveServiceKeypair(caPrivateKey []byte, serviceName string) (ed25519.Publ
 	return publicKey, privateKey, nil
 }
 
-// NewServiceUser creates a User for a service.
-func NewServiceUser(caPrivateKey []byte, serviceName string) (*User, error) {
+// NewServicePeer creates a Peer for a service.
+func NewServicePeer(caPrivateKey []byte, serviceName string) (*Peer, error) {
 	pubKey, _, err := DeriveServiceKeypair(caPrivateKey, serviceName)
 	if err != nil {
 		return nil, err
 	}
 
-	return &User{
-		ID:        ServiceUserID(serviceName),
+	return &Peer{
+		ID:        ServicePeerID(serviceName),
 		PublicKey: base64.StdEncoding.EncodeToString(pubKey),
 		Name:      serviceDisplayName(serviceName),
 		CreatedAt: time.Now().UTC(),
 	}, nil
 }
 
-// ServiceUserID returns the user ID for a service.
-func ServiceUserID(serviceName string) string {
-	return ServiceUserPrefix + serviceName
+// ServicePeerID returns the peer ID for a service.
+func ServicePeerID(serviceName string) string {
+	return ServicePeerPrefix + serviceName
 }
 
-// IsServiceUser checks if a user ID belongs to a service user.
-func IsServiceUser(userID string) bool {
-	return strings.HasPrefix(userID, ServiceUserPrefix)
+// IsServicePeer checks if a peer ID belongs to a service peer.
+func IsServicePeer(peerID string) bool {
+	return strings.HasPrefix(peerID, ServicePeerPrefix)
 }
 
 // serviceDisplayName returns a human-readable name for a service.

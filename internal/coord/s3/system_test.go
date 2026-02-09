@@ -37,33 +37,33 @@ func TestNewSystemStoreExistingBucket(t *testing.T) {
 	assert.NotNil(t, ss)
 }
 
-func TestSystemStoreSaveLoadUsers(t *testing.T) {
+func TestSystemStoreSaveLoadPeers(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
-	users := []*auth.User{
+	peers := []*auth.Peer{
 		{ID: "alice", Name: "Alice", PublicKey: "pk1", CreatedAt: time.Now().UTC()},
 		{ID: "bob", Name: "Bob", PublicKey: "pk2", CreatedAt: time.Now().UTC()},
 	}
 
-	err = ss.SaveUsers(users)
+	err = ss.SavePeers(peers)
 	require.NoError(t, err)
 
-	loaded, err := ss.LoadUsers()
+	loaded, err := ss.LoadPeers()
 	require.NoError(t, err)
 	require.Len(t, loaded, 2)
 	assert.Equal(t, "alice", loaded[0].ID)
 	assert.Equal(t, "bob", loaded[1].ID)
 }
 
-func TestSystemStoreLoadUsersNotFound(t *testing.T) {
+func TestSystemStoreLoadPeersNotFound(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
 	// Should return nil (not error) when not found
-	loaded, err := ss.LoadUsers()
+	loaded, err := ss.LoadPeers()
 	require.NoError(t, err)
 	assert.Nil(t, loaded)
 }
@@ -92,8 +92,8 @@ func TestSystemStoreSaveLoadBindings(t *testing.T) {
 	require.NoError(t, err)
 
 	bindings := []*auth.RoleBinding{
-		{Name: "b1", UserID: "alice", RoleName: "admin"},
-		{Name: "b2", UserID: "bob", RoleName: "bucket-read", BucketScope: "my-bucket"},
+		{Name: "b1", PeerID: "alice", RoleName: "admin"},
+		{Name: "b2", PeerID: "bob", RoleName: "bucket-read", BucketScope: "my-bucket"},
 	}
 
 	err = ss.SaveBindings(bindings)
@@ -102,8 +102,8 @@ func TestSystemStoreSaveLoadBindings(t *testing.T) {
 	loaded, err := ss.LoadBindings()
 	require.NoError(t, err)
 	require.Len(t, loaded, 2)
-	assert.Equal(t, "alice", loaded[0].UserID)
-	assert.Equal(t, "bob", loaded[1].UserID)
+	assert.Equal(t, "alice", loaded[0].PeerID)
+	assert.Equal(t, "bob", loaded[1].PeerID)
 	assert.Equal(t, "my-bucket", loaded[1].BucketScope)
 }
 
@@ -155,14 +155,14 @@ func TestSystemStoreExists(t *testing.T) {
 	require.NoError(t, err)
 
 	// Initially doesn't exist
-	assert.False(t, ss.Exists(UsersPath))
+	assert.False(t, ss.Exists(PeersPath))
 
 	// Save users
-	err = ss.SaveUsers([]*auth.User{{ID: "test", Name: "Test"}})
+	err = ss.SavePeers([]*auth.Peer{{ID: "test", Name: "Test"}})
 	require.NoError(t, err)
 
 	// Now exists
-	assert.True(t, ss.Exists(UsersPath))
+	assert.True(t, ss.Exists(PeersPath))
 }
 
 func TestSystemStoreDelete(t *testing.T) {
@@ -171,13 +171,13 @@ func TestSystemStoreDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Save and then delete
-	err = ss.SaveUsers([]*auth.User{{ID: "test", Name: "Test"}})
+	err = ss.SavePeers([]*auth.Peer{{ID: "test", Name: "Test"}})
 	require.NoError(t, err)
-	assert.True(t, ss.Exists(UsersPath))
+	assert.True(t, ss.Exists(PeersPath))
 
-	err = ss.Delete(UsersPath)
+	err = ss.Delete(PeersPath)
 	require.NoError(t, err)
-	assert.False(t, ss.Exists(UsersPath))
+	assert.False(t, ss.Exists(PeersPath))
 }
 
 func TestSystemStoreDeleteNotFound(t *testing.T) {

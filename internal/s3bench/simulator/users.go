@@ -230,7 +230,7 @@ func (um *UserManager) RevokePermission(characterID, fileShareName string) error
 	// Find and remove all bindings for this user on this bucket
 	removed := false
 	for _, binding := range um.authorizer.Bindings.List() {
-		if binding.UserID == characterID && binding.BucketScope == bucketName {
+		if binding.PeerID == characterID && binding.BucketScope == bucketName {
 			um.authorizer.Bindings.Remove(binding.Name)
 			removed = true
 		}

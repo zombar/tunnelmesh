@@ -449,16 +449,15 @@
             </div>
         </section>
 
-        <section id="users-section">
+        <section id="peers-mgmt-section">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
-                <h2>Users</h2>
+                <h2>Peers</h2>
             </div>
             <div class="collapsible-content">
-                <table id="users">
+                <table id="peers-mgmt">
                     <thead>
                         <tr>
                             <th>Name</th>
-                            <th>ID</th>
                             <th>Type</th>
                             <th>Groups</th>
                             <th>Last Seen</th>
@@ -466,13 +465,13 @@
                             <th>Status</th>
                         </tr>
                     </thead>
-                    <tbody id="users-body"></tbody>
+                    <tbody id="peers-mgmt-body"></tbody>
                 </table>
-                <div id="no-users" class="empty-state" style="display: none;">
-                    No users registered yet.
+                <div id="no-peers-mgmt" class="empty-state" style="display: none;">
+                    No peers registered yet.
                 </div>
-                <div id="users-pagination" class="show-more-container" style="display: none;">
-                    <span id="users-show-more"><button class="show-more-link" onclick="showMoreUsers()">show more (<span id="users-shown-count">0</span> / <span id="users-total-count">0</span>)</button></span><span id="users-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessUsers()">show less</button></span>
+                <div id="peers-mgmt-pagination" class="show-more-container" style="display: none;">
+                    <span id="peers-mgmt-show-more"><button class="show-more-link" onclick="showMorePeersMgmt()">show more (<span id="peers-mgmt-shown-count">0</span> / <span id="peers-mgmt-total-count">0</span>)</button></span><span id="peers-mgmt-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessPeersMgmt()">show less</button></span>
                 </div>
             </div>
         </section>
@@ -672,9 +671,9 @@
                 </div>
                 <div class="modal-body">
                     <div class="form-group">
-                        <label for="binding-user">User ID</label>
-                        <select id="binding-user">
-                            <option value="">Select a user...</option>
+                        <label for="binding-peer">Peer ID</label>
+                        <select id="binding-peer">
+                            <option value="">Select a peer...</option>
                         </select>
                     </div>
                     <div class="form-group">

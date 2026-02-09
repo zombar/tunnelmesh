@@ -69,7 +69,7 @@ func TestFileShareManager_Create_SetsPermissions(t *testing.T) {
 	assert.True(t, found, "everyone group should have bucket-read on fs+docs")
 
 	// Verify owner has bucket-admin
-	ownerBindings := authorizer.Bindings.GetForUser("alice")
+	ownerBindings := authorizer.Bindings.GetForPeer("alice")
 	found = false
 	for _, b := range ownerBindings {
 		if b.BucketScope == bucketName && b.RoleName == auth.RoleBucketAdmin {
@@ -109,7 +109,7 @@ func TestFileShareManager_Create_GuestReadDisabled(t *testing.T) {
 	assert.False(t, found, "everyone group should NOT have bucket-read when guest read is disabled")
 
 	// Verify owner still has bucket-admin
-	ownerBindings := authorizer.Bindings.GetForUser("alice")
+	ownerBindings := authorizer.Bindings.GetForPeer("alice")
 	found = false
 	for _, b := range ownerBindings {
 		if b.BucketScope == bucketName && b.RoleName == auth.RoleBucketAdmin {
@@ -252,7 +252,7 @@ func TestFileShareManager_Delete_RemovesPermissions(t *testing.T) {
 
 	// Verify permissions exist
 	assert.NotEmpty(t, authorizer.GroupBindings.GetForGroup(auth.GroupEveryone))
-	assert.NotEmpty(t, authorizer.Bindings.GetForUser("alice"))
+	assert.NotEmpty(t, authorizer.Bindings.GetForPeer("alice"))
 
 	// Delete the share
 	err = mgr.Delete("temp")
@@ -264,7 +264,7 @@ func TestFileShareManager_Delete_RemovesPermissions(t *testing.T) {
 	}
 
 	// Verify user bindings for this bucket are removed
-	for _, b := range authorizer.Bindings.GetForUser("alice") {
+	for _, b := range authorizer.Bindings.GetForPeer("alice") {
 		assert.NotEqual(t, bucketName, b.BucketScope)
 	}
 }
@@ -439,7 +439,7 @@ func TestFileShareManager_IsProtectedBinding(t *testing.T) {
 			name: "owner admin binding is protected",
 			binding: &auth.RoleBinding{
 				Name:        "test1",
-				UserID:      "alice",
+				PeerID:      "alice",
 				RoleName:    auth.RoleBucketAdmin,
 				BucketScope: "fs+docs",
 			},
@@ -449,7 +449,7 @@ func TestFileShareManager_IsProtectedBinding(t *testing.T) {
 			name: "non-owner admin binding is not protected",
 			binding: &auth.RoleBinding{
 				Name:        "test2",
-				UserID:      "bob",
+				PeerID:      "bob",
 				RoleName:    auth.RoleBucketAdmin,
 				BucketScope: "fs+docs",
 			},
@@ -459,7 +459,7 @@ func TestFileShareManager_IsProtectedBinding(t *testing.T) {
 			name: "owner read binding is not protected",
 			binding: &auth.RoleBinding{
 				Name:        "test3",
-				UserID:      "alice",
+				PeerID:      "alice",
 				RoleName:    auth.RoleBucketRead,
 				BucketScope: "fs+docs",
 			},
@@ -469,7 +469,7 @@ func TestFileShareManager_IsProtectedBinding(t *testing.T) {
 			name: "regular bucket admin is not protected",
 			binding: &auth.RoleBinding{
 				Name:        "test4",
-				UserID:      "alice",
+				PeerID:      "alice",
 				RoleName:    auth.RoleBucketAdmin,
 				BucketScope: "regular-bucket",
 			},
@@ -479,7 +479,7 @@ func TestFileShareManager_IsProtectedBinding(t *testing.T) {
 			name: "non-existent share is not protected",
 			binding: &auth.RoleBinding{
 				Name:        "test5",
-				UserID:      "alice",
+				PeerID:      "alice",
 				RoleName:    auth.RoleBucketAdmin,
 				BucketScope: "fs+nonexistent",
 			},
