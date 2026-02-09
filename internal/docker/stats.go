@@ -37,9 +37,11 @@ func (m *Manager) StartPeriodicStatsCollection(ctx context.Context, s3Store *s3.
 		return
 	}
 
-	log.Info().Msg("Starting Docker stats collection (30s interval)")
+	log.Info().
+		Dur("interval", statsCollectionInterval).
+		Msg("Starting Docker stats collection")
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(statsCollectionInterval)
 	defer ticker.Stop()
 
 	// Collect immediately on start

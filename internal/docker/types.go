@@ -47,22 +47,6 @@ type ContainerStats struct {
 	PIDs          uint64    `json:"pids"`           // Number of processes
 }
 
-// PortForwardMapping tracks a Docker container's port forward in the packet filter.
-type PortForwardMapping struct {
-	ContainerID   string    `json:"container_id"`
-	ContainerName string    `json:"container_name"`
-	Port          uint16    `json:"port"`
-	Protocol      string    `json:"protocol"`
-	CreatedAt     time.Time `json:"created_at"`
-	ExpiresAt     time.Time `json:"expires_at"`
-}
-
-// PortForwardStore holds all port forward mappings for persistence.
-type PortForwardStore struct {
-	Version  int                  `json:"version"`
-	Mappings []PortForwardMapping `json:"mappings"`
-}
-
 // ContainerEvent represents a Docker container lifecycle event.
 type ContainerEvent struct {
 	Type        string // "start", "stop", "die", "destroy"

@@ -8,20 +8,37 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	maxConcurrentHandlers   = 10                     // Maximum concurrent event handlers
+	defaultDebounceWindow   = 100 * time.Millisecond // Default debounce window for Docker events
+	cleanupTickerInterval   = 5 * time.Minute        // Interval for debounce map cleanup
+	cleanupMaxAge           = 10 * time.Minute       // Maximum age for debounce map entries
+	containerInspectTimeout = 2 * time.Second        // Timeout for container inspect operations
+	containerStatsTimeout   = 2 * time.Second        // Timeout for container stats operations
+	containerStopTimeout    = 10                     // Container stop/restart timeout in seconds
+	statsCollectionInterval = 30 * time.Second       // Interval for Docker stats collection
+)
+
 // eventWatcher watches Docker events and triggers callbacks.
 type eventWatcher struct {
 	handler        func(ContainerEvent)
 	debounceWindow time.Duration
 	lastEvent      map[string]time.Time // containerID -> last event time
 	mu             sync.Mutex
+	wg             *sync.WaitGroup // For tracking handler goroutines
+	ctx            context.Context // For cancelling handlers
+	semaphore      chan struct{}   // Limit concurrent handlers
 }
 
 // newEventWatcher creates a new event watcher with the given handler.
-func newEventWatcher(handler func(ContainerEvent)) *eventWatcher {
+func newEventWatcher(handler func(ContainerEvent), wg *sync.WaitGroup, ctx context.Context) *eventWatcher {
 	return &eventWatcher{
 		handler:        handler,
-		debounceWindow: 100 * time.Millisecond, // Default debounce window
+		debounceWindow: defaultDebounceWindow,
 		lastEvent:      make(map[string]time.Time),
+		wg:             wg,
+		ctx:            ctx,
+		semaphore:      make(chan struct{}, maxConcurrentHandlers),
 	}
 }
 
@@ -48,8 +65,27 @@ func (w *eventWatcher) handleEvent(event ContainerEvent) {
 
 	w.lastEvent[key] = time.Now()
 
-	// Call handler asynchronously to avoid blocking event loop
-	go w.handler(event)
+	// Call handler asynchronously with concurrency limit
+	w.wg.Add(1)
+	go func(evt ContainerEvent) {
+		defer w.wg.Done()
+
+		// Acquire semaphore slot (blocks if at limit)
+		select {
+		case w.semaphore <- struct{}{}:
+			defer func() { <-w.semaphore }()
+		case <-w.ctx.Done():
+			return
+		}
+
+		// Check context before calling handler
+		select {
+		case <-w.ctx.Done():
+			return
+		default:
+			w.handler(evt)
+		}
+	}(event)
 }
 
 // cleanup removes old entries from the debounce map to prevent unbounded growth.
@@ -109,19 +145,19 @@ func (m *Manager) watchEvents(ctx context.Context) error {
 				Str("type", event.Type).
 				Msg("Container stopped, port forwards will expire via TTL")
 		}
-	})
+	}, &m.wg, m.ctx)
 
 	// Start periodic cleanup of debounce map to prevent memory growth
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		ticker := time.NewTicker(5 * time.Minute)
+		ticker := time.NewTicker(cleanupTickerInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				// Clean up entries older than 10 minutes
-				watcher.cleanup(10 * time.Minute)
+				// Clean up old debounce entries
+				watcher.cleanup(cleanupMaxAge)
 			case <-ctx.Done():
 				return
 			}

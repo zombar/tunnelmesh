@@ -42,14 +42,10 @@ func (m *Manager) syncPortForwards(ctx context.Context, containerID string) erro
 		return nil
 	}
 
-	// Use container lifetime + 1 day buffer for TTL
-	// This ensures rules persist for the container's lifetime
-	ttl := 24 * time.Hour
-	if container.UptimeSeconds > 0 {
-		// If container has been running, extend TTL to cover expected lifetime
-		ttl = 24 * time.Hour
-	}
-	expiresAt := time.Now().Add(ttl)
+	// Set TTL for filter rules to 24 hours
+	// Rules will be recreated on container restart via event watcher
+	const filterRuleTTL = 24 * time.Hour
+	expiresAt := time.Now().Add(filterRuleTTL)
 
 	// Create filter rules for each published port
 	for _, port := range container.Ports {
@@ -74,22 +70,6 @@ func (m *Manager) syncPortForwards(ctx context.Context, containerID string) erro
 			Str("protocol", port.Protocol).
 			Str("expires", expiresAt.Format(time.RFC3339)).
 			Msg("Created temporary port forward")
-
-		// Record mapping for persistence
-		if m.systemStore != nil {
-			mapping := PortForwardMapping{
-				ContainerID:   container.ID,
-				ContainerName: container.Name,
-				Port:          port.HostPort,
-				Protocol:      port.Protocol,
-				CreatedAt:     time.Now(),
-				ExpiresAt:     expiresAt,
-			}
-			log.Debug().
-				Str("container", mapping.ContainerName).
-				Uint16("port", mapping.Port).
-				Msg("Created port forward mapping")
-		}
 	}
 
 	return nil

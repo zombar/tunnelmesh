@@ -52,8 +52,10 @@ func TestEventWatcher(t *testing.T) {
 		}
 	}
 
-	// Create watcher
-	watcher := newEventWatcher(handler)
+	// Create watcher with test WaitGroup and context
+	var wg sync.WaitGroup
+	ctx := context.Background()
+	watcher := newEventWatcher(handler, &wg, ctx)
 
 	// Process events
 	go func() {
@@ -110,7 +112,9 @@ func TestEventTypeFiltering(t *testing.T) {
 				close(done)
 			}
 
-			watcher := newEventWatcher(handler)
+			var wg sync.WaitGroup
+			ctx := context.Background()
+			watcher := newEventWatcher(handler, &wg, ctx)
 			event := ContainerEvent{Type: tt.eventType, ContainerID: "test123", Timestamp: time.Now()}
 
 			if shouldHandleEvent(event) {
@@ -147,7 +151,9 @@ func TestEventDebounce(t *testing.T) {
 		mu.Unlock()
 	}
 
-	watcher := newEventWatcher(handler)
+	var wg sync.WaitGroup
+	ctx := context.Background()
+	watcher := newEventWatcher(handler, &wg, ctx)
 	watcher.debounceWindow = 50 * time.Millisecond
 
 	now := time.Now()

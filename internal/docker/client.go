@@ -178,7 +178,7 @@ func (c *realDockerClient) StartContainer(ctx context.Context, id string) error 
 
 // StopContainer stops a running container.
 func (c *realDockerClient) StopContainer(ctx context.Context, id string) error {
-	timeout := 10 // seconds
+	timeout := containerStopTimeout
 	return c.cli.ContainerStop(ctx, id, container.StopOptions{
 		Timeout: &timeout,
 	})
@@ -186,7 +186,7 @@ func (c *realDockerClient) StopContainer(ctx context.Context, id string) error {
 
 // RestartContainer restarts a container.
 func (c *realDockerClient) RestartContainer(ctx context.Context, id string) error {
-	timeout := 10 // seconds
+	timeout := containerStopTimeout
 	return c.cli.ContainerRestart(ctx, id, container.StopOptions{
 		Timeout: &timeout,
 	})

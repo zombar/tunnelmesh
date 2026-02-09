@@ -45,7 +45,7 @@ type Manager struct {
 }
 
 // NewManager creates a new Docker manager.
-// If filter is nil, port forwarding will be disabled.
+// If filter is nil, port forwarding will be disabled until SetFilter is called.
 // If systemStore is nil, port forward mappings will not be persisted.
 func NewManager(cfg *config.DockerConfig, peerName string, filter packetFilter, systemStore *s3.SystemStore) *Manager {
 	return &Manager{
@@ -54,6 +54,13 @@ func NewManager(cfg *config.DockerConfig, peerName string, filter packetFilter, 
 		filter:      filter,
 		systemStore: systemStore,
 	}
+}
+
+// SetFilter sets or updates the packet filter for port forwarding.
+// This allows the filter to be set after manager creation (e.g., for coordinators joining the mesh).
+func (m *Manager) SetFilter(filter packetFilter) {
+	m.filter = filter
+	log.Info().Str("peer", m.peerName).Msg("Docker manager packet filter configured")
 }
 
 // Start initializes the Docker manager and connects to the Docker daemon.
@@ -182,7 +189,7 @@ func (m *Manager) ListContainers(ctx context.Context) ([]ContainerInfo, error) {
 	for i := range containers {
 		if containers[i].State == "running" {
 			// Inspect container to get full details including StartedAt with per-container timeout
-			inspectCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			inspectCtx, cancel := context.WithTimeout(ctx, containerInspectTimeout)
 			inspected, err := m.client.InspectContainer(inspectCtx, containers[i].ID)
 			cancel()
 			if err != nil {
@@ -194,7 +201,7 @@ func (m *Manager) ListContainers(ctx context.Context) ([]ContainerInfo, error) {
 				containers[i].DiskBytes = inspected.DiskBytes
 
 				// Fetch resource usage stats with per-container timeout
-				statsCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				statsCtx, cancel := context.WithTimeout(ctx, containerStatsTimeout)
 				stats, err := m.client.GetContainerStats(statsCtx, containers[i].ID)
 				cancel()
 				if err != nil {
@@ -204,9 +211,16 @@ func (m *Manager) ListContainers(ctx context.Context) ([]ContainerInfo, error) {
 					containers[i].MemoryBytes = stats.MemoryBytes
 					containers[i].MemoryPercent = stats.MemoryPercent
 					// DiskBytes already set from inspected data above (more accurate than stats)
+
+					// Record stats to Prometheus
+					m.recordStats(*stats, &containers[i])
 				}
 			}
 		}
+
+		// Record container info to Prometheus (for all containers, not just running)
+		m.recordContainerInfo(&containers[i])
+
 		// Set short ID
 		if containers[i].ShortID == "" {
 			containers[i].ShortID = shortID(containers[i].ID)

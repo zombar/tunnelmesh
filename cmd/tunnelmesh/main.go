@@ -416,7 +416,7 @@ func runServeFromService(ctx context.Context, configPath string) error {
 			Msg("joining mesh as client")
 
 		// Callback to start admin HTTPS server after joining mesh
-		onJoined := func(meshIP string, tlsMgr *peer.TLSManager) {
+		onJoined := func(meshIP string, tlsMgr *peer.TLSManager, filter *routing.PacketFilter) {
 			// Initialize coordinator metrics on the peer metrics registry
 			// so they're exposed on the /metrics endpoint
 			srv.SetMetricsRegistry(metrics.Registry)
@@ -438,13 +438,15 @@ func runServeFromService(ctx context.Context, configPath string) error {
 				log.Info().Str("socket", cfg.JoinMesh.Docker.Socket).Msg("Docker socket already configured")
 			}
 			if cfg.JoinMesh.Docker.Socket != "" {
-				// Coordinator doesn't have a packet filter (nil), but pass systemStore for stats persistence
+				// Create Docker manager with systemStore for stats persistence
 				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, srv.GetSystemStore())
 				if err := dockerMgr.Start(ctx); err != nil {
 					log.Warn().Err(err).Msg("failed to start coordinator Docker manager")
 				} else {
+					// Set packet filter for automatic port forwarding
+					dockerMgr.SetFilter(filter)
 					srv.SetDockerManager(dockerMgr)
-					log.Info().Msg("Coordinator Docker manager started")
+					log.Info().Msg("Coordinator Docker manager started with packet filter")
 				}
 			}
 
@@ -651,7 +653,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			Msg("joining mesh as client")
 
 		// Callback to start admin HTTPS server after joining mesh
-		onJoined := func(meshIP string, tlsMgr *peer.TLSManager) {
+		onJoined := func(meshIP string, tlsMgr *peer.TLSManager, filter *routing.PacketFilter) {
 			// Initialize coordinator metrics on the peer metrics registry
 			// so they're exposed on the /metrics endpoint
 			srv.SetMetricsRegistry(metrics.Registry)
@@ -673,13 +675,15 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				log.Info().Str("socket", cfg.JoinMesh.Docker.Socket).Msg("Docker socket already configured")
 			}
 			if cfg.JoinMesh.Docker.Socket != "" {
-				// Coordinator doesn't have a packet filter (nil), but pass systemStore for stats persistence
+				// Create Docker manager with systemStore for stats persistence
 				dockerMgr := docker.NewManager(&cfg.JoinMesh.Docker, cfg.JoinMesh.Name, nil, srv.GetSystemStore())
 				if err := dockerMgr.Start(ctx); err != nil {
 					log.Warn().Err(err).Msg("failed to start coordinator Docker manager")
 				} else {
+					// Set packet filter for automatic port forwarding
+					dockerMgr.SetFilter(filter)
 					srv.SetDockerManager(dockerMgr)
-					log.Info().Msg("Coordinator Docker manager started")
+					log.Info().Msg("Coordinator Docker manager started with packet filter")
 				}
 			}
 
@@ -908,8 +912,8 @@ func runJoin(cmd *cobra.Command, args []string) error {
 }
 
 // OnJoinedFunc is called after successfully joining the mesh.
-// It receives the mesh IP and TLS manager (if TLS cert was provided).
-type OnJoinedFunc func(meshIP string, tlsMgr *peer.TLSManager)
+// It receives the mesh IP, TLS manager (if TLS cert was provided), and packet filter.
+type OnJoinedFunc func(meshIP string, tlsMgr *peer.TLSManager, filter *routing.PacketFilter)
 
 func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 	return runJoinWithConfigAndCallback(ctx, cfg, nil)
@@ -1088,12 +1092,6 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			Msg("TUN device created")
 	}
 
-	// Notify callback if provided (used by server to start admin HTTPS on mesh IP)
-	// Must be after TUN device creation so the mesh IP is assigned to an interface
-	if onJoined != nil {
-		onJoined(resp.MeshIP, tlsMgr)
-	}
-
 	// Create peer identity and mesh node
 	identity := peer.NewPeerIdentity(cfg, pubKeyEncoded, udpPort, Version, resp)
 	identity.Location = location // Set location for heartbeat reporting
@@ -1130,6 +1128,12 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		log.Info().Int("rules", len(filterRules)).Msg("loaded filter rules from config")
 	}
 	forwarder.SetFilter(filter)
+
+	// Notify callback if provided (used by server to start admin HTTPS and configure Docker)
+	// Must be after TUN device and packet filter creation
+	if onJoined != nil {
+		onJoined(resp.MeshIP, tlsMgr, filter)
+	}
 
 	// Start control socket for CLI commands
 	socketPath := cfg.ControlSocket
