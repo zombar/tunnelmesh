@@ -2705,8 +2705,10 @@ function switchTab(tabName) {
 
     // Show/hide sections based on their data-tab attribute
     // Panel system controls base visibility (permissions), we just add tab filtering
+    // Sections can belong to multiple tabs via space-separated values (e.g., data-tab="app data")
     document.querySelectorAll('section[data-tab]').forEach((section) => {
-        const belongsToTab = section.dataset.tab === tabName;
+        const tabs = section.dataset.tab.split(' ');
+        const belongsToTab = tabs.includes(tabName);
         // Only show if: (1) belongs to active tab, AND (2) panel system hasn't hidden it
         if (belongsToTab) {
             // Remove tab-based hiding - panel system controls final visibility

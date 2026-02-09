@@ -56,8 +56,8 @@
 
     <!-- All panel sections in one container - tab visibility controlled by data-tab attribute -->
     <main>
-        <!-- App Tab Panels -->
-        <section id="s3-section" data-tab="app" style="display: none;">
+        <!-- Shared Panels (visible in multiple tabs) -->
+        <section id="s3-section" data-tab="app data" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Objects</h2>
             </div>
@@ -342,19 +342,6 @@
             </div>
         </section>
 
-        <section id="logs-section" data-tab="mesh" class="logs-card" style="display: none;">
-            <h2 class="section-toggle" onclick="toggleSection(this)">Logs</h2>
-            <div class="collapsible-content">
-                <a id="logs-link" class="logs-container clickable-card" href="/grafana/explore">
-                    <div id="logs-content"></div>
-                    <div id="no-logs" class="empty-state">No logs available</div>
-                </a>
-                <div id="logs-resize-handle" class="resize-handle">
-                    <div class="resize-handle-grip"></div>
-                </div>
-            </div>
-        </section>
-
         <section id="wireguard-section" data-tab="mesh" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>WireGuard</h2>
@@ -555,6 +542,20 @@
                 </div>
                 <div id="bindings-pagination" class="show-more-container" style="display: none;">
                     <span id="bindings-show-more"><button class="show-more-link" onclick="showMoreBindings()">show more (<span id="bindings-shown-count">0</span> / <span id="bindings-total-count">0</span>)</button></span><span id="bindings-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessBindings()">show less</button></span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Logs section - shown in both mesh and data tabs, at bottom -->
+        <section id="logs-section" data-tab="mesh data" class="logs-card" style="display: none;">
+            <h2 class="section-toggle" onclick="toggleSection(this)">Logs</h2>
+            <div class="collapsible-content">
+                <a id="logs-link" class="logs-container clickable-card" href="/grafana/explore">
+                    <div id="logs-content"></div>
+                    <div id="no-logs" class="empty-state">No logs available</div>
+                </a>
+                <div id="logs-resize-handle" class="resize-handle">
+                    <div class="resize-handle-grip"></div>
                 </div>
             </div>
         </section>
