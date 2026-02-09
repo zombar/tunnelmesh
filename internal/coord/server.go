@@ -39,6 +39,7 @@ type peerInfo struct {
 	lastStatsTime  time.Time
 	prevStatsTime  time.Time
 	aliases        []string // DNS aliases registered by this peer
+	userID         string   // User ID derived from peer's public key (SHA256[:8] hex)
 
 	// Latency metrics reported by peer
 	coordinatorRTT int64            // Peer's reported RTT to coordinator (ms)
@@ -975,12 +976,39 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.dnsCache[alias] = meshIP
 	}
 
+	// Compute user ID from peer's SSH public key for RBAC purposes
+	var userID string
+	if isExisting && existing.userID != "" {
+		// Preserve existing user ID
+		userID = existing.userID
+	} else if req.PublicKey != "" {
+		// Derive user ID from SSH public key
+		if edPubKey, err := config.DecodeED25519PublicKey(req.PublicKey); err == nil {
+			userID = auth.ComputeUserID(edPubKey)
+		} else {
+			log.Debug().Err(err).Str("peer", req.Name).Msg("failed to derive user ID from public key")
+		}
+	}
+
 	s.peers[req.Name] = &peerInfo{
 		peer:         peer,
 		registeredAt: registeredAt,
 		aliases:      req.Aliases,
+		userID:       userID,
 	}
 	s.dnsCache[req.Name] = meshIP
+
+	// Add peer's derived user ID to the "machines" group
+	// This group is for connected peers/machines, separate from human users in "everyone"
+	if userID != "" && s.s3Authorizer != nil && s.s3Authorizer.Groups != nil {
+		if !s.s3Authorizer.Groups.IsMember(auth.GroupMachines, userID) {
+			if err := s.s3Authorizer.Groups.AddMember(auth.GroupMachines, userID); err != nil {
+				log.Warn().Err(err).Str("peer", req.Name).Str("user_id", userID).Msg("failed to add peer to machines group")
+			} else {
+				log.Debug().Str("peer", req.Name).Str("user_id", userID).Msg("added peer to machines group")
+			}
+		}
+	}
 
 	// Generate JWT token for relay authentication
 	token, err := s.GenerateToken(req.Name, meshIP)

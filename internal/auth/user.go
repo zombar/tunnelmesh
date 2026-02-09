@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,6 +178,24 @@ func (ui *UserIdentity) GetPublicKey() (ed25519.PublicKey, error) {
 func computeUserID(pubKey ed25519.PublicKey) string {
 	hash := sha256.Sum256(pubKey)
 	return hex.EncodeToString(hash[:8])
+}
+
+// ComputeUserID generates a user ID from a raw ED25519 public key.
+// This is the exported version of computeUserID for use by other packages.
+func ComputeUserID(pubKey ed25519.PublicKey) string {
+	return computeUserID(pubKey)
+}
+
+// ComputeUserIDFromBase64 generates a user ID from a base64-encoded ED25519 public key.
+func ComputeUserIDFromBase64(pubKeyB64 string) (string, error) {
+	pubKey, err := base64.StdEncoding.DecodeString(pubKeyB64)
+	if err != nil {
+		return "", err
+	}
+	if len(pubKey) != ed25519.PublicKeySize {
+		return "", fmt.Errorf("invalid public key size: expected %d, got %d", ed25519.PublicKeySize, len(pubKey))
+	}
+	return computeUserID(pubKey), nil
 }
 
 // VerifyUserSignature verifies a signature of a message using a base64-encoded public key.

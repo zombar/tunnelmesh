@@ -1253,26 +1253,43 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 // getRequestOwner extracts the owner identity from the request.
 // It returns the peer name from the TLS client certificate, or looks up the peer
 // by their mesh IP if no certificate is available (browser access from within mesh).
-// Callers should validate the returned value before using it for ownership.
+// Returns the user ID (derived from public key) for RBAC purposes, falling back to peer name
+// if user ID is not available.
 func (s *Server) getRequestOwner(r *http.Request) string {
+	var peerName string
+
 	// Get peer name from TLS client certificate
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		cn := r.TLS.PeerCertificates[0].Subject.CommonName
 		// CN format is "peername.tunnelmesh" - extract just the peer name
 		if strings.HasSuffix(cn, ".tunnelmesh") {
-			return strings.TrimSuffix(cn, ".tunnelmesh")
+			peerName = strings.TrimSuffix(cn, ".tunnelmesh")
+		} else {
+			peerName = cn
 		}
-		return cn
 	}
 
 	// No client certificate - try to identify by mesh IP
 	// This handles browser access from within the mesh where the browser
 	// doesn't have a client certificate but the request originates from a peer
-	if peerName := s.getPeerByRemoteAddr(r.RemoteAddr); peerName != "" {
-		return peerName
+	if peerName == "" {
+		peerName = s.getPeerByRemoteAddr(r.RemoteAddr)
 	}
 
-	return ""
+	if peerName == "" {
+		return ""
+	}
+
+	// Look up the user ID for this peer (derived from their public key)
+	s.peersMu.RLock()
+	defer s.peersMu.RUnlock()
+
+	if info, ok := s.peers[peerName]; ok && info.userID != "" {
+		return info.userID
+	}
+
+	// Fall back to peer name if user ID not available
+	return peerName
 }
 
 // getPeerByRemoteAddr looks up a peer by their mesh IP address.
