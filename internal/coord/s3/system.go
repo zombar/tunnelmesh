@@ -4,7 +4,6 @@ package s3
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -73,6 +72,26 @@ const (
 	DNSCachePath = "dns/cache.json"
 	DNSAliasPath = "dns/aliases.json"
 )
+
+// Filter paths
+const (
+	FilterRulesPath = "filter/rules.json"
+)
+
+// FilterRulePersisted represents a filter rule for persistence.
+type FilterRulePersisted struct {
+	Port       uint16 `json:"port"`
+	Protocol   string `json:"protocol"`    // "tcp" or "udp"
+	Action     string `json:"action"`      // "allow" or "deny"
+	Expires    int64  `json:"expires"`     // Unix timestamp (0 = no expiry)
+	SourcePeer string `json:"source_peer"` // Empty = any peer
+}
+
+// FilterRulesData stores both temporary and service rules.
+type FilterRulesData struct {
+	Temporary []FilterRulePersisted `json:"temporary"`
+	Service   []FilterRulePersisted `json:"service"`
+}
 
 // --- Users ---
 
@@ -358,37 +377,57 @@ func (ss *SystemStore) LoadDNSAliases() (peerAliases map[string][]string, aliasO
 	return peerAliases, aliasOwner, nil
 }
 
+// --- Filter Rules ---
+
+// SaveFilterRules saves filter rules to S3 with checksum validation.
+func (ss *SystemStore) SaveFilterRules(data FilterRulesData) error {
+	return ss.saveJSONWithChecksum(FilterRulesPath, data)
+}
+
+// LoadFilterRules loads filter rules from S3 with automatic rollback on corruption.
+func (ss *SystemStore) LoadFilterRules() (*FilterRulesData, error) {
+	var data FilterRulesData
+	if err := ss.loadJSONWithChecksum(FilterRulesPath, &data, 3); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
 // --- Checksum-validated JSON helpers ---
 
 // MetadataWrapper adds checksum validation to system metadata.
 // This protects against corruption and enables automatic rollback to previous versions.
+// The entire structure is stored as compact JSON (for checksum consistency).
+// The Data field contains the actual payload as embedded JSON (not base64).
 type MetadataWrapper struct {
-	Version  int    `json:"version"`  // Schema version (for future migrations)
-	Checksum string `json:"checksum"` // SHA-256 of decoded Data field
-	Data     string `json:"data"`     // Base64-encoded payload
+	Version  int             `json:"version"`  // Schema version (for future migrations)
+	Checksum string          `json:"checksum"` // SHA-256 of Data bytes
+	Data     json.RawMessage `json:"data"`     // JSON payload (embedded, not base64)
 }
 
 // saveJSONWithChecksum saves JSON with a checksum wrapper for corruption detection.
 func (ss *SystemStore) saveJSONWithChecksum(key string, v interface{}) error {
-	// Marshal payload
+	// Marshal payload (compact for checksum consistency)
 	data, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("marshal %s: %w", key, err)
 	}
 
-	// Compute checksum
+	// Compute checksum on compact JSON bytes
 	hash := sha256.Sum256(data)
 	checksum := hex.EncodeToString(hash[:])
 
-	// Wrap with metadata (base64-encode data to avoid JSON formatting issues)
+	// Wrap with metadata (store as RawMessage, not base64)
 	wrapper := MetadataWrapper{
 		Version:  1,
 		Checksum: checksum,
-		Data:     base64.StdEncoding.EncodeToString(data),
+		Data:     json.RawMessage(data),
 	}
 
-	// Save with indentation for readability
-	wrappedData, err := json.MarshalIndent(wrapper, "", "  ")
+	// Marshal wrapper (compact to ensure checksum consistency)
+	// Note: We use compact JSON to avoid whitespace variations that could
+	// break checksum validation. The embedded data is still readable JSON.
+	wrappedData, err := json.Marshal(wrapper)
 	if err != nil {
 		return fmt.Errorf("marshal wrapper: %w", err)
 	}
@@ -482,13 +521,8 @@ func (ss *SystemStore) tryLoadVersion(key, versionID string, target interface{})
 	// Try unwrapping checksum wrapper
 	var wrapper MetadataWrapper
 	if err := json.Unmarshal(data, &wrapper); err == nil && wrapper.Checksum != "" {
-		// Has checksum - decode and validate
-		decodedData, err := base64.StdEncoding.DecodeString(wrapper.Data)
-		if err != nil {
-			return fmt.Errorf("decode base64 data: %w", err)
-		}
-
-		hash := sha256.Sum256(decodedData)
+		// Has checksum - validate
+		hash := sha256.Sum256(wrapper.Data)
 		expectedChecksum := hex.EncodeToString(hash[:])
 
 		if wrapper.Checksum != expectedChecksum {
@@ -497,7 +531,7 @@ func (ss *SystemStore) tryLoadVersion(key, versionID string, target interface{})
 		}
 
 		// Checksum valid - unmarshal payload
-		if err := json.Unmarshal(decodedData, target); err != nil {
+		if err := json.Unmarshal(wrapper.Data, target); err != nil {
 			return fmt.Errorf("unmarshal payload: %w", err)
 		}
 

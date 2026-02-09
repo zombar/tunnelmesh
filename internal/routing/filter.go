@@ -199,7 +199,8 @@ func (f *PacketFilter) SetServiceRules(rules []FilterRule) {
 }
 
 // AddTemporaryRule adds a rule to the temporary layer.
-// Temporary rules are added via CLI or admin panel and persist until reboot.
+// Temporary rules are added via CLI or admin panel and persist across
+// coordinator restarts when S3 is enabled.
 func (f *PacketFilter) AddTemporaryRule(rule FilterRule) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

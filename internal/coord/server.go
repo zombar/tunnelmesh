@@ -25,6 +25,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
 	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
+	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/internal/tracing"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -90,6 +91,8 @@ type Server struct {
 	fileShareMgr  *s3.FileShareManager // File share manager
 	// NFS server
 	nfsServer *nfs.Server // NFS server for file shares
+	// Packet filter
+	filter *routing.PacketFilter // Global packet filter
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -237,6 +240,37 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 		log.Warn().Err(err).Msg("failed to load stats history, starting fresh")
 	}
 
+	// Initialize packet filter
+	srv.filter = routing.NewPacketFilter(cfg.Filter.IsDefaultDeny())
+
+	// Load coordinator config rules
+	coordRules := make([]routing.FilterRule, len(cfg.Filter.Rules))
+	for i, r := range cfg.Filter.Rules {
+		coordRules[i] = routing.FilterRule{
+			Port:       r.Port,
+			Protocol:   r.ProtocolNumber(),
+			Action:     routing.ParseFilterAction(r.Action),
+			SourcePeer: r.SourcePeer,
+		}
+	}
+	srv.filter.SetCoordinatorRules(coordRules)
+
+	// Set service rules from config
+	serviceRules := make([]routing.FilterRule, len(cfg.ServicePorts))
+	for i, port := range cfg.ServicePorts {
+		serviceRules[i] = routing.FilterRule{
+			Port:     port,
+			Protocol: routing.ProtoTCP,
+			Action:   routing.ActionAllow,
+		}
+	}
+	srv.filter.SetServiceRules(serviceRules)
+
+	// Load persisted filter rules (temporary and service overrides)
+	if err := srv.recoverFilterRules(); err != nil {
+		log.Warn().Err(err).Msg("failed to load filter rules, starting fresh")
+	}
+
 	srv.setupRoutes()
 	return srv, nil
 }
@@ -326,10 +360,133 @@ func (s *Server) saveDNSData() {
 	}
 }
 
+// recoverFilterRules loads filter rules from S3.
+func (s *Server) recoverFilterRules() error {
+	if s.s3SystemStore == nil {
+		return nil // S3 not enabled, skip
+	}
+
+	data, err := s.s3SystemStore.LoadFilterRules()
+	if err != nil {
+		return err
+	}
+
+	// Load temporary rules (skip expired)
+	now := time.Now().Unix()
+	tempRules := make([]routing.FilterRule, 0, len(data.Temporary))
+	for _, r := range data.Temporary {
+		if r.Expires > 0 && r.Expires <= now {
+			log.Debug().Uint16("port", r.Port).Str("protocol", r.Protocol).
+				Msg("skipping expired temporary filter rule")
+			continue
+		}
+		tempRules = append(tempRules, routing.FilterRule{
+			Port:       r.Port,
+			Protocol:   routing.ProtocolFromString(r.Protocol),
+			Action:     routing.ParseFilterAction(r.Action),
+			Expires:    r.Expires,
+			SourcePeer: r.SourcePeer,
+		})
+	}
+
+	// Load service rules (skip expired)
+	serviceRules := make([]routing.FilterRule, 0, len(data.Service))
+	for _, r := range data.Service {
+		if r.Expires > 0 && r.Expires <= now {
+			log.Debug().Uint16("port", r.Port).Str("protocol", r.Protocol).
+				Msg("skipping expired service filter rule")
+			continue
+		}
+		serviceRules = append(serviceRules, routing.FilterRule{
+			Port:       r.Port,
+			Protocol:   routing.ProtocolFromString(r.Protocol),
+			Action:     routing.ParseFilterAction(r.Action),
+			Expires:    r.Expires,
+			SourcePeer: r.SourcePeer,
+		})
+	}
+
+	// Apply loaded rules
+	for _, rule := range tempRules {
+		s.filter.AddTemporaryRule(rule)
+	}
+	if len(serviceRules) > 0 {
+		s.filter.SetServiceRules(serviceRules)
+	}
+
+	log.Info().Int("temporary", len(tempRules)).Int("service", len(serviceRules)).
+		Msg("loaded filter rules from S3")
+	return nil
+}
+
+// SaveFilterRules persists filter rules to S3 or does nothing if S3 is disabled.
+func (s *Server) SaveFilterRules() error {
+	if s.s3SystemStore == nil {
+		return nil // S3 not enabled, skip
+	}
+
+	// Get all current rules
+	allRules := s.filter.ListRules()
+
+	data := s3.FilterRulesData{
+		Temporary: make([]s3.FilterRulePersisted, 0),
+		Service:   make([]s3.FilterRulePersisted, 0),
+	}
+
+	for _, r := range allRules {
+		persisted := s3.FilterRulePersisted{
+			Port:       r.Rule.Port,
+			Protocol:   routing.ProtocolToString(r.Rule.Protocol),
+			Action:     r.Rule.Action.String(),
+			Expires:    r.Rule.Expires,
+			SourcePeer: r.Rule.SourcePeer,
+		}
+
+		switch r.Source {
+		case routing.SourceTemporary:
+			data.Temporary = append(data.Temporary, persisted)
+		case routing.SourceService:
+			data.Service = append(data.Service, persisted)
+		}
+	}
+
+	if err := s.s3SystemStore.SaveFilterRules(data); err != nil {
+		return err
+	}
+
+	log.Debug().Int("temporary", len(data.Temporary)).Int("service", len(data.Service)).
+		Msg("saved filter rules to S3")
+	return nil
+}
+
+// saveFilterRulesAsync saves filter rules asynchronously.
+func (s *Server) saveFilterRulesAsync() {
+	if s.s3SystemStore == nil {
+		return
+	}
+
+	go func() {
+		if err := s.SaveFilterRules(); err != nil {
+			log.Error().Err(err).Msg("failed to save filter rules")
+		}
+	}()
+}
+
 // Shutdown gracefully shuts down the server, persisting state.
 func (s *Server) Shutdown() error {
-	log.Info().Msg("saving stats history before shutdown")
-	return s.SaveStatsHistory()
+	log.Info().Msg("saving data before shutdown")
+
+	// Save stats history
+	if err := s.SaveStatsHistory(); err != nil {
+		log.Error().Err(err).Msg("failed to save stats history")
+	}
+
+	// Save filter rules
+	if err := s.SaveFilterRules(); err != nil {
+		log.Error().Err(err).Msg("failed to save filter rules")
+	}
+
+	return nil
 }
 
 // StartPeriodicSave starts a goroutine that periodically saves stats history.
@@ -345,6 +502,9 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 			case <-ticker.C:
 				if err := s.SaveStatsHistory(); err != nil {
 					log.Warn().Err(err).Msg("failed to save stats history")
+				}
+				if err := s.SaveFilterRules(); err != nil {
+					log.Warn().Err(err).Msg("failed to save filter rules")
 				}
 			}
 		}

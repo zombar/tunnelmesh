@@ -18,8 +18,8 @@ func newFilterCmd() *cobra.Command {
 		Long: `Manage packet filter rules for incoming traffic.
 
 The packet filter controls which ports are accessible on this peer.
-Rules can be added temporarily via CLI (persist until reboot) or
-permanently via the config file.
+Rules can be added temporarily via CLI (persisted when S3 is enabled on
+the coordinator) or permanently via the config file.
 
 Rule precedence (most restrictive wins):
   1. Coordinator config (global rules)
@@ -103,7 +103,10 @@ func newFilterAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add",
 		Short: "Add a temporary filter rule",
-		Long: `Add a temporary filter rule that persists until reboot.
+		Long: `Add a filter rule to the temporary layer.
+
+When S3 persistence is enabled on the coordinator, temporary rules
+persist across restarts. Otherwise, they are lost on reboot.
 
 Examples:
   # Allow SSH access from any peer
