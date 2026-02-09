@@ -510,7 +510,7 @@ main {
 }
 
 #peers-section, #dns-section, #wireguard-section, #filter-section,
-#s3-section, #users-section, #groups-section, #shares-section, #bindings-section {
+#s3-section, #peers-mgmt-section, #groups-section, #shares-section, #bindings-section {
     background: var(--color-bg-primary);
     padding: 0;
     border: 1px solid var(--color-border-primary);
@@ -518,7 +518,7 @@ main {
 }
 
 #peers-section h2, #dns-section h2, #wireguard-section h2, #filter-section h2,
-#s3-section h2, #users-section h2, #groups-section h2, #shares-section h2, #bindings-section h2 {
+#s3-section h2, #peers-mgmt-section h2, #groups-section h2, #shares-section h2, #bindings-section h2 {
     font-size: 1rem;
     font-weight: 600;
     padding: 1rem;
@@ -547,7 +547,7 @@ main {
 #wireguard-section .section-header h2,
 #filter-section .section-header h2,
 #s3-section .section-header h2,
-#users-section .section-header h2,
+#peers-mgmt-section .section-header h2,
 #groups-section .section-header h2,
 #shares-section .section-header h2,
 #bindings-section .section-header h2 {
