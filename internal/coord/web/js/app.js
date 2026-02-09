@@ -2057,7 +2057,7 @@ function registerBuiltinPanels() {
             hasActionButton: true,
             sortOrder: 70,
         },
-        { id: 'dns', sectionId: 'dns-section', tab: 'data', title: 'DNS Records', category: 'data', sortOrder: 80 },
+        { id: 'dns', sectionId: 'dns-section', tab: 'app', title: 'DNS Records', category: 'data', sortOrder: 80 },
         {
             id: 's3',
             sectionId: 's3-section',
