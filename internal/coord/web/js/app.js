@@ -2231,6 +2231,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (dom.s3ResizeHandle && dom.s3Content) {
         initPanelResize(dom.s3ResizeHandle, dom.s3Content);
     }
+
+    // Trigger visualizer resize after DOM is fully rendered
+    // This ensures the visualizer displays correctly on initial page load
+    requestAnimationFrame(() => {
+        if (state.visualizer) {
+            state.visualizer.resize();
+        }
+    });
 });
 
 // Initialize panel resize functionality (shared by logs and S3 panels)
@@ -2298,16 +2306,13 @@ function initPanelResize(handle, container) {
 
 // Check if S3/peer management is enabled and show sections
 async function checkPeerManagement() {
+    // Check if S3/peer management is enabled
+    // Panel visibility is managed by the panel system, not here
+    // Data loading is handled by refresh coordinator when data tab is accessed
     try {
         const resp = await fetch('api/users');
-        if (resp.ok) {
-            document.getElementById('peers-mgmt-section').style.display = 'block';
-            document.getElementById('groups-section').style.display = 'block';
-            document.getElementById('shares-section').style.display = 'block';
-            const peers = await resp.json();
-            updatePeersMgmtTable(peers);
-            fetchGroups();
-            fetchShares();
+        if (!resp.ok) {
+            // S3 not enabled - panels will be hidden by panel system
         }
     } catch (_err) {
         // Peer management not enabled
