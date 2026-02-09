@@ -96,7 +96,8 @@ func (m *Manager) watchEvents(ctx context.Context) error {
 		switch event.Type {
 		case "start":
 			// Container started, sync port forwards
-			if err := m.syncPortForwards(ctx, event.ContainerID); err != nil {
+			// Use m.ctx instead of parameter ctx to handle post-shutdown events properly
+			if err := m.syncPortForwards(m.ctx, event.ContainerID); err != nil {
 				log.Error().Err(err).
 					Str("container", event.ContainerID).
 					Msg("Failed to sync port forwards on container start")
@@ -111,7 +112,9 @@ func (m *Manager) watchEvents(ctx context.Context) error {
 	})
 
 	// Start periodic cleanup of debounce map to prevent memory growth
+	m.wg.Add(1)
 	go func() {
+		defer m.wg.Done()
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 		for {

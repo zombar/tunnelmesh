@@ -548,6 +548,15 @@ func (s *Server) Shutdown() error {
 		errs = append(errs, fmt.Errorf("save filter rules: %w", err))
 	}
 
+	// Stop Docker manager if running
+	if s.dockerMgr != nil {
+		log.Info().Msg("stopping Docker manager")
+		if err := s.dockerMgr.Stop(); err != nil {
+			log.Error().Err(err).Msg("failed to stop Docker manager")
+			errs = append(errs, fmt.Errorf("stop docker manager: %w", err))
+		}
+	}
+
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
