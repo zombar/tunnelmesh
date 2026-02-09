@@ -501,7 +501,6 @@ func (s *Server) Shutdown() error {
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-
 	return nil
 }
 
