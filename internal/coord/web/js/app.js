@@ -18,6 +18,10 @@ const { createPaginationController } = TM.pagination;
 const { createSparklineSVG } = TM.table;
 const { createModalController } = TM.modal;
 
+// Panel refresh lists - defines which panels to refresh for each tab
+const PANELS_APP_TAB = ['s3', 'shares']; // App tab panels (docker disabled)
+const PANELS_DATA_TAB = ['peers-mgmt', 'groups', 'shares', 'bindings', 's3']; // Data tab panels
+
 // Toggle collapsible section
 function toggleSection(header) {
     header.classList.toggle('collapsed');
@@ -2246,13 +2250,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (activeTab && TM.refresh) {
         const tabName = activeTab.dataset.tab;
         if (tabName === 'app') {
-            // App tab contains: s3, shares (docker disabled)
-            // Match the behavior of switchTab('data') which also refreshes these
-            TM.refresh.triggerMultiple(['s3', 'shares'], { cascade: false });
+            TM.refresh.triggerMultiple(PANELS_APP_TAB, { cascade: false });
         } else if (tabName === 'data') {
-            // Data tab: refresh all data management panels
-            // Matches switchTab('data') behavior
-            TM.refresh.triggerMultiple(['peers-mgmt', 'groups', 'shares', 'bindings', 's3'], { cascade: false });
+            TM.refresh.triggerMultiple(PANELS_DATA_TAB, { cascade: false });
         }
         // Mesh tab loads via fetchData(true) which is already called above
     }
@@ -2715,11 +2715,11 @@ function switchTab(tabName) {
         });
     } else if (tabName === 'data') {
         // Refresh all data panels without cascading (we're already listing all of them)
-        TM.refresh.triggerMultiple(['peers-mgmt', 'groups', 'shares', 'bindings', 's3'], { cascade: false });
+        TM.refresh.triggerMultiple(PANELS_DATA_TAB, { cascade: false });
     } else if (tabName === 'app') {
-        // Refresh app tab panels: s3, shares (docker disabled)
+        // Refresh app tab panels
         if (TM.refresh) {
-            TM.refresh.triggerMultiple(['s3', 'shares'], { cascade: false });
+            TM.refresh.triggerMultiple(PANELS_APP_TAB, { cascade: false });
         }
     }
 
