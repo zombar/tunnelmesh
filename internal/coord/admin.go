@@ -1078,24 +1078,13 @@ func (s *Server) handleSharesList(w http.ResponseWriter, _ *http.Request) {
 
 	shares := s.fileShareMgr.List()
 
-	// Build peer ID -> name lookup map
-	peerNameMap := make(map[string]string)
-	if s.s3SystemStore != nil {
-		if peers, err := s.s3SystemStore.LoadPeers(); err == nil {
-			for _, peer := range peers {
-				peerNameMap[peer.ID] = peer.Name
-			}
-		}
-	}
-
-	// Convert shares to response format with owner names
+	// Convert shares to response format with owner names from cache
 	response := make([]FileShareResponse, len(shares))
 	for i, share := range shares {
 		response[i] = FileShareResponse{
 			FileShare: share,
-			OwnerName: peerNameMap[share.Owner],
+			OwnerName: s.getPeerName(share.Owner),
 		}
-		// If owner name not found, leave empty (frontend will fall back to owner ID)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1823,21 +1812,8 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 	bucketMeta, err := s.s3Store.HeadBucket(bucket)
 	var ownerName string
 	if err == nil && bucketMeta.Owner != "" {
-		// Look up peer name from owner ID
-		if s.s3SystemStore != nil {
-			if peers, err := s.s3SystemStore.LoadPeers(); err == nil {
-				for _, peer := range peers {
-					if peer.ID == bucketMeta.Owner {
-						ownerName = peer.Name
-						break
-					}
-				}
-			}
-		}
-		// If peer not found, use the owner ID itself
-		if ownerName == "" {
-			ownerName = bucketMeta.Owner
-		}
+		// Look up peer name from cached map (falls back to ID if not found)
+		ownerName = s.getPeerName(bucketMeta.Owner)
 	}
 
 	result := make([]S3ObjectInfo, 0)

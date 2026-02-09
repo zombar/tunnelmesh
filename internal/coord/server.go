@@ -97,6 +97,8 @@ type Server struct {
 	filter            *routing.PacketFilter // Global packet filter
 	filterSavePending atomic.Bool           // Debounce flag for async filter saves
 	filterSaveMu      sync.Mutex            // Protects SaveFilterRules from concurrent calls
+	// Peer name cache for owner display (cached to avoid LoadPeers() on every request)
+	peerNameCache atomic.Pointer[map[string]string] // Peer ID -> name mapping
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -320,6 +322,44 @@ func (s *Server) SaveStatsHistory() error {
 	}
 	log.Debug().Str("destination", destination).Msg("saved stats history")
 	return nil
+}
+
+// refreshPeerNameCache reloads the peer ID -> name mapping from storage.
+// This is called during server startup and when peers are added/updated.
+func (s *Server) refreshPeerNameCache() error {
+	if s.s3SystemStore == nil {
+		// No S3 storage, cache stays empty
+		s.peerNameCache.Store(&map[string]string{})
+		return nil
+	}
+
+	peers, err := s.s3SystemStore.LoadPeers()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load peers for name cache")
+		return fmt.Errorf("load peers: %w", err)
+	}
+
+	nameMap := make(map[string]string, len(peers))
+	for _, peer := range peers {
+		nameMap[peer.ID] = peer.Name
+	}
+	s.peerNameCache.Store(&nameMap)
+
+	log.Debug().Int("count", len(nameMap)).Msg("refreshed peer name cache")
+	return nil
+}
+
+// getPeerName returns the name for a peer ID, falling back to the ID if not found.
+// This uses the cached peer name map to avoid repeated LoadPeers() calls.
+func (s *Server) getPeerName(peerID string) string {
+	cache := s.peerNameCache.Load()
+	if cache == nil || peerID == "" {
+		return peerID
+	}
+	if name := (*cache)[peerID]; name != "" {
+		return name
+	}
+	return peerID // Fallback to ID if peer not found (may have been deleted)
 }
 
 // saveDNSData persists DNS cache and aliases to S3.
@@ -780,6 +820,11 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 				log.Warn().Err(err).Str("peer", peer.ID).Msg("failed to recover peer credentials")
 			}
 		}
+	}
+
+	// Initialize peer name cache for owner lookups
+	if err := s.refreshPeerNameCache(); err != nil {
+		log.Warn().Err(err).Msg("failed to initialize peer name cache")
 	}
 
 	// Recover role bindings
@@ -1521,6 +1566,11 @@ func (s *Server) updatePeerRecord(peerID, peerName, publicKey string, isNewPeer 
 
 	if err := s.s3SystemStore.SavePeers(peers); err != nil {
 		log.Warn().Err(err).Str("peer_id", peerID).Msg("failed to save peers")
+	} else {
+		// Refresh peer name cache after adding new peer
+		if err := s.refreshPeerNameCache(); err != nil {
+			log.Warn().Err(err).Msg("failed to refresh peer name cache")
+		}
 	}
 }
 
