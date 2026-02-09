@@ -1,7 +1,6 @@
 // Docker container orchestration panel
 
 let dockerContainers = [];
-let dockerAvailable = true;
 let dockerVisibleCount = 7; // Initial page size
 
 // Pagination controller
@@ -22,7 +21,6 @@ async function loadDockerContainers() {
 
         if (response.status === 503) {
             // Docker not available - hide the entire panel
-            dockerAvailable = false;
             hideDockerPanel();
             return;
         }
@@ -80,16 +78,17 @@ function renderDockerContainers() {
     // Get visible items from pagination controller
     const pageContainers = dockerPagination.getVisibleItems();
 
-    tbody.innerHTML = pageContainers.map(container => {
-        const statusBadge = getDockerStatusBadge(container.state);
-        const uptime = formatDockerUptime(container.uptime_seconds);
-        const cpu = formatDockerPercent(container.cpu_percent);
-        const memory = formatDockerMemory(container.memory_bytes, container.memory_percent);
-        const disk = formatDockerDisk(container.disk_bytes);
-        const ports = formatDockerPorts(container.ports);
-        const actions = renderDockerActions(container);
+    tbody.innerHTML = pageContainers
+        .map((container) => {
+            const statusBadge = getDockerStatusBadge(container.state);
+            const uptime = formatDockerUptime(container.uptime_seconds);
+            const cpu = formatDockerPercent(container.cpu_percent);
+            const memory = formatDockerMemory(container.memory_bytes, container.memory_percent);
+            const disk = formatDockerDisk(container.disk_bytes);
+            const ports = formatDockerPorts(container.ports);
+            const actions = renderDockerActions(container);
 
-        return `
+            return `
             <tr>
                 <td><strong>${escapeHtml(container.name)}</strong></td>
                 <td>${statusBadge}</td>
@@ -102,7 +101,8 @@ function renderDockerContainers() {
                 <td>${actions}</td>
             </tr>
         `;
-    }).join('');
+        })
+        .join('');
 
     updateDockerPagination();
 }
@@ -139,11 +139,11 @@ function showLessDocker() {
 // Get status badge HTML for container state
 function getDockerStatusBadge(state) {
     const stateMap = {
-        'running': '<span class="status-badge online">running</span>',
-        'exited': '<span class="status-badge offline">exited</span>',
-        'paused': '<span class="status-badge">paused</span>',
-        'restarting': '<span class="status-badge">restarting</span>',
-        'dead': '<span class="status-badge offline">dead</span>',
+        running: '<span class="status-badge online">running</span>',
+        exited: '<span class="status-badge offline">exited</span>',
+        paused: '<span class="status-badge">paused</span>',
+        restarting: '<span class="status-badge">restarting</span>',
+        dead: '<span class="status-badge offline">dead</span>',
     };
     return stateMap[state] || `<span class="status-badge">${escapeHtml(state)}</span>`;
 }
@@ -189,7 +189,7 @@ function formatDockerDisk(bytes) {
     if (!bytes || bytes === 0) {
         return '<span style="color: var(--color-text-secondary);">--</span>';
     }
-    const gb = (bytes / (1024 * 1024 * 1024));
+    const gb = bytes / (1024 * 1024 * 1024);
     if (gb >= 1) {
         return `${gb.toFixed(1)} GB`;
     }
@@ -203,7 +203,7 @@ function formatDockerPorts(ports) {
         return '<span style="color: var(--color-text-secondary);">none</span>';
     }
 
-    const portStrings = ports.map(p => {
+    const portStrings = ports.map((p) => {
         if (p.host_port === 0) {
             return `${p.container_port}/${p.protocol}`;
         }
@@ -252,7 +252,7 @@ async function dockerControlContainer(containerID, action) {
     const actionNames = {
         start: 'Starting',
         stop: 'Stopping',
-        restart: 'Restarting'
+        restart: 'Restarting',
     };
 
     const actionName = actionNames[action] || action;
@@ -276,8 +276,8 @@ async function dockerControlContainer(containerID, action) {
 
         if (result.success) {
             showToast(`Container ${action} successful`, 'success');
-            // Reload containers after a brief delay
-            setTimeout(loadDockerContainers, 1000);
+            // Refresh Docker panel after action completes
+            setTimeout(() => TM.refresh.trigger('docker'), 1000);
         } else {
             showToast(result.message || `Failed to ${action} container`, 'error');
         }
@@ -289,7 +289,7 @@ async function dockerControlContainer(containerID, action) {
 
 // Refresh Docker containers (called from UI button)
 function refreshDockerContainers() {
-    loadDockerContainers();
+    TM.refresh.trigger('docker');
 }
 
 // Export functions for global scope

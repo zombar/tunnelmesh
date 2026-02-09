@@ -1133,7 +1133,6 @@ function rebuildChartDatasets() {
     }
 }
 
-
 // WireGuard Client Management
 
 async function checkWireGuardStatus() {
@@ -2072,7 +2071,14 @@ function registerBuiltinPanels() {
             hasActionButton: true,
             sortOrder: 20,
         },
-        { id: 'peer-mgmt', sectionId: 'peers-mgmt-section', tab: 'data', title: 'Peers', category: 'admin', sortOrder: 30 },
+        {
+            id: 'peer-mgmt',
+            sectionId: 'peers-mgmt-section',
+            tab: 'data',
+            title: 'Peers',
+            category: 'admin',
+            sortOrder: 30,
+        },
         {
             id: 'groups',
             sectionId: 'groups-section',
@@ -2145,6 +2151,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Initialize tab navigation
     initTabs();
+
+    // Initialize refresh coordinator
+    initRefreshCoordinator();
 
     // Initialize visualizer
     initVisualizer();
@@ -2438,7 +2447,7 @@ async function createGroup() {
         if (resp.ok) {
             showToast(`Group "${name}" created`, 'success');
             closeGroupModal();
-            fetchGroups();
+            TM.refresh.trigger('groups');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to create group', 'error');
@@ -2456,7 +2465,7 @@ async function deleteGroup(name) {
         const resp = await fetch(`api/groups/${name}`, { method: 'DELETE' });
         if (resp.ok) {
             showToast(`Group "${name}" deleted`, 'success');
-            fetchGroups();
+            TM.refresh.trigger('groups');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to delete group', 'error');
@@ -2569,11 +2578,8 @@ async function createShare() {
         if (resp.ok) {
             showToast(`File share "${name}" created`, 'success');
             closeShareModal();
-            fetchShares();
-            fetchBindings(); // Refresh bindings since share creation adds admin binding
-            if (typeof TM !== 'undefined' && TM.s3explorer) {
-                TM.s3explorer.refresh(); // Refresh S3 explorer to show new bucket
-            }
+            // Trigger refresh for shares panel (will cascade to bindings and S3)
+            TM.refresh.trigger('shares');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to create share', 'error');
@@ -2591,11 +2597,8 @@ async function deleteShare(name) {
         const resp = await fetch(`api/shares/${name}`, { method: 'DELETE' });
         if (resp.ok) {
             showToast(`File share "${name}" deleted`, 'success');
-            fetchShares();
-            fetchBindings(); // Refresh bindings since share deletion removes bindings
-            if (typeof TM !== 'undefined' && TM.s3explorer) {
-                TM.s3explorer.refresh(); // Refresh S3 explorer to remove bucket
-            }
+            // Trigger refresh for shares panel (will cascade to bindings and S3)
+            TM.refresh.trigger('shares');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to delete share', 'error');
@@ -2607,6 +2610,50 @@ async function deleteShare(name) {
 window.deleteShare = deleteShare;
 
 // =====================
+// Refresh Coordinator
+// =====================
+
+function initRefreshCoordinator() {
+    if (!TM.refresh) {
+        console.warn('TM.refresh not loaded, panel refresh coordination disabled');
+        return;
+    }
+
+    // Register all panel refresh functions
+    TM.refresh.register('peers', () => fetchData(false));
+    TM.refresh.register('wg-clients', fetchWGClients);
+    TM.refresh.register('logs', fetchLogs);
+    TM.refresh.register('alerts', fetchAlerts);
+    TM.refresh.register('filter', loadFilterRules);
+    TM.refresh.register('peers-mgmt', fetchPeersMgmt);
+    TM.refresh.register('groups', fetchGroups);
+    TM.refresh.register('shares', fetchShares);
+    TM.refresh.register('bindings', fetchBindings);
+    TM.refresh.register('docker', loadDockerContainers);
+
+    // Register S3 explorer refresh (init if needed, then refresh)
+    TM.refresh.register('s3', async () => {
+        await initS3Explorer();
+        if (TM.s3explorer) {
+            TM.s3explorer.refresh();
+        }
+    });
+
+    // Define dependencies: when X changes, also refresh Y
+    // When shares change, refresh bindings (share creation/deletion modifies bindings)
+    // and S3 explorer (shares create S3 buckets)
+    TM.refresh.addDependency('shares', ['bindings', 's3']);
+
+    // When bindings change, refresh S3 explorer (permissions might have changed)
+    TM.refresh.addDependency('bindings', ['s3']);
+
+    // When groups change, refresh peers-mgmt (group membership affects user list)
+    TM.refresh.addDependency('groups', ['peers-mgmt']);
+
+    // When peers-mgmt changes, refresh groups and bindings (user changes affect group/role assignments)
+    TM.refresh.addDependency('peers-mgmt', ['groups', 'bindings']);
+}
+
 // Tab Navigation
 // =====================
 
@@ -2640,11 +2687,7 @@ function switchTab(tabName) {
             }
         });
     } else if (tabName === 'data') {
-        fetchPeersMgmt();
-        fetchGroups();
-        fetchShares();
-        fetchBindings();
-        initS3Explorer();
+        TM.refresh.triggerMultiple(['peers-mgmt', 'groups', 'shares', 'bindings', 's3']);
     }
 }
 window.switchTab = switchTab;
@@ -2777,7 +2820,7 @@ async function createBinding() {
         if (resp.ok) {
             showToast('Role binding created', 'success');
             closeBindingModal();
-            fetchBindings();
+            TM.refresh.trigger('bindings');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to create binding', 'error');
@@ -2795,7 +2838,7 @@ async function deleteBinding(name) {
         const resp = await fetch(`api/bindings/${name}`, { method: 'DELETE' });
         if (resp.ok) {
             showToast('Role binding deleted', 'success');
-            fetchBindings();
+            TM.refresh.trigger('bindings');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to delete binding', 'error');
