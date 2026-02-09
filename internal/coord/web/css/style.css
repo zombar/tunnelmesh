@@ -237,12 +237,24 @@ section.tab-hidden {
     display: none !important;
 }
 
-/* Charts Section - matches main's width constraints */
-#charts-section {
+/* Consistent width for all sections */
+main > section {
     max-width: 1400px;
-    margin: 1.5rem auto 0;
-    padding: 0 2rem;
+    margin-left: auto;
+    margin-right: auto;
     width: 100%;
+}
+
+/* Alert section always at top */
+#alerts-section {
+    margin-top: 0;
+    padding: 1rem 2rem 0;
+}
+
+/* Charts Section */
+#charts-section {
+    margin-top: 1.5rem;
+    padding: 0 2rem;
 }
 
 .charts-card {
@@ -308,10 +320,8 @@ section.tab-hidden {
 
 /* Map Section */
 #map-section {
-    max-width: 1400px;
-    margin: 1.5rem auto 0;
+    margin-top: 1.5rem;
     padding: 0 2rem;
-    width: 100%;
 }
 
 .map-card {
@@ -409,10 +419,8 @@ section.tab-hidden {
 
 /* Visualizer Section */
 #visualizer-section {
-    max-width: 1400px;
-    margin: 1.5rem auto 0;
+    margin-top: 1.5rem;
     padding: 0 2rem;
-    width: 100%;
 }
 
 .visualizer-card {
@@ -1200,13 +1208,6 @@ footer {
 }
 
 /* Alert tiles section */
-#alerts-section {
-    max-width: 1400px;
-    margin: 1.5rem auto 0;
-    padding: 0 2rem;
-    width: 100%;
-}
-
 .alert-tiles {
     display: flex;
     gap: 1rem;

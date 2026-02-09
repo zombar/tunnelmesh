@@ -2245,9 +2245,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
+    // Apply initial tab filtering to hide panels not in active tab
+    // This must happen BEFORE refresh triggers to avoid showing all panels briefly
+    const activeTab = document.querySelector('#main-tabs .tab.active');
+    if (activeTab) {
+        const tabName = activeTab.dataset.tab;
+        // Apply tab filtering immediately
+        switchTab(tabName);
+    }
+
     // Trigger initial refresh for the active tab
     // This ensures panels show their content on page load, not just after tab switch
-    const activeTab = document.querySelector('#main-tabs .tab.active');
     if (activeTab && TM.refresh) {
         const tabName = activeTab.dataset.tab;
         if (tabName === 'app') {
