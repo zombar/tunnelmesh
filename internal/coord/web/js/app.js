@@ -2239,6 +2239,23 @@ document.addEventListener('DOMContentLoaded', async () => {
             state.visualizer.resize();
         }
     });
+
+    // Trigger initial refresh for the active tab
+    // This ensures panels show their content on page load, not just after tab switch
+    const activeTab = document.querySelector('#main-tabs .tab.active');
+    if (activeTab && TM.refresh) {
+        const tabName = activeTab.dataset.tab;
+        if (tabName === 'app') {
+            // App tab contains: s3, shares (docker disabled)
+            // Match the behavior of switchTab('data') which also refreshes these
+            TM.refresh.triggerMultiple(['s3', 'shares'], { cascade: false });
+        } else if (tabName === 'data') {
+            // Data tab: refresh all data management panels
+            // Matches switchTab('data') behavior
+            TM.refresh.triggerMultiple(['peers-mgmt', 'groups', 'shares', 'bindings', 's3'], { cascade: false });
+        }
+        // Mesh tab loads via fetchData(true) which is already called above
+    }
 });
 
 // Initialize panel resize functionality (shared by logs and S3 panels)
@@ -2699,14 +2716,12 @@ function switchTab(tabName) {
     } else if (tabName === 'data') {
         // Refresh all data panels without cascading (we're already listing all of them)
         TM.refresh.triggerMultiple(['peers-mgmt', 'groups', 'shares', 'bindings', 's3'], { cascade: false });
+    } else if (tabName === 'app') {
+        // Refresh app tab panels: s3, shares (docker disabled)
+        if (TM.refresh) {
+            TM.refresh.triggerMultiple(['s3', 'shares'], { cascade: false });
+        }
     }
-    // TEMPORARILY DISABLED: Docker panel lazy loading
-    // else if (tabName === 'app') {
-    //     // Load Docker panel lazily when app tab is accessed
-    //     if (TM.refresh) {
-    //         TM.refresh.trigger('docker', { cascade: false });
-    //     }
-    // }
 
 }
 window.switchTab = switchTab;
