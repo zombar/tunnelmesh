@@ -2105,7 +2105,6 @@ function registerBuiltinPanels() {
             category: 'admin',
             hasActionButton: true,
             sortOrder: 30,
-            onInit: () => loadDockerContainers(),
         },
     ];
 
@@ -2632,11 +2631,17 @@ function initRefreshCoordinator() {
     TM.refresh.register('docker', loadDockerContainers);
 
     // Register S3 explorer refresh (init if needed, then refresh)
-    TM.refresh.register('s3', async () => {
-        await initS3Explorer();
-        if (TM.s3explorer) {
-            TM.s3explorer.refresh();
-        }
+    // Use promise chain instead of async/await to avoid blocking
+    TM.refresh.register('s3', () => {
+        initS3Explorer()
+            .then(() => {
+                if (TM.s3explorer) {
+                    TM.s3explorer.refresh();
+                }
+            })
+            .catch((err) => {
+                console.error('Failed to initialize S3 explorer:', err);
+            });
     });
 
     // Define dependencies: when X changes, also refresh Y
@@ -2687,6 +2692,11 @@ function switchTab(tabName) {
     } else if (tabName === 'data') {
         // Refresh all data panels without cascading (we're already listing all of them)
         TM.refresh.triggerMultiple(['peers-mgmt', 'groups', 'shares', 'bindings', 's3'], { cascade: false });
+    } else if (tabName === 'app') {
+        // Load Docker panel lazily when app tab is accessed
+        if (TM.refresh) {
+            TM.refresh.trigger('docker', { cascade: false });
+        }
     }
 }
 window.switchTab = switchTab;

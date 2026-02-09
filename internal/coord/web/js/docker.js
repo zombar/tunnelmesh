@@ -16,8 +16,16 @@ const dockerPagination = TM.pagination.createPaginationController({
 
 // Load Docker containers from the API
 async function loadDockerContainers() {
+    // Add 5-second timeout to prevent indefinite hangs
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
     try {
-        const response = await fetch('/api/docker/containers');
+        const response = await fetch('/api/docker/containers', {
+            signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
 
         if (response.status === 503) {
             // Docker not available - hide the entire panel
@@ -35,7 +43,12 @@ async function loadDockerContainers() {
 
         renderDockerContainers();
     } catch (err) {
-        console.error('Failed to load Docker containers:', err);
+        clearTimeout(timeout);
+        if (err.name === 'AbortError') {
+            console.error('Docker API request timed out after 5s');
+        } else {
+            console.error('Failed to load Docker containers:', err);
+        }
         // On error, hide the panel (likely Docker not available)
         dockerAvailable = false;
         hideDockerPanel();
