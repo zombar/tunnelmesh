@@ -19,6 +19,39 @@ type Generator struct {
 	docCounts map[string]int // Track document counts per type
 }
 
+// documentGenerators maps document types to their generator functions.
+var documentGenerators = map[string]func(story.Context) ([]byte, error){
+	"battle_report":        GenerateBattleReport,
+	"sitrep":               GenerateSITREP,
+	"scientific_analysis":  GenerateScientificAnalysis,
+	"traffic_report":       GenerateTrafficReport,
+	"council_meeting":      GenerateCouncilMeeting,
+	"telephone":            GenerateTelephone,
+	"im_transcript":        GenerateIMTranscript,
+	"casualty_list":        GenerateCasualtyList,
+	"supply_manifest":      GenerateSupplyManifest,
+	"intel_brief":          GenerateIntelBrief,
+	"radio_log":            GenerateRadioLog,
+	"press_release":        GeneratePressRelease,
+	"private_diary":        GeneratePrivateDiary,
+	"hospital_records":     GenerateHospitalRecords,
+	"lab_results":          GenerateLabResults,
+	"field_notes":          GenerateFieldNotes,
+	"drone_footage":        GenerateDroneFootage,
+	"intercepted_comms":    GenerateInterceptedComms,
+	"evacuation_order":     GenerateEvacuationOrder,
+	"status_update":        GenerateStatusUpdate,
+	"incident_report":      GenerateIncidentReport,
+	"sensor_reading":       GenerateSensorReading,
+	"social_media":         GenerateSocialMedia,
+	"news_bulletin":        GenerateNewsBulletin,
+	"logistics_report":     GenerateLogisticsReport,
+	"personnel_status":     GeneratePersonnelStatus,
+	"environmental_report": GenerateEnvironmentalReport,
+	"email":                GenerateEmail,
+	"alert_message":        GenerateAlertMessage,
+}
+
 // NewGenerator creates a new document generator for the given story.
 func NewGenerator(s story.Story) *Generator {
 	return &Generator{
@@ -39,72 +72,12 @@ func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte
 	ctx.Data["Rule"] = rule
 
 	// Select generator function based on document type
-	var content []byte
-	var err error
-
-	switch rule.Type {
-	case "battle_report":
-		content, err = GenerateBattleReport(ctx)
-	case "sitrep":
-		content, err = GenerateSITREP(ctx)
-	case "scientific_analysis":
-		content, err = GenerateScientificAnalysis(ctx)
-	case "traffic_report":
-		content, err = GenerateTrafficReport(ctx)
-	case "council_meeting":
-		content, err = GenerateCouncilMeeting(ctx)
-	case "telephone":
-		content, err = GenerateTelephone(ctx)
-	case "im_transcript":
-		content, err = GenerateIMTranscript(ctx)
-	case "casualty_list":
-		content, err = GenerateCasualtyList(ctx)
-	case "supply_manifest":
-		content, err = GenerateSupplyManifest(ctx)
-	case "intel_brief":
-		content, err = GenerateIntelBrief(ctx)
-	case "radio_log":
-		content, err = GenerateRadioLog(ctx)
-	case "press_release":
-		content, err = GeneratePressRelease(ctx)
-	case "private_diary":
-		content, err = GeneratePrivateDiary(ctx)
-	case "hospital_records":
-		content, err = GenerateHospitalRecords(ctx)
-	case "lab_results":
-		content, err = GenerateLabResults(ctx)
-	case "field_notes":
-		content, err = GenerateFieldNotes(ctx)
-	case "drone_footage":
-		content, err = GenerateDroneFootage(ctx)
-	case "intercepted_comms":
-		content, err = GenerateInterceptedComms(ctx)
-	case "evacuation_order":
-		content, err = GenerateEvacuationOrder(ctx)
-	case "status_update":
-		content, err = GenerateStatusUpdate(ctx)
-	case "incident_report":
-		content, err = GenerateIncidentReport(ctx)
-	case "sensor_reading":
-		content, err = GenerateSensorReading(ctx)
-	case "social_media":
-		content, err = GenerateSocialMedia(ctx)
-	case "news_bulletin":
-		content, err = GenerateNewsBulletin(ctx)
-	case "logistics_report":
-		content, err = GenerateLogisticsReport(ctx)
-	case "personnel_status":
-		content, err = GeneratePersonnelStatus(ctx)
-	case "environmental_report":
-		content, err = GenerateEnvironmentalReport(ctx)
-	case "email":
-		content, err = GenerateEmail(ctx)
-	case "alert_message":
-		content, err = GenerateAlertMessage(ctx)
-	default:
+	generatorFunc, ok := documentGenerators[rule.Type]
+	if !ok {
 		return nil, fmt.Errorf("unknown document type: %s", rule.Type)
 	}
 
+	content, err := generatorFunc(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("generating %s: %w", rule.Type, err)
 	}
@@ -242,18 +215,20 @@ func GetCasualtyCount(elapsed time.Duration) int {
 // GetThreatLevel returns the current threat level.
 func GetThreatLevel(elapsed time.Duration) string {
 	hours := elapsed.Hours()
-	if hours < 6 {
+	switch {
+	case hours < 6:
 		return "ELEVATED"
-	} else if hours < 18 {
+	case hours < 18:
 		return "HIGH"
-	} else if hours < 24 {
+	case hours < 24:
 		return "SEVERE"
-	} else if hours < 48 {
+	case hours < 48:
 		return "CRITICAL"
-	} else if hours < 60 {
+	case hours < 60:
 		return "CRITICAL"
+	default:
+		return "SEVERE" // Resistance stabilizing
 	}
-	return "SEVERE" // Resistance stabilizing
 }
 
 // RandomChoice returns a random element from a slice.

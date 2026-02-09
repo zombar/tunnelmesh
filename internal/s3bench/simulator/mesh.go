@@ -210,7 +210,7 @@ func (m *MeshOrchestrator) Stats() map[string]interface{} {
 
 // peerDetails returns a summary of each peer's state.
 func (m *MeshOrchestrator) peerDetails() []map[string]interface{} {
-	var details []map[string]interface{}
+	details := make([]map[string]interface{}, 0, len(m.peers))
 	for _, state := range m.peers {
 		detail := map[string]interface{}{
 			"character":   state.Character.Name,

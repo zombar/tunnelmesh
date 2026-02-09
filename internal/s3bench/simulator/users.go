@@ -161,13 +161,14 @@ func (um *UserManager) grantDepartmentAccess(dept story.Department) error {
 		// Determine role based on clearance
 		// Higher clearance = more permissions
 		var roleName string
-		if char.Clearance >= 4 {
+		switch {
+		case char.Clearance >= 4:
 			// High clearance: admin access to department shares
 			roleName = auth.RoleBucketAdmin
-		} else if char.Clearance >= 2 {
+		case char.Clearance >= 2:
 			// Medium clearance: write access
 			roleName = auth.RoleBucketWrite
-		} else {
+		default:
 			// Low clearance: read-only
 			roleName = auth.RoleBucketRead
 		}
