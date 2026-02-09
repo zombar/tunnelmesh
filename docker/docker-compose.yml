@@ -11,6 +11,7 @@ services:
       - ./scripts/server-entrypoint.sh:/scripts/server-entrypoint.sh:ro
       - metrics-data:/var/lib/tunnelmesh
       - s3-data:/var/lib/tunnelmesh/s3
+      - server-keys:/root/.tunnelmesh  # Persist SSH keys across restarts
       - /var/run/docker.sock:/var/run/docker.sock:ro  # Docker socket for container management
     cap_add:
       - NET_ADMIN
@@ -219,6 +220,10 @@ volumes:
     name: tunnelmesh-s3-data
     labels:
       - "com.tunnelmesh.description=S3 storage for users, groups, and file shares"
+  server-keys:
+    name: tunnelmesh-server-keys
+    labels:
+      - "com.tunnelmesh.description=Server SSH keys for mesh join identity"
   prometheus-data:
   grafana-data:
   loki-data:
