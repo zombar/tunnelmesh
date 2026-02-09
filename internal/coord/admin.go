@@ -1398,6 +1398,7 @@ type BindingInfo struct {
 	RoleName     string    `json:"role_name"`
 	BucketScope  string    `json:"bucket_scope,omitempty"`
 	ObjectPrefix string    `json:"object_prefix,omitempty"`
+	PanelScope   string    `json:"panel_scope,omitempty"`
 	Protected    bool      `json:"protected"`
 	CreatedAt    time.Time `json:"created_at"`
 }
@@ -1422,6 +1423,7 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 				RoleName:     b.RoleName,
 				BucketScope:  b.BucketScope,
 				ObjectPrefix: b.ObjectPrefix,
+				PanelScope:   b.PanelScope,
 				Protected:    protected,
 				CreatedAt:    b.CreatedAt,
 			})
@@ -1436,6 +1438,7 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 				RoleName:     gb.RoleName,
 				BucketScope:  gb.BucketScope,
 				ObjectPrefix: gb.ObjectPrefix,
+				PanelScope:   gb.PanelScope,
 				Protected:    protected,
 				CreatedAt:    gb.CreatedAt,
 			})
