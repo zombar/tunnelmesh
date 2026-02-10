@@ -29,7 +29,6 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/replication"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
-	"github.com/tunnelmesh/tunnelmesh/internal/dns"
 	"github.com/tunnelmesh/tunnelmesh/internal/docker"
 	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
@@ -405,14 +404,6 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 		}
 	}
 
-	// Publish SRV record for coordinator discovery
-	if cfg.Name != "" && cfg.Coordinator.Listen != "" {
-		srvName := fmt.Sprintf("%s.tunnelmesh", cfg.Name)
-		if err := dns.PublishCoordinator(srvName, cfg.Coordinator.Listen); err != nil {
-			log.Warn().Err(err).Msg("failed to publish coordinator SRV record")
-		}
-	}
-
 	// Initialize replicator if clustering is enabled
 	if srv.cluster != nil && srv.s3Store != nil {
 		// Create mesh transport for replication with TLS certificate verification
@@ -739,10 +730,6 @@ func (s *Server) Shutdown() error {
 			log.Error().Err(err).Msg("failed to shutdown cluster")
 			errs = append(errs, fmt.Errorf("shutdown cluster: %w", err))
 		}
-	}
-	if s.cfg.Name != "" {
-		srvName := fmt.Sprintf("%s.tunnelmesh", s.cfg.Name)
-		dns.UnpublishCoordinator(srvName)
 	}
 
 	if len(errs) > 0 {
@@ -1558,6 +1545,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Location:          location,
 		AllowsExitTraffic: req.AllowsExitTraffic,
 		ExitPeer:          req.ExitPeer,
+		IsCoordinator:     req.IsCoordinator,
 	}
 
 	// Preserve registeredAt for existing peers
@@ -1689,26 +1677,19 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		go s.lookupPeerLocation(req.Name, geoLookupIP)
 	}
 
-	// Populate live coordinators from cluster (if clustering enabled)
-	var liveCoordinators []string
-	if s.cluster != nil {
-		liveCoordinators = s.cluster.GetCoordinatorAddresses()
-	}
-
 	// Get coordinator mesh IP safely (uses atomic.Value)
 	coordIP, _ := s.coordMeshIP.Load().(string)
 
 	resp := proto.RegisterResponse{
-		MeshIP:           meshIP,
-		MeshCIDR:         mesh.CIDR,
-		Domain:           mesh.DomainSuffix,
-		Token:            token,
-		CoordMeshIP:      coordIP, // For "this.tunnelmesh" resolution
-		ServerVersion:    s.version,
-		PeerName:         req.Name, // May differ from original request if renamed
-		PeerID:           peerID,
-		IsAdmin:          isAdmin,
-		LiveCoordinators: liveCoordinators,
+		MeshIP:        meshIP,
+		MeshCIDR:      mesh.CIDR,
+		Domain:        mesh.DomainSuffix,
+		Token:         token,
+		CoordMeshIP:   coordIP, // For "this.tunnelmesh" resolution
+		ServerVersion: s.version,
+		PeerName:      req.Name, // May differ from original request if renamed
+		PeerID:        peerID,
+		IsAdmin:       isAdmin,
 	}
 
 	// Generate TLS certificate for the peer

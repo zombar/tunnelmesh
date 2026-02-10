@@ -38,7 +38,7 @@ func NewClient(baseURL, authToken string) *Client {
 
 // Register registers this peer with the coordination server.
 // The location parameter is optional and can be nil.
-func (c *Client) Register(name, publicKey string, publicIPs, privateIPs []string, sshPort, udpPort int, behindNAT bool, version string, location *proto.GeoLocation, exitNode string, allowsExitTraffic bool, aliases []string) (*proto.RegisterResponse, error) {
+func (c *Client) Register(name, publicKey string, publicIPs, privateIPs []string, sshPort, udpPort int, behindNAT bool, version string, location *proto.GeoLocation, exitNode string, allowsExitTraffic bool, aliases []string, isCoordinator bool) (*proto.RegisterResponse, error) {
 	req := proto.RegisterRequest{
 		Name:              name,
 		PublicKey:         publicKey,
@@ -52,6 +52,7 @@ func (c *Client) Register(name, publicKey string, publicIPs, privateIPs []string
 		ExitPeer:          exitNode,
 		AllowsExitTraffic: allowsExitTraffic,
 		Aliases:           aliases,
+		IsCoordinator:     isCoordinator,
 	}
 
 	body, err := json.Marshal(req)
@@ -99,7 +100,7 @@ func DefaultRetryConfig() RetryConfig {
 // RegisterWithRetry registers this peer with exponential backoff retry.
 // It will retry up to MaxRetries times if registration fails.
 // The location parameter is optional and can be nil.
-func (c *Client) RegisterWithRetry(ctx context.Context, name, publicKey string, publicIPs, privateIPs []string, sshPort, udpPort int, behindNAT bool, version string, location *proto.GeoLocation, exitNode string, allowsExitTraffic bool, aliases []string, cfg RetryConfig) (*proto.RegisterResponse, error) {
+func (c *Client) RegisterWithRetry(ctx context.Context, name, publicKey string, publicIPs, privateIPs []string, sshPort, udpPort int, behindNAT bool, version string, location *proto.GeoLocation, exitNode string, allowsExitTraffic bool, aliases []string, isCoordinator bool, cfg RetryConfig) (*proto.RegisterResponse, error) {
 	if cfg.MaxRetries == 0 {
 		cfg = DefaultRetryConfig()
 	}
@@ -108,7 +109,7 @@ func (c *Client) RegisterWithRetry(ctx context.Context, name, publicKey string, 
 	var lastErr error
 
 	for attempt := 1; attempt <= cfg.MaxRetries; attempt++ {
-		resp, err := c.Register(name, publicKey, publicIPs, privateIPs, sshPort, udpPort, behindNAT, version, location, exitNode, allowsExitTraffic, aliases)
+		resp, err := c.Register(name, publicKey, publicIPs, privateIPs, sshPort, udpPort, behindNAT, version, location, exitNode, allowsExitTraffic, aliases, isCoordinator)
 		if err == nil {
 			return resp, nil
 		}

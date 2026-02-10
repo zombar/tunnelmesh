@@ -61,6 +61,7 @@ type Peer struct {
 	Location          *GeoLocation `json:"location,omitempty"`            // Geographic location
 	AllowsExitTraffic bool         `json:"allows_exit_traffic,omitempty"` // Can act as exit node for other peers
 	ExitPeer          string       `json:"exit_node,omitempty"`           // Name of peer used as exit node
+	IsCoordinator     bool         `json:"is_coordinator,omitempty"`      // True if peer is running coordinator services
 }
 
 // RegisterRequest is sent by a peer to join the mesh.
@@ -77,22 +78,22 @@ type RegisterRequest struct {
 	AllowsExitTraffic bool         `json:"allows_exit_traffic,omitempty"` // Allow this node to act as exit node
 	ExitPeer          string       `json:"exit_node,omitempty"`           // Name of peer to use as exit node
 	Aliases           []string     `json:"aliases,omitempty"`             // Custom DNS aliases for this peer
+	IsCoordinator     bool         `json:"is_coordinator,omitempty"`      // True if peer is running coordinator services
 }
 
 // RegisterResponse is returned after successful registration.
 type RegisterResponse struct {
-	MeshIP           string   `json:"mesh_ip"`                     // Assigned mesh IP address
-	MeshCIDR         string   `json:"mesh_cidr"`                   // Full mesh CIDR for routing
-	Domain           string   `json:"domain"`                      // Domain suffix (e.g., ".tunnelmesh")
-	Token            string   `json:"token"`                       // JWT token for relay authentication
-	TLSCert          string   `json:"tls_cert,omitempty"`          // PEM-encoded TLS certificate signed by mesh CA
-	TLSKey           string   `json:"tls_key,omitempty"`           // PEM-encoded TLS private key
-	CoordMeshIP      string   `json:"coord_mesh_ip,omitempty"`     // Coordinator's mesh IP for "this.tunnelmesh" resolution
-	ServerVersion    string   `json:"server_version,omitempty"`    // Server version for compatibility check
-	PeerName         string   `json:"peer_name,omitempty"`         // Assigned peer name (may differ from request if renamed)
-	PeerID           string   `json:"peer_id,omitempty"`           // Derived peer ID for RBAC (SHA256(pubkey)[:8] hex)
-	IsAdmin          bool     `json:"is_admin,omitempty"`          // True if peer is in admin_peers list (coordinator services enabled)
-	LiveCoordinators []string `json:"live_coordinators,omitempty"` // List of live coordinator addresses for failover
+	MeshIP        string `json:"mesh_ip"`                  // Assigned mesh IP address
+	MeshCIDR      string `json:"mesh_cidr"`                // Full mesh CIDR for routing
+	Domain        string `json:"domain"`                   // Domain suffix (e.g., ".tunnelmesh")
+	Token         string `json:"token"`                    // JWT token for relay authentication
+	TLSCert       string `json:"tls_cert,omitempty"`       // PEM-encoded TLS certificate signed by mesh CA
+	TLSKey        string `json:"tls_key,omitempty"`        // PEM-encoded TLS private key
+	CoordMeshIP   string `json:"coord_mesh_ip,omitempty"`  // Coordinator's mesh IP for "this.tunnelmesh" resolution
+	ServerVersion string `json:"server_version,omitempty"` // Server version for compatibility check
+	PeerName      string `json:"peer_name,omitempty"`      // Assigned peer name (may differ from request if renamed)
+	PeerID        string `json:"peer_id,omitempty"`        // Derived peer ID for RBAC (SHA256(pubkey)[:8] hex)
+	IsAdmin       bool   `json:"is_admin,omitempty"`       // True if peer is in admin_peers list (coordinator services enabled)
 }
 
 // PeerStats contains traffic statistics reported by peers.

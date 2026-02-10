@@ -11,17 +11,11 @@ if [ ! -f "$KEY_PATH" ]; then
 fi
 
 # Build command with optional flags
-CMD="tunnelmesh serve --config /etc/tunnelmesh/server.yaml"
+CMD="tunnelmesh join --config /etc/tunnelmesh/server.yaml"
 
 # Set log level from environment (default: info)
 LOG_LEVEL="${LOG_LEVEL:-info}"
 CMD="$CMD --log-level $LOG_LEVEL"
-
-# Enable pprof if PPROF_ADDR is set
-if [ -n "$PPROF_ADDR" ]; then
-    echo "Enabling pprof on $PPROF_ADDR"
-    CMD="$CMD --pprof-addr $PPROF_ADDR"
-fi
 
 # Start the server (which will also join the mesh as a client)
 echo "Starting mesh server..."

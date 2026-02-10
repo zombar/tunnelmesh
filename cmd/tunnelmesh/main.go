@@ -361,8 +361,13 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 		Int("ssh_port", cfg.SSHPort).
 		Msg("config loaded")
 
-	if len(cfg.Servers) == 0 || cfg.AuthToken == "" {
-		return fmt.Errorf("servers and token are required in config")
+	// Validate configuration
+	// Standalone coordinators (first in network) can have empty servers list
+	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
+		return fmt.Errorf("servers required for non-coordinator peers")
+	}
+	if cfg.AuthToken == "" {
+		return fmt.Errorf("auth_token is required in config")
 	}
 
 	// Log network interface information for debugging
@@ -590,23 +595,11 @@ func discoverAndRegisterWithCoordinator(
 	// Build list of coordinators to try
 	coordinators := make([]string, 0, len(cfg.Servers)+10)
 
-	// 1. Try static config servers first (primary)
+	// Use static config servers (coordinators discover each other via peer list)
 	coordinators = append(coordinators, cfg.Servers...)
 
-	// 2. Try DNS SRV discovery if static config fails or is empty
-	if len(cfg.Servers) == 0 {
-		log.Info().Msg("no servers in config, attempting DNS SRV discovery")
-		srvCoords, err := meshdns.DiscoverCoordinators("tunnelmesh")
-		if err == nil && len(srvCoords) > 0 {
-			log.Info().Strs("coordinators", srvCoords).Msg("discovered coordinators via DNS SRV")
-			coordinators = append(coordinators, srvCoords...)
-		} else if err != nil {
-			log.Debug().Err(err).Msg("DNS SRV discovery failed")
-		}
-	}
-
 	if len(coordinators) == 0 {
-		return nil, nil, fmt.Errorf("no coordinators found (check servers config or DNS SRV records)")
+		return nil, nil, fmt.Errorf("no coordinators configured (check servers config)")
 	}
 
 	// Try each coordinator until one succeeds
@@ -629,6 +622,7 @@ func discoverAndRegisterWithCoordinator(
 			cfg.ExitPeer,
 			cfg.AllowExitTraffic,
 			cfg.DNS.Aliases,
+			cfg.Coordinator.Enabled,
 			coord.DefaultRetryConfig(),
 		)
 
@@ -637,13 +631,6 @@ func discoverAndRegisterWithCoordinator(
 				Str("coordinator", coordURL).
 				Str("mesh_ip", resp.MeshIP).
 				Msg("successfully registered with coordinator")
-
-			// TODO Phase 3: Cache LiveCoordinators from response for failover
-			if len(resp.LiveCoordinators) > 0 {
-				log.Debug().
-					Strs("live_coordinators", resp.LiveCoordinators).
-					Msg("received live coordinator list for failover")
-			}
 
 			return client, resp, nil
 		}
@@ -663,8 +650,13 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Always use system hostname as node name
 	cfg.Name, _ = os.Hostname()
 
-	if len(cfg.Servers) == 0 || cfg.AuthToken == "" {
-		return fmt.Errorf("servers and token are required")
+	// Validate configuration
+	// Standalone coordinators (first in network) can have empty servers list
+	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
+		return fmt.Errorf("servers required for non-coordinator peers")
+	}
+	if cfg.AuthToken == "" {
+		return fmt.Errorf("auth_token is required")
 	}
 
 	// Apply configured log level from config file

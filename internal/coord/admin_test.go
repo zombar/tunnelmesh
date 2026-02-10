@@ -128,7 +128,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 		City:      "London",
 		Country:   "United Kingdom",
 	}
-	_, err = client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", location, "", false, nil)
+	_, err = client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", location, "", false, nil, false)
 	require.NoError(t, err)
 
 	// Fetch admin overview from adminMux (internal mesh only)
@@ -177,11 +177,11 @@ func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 
 	// Register an exit node
 	client := NewClient(ts.URL, "test-token")
-	_, err = client.Register("exit-node", "SHA256:exitkey", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", true, nil)
+	_, err = client.Register("exit-node", "SHA256:exitkey", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", true, nil, false)
 	require.NoError(t, err)
 
 	// Register a client that uses the exit node
-	_, err = client.Register("client1", "SHA256:client1key", []string{"5.6.7.8"}, nil, 2223, 0, false, "v1.0.0", nil, "exit-node", false, nil)
+	_, err = client.Register("client1", "SHA256:client1key", []string{"5.6.7.8"}, nil, 2223, 0, false, "v1.0.0", nil, "exit-node", false, nil, false)
 	require.NoError(t, err)
 
 	// Fetch admin overview from adminMux (internal mesh only)
@@ -245,7 +245,7 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 
 	// Register a peer
 	client := NewClient(ts.URL, "test-token")
-	_, err = client.Register("peer1", "SHA256:peer1key", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil)
+	_, err = client.Register("peer1", "SHA256:peer1key", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
 	require.NoError(t, err)
 
 	// Directly set stats on the server (simulating heartbeat)

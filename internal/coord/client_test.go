@@ -38,7 +38,7 @@ func TestClient_Register(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register
-	resp, err := client.Register("mynode", "SHA256:abc123", []string{"1.2.3.4"}, []string{"192.168.1.1"}, 2222, 0, false, "v1.0.0", nil, "", false, nil)
+	resp, err := client.Register("mynode", "SHA256:abc123", []string{"1.2.3.4"}, []string{"192.168.1.1"}, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
 	require.NoError(t, err)
 
 	assert.Contains(t, resp.MeshIP, "172.30.") // IP is hash-based, just check it's in mesh range
@@ -76,7 +76,7 @@ func TestClient_RegisterWithLocation(t *testing.T) {
 		Longitude: -0.1278,
 		Source:    "manual",
 	}
-	resp, err := client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, []string{"192.168.1.1"}, 2222, 0, false, "v1.0.0", location, "", false, nil)
+	resp, err := client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, []string{"192.168.1.1"}, 2222, 0, false, "v1.0.0", location, "", false, nil, false)
 	require.NoError(t, err)
 
 	assert.Contains(t, resp.MeshIP, "172.30.")
@@ -113,7 +113,7 @@ func TestClient_ListPeers(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register a peer
-	_, err = client.Register("node1", "SHA256:key1", nil, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil)
+	_, err = client.Register("node1", "SHA256:key1", nil, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
 	require.NoError(t, err)
 
 	// List peers
@@ -150,7 +150,7 @@ func TestClient_Deregister(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register first
-	_, err = client.Register("mynode", "SHA256:key", nil, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil)
+	_, err = client.Register("mynode", "SHA256:key", nil, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
 	require.NoError(t, err)
 
 	// Verify registered
@@ -188,9 +188,9 @@ func TestClient_GetDNSRecords(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Register peers
-	_, err = client.Register("node1", "SHA256:key1", nil, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil)
+	_, err = client.Register("node1", "SHA256:key1", nil, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
 	require.NoError(t, err)
-	_, err = client.Register("node2", "SHA256:key2", nil, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil)
+	_, err = client.Register("node2", "SHA256:key2", nil, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
 	require.NoError(t, err)
 
 	// Get DNS records
@@ -228,7 +228,7 @@ func TestClient_RegisterWithRetry_SuccessOnFirstTry(t *testing.T) {
 		MaxBackoff:     100 * time.Millisecond,
 	}
 
-	resp, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 2223, false, "v1.0.0", nil, "", false, nil, retryCfg)
+	resp, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", []string{"1.2.3.4"}, []string{}, 2222, 2223, false, "v1.0.0", nil, "", false, []string{}, false, retryCfg)
 	require.NoError(t, err)
 
 	assert.Contains(t, resp.MeshIP, "172.30.")
@@ -267,7 +267,7 @@ func TestClient_RegisterWithRetry_SuccessAfterFailures(t *testing.T) {
 		MaxBackoff:     50 * time.Millisecond,
 	}
 
-	resp, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", nil, nil, 2222, 2223, false, "v1.0.0", nil, "", false, nil, retryCfg)
+	resp, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", []string{}, []string{}, 2222, 2223, false, "v1.0.0", nil, "", false, []string{}, false, retryCfg)
 	require.NoError(t, err)
 
 	assert.Equal(t, int32(3), attempts.Load(), "should have taken 3 attempts")
@@ -294,7 +294,7 @@ func TestClient_RegisterWithRetry_MaxRetriesExceeded(t *testing.T) {
 		MaxBackoff:     50 * time.Millisecond,
 	}
 
-	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", nil, nil, 2222, 2223, false, "v1.0.0", nil, "", false, nil, retryCfg)
+	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", []string{}, []string{}, 2222, 2223, false, "v1.0.0", nil, "", false, []string{}, false, retryCfg)
 	require.Error(t, err)
 
 	assert.Equal(t, int32(3), attempts.Load(), "should have made exactly 3 attempts")
@@ -327,7 +327,7 @@ func TestClient_RegisterWithRetry_ContextCancelled(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", nil, nil, 2222, 2223, false, "v1.0.0", nil, "", false, nil, retryCfg)
+	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", []string{}, []string{}, 2222, 2223, false, "v1.0.0", nil, "", false, []string{}, false, retryCfg)
 	require.Error(t, err)
 
 	assert.Equal(t, context.Canceled, err)
@@ -345,7 +345,7 @@ func TestClient_RegisterWithRetry_ConnectionRefused(t *testing.T) {
 		MaxBackoff:     50 * time.Millisecond,
 	}
 
-	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", nil, nil, 2222, 2223, false, "v1.0.0", nil, "", false, nil, retryCfg)
+	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", []string{}, []string{}, 2222, 2223, false, "v1.0.0", nil, "", false, []string{}, false, retryCfg)
 	require.Error(t, err)
 
 	assert.Contains(t, err.Error(), "after 2 attempts")
@@ -400,7 +400,7 @@ func TestServer_GeolocationOnlyOnNewOrChangedIP(t *testing.T) {
 	client := NewClient(ts.URL, "test-token")
 
 	// Test 1: First registration should trigger geolocation lookup
-	_, err = client.Register("node1", "SHA256:key1", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil)
+	_, err = client.Register("node1", "SHA256:key1", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
 	require.NoError(t, err)
 
 	// Wait for background geolocation to complete
@@ -417,7 +417,7 @@ func TestServer_GeolocationOnlyOnNewOrChangedIP(t *testing.T) {
 	assert.Equal(t, "ip", peers[0].Location.Source)
 
 	// Test 2: Re-registration with SAME IP should NOT trigger new lookup
-	_, err = client.Register("node1", "SHA256:key1", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil)
+	_, err = client.Register("node1", "SHA256:key1", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
 	require.NoError(t, err)
 
 	time.Sleep(100 * time.Millisecond)
@@ -425,7 +425,7 @@ func TestServer_GeolocationOnlyOnNewOrChangedIP(t *testing.T) {
 	assert.Equal(t, initialCount, geoLookupCount.Load(), "re-registration with same IP should not trigger new lookup")
 
 	// Test 3: Re-registration with DIFFERENT IP should trigger new lookup
-	_, err = client.Register("node1", "SHA256:key1", []string{"5.6.7.8"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil)
+	_, err = client.Register("node1", "SHA256:key1", []string{"5.6.7.8"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
 	require.NoError(t, err)
 
 	time.Sleep(100 * time.Millisecond)
@@ -463,7 +463,7 @@ func TestServer_ManualLocationPreservedOnIPChange(t *testing.T) {
 		Source:    "manual",
 		City:      "New York",
 	}
-	_, err = client.Register("node1", "SHA256:key1", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", manualLoc, "", false, nil)
+	_, err = client.Register("node1", "SHA256:key1", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", manualLoc, "", false, nil, false)
 	require.NoError(t, err)
 
 	// Verify location
@@ -475,7 +475,7 @@ func TestServer_ManualLocationPreservedOnIPChange(t *testing.T) {
 	assert.Equal(t, 40.7128, peers[0].Location.Latitude)
 
 	// Re-register with different IP but NO location (simulating reconnect)
-	_, err = client.Register("node1", "SHA256:key1", []string{"5.6.7.8"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil)
+	_, err = client.Register("node1", "SHA256:key1", []string{"5.6.7.8"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
 	require.NoError(t, err)
 
 	// Manual location should be preserved
