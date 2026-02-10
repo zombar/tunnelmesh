@@ -22,7 +22,7 @@
     --color-btn-danger: #f85149;
 
     /* Focus ring */
-    --color-focus-ring: rgba(88, 166, 255, 0.3);
+    --color-focus-ring: rgb(88, 166, 255, 0.3);
 
     /* Card hover state (matches network topology nodes) */
     --color-card-hover-bg: #2d333b;
@@ -38,8 +38,8 @@
     --viz-peer-online: #3fb950;
     --viz-peer-offline: #f85149;
     --viz-peer-coordinator: #58a6ff;
-    --viz-edge-online: rgba(88, 166, 255, 0.4);
-    --viz-edge-offline: rgba(248, 81, 73, 0.3);
+    --viz-edge-online: rgb(88, 166, 255, 0.4);
+    --viz-edge-offline: rgb(248, 81, 73, 0.3);
     --viz-label-text: #e6edf3;
 }
 
@@ -244,7 +244,7 @@ main > section {
 }
 
 /* Responsive spacing for sections on smaller screens */
-@media (max-width: 900px) {
+@media (width <= 900px) {
     main > section {
         margin-bottom: 1rem;
     }
@@ -267,7 +267,7 @@ main > section {
     font-size: 0.875rem;
     font-weight: 500;
     color: var(--color-text-secondary);
-    margin: 0 0 0.75rem 0;
+    margin: 0 0 0.75rem;
 }
 
 .chart-card canvas {
@@ -310,10 +310,11 @@ main > section {
 /* Fix tile seams (white lines between tiles) */
 .leaflet-tile {
     outline: none !important;
+
     /* GPU acceleration prevents subpixel gaps */
     backface-visibility: hidden;
-    -webkit-backface-visibility: hidden;
     transform: translate3d(0, 0, 0);
+
     /* Slightly enlarge tiles to overlap seams */
     margin: -0.5px;
 }
@@ -325,7 +326,6 @@ main > section {
 
 .leaflet-tile-container {
     backface-visibility: hidden;
-    -webkit-backface-visibility: hidden;
 }
 
 .leaflet-tile-container img {
@@ -345,7 +345,7 @@ main > section {
 }
 
 .leaflet-control-attribution {
-    background: rgba(13, 17, 23, 0.8) !important;
+    background: rgb(13, 17, 23, 0.8) !important;
     color: var(--color-text-secondary) !important;
 }
 
@@ -358,7 +358,7 @@ main > section {
     cursor: pointer;
 }
 
-@media (max-width: 900px) {
+@media (width <= 900px) {
     .map-container {
         height: 280px;
     }
@@ -399,7 +399,7 @@ main > section {
     cursor: grab;
 }
 
-@media (max-width: 900px) {
+@media (width <= 900px) {
     .visualizer-container {
         height: 350px;
     }
@@ -617,7 +617,7 @@ main {
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.8);
+    background: rgb(0, 0, 0, 0.8);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -721,8 +721,8 @@ main {
 }
 
 .warning-box {
-    background: rgba(210, 153, 34, 0.15);
-    border: 1px solid rgba(210, 153, 34, 0.4);
+    background: rgb(210, 153, 34, 0.15);
+    border: 1px solid rgb(210, 153, 34, 0.4);
     border-radius: var(--panel-border-radius);
     padding: 0.75rem 1rem;
     margin-bottom: 1rem;
@@ -753,7 +753,7 @@ main {
     resize: vertical;
 }
 
-@media (max-width: 600px) {
+@media (width <= 600px) {
     .config-grid {
         grid-template-columns: 1fr;
         text-align: center;
@@ -829,23 +829,23 @@ td {
 }
 
 .status-badge.online {
-    background: rgba(63, 185, 80, 0.15);
+    background: rgb(63, 185, 80, 0.15);
     color: var(--color-accent-green);
-    border-color: rgba(63, 185, 80, 0.4);
+    border-color: rgb(63, 185, 80, 0.4);
 }
 
 .status-badge.offline {
-    background: rgba(248, 81, 73, 0.15);
+    background: rgb(248, 81, 73, 0.15);
     color: var(--color-accent-red);
-    border-color: rgba(248, 81, 73, 0.4);
+    border-color: rgb(248, 81, 73, 0.4);
 }
 
 
 /* Exit node badge (square corners, compact) */
 .status-badge.exit {
-    background: rgba(240, 165, 0, 0.2);
+    background: rgb(240, 165, 0, 0.2);
     color: #f0a500;
-    border-color: rgba(240, 165, 0, 0.5);
+    border-color: rgb(240, 165, 0, 0.5);
     border-radius: 0;
     padding: 0.1rem 0.3rem;
     font-size: 0.65rem;
@@ -856,21 +856,21 @@ td {
 
 /* Transport type badges */
 .status-badge.ssh {
-    background: rgba(63, 185, 80, 0.15);
+    background: rgb(63, 185, 80, 0.15);
     color: var(--color-accent-green);
-    border-color: rgba(63, 185, 80, 0.4);
+    border-color: rgb(63, 185, 80, 0.4);
 }
 
 .status-badge.udp {
-    background: rgba(88, 166, 255, 0.15);
+    background: rgb(88, 166, 255, 0.15);
     color: #58a6ff;
-    border-color: rgba(88, 166, 255, 0.4);
+    border-color: rgb(88, 166, 255, 0.4);
 }
 
 .status-badge.relay {
-    background: rgba(210, 153, 34, 0.15);
+    background: rgb(210, 153, 34, 0.15);
     color: #d29922;
-    border-color: rgba(210, 153, 34, 0.4);
+    border-color: rgb(210, 153, 34, 0.4);
 }
 
 /* Exit node text indicator */
@@ -1018,7 +1018,7 @@ footer {
     flex-shrink: 0;
 }
 
-@media (max-width: 768px) {
+@media (width <= 768px) {
     header {
         flex-direction: column;
         text-align: center;
@@ -1057,7 +1057,7 @@ footer {
     max-width: 400px;
     font-size: 0.875rem;
     color: var(--color-text-primary);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 4px 12px rgb(0, 0, 0, 0.4);
     animation: toast-slide-in 0.2s ease-out;
 }
 
@@ -1085,6 +1085,7 @@ footer {
         opacity: 0;
         transform: translateX(100%);
     }
+
     to {
         opacity: 1;
         transform: translateX(0);
@@ -1095,6 +1096,7 @@ footer {
     from {
         opacity: 1;
     }
+
     to {
         opacity: 0;
     }
@@ -1225,20 +1227,20 @@ a.alert-tile {
 /* Highlight tile when alerts are firing */
 .alert-tile.warning.active {
     border-color: var(--color-accent-orange);
-    background: rgba(210, 153, 34, 0.1);
+    background: rgb(210, 153, 34, 0.1);
 }
 
 .alert-tile.critical.active {
     border-color: var(--color-accent-red);
-    background: rgba(248, 81, 73, 0.1);
+    background: rgb(248, 81, 73, 0.1);
 }
 
 .alert-tile.page.active {
     border-color: #a855f7;
-    background: rgba(168, 85, 247, 0.1);
+    background: rgb(168, 85, 247, 0.1);
 }
 
-@media (max-width: 900px) {
+@media (width <= 900px) {
     #alerts-section {
         padding: 0 1rem;
         margin: 1rem auto 0;
@@ -1277,8 +1279,7 @@ a.alert-tile {
 a.logs-container {
     display: block;
     height: 300px;
-    overflow-y: auto;
-    overflow-x: auto;
+    overflow: auto;
     font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
     font-size: 0.75rem;
     line-height: 1.4;
@@ -1493,15 +1494,15 @@ a.logs-container {
 }
 
 .action-badge.allow {
-    background: rgba(139, 148, 158, 0.15);
+    background: rgb(139, 148, 158, 0.15);
     color: var(--color-text-secondary);
-    border: 1px solid rgba(139, 148, 158, 0.3);
+    border: 1px solid rgb(139, 148, 158, 0.3);
 }
 
 .action-badge.deny {
-    background: rgba(139, 148, 158, 0.15);
+    background: rgb(139, 148, 158, 0.15);
     color: var(--color-text-secondary);
-    border: 1px solid rgba(139, 148, 158, 0.3);
+    border: 1px solid rgb(139, 148, 158, 0.3);
 }
 
 /* Muted text utility */
@@ -1545,8 +1546,8 @@ a.logs-container {
 .filter-warning {
     padding: 0.5rem 1rem;
     margin: 0;
-    background: rgba(210, 153, 34, 0.1);
-    border-bottom: 1px solid rgba(210, 153, 34, 0.3);
+    background: rgb(210, 153, 34, 0.1);
+    border-bottom: 1px solid rgb(210, 153, 34, 0.3);
     color: #d29922;
     font-size: 0.8rem;
 }
@@ -1702,10 +1703,7 @@ a.logs-container {
 /* Fullscreen mode */
 .s3-fullscreen {
     position: fixed !important;
-    top: 0 !important;
-    left: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
+    inset: 0 !important;
     z-index: 1000 !important;
     margin: 0 !important;
     border-radius: 0 !important;
@@ -1727,8 +1725,7 @@ a.logs-container {
 /* Resizable content container */
 .s3-content {
     height: 448px;
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: hidden auto;
 }
 
 /* Discreet scrollbar for s3 content */
@@ -1863,11 +1860,8 @@ a.logs-container {
 /* S3 Version Modal */
 .s3-modal {
     position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
+    inset: 0;
+    background: rgb(0, 0, 0, 0.5);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2067,8 +2061,8 @@ a.logs-container {
     text-transform: uppercase;
     pointer-events: none;
     z-index: 10;
-    text-shadow: 0 0 8px rgba(210, 153, 34, 0.4);
-    box-shadow: 0 4px 12px rgba(210, 153, 34, 0.15);
+    text-shadow: 0 0 8px rgb(210, 153, 34, 0.4);
+    box-shadow: 0 4px 12px rgb(210, 153, 34, 0.15);
     flex-shrink: 0;
 }
 
@@ -2076,8 +2070,8 @@ a.logs-container {
 .s3-readonly-badge.s3-readonly-tombstoned {
     border-bottom-color: var(--color-accent-red);
     color: var(--color-accent-red);
-    text-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
-    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.15);
+    text-shadow: 0 0 8px rgb(239, 68, 68, 0.4);
+    box-shadow: 0 4px 12px rgb(239, 68, 68, 0.15);
 }
 
 .s3-line-numbers {
@@ -2133,12 +2127,8 @@ a.logs-container {
     letter-spacing: 0.025em;
     word-spacing: 0.08em;
     white-space: normal;
-    word-wrap: break-word;
     overflow-wrap: break-word;
-    padding-left: 7rem;
-    padding-right: 1rem;
-    padding-top: 0.75rem;
-    padding-bottom: 0.75rem;
+    padding: 0.75rem 1rem 0.75rem 7rem;
     background: linear-gradient(90deg, var(--color-bg-secondary) 6rem, var(--color-bg-primary) 6rem);
     overflow: auto;
 }
@@ -2160,7 +2150,7 @@ a.logs-container {
     word-spacing: 0.12em;
     border-bottom: 2px solid var(--color-border-primary);
     padding-bottom: 0.3em;
-    margin: 1em 0 0.5em 0;
+    margin: 1em 0 0.5em;
     color: var(--color-accent-blue);
     text-transform: uppercase;
 }
@@ -2172,7 +2162,7 @@ a.logs-container {
     word-spacing: 0.1em;
     border-bottom: 1px solid var(--color-border-secondary);
     padding-bottom: 0.3em;
-    margin: 0.9em 0 0.5em 0;
+    margin: 0.9em 0 0.5em;
     color: var(--color-text-primary);
 }
 
@@ -2181,7 +2171,7 @@ a.logs-container {
     font-weight: 600;
     letter-spacing: 0.05em;
     word-spacing: 0.08em;
-    margin: 0.8em 0 0.4em 0;
+    margin: 0.8em 0 0.4em;
     color: var(--color-text-primary);
 }
 
@@ -2190,7 +2180,7 @@ a.logs-container {
     font-weight: 600;
     letter-spacing: 0.04em;
     word-spacing: 0.07em;
-    margin: 0.7em 0 0.4em 0;
+    margin: 0.7em 0 0.4em;
     color: var(--color-text-primary);
 }
 
@@ -2199,7 +2189,7 @@ a.logs-container {
     font-weight: 600;
     letter-spacing: 0.03em;
     word-spacing: 0.06em;
-    margin: 0.6em 0 0.4em 0;
+    margin: 0.6em 0 0.4em;
     color: var(--color-text-secondary);
 }
 
@@ -2208,7 +2198,7 @@ a.logs-container {
     font-weight: 600;
     letter-spacing: 0.03em;
     word-spacing: 0.06em;
-    margin: 0.6em 0 0.4em 0;
+    margin: 0.6em 0 0.4em;
     color: var(--color-text-secondary);
 }
 
@@ -2290,7 +2280,7 @@ a.logs-container {
     color: var(--color-text-secondary);
     font-style: italic;
     letter-spacing: 0.02em;
-    background: rgba(88, 166, 255, 0.05);
+    background: rgb(88, 166, 255, 0.05);
     padding-top: 0.5em;
     padding-bottom: 0.5em;
 }
@@ -2314,14 +2304,14 @@ a.logs-container {
 }
 
 .s3-wysiwyg .markdown-alert-icon {
-    fill: currentColor;
+    fill: currentcolor;
     flex-shrink: 0;
 }
 
 /* Note - Blue */
 .s3-wysiwyg .markdown-alert-note {
     border-left-color: var(--color-accent-blue);
-    background: rgba(88, 166, 255, 0.1);
+    background: rgb(88, 166, 255, 0.1);
     color: var(--color-text-primary);
 }
 
@@ -2332,7 +2322,7 @@ a.logs-container {
 /* Tip - Green */
 .s3-wysiwyg .markdown-alert-tip {
     border-left-color: #3fb950;
-    background: rgba(63, 185, 80, 0.1);
+    background: rgb(63, 185, 80, 0.1);
     color: var(--color-text-primary);
 }
 
@@ -2343,7 +2333,7 @@ a.logs-container {
 /* Important - Purple */
 .s3-wysiwyg .markdown-alert-important {
     border-left-color: #a371f7;
-    background: rgba(163, 113, 247, 0.1);
+    background: rgb(163, 113, 247, 0.1);
     color: var(--color-text-primary);
 }
 
@@ -2354,7 +2344,7 @@ a.logs-container {
 /* Warning - Orange/Yellow */
 .s3-wysiwyg .markdown-alert-warning {
     border-left-color: var(--color-accent-orange);
-    background: rgba(210, 153, 34, 0.1);
+    background: rgb(210, 153, 34, 0.1);
     color: var(--color-text-primary);
 }
 
@@ -2365,7 +2355,7 @@ a.logs-container {
 /* Caution - Red */
 .s3-wysiwyg .markdown-alert-caution {
     border-left-color: var(--color-accent-red);
-    background: rgba(239, 68, 68, 0.1);
+    background: rgb(239, 68, 68, 0.1);
     color: var(--color-text-primary);
 }
 
@@ -2385,7 +2375,7 @@ a.logs-container {
 .s3-wysiwyg a:hover {
     color: var(--color-accent-blue);
     border-bottom: 1px solid var(--color-accent-blue);
-    background: rgba(88, 166, 255, 0.1);
+    background: rgb(88, 166, 255, 0.1);
 }
 
 /* Images */
@@ -2488,11 +2478,8 @@ a.logs-container {
 /* Drop zone overlay */
 .s3-drop-zone {
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(88, 166, 255, 0.15);
+    inset: 0;
+    background: rgb(88, 166, 255, 0.15);
     border: 2px dashed var(--color-accent-blue);
     display: none;
     align-items: center;
@@ -2570,7 +2557,7 @@ a.logs-container {
     text-align: center;
     font-size: 0.75rem;
     color: var(--color-text-primary);
-    word-break: break-word;
+    overflow-wrap: break-word;
     max-width: 100%;
     line-height: 1.3;
 }
@@ -2601,14 +2588,14 @@ a.logs-container {
 }
 
 /* Responsive grid */
-@media (max-width: 900px) {
+@media (width <= 900px) {
     .s3-icon-grid {
         grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
         gap: 0.75rem;
     }
 }
 
-@media (max-width: 600px) {
+@media (width <= 600px) {
     .s3-icon-grid {
         grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
         gap: 0.5rem;

@@ -1,0 +1,28 @@
+{
+  "name": "tunnelmesh",
+  "version": "1.0.0",
+  "description": "![Admin Dashboard](docs/images/tunnelmesh_banner.webp)",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zombar/tunnelmesh.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/zombar/tunnelmesh/issues"
+  },
+  "homepage": "https://github.com/zombar/tunnelmesh#readme",
+  "devDependencies": {
+    "stylelint": "^17.2.0",
+    "stylelint-config-standard": "^40.0.0"
+  }
+}

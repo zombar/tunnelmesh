@@ -95,6 +95,18 @@ pre-commit:
         fi
       fail_text: "Markdown linting failed. Fix errors or install markdownlint-cli."
 
+    # CSS linting
+    css-lint:
+      glob: "**/*.css"
+      run: |
+        if command -v npx >/dev/null 2>&1; then
+          npx stylelint {staged_files}
+        else
+          echo "npx not found. Install Node.js and npm"
+          exit 1
+        fi
+      fail_text: "CSS linting failed. Fix errors with: npx stylelint --fix <file>"
+
 pre-push:
   parallel: true
   commands:

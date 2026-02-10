@@ -21,6 +21,7 @@ go.work
 
 # Dependency directories
 # vendor/ - Intentionally NOT ignored for supply chain security
+node_modules/
 
 # IDE and editor files
 .idea/
