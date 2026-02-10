@@ -16,7 +16,7 @@
     // =========================================================================
 
     const PAGE_SIZE = 7;
-    const DATASHEET_PAGE_SIZE = 50; // Rows per page in datasheet view
+    const DATASHEET_PAGE_SIZE = 50; // Minimum rows per page in datasheet view (actual size adapts to viewport)
     const DEFAULT_COLUMN_WIDTH = 150; // Default column width in pixels
 
     // =========================================================================
@@ -434,11 +434,40 @@
     }
 
     /**
+     * Calculate dynamic page size based on available viewport height
+     * @returns {number} Number of rows that fit in the viewport
+     */
+    function calculateDatasheetPageSize() {
+        const container = document.getElementById('s3-datasheet-container');
+        if (!container) return DATASHEET_PAGE_SIZE;
+
+        // Get available height for the table
+        const containerHeight = container.clientHeight;
+
+        // Estimate row height (padding + line height + border)
+        // Using 36px as a reasonable estimate based on CSS (0.5rem padding = 8px * 2 + ~20px line height)
+        const estimatedRowHeight = 36;
+
+        // Reserve space for header (estimate ~40px)
+        const headerHeight = 40;
+
+        // Calculate how many rows fit
+        const availableHeight = containerHeight - headerHeight;
+        const rowsFit = Math.floor(availableHeight / estimatedRowHeight);
+
+        // Return at least minimum page size, at most the calculated rows
+        return Math.max(DATASHEET_PAGE_SIZE, rowsFit);
+    }
+
+    /**
      * Render datasheet view
      */
     function renderDatasheet() {
         const container = document.getElementById('s3-datasheet');
         if (!container || !state.datasheetData || !state.datasheetSchema) return;
+
+        // Calculate dynamic page size based on viewport
+        state.datasheetPageSize = calculateDatasheetPageSize();
 
         const { data, schema, page, pageSize } = {
             data: state.datasheetData,
@@ -2469,6 +2498,18 @@
                     renderFileListing();
                 }
             });
+        }
+
+        // Listen for window resize to recalculate datasheet page size
+        if (typeof TM !== 'undefined' && TM.utils && TM.utils.debounce) {
+            const handleResize = TM.utils.debounce(() => {
+                // Only re-render if currently in datasheet mode
+                if (state.editorMode === 'datasheet' && state.datasheetData) {
+                    renderDatasheet();
+                }
+            }, 200); // Debounce by 200ms
+
+            window.addEventListener('resize', handleResize);
         }
 
         await renderFileListing();
