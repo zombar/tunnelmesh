@@ -11,7 +11,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/testutil"
 )
 
-func TestLoadServerConfig(t *testing.T) {
+func TestLoadPeerConfig(t *testing.T) {
 	dir, cleanup := testutil.TempDir(t)
 	defer cleanup()
 
@@ -23,14 +23,14 @@ domain_suffix: ".tunnelmesh"
 `
 	configPath := testutil.TempFile(t, dir, "server.yaml", content)
 
-	cfg, err := LoadServerConfig(configPath)
+	cfg, err := LoadPeerConfig(configPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, ":8080", cfg.Listen)
 	assert.Equal(t, "test-token-123", cfg.AuthToken)
 }
 
-func TestLoadServerConfig_Defaults(t *testing.T) {
+func TestLoadPeerConfig_Defaults(t *testing.T) {
 	dir, cleanup := testutil.TempDir(t)
 	defer cleanup()
 
@@ -41,7 +41,7 @@ auth_token: "secret"
 `
 	configPath := testutil.TempFile(t, dir, "server.yaml", content)
 
-	cfg, err := LoadServerConfig(configPath)
+	cfg, err := LoadPeerConfig(configPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, ":9000", cfg.Listen)
@@ -50,7 +50,7 @@ auth_token: "secret"
 	assert.Equal(t, []uint16{9443}, cfg.ServicePorts, "ServicePorts should default to [9443] for metrics")
 }
 
-func TestLoadServerConfig_S3ExpiryDefaults(t *testing.T) {
+func TestLoadPeerConfig_S3ExpiryDefaults(t *testing.T) {
 	dir, cleanup := testutil.TempDir(t)
 	defer cleanup()
 
@@ -63,14 +63,14 @@ s3:
 `
 	configPath := testutil.TempFile(t, dir, "server.yaml", content)
 
-	cfg, err := LoadServerConfig(configPath)
+	cfg, err := LoadPeerConfig(configPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, 9125, cfg.S3.ObjectExpiryDays, "ObjectExpiryDays should default to 9125 (25 years)")
 	assert.Equal(t, 365, cfg.S3.ShareExpiryDays, "ShareExpiryDays should default to 365 (1 year)")
 }
 
-func TestLoadServerConfig_S3ExpiryCustom(t *testing.T) {
+func TestLoadPeerConfig_S3ExpiryCustom(t *testing.T) {
 	dir, cleanup := testutil.TempDir(t)
 	defer cleanup()
 
@@ -85,14 +85,14 @@ s3:
 `
 	configPath := testutil.TempFile(t, dir, "server.yaml", content)
 
-	cfg, err := LoadServerConfig(configPath)
+	cfg, err := LoadPeerConfig(configPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3650, cfg.S3.ObjectExpiryDays, "ObjectExpiryDays should be customizable")
 	assert.Equal(t, 180, cfg.S3.ShareExpiryDays, "ShareExpiryDays should be customizable")
 }
 
-func TestLoadServerConfig_S3TombstoneDefaults(t *testing.T) {
+func TestLoadPeerConfig_S3TombstoneDefaults(t *testing.T) {
 	dir, cleanup := testutil.TempDir(t)
 	defer cleanup()
 
@@ -105,13 +105,13 @@ s3:
 `
 	configPath := testutil.TempFile(t, dir, "server.yaml", content)
 
-	cfg, err := LoadServerConfig(configPath)
+	cfg, err := LoadPeerConfig(configPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, 90, cfg.S3.TombstoneRetentionDays, "TombstoneRetentionDays should default to 90")
 }
 
-func TestLoadServerConfig_S3TombstoneCustom(t *testing.T) {
+func TestLoadPeerConfig_S3TombstoneCustom(t *testing.T) {
 	dir, cleanup := testutil.TempDir(t)
 	defer cleanup()
 
@@ -125,18 +125,18 @@ s3:
 `
 	configPath := testutil.TempFile(t, dir, "server.yaml", content)
 
-	cfg, err := LoadServerConfig(configPath)
+	cfg, err := LoadPeerConfig(configPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, 30, cfg.S3.TombstoneRetentionDays, "TombstoneRetentionDays should be customizable")
 }
 
-func TestLoadServerConfig_FileNotFound(t *testing.T) {
-	_, err := LoadServerConfig("/nonexistent/path/config.yaml")
+func TestLoadPeerConfig_FileNotFound(t *testing.T) {
+	_, err := LoadPeerConfig("/nonexistent/path/config.yaml")
 	assert.Error(t, err)
 }
 
-func TestLoadServerConfig_InvalidYAML(t *testing.T) {
+func TestLoadPeerConfig_InvalidYAML(t *testing.T) {
 	dir, cleanup := testutil.TempDir(t)
 	defer cleanup()
 
@@ -145,7 +145,7 @@ listen: [invalid yaml
 `
 	configPath := testutil.TempFile(t, dir, "server.yaml", content)
 
-	_, err := LoadServerConfig(configPath)
+	_, err := LoadPeerConfig(configPath)
 	assert.Error(t, err)
 }
 
@@ -173,7 +173,7 @@ dns:
 	require.NoError(t, err)
 
 	assert.Equal(t, "mynode", cfg.Name)
-	assert.Equal(t, "https://coord.example.com", cfg.Server)
+	assert.Equal(t, "https://coord.example.com", cfg.Servers[0])
 	assert.Equal(t, "peer-token", cfg.AuthToken)
 	assert.Equal(t, 2222, cfg.SSHPort)
 	assert.Equal(t, "/path/to/key", cfg.PrivateKey)
@@ -228,15 +228,15 @@ private_key: "~/.tunnelmesh/id_ed25519"
 	assert.Equal(t, expected, cfg.PrivateKey)
 }
 
-func TestServerConfig_Validate(t *testing.T) {
+func TestPeerConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
-		cfg     ServerConfig
+		cfg     PeerConfig
 		wantErr bool
 	}{
 		{
 			name: "valid config",
-			cfg: ServerConfig{
+			cfg: PeerConfig{
 				Listen:    ":8080",
 				AuthToken: "token",
 			},
@@ -244,14 +244,14 @@ func TestServerConfig_Validate(t *testing.T) {
 		},
 		{
 			name: "missing listen",
-			cfg: ServerConfig{
+			cfg: PeerConfig{
 				AuthToken: "token",
 			},
 			wantErr: true,
 		},
 		{
 			name: "missing auth token",
-			cfg: ServerConfig{
+			cfg: PeerConfig{
 				Listen: ":8080",
 			},
 			wantErr: true,
@@ -916,7 +916,7 @@ metrics_enabled: true
 
 // Log Level Configuration Tests
 
-func TestLoadServerConfig_WithLogLevel(t *testing.T) {
+func TestLoadPeerConfig_WithLogLevel(t *testing.T) {
 	dir, cleanup := testutil.TempDir(t)
 	defer cleanup()
 
@@ -927,14 +927,14 @@ log_level: "debug"
 `
 	configPath := testutil.TempFile(t, dir, "server.yaml", content)
 
-	cfg, err := LoadServerConfig(configPath)
+	cfg, err := LoadPeerConfig(configPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, ":8080", cfg.Listen)
 	assert.Equal(t, "debug", cfg.LogLevel)
 }
 
-func TestLoadServerConfig_LogLevelDefaults(t *testing.T) {
+func TestLoadPeerConfig_LogLevelDefaults(t *testing.T) {
 	dir, cleanup := testutil.TempDir(t)
 	defer cleanup()
 
@@ -945,7 +945,7 @@ auth_token: "test-token-123"
 `
 	configPath := testutil.TempFile(t, dir, "server.yaml", content)
 
-	cfg, err := LoadServerConfig(configPath)
+	cfg, err := LoadPeerConfig(configPath)
 	require.NoError(t, err)
 
 	assert.Equal(t, "", cfg.LogLevel, "log_level should default to empty string")
@@ -988,7 +988,7 @@ auth_token: "token"
 	assert.Equal(t, "", cfg.LogLevel, "log_level should default to empty string")
 }
 
-func TestLoadServerConfig_AllLogLevels(t *testing.T) {
+func TestLoadPeerConfig_AllLogLevels(t *testing.T) {
 	levels := []string{"trace", "debug", "info", "warn", "error"}
 
 	for _, level := range levels {
@@ -1003,7 +1003,7 @@ log_level: "` + level + `"
 `
 			configPath := testutil.TempFile(t, dir, "server.yaml", content)
 
-			cfg, err := LoadServerConfig(configPath)
+			cfg, err := LoadPeerConfig(configPath)
 			require.NoError(t, err)
 			assert.Equal(t, level, cfg.LogLevel)
 		})
@@ -1276,7 +1276,7 @@ filter:
 	assert.Equal(t, "allow", cfg.Filter.Rules[0].Action)
 }
 
-func TestLoadServerConfig_WithFilter(t *testing.T) {
+func TestLoadPeerConfig_WithFilter(t *testing.T) {
 	dir, cleanup := testutil.TempDir(t)
 	defer cleanup()
 
@@ -1295,7 +1295,7 @@ filter:
 `
 	configPath := testutil.TempFile(t, dir, "server.yaml", content)
 
-	cfg, err := LoadServerConfig(configPath)
+	cfg, err := LoadPeerConfig(configPath)
 	require.NoError(t, err)
 
 	assert.True(t, cfg.Filter.IsDefaultDeny())

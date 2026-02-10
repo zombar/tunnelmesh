@@ -29,8 +29,10 @@ func newTestServer(t *testing.T) *Server {
 		Coordinator: config.CoordinatorConfig{
 			Enabled: true,
 			Listen:  ":0",
+			Admin: config.AdminConfig{
+				Enabled: true,
+			},
 		},
-	},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -552,10 +554,10 @@ func newTestServerWithWireGuard(t *testing.T) *Server {
 		Coordinator: config.CoordinatorConfig{
 			Enabled: true,
 			Listen:  ":0",
-		},
-	},
-			Enabled:  true,
-			Endpoint: "wg.example.com:51820",
+			WireGuardServer: config.WireGuardServerConfig{
+				Enabled:  true,
+				Endpoint: "wg.example.com:51820",
+			},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -995,8 +997,12 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 		Coordinator: config.CoordinatorConfig{
 			Enabled: true,
 			Listen:  ":0",
+			S3: config.S3Config{
+				Enabled: true,
+				DataDir: tempDir + "/s3",
+				Port:    9000,
+			},
 		},
-	},
 	}
 
 	// Create first server instance
@@ -1067,13 +1073,13 @@ func newTestServerWithS3(t *testing.T) *Server {
 		Coordinator: config.CoordinatorConfig{
 			Enabled: true,
 			Listen:  ":0",
-		},
-	},
-		S3: config.S3Config{
-			Enabled: true,
-			DataDir: tempDir + "/s3",
-			Port:    9000,
-			MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
+			S3: config.S3Config{
+				Enabled: true,
+				DataDir: tempDir + "/s3",
+				Port:    9000,
+				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
+			},
+			Filter: config.FilterConfig{}, // Initialize Filter field
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -1283,13 +1289,12 @@ func TestServer_FilterRulesRecoveryFiltersExpired(t *testing.T) {
 		Coordinator: config.CoordinatorConfig{
 			Enabled: true,
 			Listen:  ":0",
-		},
-	},
-		S3: config.S3Config{
-			Enabled: true,
-			DataDir: tempDir + "/s3",
-			Port:    9000,
-			MaxSize: 1 * 1024 * 1024 * 1024,
+			S3: config.S3Config{
+				Enabled: true,
+				DataDir: tempDir + "/s3",
+				Port:    9000,
+				MaxSize: 1 * 1024 * 1024 * 1024,
+			},
 		},
 	}
 

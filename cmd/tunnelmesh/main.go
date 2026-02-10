@@ -928,6 +928,90 @@ func runJoinWithConfig(ctx context.Context, cfg *config.PeerConfig) error {
 }
 
 // nolint:gocyclo // Main join logic is inherently complex due to protocol state machine
+// discoverAndRegisterWithCoordinator discovers coordinators and tries to register with them.
+// Discovery hierarchy: Static config → DNS SRV → Retry with exponential backoff
+// Returns the successful client and registration response.
+func discoverAndRegisterWithCoordinator(
+	ctx context.Context,
+	cfg *config.PeerConfig,
+	publicKey string,
+	publicIPs, privateIPs []string,
+	sshPort, udpPort int,
+	behindNAT bool,
+	version string,
+	location *proto.GeoLocation,
+) (*coord.Client, *proto.RegisterResponse, error) {
+	// Build list of coordinators to try
+	coordinators := make([]string, 0, len(cfg.Servers)+10)
+
+	// 1. Try static config servers first (primary)
+	coordinators = append(coordinators, cfg.Servers...)
+
+	// 2. Try DNS SRV discovery if static config fails or is empty
+	if len(cfg.Servers) == 0 {
+		log.Info().Msg("no servers in config, attempting DNS SRV discovery")
+		srvCoords, err := meshdns.DiscoverCoordinators("tunnelmesh")
+		if err == nil && len(srvCoords) > 0 {
+			log.Info().Strs("coordinators", srvCoords).Msg("discovered coordinators via DNS SRV")
+			coordinators = append(coordinators, srvCoords...)
+		} else if err != nil {
+			log.Debug().Err(err).Msg("DNS SRV discovery failed")
+		}
+	}
+
+	if len(coordinators) == 0 {
+		return nil, nil, fmt.Errorf("no coordinators found (check servers config or DNS SRV records)")
+	}
+
+	// Try each coordinator until one succeeds
+	var lastErr error
+	for _, coordURL := range coordinators {
+		log.Info().Str("coordinator", coordURL).Msg("attempting registration")
+
+		client := coord.NewClient(coordURL, cfg.AuthToken)
+		resp, err := client.RegisterWithRetry(
+			ctx,
+			cfg.Name,
+			publicKey,
+			publicIPs,
+			privateIPs,
+			sshPort,
+			udpPort,
+			behindNAT,
+			version,
+			location,
+			cfg.ExitPeer,
+			cfg.AllowExitTraffic,
+			cfg.DNS.Aliases,
+			coord.DefaultRetryConfig(),
+		)
+
+		if err == nil {
+			log.Info().
+				Str("coordinator", coordURL).
+				Str("mesh_ip", resp.MeshIP).
+				Msg("successfully registered with coordinator")
+
+			// TODO Phase 3: Cache LiveCoordinators from response for failover
+			if len(resp.LiveCoordinators) > 0 {
+				log.Debug().
+					Strs("live_coordinators", resp.LiveCoordinators).
+					Msg("received live coordinator list for failover")
+			}
+
+			return client, resp, nil
+		}
+
+		lastErr = err
+		log.Warn().
+			Err(err).
+			Str("coordinator", coordURL).
+			Msg("failed to register with coordinator, trying next")
+	}
+
+	return nil, nil, fmt.Errorf("failed to register with any coordinator (tried %d): %w", len(coordinators), lastErr)
+}
+
 func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, onJoined OnJoinedFunc) error {
 	// Always use system hostname as node name
 	cfg.Name, _ = os.Hostname()
@@ -962,9 +1046,6 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		Bool("behind_nat", behindNAT).
 		Msg("detected local IPs")
 
-	// Connect to coordination server
-	client := coord.NewClient(cfg.Servers[0], cfg.AuthToken)
-
 	// UDP port is SSH port + 1
 	udpPort := cfg.SSHPort + 1
 
@@ -984,8 +1065,11 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			Msg("geolocation configured")
 	}
 
-	// Register with retry and exponential backoff
-	resp, err := client.RegisterWithRetry(ctx, cfg.Name, pubKeyEncoded, publicIPs, privateIPs, cfg.SSHPort, udpPort, behindNAT, Version, location, cfg.ExitPeer, cfg.AllowExitTraffic, cfg.DNS.Aliases, coord.DefaultRetryConfig())
+	// Discover and connect to coordination server
+	client, resp, err := discoverAndRegisterWithCoordinator(
+		ctx, cfg, pubKeyEncoded, publicIPs, privateIPs,
+		cfg.SSHPort, udpPort, behindNAT, Version, location,
+	)
 	if err != nil {
 		return fmt.Errorf("register with server: %w", err)
 	}

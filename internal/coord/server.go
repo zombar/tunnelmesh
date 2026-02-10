@@ -23,9 +23,11 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/cluster"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/nfs"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
+	"github.com/tunnelmesh/tunnelmesh/internal/dns"
 	"github.com/tunnelmesh/tunnelmesh/internal/docker"
 	"github.com/tunnelmesh/tunnelmesh/internal/mesh"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
@@ -66,9 +68,10 @@ type serverStats struct {
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
 	cfg          *config.PeerConfig
-	mux          *http.ServeMux // Public coordination API (peer registration, heartbeats)
-	adminMux     *http.ServeMux // Private admin interface (dashboards, monitoring) - mesh-only
-	adminServer  *http.Server   // HTTPS server for adminMux, bound to mesh IP only
+	mux          *http.ServeMux              // Public coordination API (peer registration, heartbeats)
+	adminMux     *http.ServeMux              // Private admin interface (dashboards, monitoring) - mesh-only
+	adminServer  *http.Server                // HTTPS server for adminMux, bound to mesh IP only
+	cluster      *cluster.CoordinatorCluster // Memberlist cluster (nil if not using clustering)
 	peers        map[string]*peerInfo
 	peersMu      sync.RWMutex
 	ipAlloc      *ipAllocator
@@ -285,6 +288,39 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 	// Load persisted filter rules (temporary and service overrides)
 	if err := srv.recoverFilterRules(); err != nil {
 		log.Warn().Err(err).Msg("failed to load filter rules, starting fresh")
+	}
+
+	// Initialize memberlist cluster if seeds are configured
+	if len(cfg.Coordinator.MemberlistSeeds) > 0 {
+		coordAddr := cfg.Coordinator.Listen
+		if coordAddr == "" {
+			coordAddr = ":8080"
+		}
+		// Use coordinator name as address for cluster identity
+		clusterName := fmt.Sprintf("%s%s", cfg.Name, coordAddr)
+
+		cluster, err := cluster.NewCoordinatorCluster(
+			cfg.Coordinator.MemberlistBindAddr,
+			clusterName,
+			cfg.Coordinator.MemberlistSeeds,
+		)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to initialize coordinator cluster (will run standalone)")
+		} else {
+			srv.cluster = cluster
+			log.Info().
+				Int("members", cluster.NumMembers()).
+				Strs("seeds", cfg.Coordinator.MemberlistSeeds).
+				Msg("coordinator cluster initialized")
+		}
+	}
+
+	// Publish SRV record for coordinator discovery
+	if cfg.Name != "" && cfg.Coordinator.Listen != "" {
+		srvName := fmt.Sprintf("%s.tunnelmesh", cfg.Name)
+		if err := dns.PublishCoordinator(srvName, cfg.Coordinator.Listen); err != nil {
+			log.Warn().Err(err).Msg("failed to publish coordinator SRV record")
+		}
 	}
 
 	srv.setupRoutes()
@@ -561,6 +597,23 @@ func (s *Server) Shutdown() error {
 			log.Error().Err(err).Msg("failed to stop Docker manager")
 			errs = append(errs, fmt.Errorf("stop docker manager: %w", err))
 		}
+	}
+
+	// Leave memberlist cluster and unpublish SRV record
+	if s.cluster != nil {
+		log.Info().Msg("leaving coordinator cluster")
+		if err := s.cluster.Leave(); err != nil {
+			log.Error().Err(err).Msg("failed to leave cluster gracefully")
+			errs = append(errs, fmt.Errorf("leave cluster: %w", err))
+		}
+		if err := s.cluster.Shutdown(); err != nil {
+			log.Error().Err(err).Msg("failed to shutdown cluster")
+			errs = append(errs, fmt.Errorf("shutdown cluster: %w", err))
+		}
+	}
+	if s.cfg.Name != "" {
+		srvName := fmt.Sprintf("%s.tunnelmesh", s.cfg.Name)
+		dns.UnpublishCoordinator(srvName)
 	}
 
 	if len(errs) > 0 {
@@ -1478,16 +1531,23 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		go s.lookupPeerLocation(req.Name, geoLookupIP)
 	}
 
+	// Populate live coordinators from cluster (if clustering enabled)
+	var liveCoordinators []string
+	if s.cluster != nil {
+		liveCoordinators = s.cluster.GetCoordinatorAddresses()
+	}
+
 	resp := proto.RegisterResponse{
-		MeshIP:        meshIP,
-		MeshCIDR:      mesh.CIDR,
-		Domain:        mesh.DomainSuffix,
-		Token:         token,
-		CoordMeshIP:   s.coordMeshIP, // For "this.tunnelmesh" resolution
-		ServerVersion: s.version,
-		PeerName:      req.Name, // May differ from original request if renamed
-		PeerID:        peerID,
-		IsAdmin:       isAdmin,
+		MeshIP:           meshIP,
+		MeshCIDR:         mesh.CIDR,
+		Domain:           mesh.DomainSuffix,
+		Token:            token,
+		CoordMeshIP:      s.coordMeshIP, // For "this.tunnelmesh" resolution
+		ServerVersion:    s.version,
+		PeerName:         req.Name, // May differ from original request if renamed
+		PeerID:           peerID,
+		IsAdmin:          isAdmin,
+		LiveCoordinators: liveCoordinators,
 	}
 
 	// Generate TLS certificate for the peer

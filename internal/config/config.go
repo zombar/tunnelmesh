@@ -41,21 +41,21 @@ type WireGuardServerConfig struct {
 
 // CoordinatorConfig holds configuration for coordinator services (run by admin peers).
 type CoordinatorConfig struct {
-	Enabled             bool                  `yaml:"enabled"`               // Enable coordinator services (auto-enabled if peer is admin)
-	Listen              string                `yaml:"listen"`                // Coordination API listen address (e.g., ":8443")
-	DataDir             string                `yaml:"data_dir"`              // Data directory for persistence (default: /var/lib/tunnelmesh)
-	HeartbeatInterval   string                `yaml:"heartbeat_interval"`    // Heartbeat interval (default: 10s)
-	UserExpirationDays  int                   `yaml:"user_expiration_days"`  // Days until user expires after last seen (default: 270 = 9 months)
-	AdminPeers          []string              `yaml:"admin_peers"`           // Peer names that should be added to admins group (e.g., ["honker", "oldie"])
-	Locations           bool                  `yaml:"locations"`             // Enable node location tracking (requires external IP geolocation API)
-	MemberlistSeeds     []string              `yaml:"memberlist_seeds"`      // Memberlist gossip cluster seed addresses (e.g., ["coord1.example.com:7946"])
-	MemberlistBindAddr  string                `yaml:"memberlist_bind_addr"`  // Address to bind memberlist gossip (default: ":7946")
-	Admin               AdminConfig           `yaml:"admin"`                 // Admin web interface configuration
-	Relay               RelayConfig           `yaml:"relay"`                 // WebSocket relay configuration
-	WireGuardServer     WireGuardServerConfig `yaml:"wireguard_server"`      // WireGuard client management
-	S3                  S3Config              `yaml:"s3"`                    // S3-compatible storage configuration
-	Filter              FilterConfig          `yaml:"filter"`                // Global packet filter rules for all peers
-	ServicePorts        []uint16              `yaml:"service_ports"`         // Service ports to auto-allow on peers (default: [9443] for metrics)
+	Enabled            bool                  `yaml:"enabled"`              // Enable coordinator services (auto-enabled if peer is admin)
+	Listen             string                `yaml:"listen"`               // Coordination API listen address (e.g., ":8443")
+	DataDir            string                `yaml:"data_dir"`             // Data directory for persistence (default: /var/lib/tunnelmesh)
+	HeartbeatInterval  string                `yaml:"heartbeat_interval"`   // Heartbeat interval (default: 10s)
+	UserExpirationDays int                   `yaml:"user_expiration_days"` // Days until user expires after last seen (default: 270 = 9 months)
+	AdminPeers         []string              `yaml:"admin_peers"`          // Peer names that should be added to admins group (e.g., ["honker", "oldie"])
+	Locations          bool                  `yaml:"locations"`            // Enable node location tracking (requires external IP geolocation API)
+	MemberlistSeeds    []string              `yaml:"memberlist_seeds"`     // Memberlist gossip cluster seed addresses (e.g., ["coord1.example.com:7946"])
+	MemberlistBindAddr string                `yaml:"memberlist_bind_addr"` // Address to bind memberlist gossip (default: ":7946")
+	Admin              AdminConfig           `yaml:"admin"`                // Admin web interface configuration
+	Relay              RelayConfig           `yaml:"relay"`                // WebSocket relay configuration
+	WireGuardServer    WireGuardServerConfig `yaml:"wireguard_server"`     // WireGuard client management
+	S3                 S3Config              `yaml:"s3"`                   // S3-compatible storage configuration
+	Filter             FilterConfig          `yaml:"filter"`               // Global packet filter rules for all peers
+	ServicePorts       []uint16              `yaml:"service_ports"`        // Service ports to auto-allow on peers (default: [9443] for metrics)
 }
 
 // S3Config holds configuration for the S3-compatible storage service.
@@ -94,7 +94,7 @@ type WireGuardPeerConfig struct {
 // PeerConfig holds configuration for a peer node.
 type PeerConfig struct {
 	Name              string              `yaml:"name"`
-	Servers           []string            `yaml:"servers"`            // Coordinator URLs (e.g., ["https://coord1.example.com:8443"])
+	Servers           []string            `yaml:"servers"` // Coordinator URLs (e.g., ["https://coord1.example.com:8443"])
 	AuthToken         string              `yaml:"auth_token"`
 	SSHPort           int                 `yaml:"ssh_port"`
 	PrivateKey        string              `yaml:"private_key"`
@@ -376,7 +376,6 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 
 	return cfg, nil
 }
-
 
 // IsMetricsEnabled returns whether Prometheus metrics collection is enabled.
 // Returns true by default (when MetricsEnabled is nil or explicitly true).
