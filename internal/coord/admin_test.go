@@ -95,15 +95,20 @@ func TestDownsampleHistory(t *testing.T) {
 }
 
 func TestAdminOverview_IncludesLocation(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		Locations: true, // Enable location tracking for this test
-		Admin: config.AdminConfig{
-			Enabled: true,
+		TUN: config.TUNConfig{
+			MTU: 1400,
 		},
-		JoinMesh: &config.PeerConfig{
-			Name: "test-coord",
+		Coordinator: config.CoordinatorConfig{
+			Enabled:   true,
+			Listen:    ":0",
+			Locations: true, // Enable location tracking for this test
+			Admin: config.AdminConfig{
+				Enabled: true,
+			},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -148,19 +153,24 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 }
 
 func TestAdminOverview_ExitPeerInfo(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		Admin: config.AdminConfig{
-			Enabled: true,
+		TUN: config.TUNConfig{
+			MTU: 1400,
 		},
-		JoinMesh: &config.PeerConfig{
-			Name: "test-coord",
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+			Admin: config.AdminConfig{
+				Enabled: true,
+			},
 		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
-	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
+	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -211,14 +221,19 @@ func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 }
 
 func TestAdminOverview_ConnectionTypes(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		Admin: config.AdminConfig{
-			Enabled: true,
+		TUN: config.TUNConfig{
+			MTU: 1400,
 		},
-		JoinMesh: &config.PeerConfig{
-			Name: "test-coord",
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+			Admin: config.AdminConfig{
+				Enabled: true,
+			},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -274,20 +289,25 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 }
 
 func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
-	// Create a server with JoinMesh configured to enable adminMux
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	// Create a server with coordinator enabled to have adminMux
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		Admin: config.AdminConfig{
-			Enabled: true,
+		TUN: config.TUNConfig{
+			MTU: 1400,
 		},
-		JoinMesh: &config.PeerConfig{
-			Name: "test-coord",
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+			Admin: config.AdminConfig{
+				Enabled: true,
+			},
 		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
-	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
+	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
 
 	// Start mock Prometheus and Grafana servers
 	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -366,16 +386,24 @@ func TestDownsampleHistory_Uniformity(t *testing.T) {
 func newTestServerWithS3AndBucket(t *testing.T) *Server {
 	t.Helper()
 	tempDir := t.TempDir()
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		DataDir:   tempDir,
-		Admin:     config.AdminConfig{Enabled: true},
-		S3: config.S3Config{
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
 			Enabled: true,
-			DataDir: tempDir + "/s3",
-			Port:    9000,
-			MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
+			Listen:  ":0",
+			DataDir: tempDir,
+			Admin:   config.AdminConfig{Enabled: true},
+			S3: config.S3Config{
+				Enabled: true,
+				DataDir: tempDir + "/s3",
+				Port:    9000,
+				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
+			},
 		},
 	}
 	srv, err := NewServer(cfg)

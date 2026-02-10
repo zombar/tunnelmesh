@@ -16,9 +16,17 @@ import (
 
 func TestClient_Register(t *testing.T) {
 	// Create test server
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -40,10 +48,18 @@ func TestClient_Register(t *testing.T) {
 
 func TestClient_RegisterWithLocation(t *testing.T) {
 	// Create test server
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		Locations: true, // Enable location tracking for this test
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled:   true,
+			Listen:    ":0",
+			Locations: true, // Enable location tracking for this test
+		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -76,9 +92,17 @@ func TestClient_RegisterWithLocation(t *testing.T) {
 }
 
 func TestClient_ListPeers(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -105,9 +129,17 @@ func TestClient_ListPeers(t *testing.T) {
 // See internal/tunnel/persistent_relay_test.go for WebSocket heartbeat tests.
 
 func TestClient_Deregister(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -135,9 +167,17 @@ func TestClient_Deregister(t *testing.T) {
 }
 
 func TestClient_GetDNSRecords(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -161,9 +201,17 @@ func TestClient_GetDNSRecords(t *testing.T) {
 }
 
 func TestClient_RegisterWithRetry_SuccessOnFirstTry(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -327,10 +375,18 @@ func TestServer_GeolocationOnlyOnNewOrChangedIP(t *testing.T) {
 	defer geoServer.Close()
 
 	// Create test server with custom geolocation cache
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		Locations: true, // Enable location tracking for this test
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled:   true,
+			Listen:    ":0",
+			Locations: true, // Enable location tracking for this test
+		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -379,10 +435,18 @@ func TestServer_GeolocationOnlyOnNewOrChangedIP(t *testing.T) {
 }
 
 func TestServer_ManualLocationPreservedOnIPChange(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		Locations: true, // Enable location tracking for this test
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled:   true,
+			Listen:    ":0",
+			Locations: true, // Enable location tracking for this test
+		},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)

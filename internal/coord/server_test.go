@@ -19,10 +19,18 @@ import (
 )
 
 func newTestServer(t *testing.T) *Server {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		Admin:     config.AdminConfig{Enabled: true},
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+		},
+	},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -534,10 +542,18 @@ func TestServer_IPv4OnlyEndpointRegistration(t *testing.T) {
 
 // newTestServerWithWireGuard creates a test server with WireGuard enabled.
 func newTestServerWithWireGuard(t *testing.T) *Server {
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		Admin:     config.AdminConfig{Enabled: true},
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+		},
+	},
 			Enabled:  true,
 			Endpoint: "wg.example.com:51820",
 		},
@@ -969,16 +985,18 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 	// This test verifies that registered users are recovered after coordinator restart
 	tempDir := t.TempDir()
 
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		DataDir:   tempDir,
-		S3: config.S3Config{
-			Enabled: true,
-			DataDir: tempDir + "/s3",
-			Port:    9000,
-			MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
+		TUN: config.TUNConfig{
+			MTU: 1400,
 		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+		},
+	},
 	}
 
 	// Create first server instance
@@ -1039,11 +1057,18 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 func newTestServerWithS3(t *testing.T) *Server {
 	t.Helper()
 	tempDir := t.TempDir()
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		DataDir:   tempDir,
-		Admin:     config.AdminConfig{Enabled: true},
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+		},
+	},
 		S3: config.S3Config{
 			Enabled: true,
 			DataDir: tempDir + "/s3",
@@ -1248,11 +1273,18 @@ func TestServer_FilterRulesPersistence(t *testing.T) {
 
 func TestServer_FilterRulesRecoveryFiltersExpired(t *testing.T) {
 	tempDir := t.TempDir()
-	cfg := &config.ServerConfig{
-		Listen:    ":0",
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
-		DataDir:   tempDir,
-		Admin:     config.AdminConfig{Enabled: true},
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":0",
+		},
+	},
 		S3: config.S3Config{
 			Enabled: true,
 			DataDir: tempDir + "/s3",

@@ -10,9 +10,17 @@ import (
 )
 
 func TestServer_GenerateAndValidateToken(t *testing.T) {
-	srv, err := NewServer(&config.ServerConfig{
-		Listen:    ":8080",
+	srv, err := NewServer(&config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-secret-key-12345",
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":8080",
+		},
 	})
 	require.NoError(t, err)
 
@@ -30,15 +38,31 @@ func TestServer_GenerateAndValidateToken(t *testing.T) {
 }
 
 func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
-	srv1, err := NewServer(&config.ServerConfig{
-		Listen:    ":8080",
+	srv1, err := NewServer(&config.PeerConfig{
+		Name:      "test-coord1",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "secret-key-1",
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":8080",
+		},
 	})
 	require.NoError(t, err)
 
-	srv2, err := NewServer(&config.ServerConfig{
-		Listen:    ":8080",
+	srv2, err := NewServer(&config.PeerConfig{
+		Name:      "test-coord2",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "secret-key-2", // Different key
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":8080",
+		},
 	})
 	require.NoError(t, err)
 
@@ -52,9 +76,17 @@ func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
 }
 
 func TestServer_ValidateToken_InvalidToken(t *testing.T) {
-	srv, err := NewServer(&config.ServerConfig{
-		Listen:    ":8080",
+	srv, err := NewServer(&config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-secret-key",
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+			Listen:  ":8080",
+		},
 	})
 	require.NoError(t, err)
 
