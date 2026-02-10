@@ -1447,6 +1447,7 @@
             }
 
             updateModeToggleButton();
+            updateCloseButton();
 
             // Focus editor at position 0 when in source mode
             if (state.editorMode === 'source' && editor && !isReadOnly) {
@@ -1469,7 +1470,18 @@
 
         state.currentFile = null;
         state.isDirty = false;
+        updateCloseButton();
         renderFileListing();
+    }
+
+    /**
+     * Update close button disabled state based on whether a file is open
+     */
+    function updateCloseButton() {
+        const closeBtn = document.getElementById('s3-close-btn');
+        if (closeBtn) {
+            closeBtn.disabled = !state.currentFile;
+        }
     }
 
     /* istanbul ignore next */
@@ -2494,6 +2506,7 @@
         initDatasheetEvents();
         initTreeviewEvents();
         updateViewToggleButton();
+        updateCloseButton();
 
         // Listen for panel data changes to refresh S3 explorer
         // (user might be browsing state metadata like filter rules, groups, etc.)
