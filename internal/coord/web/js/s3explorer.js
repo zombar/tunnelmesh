@@ -420,13 +420,19 @@
                 return `<a href="${encodeURI(value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`;
             case 'nested-array':
                 return `<span class="s3-ds-nested" data-row-idx="${rowIdx}" data-col-key="${escapeHtml(colKey)}" title="Click to view nested array">
-                    <span class="s3-ds-nested-text">[${Array.isArray(value) ? value.length : 0} items]</span>
-                    <span class="s3-ds-nested-icon">🔍</span>
+                    <span class="s3-ds-nested-text">${Array.isArray(value) ? value.length : 0} items</span>
+                    <svg class="s3-ds-nested-icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                        <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.5"/>
+                        <circle cx="7" cy="7" r="2" fill="currentColor" opacity="0.5"/>
+                    </svg>
                 </span>`;
             case 'nested-object':
                 return `<span class="s3-ds-nested" data-row-idx="${rowIdx}" data-col-key="${escapeHtml(colKey)}" title="Click to view nested object">
                     <span class="s3-ds-nested-text">{...}</span>
-                    <span class="s3-ds-nested-icon">🔍</span>
+                    <svg class="s3-ds-nested-icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                        <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.5"/>
+                        <circle cx="7" cy="7" r="2" fill="currentColor" opacity="0.5"/>
+                    </svg>
                 </span>`;
             default:
                 return escapeHtml(String(value));

@@ -2786,7 +2786,10 @@ a.logs-container {
 }
 
 .s3-ds-nested-icon {
-    font-size: 1rem;
+    display: inline-block;
+    vertical-align: middle;
+    margin-left: 0.25rem;
+    color: var(--color-text-secondary);
 }
 
 /* Aggregation footer */
@@ -2964,6 +2967,8 @@ a.logs-container {
     cursor: pointer;
     margin-left: 0.5rem;
     font-size: 0.875rem;
+    font-variant: small-caps;
+    letter-spacing: 0.05em;
 }
 
 .tree-datasheet-link:hover {
