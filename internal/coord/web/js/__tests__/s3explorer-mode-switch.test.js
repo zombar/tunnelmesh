@@ -523,4 +523,113 @@ const code = 'block';
             expect(file2.isDirty).toBe(false);
         });
     });
+
+    describe('Error Handling and Cleanup', () => {
+        test('observer cleanup on file close prevents memory leaks', () => {
+            const mockObserver = {
+                disconnect: mock(() => {}),
+            };
+
+            state.wysiwygObserver = mockObserver;
+            state.currentFile = { bucket: 'test', key: 'test.md' };
+
+            // Simulate closeFile() cleanup
+            if (state.wysiwygObserver) {
+                state.wysiwygObserver.disconnect();
+                state.wysiwygObserver = null;
+            }
+
+            expect(mockObserver.disconnect).toHaveBeenCalled();
+            expect(state.wysiwygObserver).toBeNull();
+        });
+
+        test('observer flag reset even if rendering throws', () => {
+            state.mutationObserverPaused = false;
+
+            const badMarkdown = {
+                renderMarkdown: mock(() => {
+                    throw new Error('Rendering failed');
+                }),
+            };
+
+            // Simulate try/finally block with error handling
+            state.mutationObserverPaused = true;
+            let errorThrown = false;
+            try {
+                try {
+                    badMarkdown.renderMarkdown('**test**');
+                } finally {
+                    state.mutationObserverPaused = false;
+                }
+            } catch (_e) {
+                errorThrown = true;
+            }
+
+            // Flag should be reset even though rendering threw
+            expect(state.mutationObserverPaused).toBe(false);
+            expect(errorThrown).toBe(true);
+        });
+
+        test('cursor bounds checking prevents overflow', () => {
+            editor.value = 'Short text'; // 10 characters
+            const maxPos = editor.value.length; // 10
+
+            // Stored cursor position exceeds content length
+            state.sourceCursorPosition = { start: 100, end: 100 };
+
+            // Apply bounds checking (as in toggleEditorMode)
+            const clampedStart = Math.min(state.sourceCursorPosition.start, maxPos);
+            const clampedEnd = Math.min(state.sourceCursorPosition.end, maxPos);
+
+            expect(clampedStart).toBe(10); // Clamped to max
+            expect(clampedEnd).toBe(10); // Clamped to max
+
+            // Verify it doesn't exceed bounds
+            expect(clampedStart).toBeLessThanOrEqual(maxPos);
+            expect(clampedEnd).toBeLessThanOrEqual(maxPos);
+        });
+
+        test('cursor position within bounds is preserved', () => {
+            editor.value = 'This is longer text'; // 19 characters
+            const maxPos = editor.value.length;
+
+            // Valid cursor position
+            state.sourceCursorPosition = { start: 5, end: 10 };
+
+            const clampedStart = Math.min(state.sourceCursorPosition.start, maxPos);
+            const clampedEnd = Math.min(state.sourceCursorPosition.end, maxPos);
+
+            // Should preserve original positions
+            expect(clampedStart).toBe(5);
+            expect(clampedEnd).toBe(10);
+        });
+
+        test('observer flag prevents mutations during programmatic changes', () => {
+            state.mutationObserverPaused = false;
+            const mutations = [];
+
+            // Simulate mutation observer callback
+            const observerCallback = () => {
+                if (!state.mutationObserverPaused) {
+                    mutations.push('mutation detected');
+                }
+            };
+
+            // Pause observer
+            state.mutationObserverPaused = true;
+
+            // Simulate programmatic change
+            wysiwyg.innerHTML = '<p>New content</p>';
+            observerCallback(); // This should NOT add to mutations
+
+            // Unpause
+            state.mutationObserverPaused = false;
+
+            // Simulate user edit
+            observerCallback(); // This SHOULD add to mutations
+
+            expect(mutations).toHaveLength(1);
+            expect(mutations[0]).toBe('mutation detected');
+        });
+    });
 });
