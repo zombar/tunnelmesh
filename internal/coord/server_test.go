@@ -552,20 +552,12 @@ func TestServer_IPv4OnlyEndpointRegistration(t *testing.T) {
 
 // newTestServerWithWireGuard creates a test server with WireGuard enabled.
 func newTestServerWithWireGuard(t *testing.T) *Server {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
-			Listen: ":0",
-			WireGuardServer: config.WireGuardServerConfig{
-				Endpoint: "wg.example.com:51820",
-			},
-		},
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.WireGuardServer = config.WireGuardServerConfig{
+		Endpoint: "wg.example.com:51820",
 	}
+
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 	return srv

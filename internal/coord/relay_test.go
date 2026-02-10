@@ -13,7 +13,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
@@ -32,23 +31,23 @@ func connectRelay(t *testing.T, serverURL, peerName, jwtToken string) *websocket
 	conn, _, err := dialer.Dial(wsURL, headers)
 	require.NoError(t, err, "failed to connect to relay")
 
+	// Drain the automatic service port notification message (sent because S3 is always enabled)
+	// This prevents tests from reading it when they expect other messages
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_, data, err := conn.ReadMessage()
+	// Ignore read errors - the notification might not arrive immediately
+	_ = err
+	_ = data // May or may not receive service port notification (0x33)
+	// Reset deadline for test use
+	_ = conn.SetReadDeadline(time.Time{})
+
 	return conn
 }
 
 func TestRelayManager_HandleHeartbeat(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Relay:   config.RelayConfig{},
-		},
-	}
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 
@@ -107,19 +106,9 @@ func TestRelayManager_HandleHeartbeat(t *testing.T) {
 }
 
 func TestRelayManager_NotifyRelayRequest(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 
-			Listen: ":0",
-			Relay:  config.RelayConfig{},
-		},
-	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 
@@ -157,19 +146,9 @@ func TestRelayManager_NotifyRelayRequest(t *testing.T) {
 }
 
 func TestRelayManager_NotifyHolePunch(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 
-			Listen: ":0",
-			Relay:  config.RelayConfig{},
-		},
-	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 
@@ -204,19 +183,9 @@ func TestRelayManager_NotifyHolePunch(t *testing.T) {
 }
 
 func TestRelayManager_NotifyPeerNotConnected(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 
-			Listen: ":0",
-			Relay:  config.RelayConfig{},
-		},
-	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 
@@ -227,19 +196,9 @@ func TestRelayManager_NotifyPeerNotConnected(t *testing.T) {
 }
 
 func TestRelayManager_HeartbeatUpdatesStats(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 
-			Listen: ":0",
-			Relay:  config.RelayConfig{},
-		},
-	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 
@@ -339,19 +298,9 @@ var _ = sync.WaitGroup{}
 // --- RTT and latency tests ---
 
 func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 
-			Listen: ":0",
-			Relay:  config.RelayConfig{},
-		},
-	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 
@@ -399,19 +348,9 @@ func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
 }
 
 func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 
-			Listen: ":0",
-			Relay:  config.RelayConfig{},
-		},
-	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 
@@ -454,19 +393,9 @@ func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 }
 
 func TestRelayManager_QueryFilterRules(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 
-			Listen: ":0",
-			Relay:  config.RelayConfig{},
-		},
-	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 
@@ -542,19 +471,9 @@ func TestRelayManager_QueryFilterRules(t *testing.T) {
 }
 
 func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 
-			Listen: ":0",
-			Relay:  config.RelayConfig{},
-		},
-	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 
@@ -576,19 +495,9 @@ func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
 }
 
 func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 
-			Listen: ":0",
-			Relay:  config.RelayConfig{},
-		},
-	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 
@@ -599,19 +508,9 @@ func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
 }
 
 func TestRelayManager_StoresReportedLatency(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 
-			Listen: ":0",
-			Relay:  config.RelayConfig{},
-		},
-	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 

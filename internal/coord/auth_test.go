@@ -6,22 +6,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tunnelmesh/tunnelmesh/internal/config"
 )
 
 func TestServer_GenerateAndValidateToken(t *testing.T) {
-	srv, err := NewServer(&config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-secret-key-12345",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":8080",
-		},
-	})
+	cfg := newTestConfig(t)
+	cfg.AuthToken = "test-secret-key-12345"
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.Listen = ":8080"
+
+	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 	defer func() { _ = srv.Shutdown() }()
 
@@ -39,33 +32,23 @@ func TestServer_GenerateAndValidateToken(t *testing.T) {
 }
 
 func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
-	srv1, err := NewServer(&config.PeerConfig{
-		Name:      "test-coord1",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "secret-key-1",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":8080",
-		},
-	})
+	cfg1 := newTestConfig(t)
+	cfg1.Name = "test-coord1"
+	cfg1.AuthToken = "secret-key-1"
+	cfg1.Coordinator.Enabled = true
+	cfg1.Coordinator.Listen = ":8080"
+
+	srv1, err := NewServer(cfg1)
 	require.NoError(t, err)
 	defer func() { _ = srv1.Shutdown() }()
 
-	srv2, err := NewServer(&config.PeerConfig{
-		Name:      "test-coord2",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "secret-key-2", // Different key
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":8080",
-		},
-	})
+	cfg2 := newTestConfig(t)
+	cfg2.Name = "test-coord2"
+	cfg2.AuthToken = "secret-key-2" // Different key
+	cfg2.Coordinator.Enabled = true
+	cfg2.Coordinator.Listen = ":8080"
+
+	srv2, err := NewServer(cfg2)
 	require.NoError(t, err)
 	defer func() { _ = srv2.Shutdown() }()
 
@@ -79,18 +62,12 @@ func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
 }
 
 func TestServer_ValidateToken_InvalidToken(t *testing.T) {
-	srv, err := NewServer(&config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-secret-key",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":8080",
-		},
-	})
+	cfg := newTestConfig(t)
+	cfg.AuthToken = "test-secret-key"
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.Listen = ":8080"
+
+	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 	defer func() { _ = srv.Shutdown() }()
 

@@ -350,17 +350,6 @@ func newTestServerWithS3AndBucket(t *testing.T) *Server {
 	return srv
 }
 
-func TestS3Proxy_NoS3Store(t *testing.T) {
-	srv := newTestServer(t)
-	// s3Store is nil
-
-	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets", nil)
-	rec := httptest.NewRecorder()
-	srv.adminMux.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-}
-
 func TestS3Proxy_ListBuckets(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 
