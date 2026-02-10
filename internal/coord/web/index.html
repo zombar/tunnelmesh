@@ -54,10 +54,34 @@
         </div>
     </nav>
 
-    <!-- App Tab Content -->
-    <div id="app-tab" class="tab-content active">
+    <!-- All panel sections in one container - tab visibility controlled by data-tab attribute -->
     <main>
-        <section id="s3-section" style="display: none;">
+        <!-- Alert tiles - visible in mesh and data tabs -->
+        <section id="alerts-section" data-tab="mesh data" style="display: none;">
+        <div class="alert-tiles">
+            <a class="alert-tile warning clickable-card" id="alert-tile-warning" href="/prometheus/alerts">
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-warning">0</span>
+                    <span class="alert-label">Warning</span>
+                </div>
+            </a>
+            <a class="alert-tile critical clickable-card" id="alert-tile-critical" href="/prometheus/alerts">
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-critical">0</span>
+                    <span class="alert-label">Critical</span>
+                </div>
+            </a>
+            <a class="alert-tile page clickable-card" id="alert-tile-page" href="/prometheus/alerts">
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-page">0</span>
+                    <span class="alert-label">Page</span>
+                </div>
+            </a>
+        </div>
+    </section>
+
+        <!-- Shared Panels (visible in multiple tabs) -->
+        <section id="s3-section" data-tab="app data" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Objects</h2>
             </div>
@@ -167,7 +191,7 @@
             </div>
         </section>
 
-        <section id="shares-section" style="display: none;">
+        <section id="shares-section" data-tab="app" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Shares</h2>
                 <button id="add-share-btn" class="btn-primary" onclick="event.stopPropagation(); openShareModal();">+ New Share</button>
@@ -196,7 +220,7 @@
             </div>
         </section>
 
-        <section id="docker-section" class="panel" style="display: none;">
+        <section id="docker-section" data-tab="app" class="panel" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Docker</h2>
                 <button id="refresh-docker-btn" class="btn-primary" onclick="event.stopPropagation(); refreshDockerContainers();" title="Refresh containers">⟳ Refresh</button>
@@ -226,36 +250,8 @@
                 </div>
             </div>
         </section>
-    </main>
-    </div><!-- End App Tab -->
 
-    <!-- Mesh Tab Content -->
-    <div id="mesh-tab" class="tab-content">
-    <main>
-    <section id="alerts-section" style="display: none;">
-        <div class="alert-tiles">
-            <a class="alert-tile warning clickable-card" id="alert-tile-warning" href="/prometheus/alerts">
-                <div class="alert-content">
-                    <span class="alert-count" id="alert-count-warning">0</span>
-                    <span class="alert-label">Warning</span>
-                </div>
-            </a>
-            <a class="alert-tile critical clickable-card" id="alert-tile-critical" href="/prometheus/alerts">
-                <div class="alert-content">
-                    <span class="alert-count" id="alert-count-critical">0</span>
-                    <span class="alert-label">Critical</span>
-                </div>
-            </a>
-            <a class="alert-tile page clickable-card" id="alert-tile-page" href="/prometheus/alerts">
-                <div class="alert-content">
-                    <span class="alert-count" id="alert-count-page">0</span>
-                    <span class="alert-label">Page</span>
-                </div>
-            </a>
-        </div>
-    </section>
-
-    <section id="visualizer-section" style="display: none;">
+    <section id="visualizer-section" data-tab="mesh" style="display: none;">
         <div class="visualizer-card">
             <div class="visualizer-header section-toggle" onclick="toggleSection(this)">
                 <h2>Topology</h2>
@@ -268,7 +264,7 @@
         </div>
     </section>
 
-    <section id="map-section" style="display: none;">
+    <section id="map-section" data-tab="mesh" style="display: none;">
         <div class="map-card">
             <div class="map-header section-toggle" onclick="toggleSection(this)">
                 <h2>Map</h2>
@@ -279,28 +275,22 @@
         </div>
     </section>
 
-    <section id="charts-section" style="display: none;">
-        <div class="charts-card">
-            <div class="charts-header section-toggle" onclick="toggleSection(this)">
-                <h2>Charts</h2>
-            </div>
-            <div class="collapsible-content">
-                <div class="charts-container">
-                    <div class="chart-wrapper" id="throughput-wrapper">
-                        <h3>Throughput</h3>
-                        <canvas id="throughput-chart"></canvas>
-                    </div>
-                    <div class="chart-wrapper" id="packets-wrapper">
-                        <h3>Packets/s</h3>
-                        <canvas id="packets-chart"></canvas>
-                    </div>
-                </div>
-            </div>
+    <!-- Charts as individual floating panels -->
+    <section id="throughput-chart-section" data-tab="mesh" style="display: none;">
+        <div class="chart-card">
+            <h3 class="chart-title">Throughput</h3>
+            <canvas id="throughput-chart"></canvas>
         </div>
     </section>
 
-    <main>
-        <section id="peers-section" style="display: none;">
+    <section id="packets-chart-section" data-tab="mesh" style="display: none;">
+        <div class="chart-card">
+            <h3 class="chart-title">Packets/s</h3>
+            <canvas id="packets-chart"></canvas>
+        </div>
+    </section>
+
+        <section id="peers-section" data-tab="mesh" style="display: none;">
             <h2 class="section-toggle" onclick="toggleSection(this)">Network</h2>
             <div class="collapsible-content">
                 <table id="peers">
@@ -308,11 +298,11 @@
                         <tr>
                             <th>Name</th>
                             <th>Mesh IP</th>
-                            <th>Status</th>
                             <th>Latency</th>
                             <th>Throughput</th>
                             <th>Packets/s</th>
                             <th>Version</th>
+                            <th>Status</th>
                         </tr>
                     </thead>
                     <tbody id="peers-body"></tbody>
@@ -326,20 +316,7 @@
             </div>
         </section>
 
-        <section id="logs-section" class="logs-card" style="display: none;">
-            <h2 class="section-toggle" onclick="toggleSection(this)">Logs</h2>
-            <div class="collapsible-content">
-                <a id="logs-link" class="logs-container clickable-card" href="/grafana/explore">
-                    <div id="logs-content"></div>
-                    <div id="no-logs" class="empty-state">No logs available</div>
-                </a>
-                <div id="logs-resize-handle" class="resize-handle">
-                    <div class="resize-handle-grip"></div>
-                </div>
-            </div>
-        </section>
-
-        <section id="wireguard-section" style="display: none;">
+        <section id="wireguard-section" data-tab="mesh" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>WireGuard</h2>
                 <button id="add-wg-client-btn" class="btn-primary" onclick="event.stopPropagation()">+ Add Peer</button>
@@ -367,7 +344,7 @@
             </div>
         </section>
 
-        <section id="filter-section" style="display: none;">
+        <section id="filter-section" data-tab="mesh" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Filter</h2>
                 <button id="add-filter-rule-btn" class="btn-primary" onclick="event.stopPropagation(); openFilterModal();">+ Add Rule</button>
@@ -460,13 +437,8 @@
             </div>
         </div>
 
-    </main>
-    </div><!-- End Mesh Tab -->
-    <!-- Data Tab Content -->
-    <div id="data-tab" class="tab-content">
-    <main>
-        <!-- Objects Section (GitHub-style file browser) -->
-        <section id="peers-mgmt-section" style="display: none;">
+        <!-- Data Tab Panels -->
+        <section id="peers-mgmt-section" data-tab="data" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Peers</h2>
             </div>
@@ -493,7 +465,7 @@
             </div>
         </section>
 
-        <section id="groups-section" style="display: none;">
+        <section id="groups-section" data-tab="data" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Groups</h2>
                 <button id="add-group-btn" class="btn-primary" onclick="event.stopPropagation(); openGroupModal();">+ Add Group</button>
@@ -519,7 +491,7 @@
             </div>
         </section>
 
-        <section id="bindings-section" style="display: none;">
+        <section id="bindings-section" data-tab="data" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Bindings</h2>
                 <button id="add-binding-btn" class="btn-primary" onclick="event.stopPropagation(); openBindingModal();">+ Add Binding</button>
@@ -548,7 +520,7 @@
             </div>
         </section>
 
-        <section id="dns-section" style="display: none;">
+        <section id="dns-section" data-tab="data" style="display: none;">
             <h2 class="section-toggle" onclick="toggleSection(this)">DNS</h2>
             <div class="collapsible-content">
                 <table id="dns">
@@ -569,8 +541,21 @@
             </div>
         </section>
 
+        <!-- Logs section - shown in both mesh and data tabs, at bottom -->
+        <section id="logs-section" data-tab="mesh data" class="logs-card" style="display: none;">
+            <h2 class="section-toggle" onclick="toggleSection(this)">Logs</h2>
+            <div class="collapsible-content">
+                <a id="logs-link" class="logs-container clickable-card" href="/grafana/explore">
+                    <div id="logs-content"></div>
+                    <div id="no-logs" class="empty-state">No logs available</div>
+                </a>
+                <div id="logs-resize-handle" class="resize-handle">
+                    <div class="resize-handle-grip"></div>
+                </div>
+            </div>
+        </section>
+
     </main>
-    </div><!-- End Data Tab -->
 
     <!-- Container for external plugin panels -->
     <div id="external-panels" class="external-panels-container"></div>

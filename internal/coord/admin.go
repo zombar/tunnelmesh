@@ -307,6 +307,9 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("/api/bindings", s.handleBindings)
 	s.adminMux.HandleFunc("/api/bindings/", s.handleBindingByName)
 
+	// DNS records
+	s.adminMux.HandleFunc("/api/dns", s.handleDNS)
+
 	// S3 proxy for explorer
 	s.adminMux.HandleFunc("/api/s3/", s.handleS3Proxy)
 

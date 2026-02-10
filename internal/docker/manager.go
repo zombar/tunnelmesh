@@ -185,46 +185,81 @@ func (m *Manager) ListContainers(ctx context.Context) ([]ContainerInfo, error) {
 		return nil, err
 	}
 
-	// Inspect running containers to get StartedAt time and fetch stats
+	// Inspect running containers in parallel to get StartedAt time and fetch stats
+	// This prevents sequential blocking when there are many containers
+	var wg sync.WaitGroup
+	var mu sync.Mutex // Protect concurrent writes to containers slice
+
 	for i := range containers {
-		if containers[i].State == "running" {
-			// Inspect container to get full details including StartedAt with per-container timeout
-			inspectCtx, cancel := context.WithTimeout(ctx, containerInspectTimeout)
-			inspected, err := m.client.InspectContainer(inspectCtx, containers[i].ID)
-			cancel()
-			if err != nil {
-				log.Debug().Err(err).Str("container", containers[i].Name).Msg("Failed to inspect container")
-			} else if inspected != nil && !inspected.StartedAt.IsZero() {
-				// Update with inspected data (includes DiskBytes from SizeRootFs)
-				containers[i].StartedAt = inspected.StartedAt
-				containers[i].UptimeSeconds = calculateUptime(inspected.StartedAt)
-				containers[i].DiskBytes = inspected.DiskBytes
-
-				// Fetch resource usage stats with per-container timeout
-				statsCtx, cancel := context.WithTimeout(ctx, containerStatsTimeout)
-				stats, err := m.client.GetContainerStats(statsCtx, containers[i].ID)
-				cancel()
-				if err != nil {
-					log.Debug().Err(err).Str("container", containers[i].Name).Msg("Failed to get container stats")
-				} else if stats != nil {
-					containers[i].CPUPercent = stats.CPUPercent
-					containers[i].MemoryBytes = stats.MemoryBytes
-					containers[i].MemoryPercent = stats.MemoryPercent
-					// DiskBytes already set from inspected data above (more accurate than stats)
-
-					// Record stats to Prometheus
-					m.recordStats(*stats, &containers[i])
-				}
-			}
+		// Set short ID immediately
+		if containers[i].ShortID == "" {
+			containers[i].ShortID = shortID(containers[i].ID)
 		}
 
 		// Record container info to Prometheus (for all containers, not just running)
 		m.recordContainerInfo(&containers[i])
 
-		// Set short ID
-		if containers[i].ShortID == "" {
-			containers[i].ShortID = shortID(containers[i].ID)
+		if containers[i].State == "running" {
+			wg.Add(1)
+			// Capture values needed in goroutine to avoid race conditions
+			containerID := containers[i].ID
+			containerName := containers[i].Name
+			go func(index int, id, name string) {
+				defer wg.Done()
+
+				// Inspect container to get full details including StartedAt with per-container timeout
+				inspectCtx, cancel := context.WithTimeout(ctx, containerInspectTimeout)
+				inspected, err := m.client.InspectContainer(inspectCtx, id)
+				cancel()
+				if err != nil {
+					log.Debug().Err(err).Str("container", name).Msg("Failed to inspect container")
+					return
+				}
+				if inspected == nil || inspected.StartedAt.IsZero() {
+					return
+				}
+
+				// Fetch resource usage stats with per-container timeout
+				statsCtx, cancel := context.WithTimeout(ctx, containerStatsTimeout)
+				stats, err := m.client.GetContainerStats(statsCtx, id)
+				cancel()
+				if err != nil {
+					log.Debug().Err(err).Str("container", name).Msg("Failed to get container stats")
+					return
+				}
+
+				// Update with inspected data and stats (protected by mutex)
+				mu.Lock()
+				containers[index].StartedAt = inspected.StartedAt
+				containers[index].UptimeSeconds = calculateUptime(inspected.StartedAt)
+				containers[index].DiskBytes = inspected.DiskBytes
+				if stats != nil {
+					containers[index].CPUPercent = stats.CPUPercent
+					containers[index].MemoryBytes = stats.MemoryBytes
+					containers[index].MemoryPercent = stats.MemoryPercent
+					// DiskBytes already set from inspected data above (more accurate than stats)
+
+					// Record stats to Prometheus
+					m.recordStats(*stats, &containers[index])
+				}
+				mu.Unlock()
+			}(i, containerID, containerName)
 		}
+	}
+
+	// Wait for all goroutines to complete (with timeout to prevent hanging)
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// All goroutines completed successfully
+	case <-ctx.Done():
+		// Context cancelled - return what we have so far
+		log.Warn().Msg("Context cancelled while fetching container stats")
 	}
 
 	return containers, nil

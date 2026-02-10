@@ -85,8 +85,20 @@ function renderDockerContainers() {
     if (tableEl) tableEl.style.display = 'table';
     if (emptyStateEl) emptyStateEl.style.display = 'none';
 
-    // Sort by name
-    dockerContainers.sort((a, b) => a.name.localeCompare(b.name));
+    // Sort by status (running first), then alphabetically by name
+    dockerContainers.sort((a, b) => {
+        // Define status priority (running first, then others alphabetically)
+        const statusPriority = { running: 0, paused: 1, restarting: 2, exited: 3, dead: 4 };
+        const aPriority = statusPriority[a.state] ?? 99;
+        const bPriority = statusPriority[b.state] ?? 99;
+
+        if (aPriority !== bPriority) {
+            return aPriority - bPriority;
+        }
+
+        // Same status - sort alphabetically by name
+        return a.name.localeCompare(b.name);
+    });
 
     // Get visible items from pagination controller
     const pageContainers = dockerPagination.getVisibleItems();
@@ -99,6 +111,7 @@ function renderDockerContainers() {
             const memory = formatDockerMemory(container.memory_bytes, container.memory_percent);
             const disk = formatDockerDisk(container.disk_bytes);
             const ports = formatDockerPorts(container.ports);
+            const network = formatDockerNetwork(container.network_mode);
             const actions = renderDockerActions(container);
 
             return `
@@ -106,7 +119,7 @@ function renderDockerContainers() {
                 <td><strong>${escapeHtml(container.name)}</strong></td>
                 <td>${statusBadge}</td>
                 <td>${ports}</td>
-                <td><code>${escapeHtml(container.network_mode)}</code></td>
+                <td><code>${network}</code></td>
                 <td>${uptime}</td>
                 <td>${cpu}</td>
                 <td>${memory}</td>
@@ -230,6 +243,20 @@ function formatDockerPorts(ports) {
     }
 
     return `<code>${portStrings.join(', ')}</code>`;
+}
+
+// Truncate network mode to 12 characters (for long container IDs in network mode)
+function formatDockerNetwork(networkMode) {
+    if (!networkMode) {
+        return '<span style="color: var(--color-text-secondary);">--</span>';
+    }
+
+    // Truncate to 12 chars (Docker short ID format)
+    if (networkMode.length > 12) {
+        return escapeHtml(networkMode.substring(0, 12));
+    }
+
+    return escapeHtml(networkMode);
 }
 
 // Render action buttons for container
