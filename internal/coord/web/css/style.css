@@ -2909,7 +2909,7 @@ a.logs-container {
 }
 
 .tree-key {
-    color: #a371f7;
+    color: var(--color-text-primary);
     margin-right: 0.25rem;
 }
 
@@ -2930,17 +2930,17 @@ a.logs-container {
     padding-left: 0.5rem;
 }
 
-/* Value types */
+/* Value types - subdued colors matching UI theme */
 .tree-string {
-    color: #3fb950;
+    color: var(--color-accent-green);
 }
 
 .tree-number {
-    color: #58a6ff;
+    color: var(--color-accent-blue);
 }
 
 .tree-boolean {
-    color: #f0a500;
+    color: var(--color-accent-orange);
 }
 
 .tree-null {
@@ -2955,4 +2955,17 @@ a.logs-container {
 
 .tree-unknown {
     color: var(--color-accent-red);
+}
+
+/* Datasheet link in tree view */
+.tree-datasheet-link {
+    color: var(--color-accent-blue);
+    text-decoration: none;
+    cursor: pointer;
+    margin-left: 0.5rem;
+    font-size: 0.875rem;
+}
+
+.tree-datasheet-link:hover {
+    text-decoration: underline;
 }

@@ -621,11 +621,23 @@
         if (Array.isArray(value)) {
             const toggleIcon = isCollapsed ? '▶' : '▼';
             const arrayLength = value.length;
+
+            // Check if array can be displayed as datasheet (all elements are objects)
+            const canShowDatasheet =
+                arrayLength > 0 &&
+                value.every((item) => typeof item === 'object' && item !== null && !Array.isArray(item));
+
             let html = `<div class="tree-item tree-expandable">
-                <span class="tree-toggle" onclick="TM.s3explorer.toggleTreeNode('${escapeJsString(fullPath)}')">${toggleIcon}</span>
+                <span class="tree-toggle" data-tree-path="${escapeHtml(fullPath)}">${toggleIcon}</span>
                 <span class="tree-key">${escapeHtml(key)}:</span>
-                <span class="tree-bracket">[</span><span class="tree-count">${arrayLength} items</span><span class="tree-bracket">]</span>
-            </div>`;
+                <span class="tree-bracket">[</span><span class="tree-count">${arrayLength} items</span><span class="tree-bracket">]</span>`;
+
+            // Add datasheet link if applicable
+            if (canShowDatasheet) {
+                html += ` <a href="#" class="tree-datasheet-link" data-tree-path="${escapeHtml(fullPath)}" data-tree-array="true">(datasheet)</a>`;
+            }
+
+            html += '</div>';
 
             if (!isCollapsed) {
                 html += '<div class="tree-children">';
@@ -644,7 +656,7 @@
             const keyCount = keys.length;
 
             let html = `<div class="tree-item tree-expandable">
-                <span class="tree-toggle" onclick="TM.s3explorer.toggleTreeNode('${escapeJsString(fullPath)}')">${toggleIcon}</span>
+                <span class="tree-toggle" data-tree-path="${escapeHtml(fullPath)}">${toggleIcon}</span>
                 <span class="tree-key">${escapeHtml(key)}:</span>
                 <span class="tree-bracket">{</span><span class="tree-count">${keyCount} keys</span><span class="tree-bracket">}</span>
             </div>`;
@@ -1519,6 +1531,8 @@
                 state.editorMode = 'source';
                 if (editor) {
                     editor.value = state.originalContent;
+                    // Update line numbers when switching back to source
+                    updateLineNumbers();
                 }
             } else {
                 // Switch from source to appropriate view mode based on JSON type
@@ -2346,6 +2360,91 @@
         });
     }
 
+    /**
+     * Initialize treeview event delegation
+     * Handles clicks on tree toggles and datasheet links without inline onclick handlers
+     */
+    function initTreeviewEvents() {
+        const treeview = document.getElementById('s3-treeview');
+        if (!treeview) return;
+
+        // Use event delegation for tree toggle and datasheet link clicks
+        treeview.addEventListener('click', (e) => {
+            // Handle tree toggle clicks
+            const toggleElement = e.target.closest('.tree-toggle');
+            if (toggleElement) {
+                const path = toggleElement.dataset.treePath;
+                if (path) {
+                    toggleTreeNode(path);
+                }
+                return;
+            }
+
+            // Handle datasheet link clicks
+            const datasheetLink = e.target.closest('.tree-datasheet-link');
+            if (datasheetLink) {
+                e.preventDefault();
+                const path = datasheetLink.dataset.treePath;
+                if (path && datasheetLink.dataset.treeArray === 'true') {
+                    openArrayAsDatasheet(path);
+                }
+                return;
+            }
+        });
+    }
+
+    /**
+     * Open a tree array as datasheet view
+     * @param {string} path - The path to the array in the tree
+     */
+    function openArrayAsDatasheet(path) {
+        if (!state.treeviewData) return;
+
+        // Navigate to the array value using the path
+        const pathParts = path.split('.').filter((p) => p && p !== 'root');
+        let value = state.treeviewData;
+
+        for (const part of pathParts) {
+            if (part.startsWith('[') && part.endsWith(']')) {
+                // Array index
+                const index = Number.parseInt(part.slice(1, -1), 10);
+                value = value[index];
+            } else {
+                // Object key
+                value = value[part];
+            }
+
+            if (value === undefined) {
+                showToast('Array not found', 'error');
+                return;
+            }
+        }
+
+        // Verify it's an array
+        if (!Array.isArray(value)) {
+            showToast('Selected item is not an array', 'error');
+            return;
+        }
+
+        // Check if it can be displayed as datasheet
+        const detect = detectDatasheetMode(JSON.stringify(value));
+        if (!detect.isDatasheet) {
+            const reason = detect.reason || 'must be a JSON array of objects';
+            showToast(`Cannot render as datasheet: ${reason}`, 'error');
+            return;
+        }
+
+        // Switch to datasheet mode
+        state.editorMode = 'datasheet';
+        state.datasheetData = detect.data;
+        state.datasheetSchema = inferSchema(detect.data);
+        state.datasheetPage = 1;
+        state.treeviewData = null;
+        renderDatasheet();
+        updateEditorUI('datasheet');
+        updateModeToggleButton();
+    }
+
     /* istanbul ignore next */
     async function init() {
         const editor = document.getElementById('s3-editor');
@@ -2358,6 +2457,7 @@
         initKeyboardShortcuts();
         initIconGridEvents();
         initDatasheetEvents();
+        initTreeviewEvents();
         updateViewToggleButton();
 
         // Listen for panel data changes to refresh S3 explorer
