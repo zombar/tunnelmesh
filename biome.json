@@ -42,6 +42,10 @@
     "formatter": {
       "quoteStyle": "single",
       "semicolons": "always"
-    }
+    },
+    "parser": {
+      "unsafeParameterDecoratorsEnabled": false
+    },
+    "globals": ["TM"]
   }
 }

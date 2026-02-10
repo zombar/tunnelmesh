@@ -109,6 +109,22 @@ jobs:
         if: steps.setup-go.outcome != 'success'
         run: echo "::notice::Go 1.26 not yet available, skipping tests"
 
+  lint-frontend:
+    name: Frontend Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint JavaScript with biome
+        run: npx biome check internal/coord/web/js/
+      - name: Lint CSS with stylelint
+        run: npx stylelint "internal/coord/web/css/**/*.css"
+
   test-js:
     name: JavaScript Tests
     runs-on: ubuntu-latest
@@ -132,7 +148,7 @@ jobs:
 
   build:
     name: Build
-    needs: [checks, lint, security, test, test-js]
+    needs: [checks, lint, security, test, lint-frontend, test-js]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

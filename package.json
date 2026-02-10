@@ -16,12 +16,13 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "bugs": {
     "url": "https://github.com/zombar/tunnelmesh/issues"
   },
   "homepage": "https://github.com/zombar/tunnelmesh#readme",
   "devDependencies": {
+    "@biomejs/biome": "^2.3.14",
     "stylelint": "^17.2.0",
     "stylelint-config-standard": "^40.0.0"
   }
