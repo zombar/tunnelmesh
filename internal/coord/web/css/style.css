@@ -1655,6 +1655,12 @@ a.logs-container {
     background: var(--color-border-secondary);
 }
 
+.s3-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
 /* Primary button (green) */
 .s3-btn.btn-primary {
     background: var(--color-btn-primary);
@@ -2886,7 +2892,7 @@ a.logs-container {
     padding: 1rem;
     background: var(--color-bg-primary);
     font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
-    font-size: 0.875rem;
+    font-size: 0.7rem;
     line-height: 1.6;
 }
 
@@ -2924,7 +2930,7 @@ a.logs-container {
 .tree-count {
     color: var(--color-text-secondary);
     font-style: italic;
-    font-size: 0.6875rem;
+    font-size: 0.55rem;
 }
 
 .tree-children {
