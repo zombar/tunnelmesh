@@ -495,34 +495,6 @@ func (s *Store) CalculatePrefixSize(bucketName, prefix string) (int64, error) {
 	return totalSize, nil
 }
 
-// recalculateBucketSize recalculates bucket size from all objects (including tombstoned).
-// This is used for migration/repair when SizeBytes is not yet populated.
-// Must be called with write lock held.
-func (s *Store) recalculateBucketSize(bucketName string) (int64, error) {
-	var totalSize int64
-
-	// Iterate through all objects with pagination
-	marker := ""
-	for {
-		objects, isTruncated, nextMarker, err := s.ListObjects(bucketName, "", marker, 1000)
-		if err != nil {
-			return 0, fmt.Errorf("list objects: %w", err)
-		}
-
-		// Sum sizes of ALL objects (including tombstoned)
-		for _, obj := range objects {
-			totalSize += obj.Size
-		}
-
-		if !isTruncated {
-			break
-		}
-		marker = nextMarker
-	}
-
-	return totalSize, nil
-}
-
 // updateBucketSize updates the cached bucket size by delta.
 // Must be called with write lock held.
 func (s *Store) updateBucketSize(bucketName string, delta int64) error {
