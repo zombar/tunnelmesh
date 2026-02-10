@@ -23,7 +23,6 @@ func newTestServer(t *testing.T) *Server {
 		Listen:    ":0",
 		AuthToken: "test-token",
 		Admin:     config.AdminConfig{Enabled: true},
-		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
@@ -539,8 +538,6 @@ func newTestServerWithWireGuard(t *testing.T) *Server {
 		Listen:    ":0",
 		AuthToken: "test-token",
 		Admin:     config.AdminConfig{Enabled: true},
-		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
-		WireGuard: config.WireGuardServerConfig{
 			Enabled:  true,
 			Endpoint: "wg.example.com:51820",
 		},
@@ -1047,7 +1044,6 @@ func newTestServerWithS3(t *testing.T) *Server {
 		AuthToken: "test-token",
 		DataDir:   tempDir,
 		Admin:     config.AdminConfig{Enabled: true},
-		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
 		S3: config.S3Config{
 			Enabled: true,
 			DataDir: tempDir + "/s3",
@@ -1257,7 +1253,6 @@ func TestServer_FilterRulesRecoveryFiltersExpired(t *testing.T) {
 		AuthToken: "test-token",
 		DataDir:   tempDir,
 		Admin:     config.AdminConfig{Enabled: true},
-		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
 		S3: config.S3Config{
 			Enabled: true,
 			DataDir: tempDir + "/s3",

@@ -371,7 +371,6 @@ func newTestServerWithS3AndBucket(t *testing.T) *Server {
 		AuthToken: "test-token",
 		DataDir:   tempDir,
 		Admin:     config.AdminConfig{Enabled: true},
-		JoinMesh:  &config.PeerConfig{Name: "test-coord"},
 		S3: config.S3Config{
 			Enabled: true,
 			DataDir: tempDir + "/s3",
