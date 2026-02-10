@@ -40,12 +40,15 @@
         // View mode (defaults to 'icon' - user can toggle to 'list' view manually)
         viewMode: 'icon', // 'list' or 'icon'
         // Editor mode
-        editorMode: 'source', // 'source' or 'wysiwyg' or 'datasheet'
+        editorMode: 'source', // 'source' or 'wysiwyg' or 'datasheet' or 'treeview'
         // Datasheet-specific state
         datasheetData: null, // Parsed JSON array for datasheet view
         datasheetSchema: null, // { columns: [{ key, type, width }] }
         datasheetPage: 1, // Current page number
         datasheetPageSize: 50, // Rows per page
+        // Tree view state
+        treeviewData: null, // Parsed JSON object/array for tree view
+        treeviewCollapsed: new Set(), // Set of collapsed paths (e.g., 'data.items[0]')
     };
 
     // Text file extensions
@@ -185,6 +188,24 @@
         if (!content || content.trim().length === 0) return false;
         // Non-empty markdown files open in preview mode
         return true;
+    }
+
+    /**
+     * Detect JSON type (object vs array)
+     * @param {string} content - JSON string content
+     * @returns {{isObject: boolean, isArray: boolean, parsed: any}} - Detection result
+     */
+    function detectJsonType(content) {
+        try {
+            const parsed = JSON.parse(content);
+            return {
+                isObject: typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed),
+                isArray: Array.isArray(parsed),
+                parsed,
+            };
+        } catch (_e) {
+            return { isObject: false, isArray: false, parsed: null };
+        }
     }
 
     function _isTextFile(filename) {
@@ -526,6 +547,107 @@
             state.datasheetPage--;
             renderDatasheet();
         }
+    }
+
+    /**
+     * Render tree view for JSON objects
+     */
+    function renderTreeView() {
+        const container = document.getElementById('s3-treeview');
+        if (!container || !state.treeviewData) return;
+
+        container.innerHTML = renderTreeNode(state.treeviewData, '', 'root');
+    }
+
+    /**
+     * Render a single tree node recursively
+     * @param {any} value - The value to render
+     * @param {string} path - The path to this node (e.g., 'data.items[0].name')
+     * @param {string} key - The key/index for this node
+     * @returns {string} - HTML string
+     */
+    function renderTreeNode(value, path, key) {
+        const fullPath = path ? `${path}.${key}` : key;
+        const isCollapsed = state.treeviewCollapsed.has(fullPath);
+
+        if (value === null) {
+            return `<div class="tree-item"><span class="tree-key">${escapeHtml(key)}:</span> <span class="tree-null">null</span></div>`;
+        }
+
+        if (value === undefined) {
+            return `<div class="tree-item"><span class="tree-key">${escapeHtml(key)}:</span> <span class="tree-undefined">undefined</span></div>`;
+        }
+
+        const type = typeof value;
+
+        if (type === 'boolean') {
+            return `<div class="tree-item"><span class="tree-key">${escapeHtml(key)}:</span> <span class="tree-boolean">${value}</span></div>`;
+        }
+
+        if (type === 'number') {
+            return `<div class="tree-item"><span class="tree-key">${escapeHtml(key)}:</span> <span class="tree-number">${value}</span></div>`;
+        }
+
+        if (type === 'string') {
+            return `<div class="tree-item"><span class="tree-key">${escapeHtml(key)}:</span> <span class="tree-string">"${escapeHtml(value)}"</span></div>`;
+        }
+
+        if (Array.isArray(value)) {
+            const toggleIcon = isCollapsed ? '▶' : '▼';
+            const arrayLength = value.length;
+            let html = `<div class="tree-item tree-expandable">
+                <span class="tree-toggle" onclick="TM.s3explorer.toggleTreeNode('${escapeJsString(fullPath)}')">${toggleIcon}</span>
+                <span class="tree-key">${escapeHtml(key)}:</span>
+                <span class="tree-bracket">[</span><span class="tree-count">${arrayLength} items</span><span class="tree-bracket">]</span>
+            </div>`;
+
+            if (!isCollapsed) {
+                html += '<div class="tree-children">';
+                value.forEach((item, index) => {
+                    html += renderTreeNode(item, fullPath, `[${index}]`);
+                });
+                html += '</div>';
+            }
+
+            return html;
+        }
+
+        if (type === 'object') {
+            const toggleIcon = isCollapsed ? '▶' : '▼';
+            const keys = Object.keys(value);
+            const keyCount = keys.length;
+
+            let html = `<div class="tree-item tree-expandable">
+                <span class="tree-toggle" onclick="TM.s3explorer.toggleTreeNode('${escapeJsString(fullPath)}')">${toggleIcon}</span>
+                <span class="tree-key">${escapeHtml(key)}:</span>
+                <span class="tree-bracket">{</span><span class="tree-count">${keyCount} keys</span><span class="tree-bracket">}</span>
+            </div>`;
+
+            if (!isCollapsed) {
+                html += '<div class="tree-children">';
+                keys.forEach((k) => {
+                    html += renderTreeNode(value[k], fullPath, k);
+                });
+                html += '</div>';
+            }
+
+            return html;
+        }
+
+        return `<div class="tree-item"><span class="tree-key">${escapeHtml(key)}:</span> <span class="tree-unknown">${escapeHtml(String(value))}</span></div>`;
+    }
+
+    /**
+     * Toggle expand/collapse state of a tree node
+     * @param {string} path - The path to toggle
+     */
+    function toggleTreeNode(path) {
+        if (state.treeviewCollapsed.has(path)) {
+            state.treeviewCollapsed.delete(path);
+        } else {
+            state.treeviewCollapsed.add(path);
+        }
+        renderTreeView();
     }
 
     /**
@@ -1101,18 +1223,37 @@
 
             state.originalContent = displayContent;
 
-            // Detect datasheet mode for JSON arrays
+            // Detect JSON type and choose appropriate viewer mode
             if (ext === 'json') {
-                const datasheetDetect = detectDatasheetMode(displayContent);
-                if (datasheetDetect.isDatasheet) {
-                    state.datasheetData = datasheetDetect.data;
-                    state.datasheetSchema = inferSchema(datasheetDetect.data);
-                    state.datasheetPage = 1;
-                    state.editorMode = 'datasheet';
+                const jsonType = detectJsonType(displayContent);
+                if (jsonType.isArray) {
+                    // JSON arrays → datasheet mode (table view)
+                    const datasheetDetect = detectDatasheetMode(displayContent);
+                    if (datasheetDetect.isDatasheet) {
+                        state.datasheetData = datasheetDetect.data;
+                        state.datasheetSchema = inferSchema(datasheetDetect.data);
+                        state.datasheetPage = 1;
+                        state.editorMode = 'datasheet';
+                        state.treeviewData = null;
+                    } else {
+                        state.editorMode = 'source';
+                        state.datasheetData = null;
+                        state.datasheetSchema = null;
+                        state.treeviewData = null;
+                    }
+                } else if (jsonType.isObject) {
+                    // JSON objects → tree view mode
+                    state.treeviewData = jsonType.parsed;
+                    state.treeviewCollapsed = new Set();
+                    state.editorMode = 'treeview';
+                    state.datasheetData = null;
+                    state.datasheetSchema = null;
                 } else {
+                    // Invalid JSON → source mode
                     state.editorMode = 'source';
                     state.datasheetData = null;
                     state.datasheetSchema = null;
+                    state.treeviewData = null;
                 }
             }
             // Auto-switch to WYSIWYG mode for non-empty markdown files
@@ -1184,6 +1325,10 @@
                 // Render datasheet view
                 renderDatasheet();
                 updateEditorUI('datasheet');
+            } else if (state.editorMode === 'treeview') {
+                // Render tree view
+                renderTreeView();
+                updateEditorUI('treeview');
             } else if (state.editorMode === 'wysiwyg') {
                 const wysiwyg = document.getElementById('s3-wysiwyg');
                 if (wysiwyg) {
@@ -1328,27 +1473,41 @@
         const wysiwyg = document.getElementById('s3-wysiwyg');
         const ext = getExtension(state.currentFile.key);
 
-        // For JSON files, allow toggling to/from datasheet mode
+        // For JSON files, allow toggling between source/datasheet/treeview modes
         if (ext === 'json') {
-            if (state.editorMode === 'datasheet') {
-                // Switch from datasheet to source
+            if (state.editorMode === 'datasheet' || state.editorMode === 'treeview') {
+                // Switch from datasheet/treeview to source
                 state.editorMode = 'source';
                 if (editor) {
                     editor.value = state.originalContent;
                 }
             } else {
-                // Switch from source to datasheet
-                // Parse current editor content to see if it's a valid datasheet
-                const detect = detectDatasheetMode(editor.value);
-                if (detect.isDatasheet) {
-                    state.editorMode = 'datasheet';
-                    state.datasheetData = detect.data;
-                    state.datasheetSchema = inferSchema(detect.data);
-                    state.datasheetPage = 1;
-                    renderDatasheet();
+                // Switch from source to appropriate view mode based on JSON type
+                const jsonType = detectJsonType(editor.value);
+                if (jsonType.isArray) {
+                    // JSON arrays → datasheet mode
+                    const detect = detectDatasheetMode(editor.value);
+                    if (detect.isDatasheet) {
+                        state.editorMode = 'datasheet';
+                        state.datasheetData = detect.data;
+                        state.datasheetSchema = inferSchema(detect.data);
+                        state.datasheetPage = 1;
+                        state.treeviewData = null;
+                        renderDatasheet();
+                    } else {
+                        showToast('Cannot render as datasheet - must be a JSON array of objects', 'error');
+                        return;
+                    }
+                } else if (jsonType.isObject) {
+                    // JSON objects → tree view mode
+                    state.editorMode = 'treeview';
+                    state.treeviewData = jsonType.parsed;
+                    state.treeviewCollapsed = new Set();
+                    state.datasheetData = null;
+                    state.datasheetSchema = null;
+                    renderTreeView();
                 } else {
-                    // Can't render as datasheet, stay in source mode
-                    showToast('Cannot render as datasheet - must be a JSON array of objects', 'error');
+                    showToast('Invalid JSON - cannot visualize', 'error');
                     return;
                 }
             }
@@ -1374,6 +1533,7 @@
         const editor = document.getElementById('s3-editor');
         const wysiwyg = document.getElementById('s3-wysiwyg');
         const datasheet = document.getElementById('s3-datasheet');
+        const treeview = document.getElementById('s3-treeview');
         const editorWrap = document.querySelector('.s3-editor-wrap');
         const saveBtn = document.getElementById('s3-save-btn');
         const autosaveLabel = document.querySelector('.s3-autosave-label');
@@ -1383,17 +1543,31 @@
         if (mode === 'datasheet') {
             editor.style.display = 'none';
             wysiwyg.style.display = 'none';
+            if (treeview) treeview.style.display = 'none';
             if (datasheet) datasheet.style.display = 'flex';
             if (editorWrap) editorWrap.classList.add('datasheet-mode');
+            if (editorWrap) editorWrap.classList.remove('treeview-mode');
             // Hide save and autosave in datasheet mode (view-only)
+            if (saveBtn) saveBtn.style.display = 'none';
+            if (autosaveLabel) autosaveLabel.style.display = 'none';
+        } else if (mode === 'treeview') {
+            editor.style.display = 'none';
+            wysiwyg.style.display = 'none';
+            if (datasheet) datasheet.style.display = 'none';
+            if (treeview) treeview.style.display = 'block';
+            if (editorWrap) editorWrap.classList.add('treeview-mode');
+            if (editorWrap) editorWrap.classList.remove('datasheet-mode');
+            // Hide save and autosave in tree view mode (view-only)
             if (saveBtn) saveBtn.style.display = 'none';
             if (autosaveLabel) autosaveLabel.style.display = 'none';
         } else if (mode === 'wysiwyg') {
             editor.style.display = 'none';
             wysiwyg.style.display = 'block';
             if (datasheet) datasheet.style.display = 'none';
+            if (treeview) treeview.style.display = 'none';
             if (editorWrap) editorWrap.classList.add('wysiwyg-mode');
             if (editorWrap) editorWrap.classList.remove('datasheet-mode');
+            if (editorWrap) editorWrap.classList.remove('treeview-mode');
             // Hide save and autosave in preview mode (read-only)
             if (saveBtn) saveBtn.style.display = 'none';
             if (autosaveLabel) autosaveLabel.style.display = 'none';
@@ -1401,8 +1575,10 @@
             editor.style.display = 'block';
             wysiwyg.style.display = 'none';
             if (datasheet) datasheet.style.display = 'none';
+            if (treeview) treeview.style.display = 'none';
             if (editorWrap) editorWrap.classList.remove('wysiwyg-mode');
             if (editorWrap) editorWrap.classList.remove('datasheet-mode');
+            if (editorWrap) editorWrap.classList.remove('treeview-mode');
             // Show save and autosave in source mode (unless read-only)
             if (saveBtn && !state.writable) {
                 saveBtn.style.display = 'none';
@@ -1424,19 +1600,36 @@
 
         const ext = state.currentFile ? getExtension(state.currentFile.key) : '';
 
-        // For JSON files, always show toggle button (even if not currently a valid datasheet)
+        // For JSON files, show appropriate toggle based on JSON type
         if (ext === 'json') {
             btn.style.display = 'inline-flex'; // Make sure button is visible
-            if (state.editorMode === 'datasheet') {
-                // Currently in datasheet mode, show "Source" button
+            if (state.editorMode === 'datasheet' || state.editorMode === 'treeview') {
+                // Currently in visual mode, show "Source" button
                 btn.title = 'Switch to source mode';
                 btn.innerHTML =
                     '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9l.94.94L5.92 19H5v-.92L14.06 9m3.6-6c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"/></svg><span id="s3-mode-label">Source</span>';
             } else {
-                // Currently in source mode, show "Datasheet" button with table icon
-                btn.title = 'Switch to datasheet view';
-                btn.innerHTML =
-                    '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3v18h18V3H3zm16 16H5V5h14v14zm-2-12H7v2h10V7zm0 4H7v2h10v-2zm0 4H7v2h10v-2z"/></svg><span id="s3-mode-label">Datasheet</span>';
+                // Currently in source mode, determine button based on JSON type
+                const editor = document.getElementById('s3-editor');
+                if (editor?.value) {
+                    const jsonType = detectJsonType(editor.value);
+                    if (jsonType.isArray) {
+                        // JSON array → show "Datasheet" button
+                        btn.title = 'Switch to datasheet view';
+                        btn.innerHTML =
+                            '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3v18h18V3H3zm16 16H5V5h14v14zm-2-12H7v2h10V7zm0 4H7v2h10v-2zm0 4H7v2h10v-2z"/></svg><span id="s3-mode-label">Datasheet</span>';
+                    } else if (jsonType.isObject) {
+                        // JSON object → show "Tree View" button
+                        btn.title = 'Switch to tree view';
+                        btn.innerHTML =
+                            '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l-5.5 9h11L12 2zm0 3.84L13.93 9h-3.87L12 5.84zM17.5 13c-2.49 0-4.5 2.01-4.5 4.5s2.01 4.5 4.5 4.5 4.5-2.01 4.5-4.5-2.01-4.5-4.5-4.5zm0 7c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5zM3 21.5h8v-8H3v8zm2-6h4v4H5v-4z"/></svg><span id="s3-mode-label">Tree View</span>';
+                    } else {
+                        // Invalid JSON, hide button
+                        btn.style.display = 'none';
+                    }
+                } else {
+                    btn.style.display = 'none';
+                }
             }
         }
         // For markdown files with WYSIWYG mode
@@ -2143,6 +2336,8 @@
         prevPage,
         openNestedModal,
         closeNestedModal,
+        // Tree view
+        toggleTreeNode,
         // Version history
         showVersionHistory,
         restoreVersionAndRefresh,
@@ -2155,6 +2350,7 @@
             buildItemMetadata,
             buildOnclickHandler,
             shouldUseWysiwygMode,
+            detectJsonType,
         },
     };
 });

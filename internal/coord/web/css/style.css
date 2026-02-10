@@ -2861,3 +2861,98 @@ a.logs-container {
 .s3-editor-wrap.datasheet-mode .s3-datasheet {
     display: flex;
 }
+
+/* Tree view mode adjustments */
+.s3-editor-wrap.treeview-mode {
+    display: flex;
+    flex-direction: column;
+}
+
+.s3-editor-wrap.treeview-mode .s3-line-numbers {
+    display: none;
+}
+
+.s3-editor-wrap.treeview-mode .s3-treeview {
+    display: block;
+}
+
+/* Tree view styling - similar to browser DevTools */
+.s3-treeview {
+    flex: 1;
+    overflow: auto;
+    padding: 1rem;
+    background: var(--color-bg-primary);
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.875rem;
+    line-height: 1.6;
+}
+
+.tree-item {
+    margin-left: 0;
+    padding: 0.125rem 0;
+}
+
+.tree-expandable {
+    cursor: pointer;
+}
+
+.tree-toggle {
+    display: inline-block;
+    width: 1rem;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.tree-toggle:hover {
+    color: var(--color-text-primary);
+}
+
+.tree-key {
+    color: #a371f7;
+    margin-right: 0.25rem;
+}
+
+.tree-bracket {
+    color: var(--color-text-secondary);
+    margin: 0 0.25rem;
+}
+
+.tree-count {
+    color: var(--color-text-secondary);
+    font-style: italic;
+    font-size: 0.8125rem;
+}
+
+.tree-children {
+    margin-left: 1.5rem;
+    border-left: 1px solid rgb(139 148 158 / 0.2);
+    padding-left: 0.5rem;
+}
+
+/* Value types */
+.tree-string {
+    color: #3fb950;
+}
+
+.tree-number {
+    color: #58a6ff;
+}
+
+.tree-boolean {
+    color: #f0a500;
+}
+
+.tree-null {
+    color: var(--color-text-secondary);
+    font-style: italic;
+}
+
+.tree-undefined {
+    color: var(--color-text-secondary);
+    font-style: italic;
+}
+
+.tree-unknown {
+    color: var(--color-accent-red);
+}

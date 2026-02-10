@@ -2,8 +2,15 @@
 import { describe, test, expect } from 'bun:test';
 import s3explorer from '../s3explorer.js';
 
-const { getItemIcon, getItemDisplayName, getIconSVG, buildItemMetadata, buildOnclickHandler, shouldUseWysiwygMode } =
-    s3explorer._test;
+const {
+    getItemIcon,
+    getItemDisplayName,
+    getIconSVG,
+    buildItemMetadata,
+    buildOnclickHandler,
+    shouldUseWysiwygMode,
+    detectJsonType,
+} = s3explorer._test;
 
 describe('getItemIcon', () => {
     test('returns "share" for bucket with fs+ prefix', () => {
@@ -190,5 +197,86 @@ describe('shouldUseWysiwygMode', () => {
     test('returns false for non-markdown files even when empty', () => {
         expect(shouldUseWysiwygMode('txt', '')).toBe(false);
         expect(shouldUseWysiwygMode('json', '')).toBe(false);
+    });
+});
+
+describe('detectJsonType', () => {
+    test('detects JSON objects correctly', () => {
+        const result = detectJsonType('{"name": "test", "value": 123}');
+        expect(result.isObject).toBe(true);
+        expect(result.isArray).toBe(false);
+        expect(result.parsed).toEqual({ name: 'test', value: 123 });
+    });
+
+    test('detects JSON arrays correctly', () => {
+        const result = detectJsonType('[1, 2, 3]');
+        expect(result.isObject).toBe(false);
+        expect(result.isArray).toBe(true);
+        expect(result.parsed).toEqual([1, 2, 3]);
+    });
+
+    test('detects nested objects', () => {
+        const result = detectJsonType('{"user": {"name": "Alice", "age": 30}}');
+        expect(result.isObject).toBe(true);
+        expect(result.isArray).toBe(false);
+        expect(result.parsed).toEqual({ user: { name: 'Alice', age: 30 } });
+    });
+
+    test('detects array of objects', () => {
+        const result = detectJsonType('[{"name": "Alice"}, {"name": "Bob"}]');
+        expect(result.isObject).toBe(false);
+        expect(result.isArray).toBe(true);
+        expect(result.parsed).toEqual([{ name: 'Alice' }, { name: 'Bob' }]);
+    });
+
+    test('handles empty object', () => {
+        const result = detectJsonType('{}');
+        expect(result.isObject).toBe(true);
+        expect(result.isArray).toBe(false);
+        expect(result.parsed).toEqual({});
+    });
+
+    test('handles empty array', () => {
+        const result = detectJsonType('[]');
+        expect(result.isObject).toBe(false);
+        expect(result.isArray).toBe(true);
+        expect(result.parsed).toEqual([]);
+    });
+
+    test('handles invalid JSON', () => {
+        const result = detectJsonType('not valid json');
+        expect(result.isObject).toBe(false);
+        expect(result.isArray).toBe(false);
+        expect(result.parsed).toBe(null);
+    });
+
+    test('handles null input', () => {
+        const result = detectJsonType('null');
+        expect(result.isObject).toBe(false);
+        expect(result.isArray).toBe(false);
+        expect(result.parsed).toBe(null);
+    });
+
+    test('handles primitive values', () => {
+        expect(detectJsonType('123').isObject).toBe(false);
+        expect(detectJsonType('"string"').isObject).toBe(false);
+        expect(detectJsonType('true').isObject).toBe(false);
+    });
+
+    test('handles complex nested structures', () => {
+        const json = JSON.stringify({
+            users: [
+                { name: 'Alice', age: 30 },
+                { name: 'Bob', age: 25 },
+            ],
+            metadata: {
+                created: '2024-01-01',
+                version: 1,
+            },
+        });
+        const result = detectJsonType(json);
+        expect(result.isObject).toBe(true);
+        expect(result.isArray).toBe(false);
+        expect(result.parsed.users).toHaveLength(2);
     });
 });
