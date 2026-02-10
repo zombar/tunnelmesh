@@ -1103,7 +1103,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			ctx := meshctx.Context{
 				Name:       joinContext,
 				ConfigPath: cfgFile,
-				Server:     cfg.Servers[0],
+				Server:     cfg.PrimaryServer(),
 				AuthToken:  cfg.AuthToken,
 				Domain:     resp.Domain,
 				MeshIP:     resp.MeshIP,
@@ -1144,7 +1144,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		}
 
 		// Fetch and store CA certificate locally
-		caPEM, err := FetchCA(cfg.Servers[0])
+		caPEM, err := FetchCA(cfg.PrimaryServer())
 		if err != nil {
 			return fmt.Errorf("fetch CA certificate: %w", err)
 		}
@@ -1435,7 +1435,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 				LocalPeerName:  cfg.Name,
 				StaticPrivate:  privKey,
 				StaticPublic:   pubKey,
-				CoordServerURL: cfg.Servers[0],
+				CoordServerURL: cfg.PrimaryServer(),
 				AuthToken:      cfg.AuthToken,
 				PeerResolver:   peerResolver,
 			})
@@ -1606,7 +1606,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			log.Error().Err(err).Msg("failed to create WireGuard client store")
 		} else {
 			wgCfg := &peerwg.ConcentratorConfig{
-				ServerURL:    cfg.Servers[0],
+				ServerURL:    cfg.PrimaryServer(),
 				AuthToken:    cfg.AuthToken,
 				ListenPort:   cfg.WireGuard.ListenPort,
 				DataDir:      dataDir,
@@ -1970,10 +1970,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		fmt.Println("  Status:      disconnected")
 		return nil
 	}
-	fmt.Printf("  URL:         %s\n", cfg.Servers[0])
+	fmt.Printf("  URL:         %s\n", cfg.PrimaryServer())
 
 	// Try to connect and get peer list
-	client := coord.NewClient(cfg.Servers[0], cfg.AuthToken)
+	client := coord.NewClient(cfg.PrimaryServer(), cfg.AuthToken)
 	peers, err := client.ListPeers()
 	if err != nil {
 		fmt.Println("  Status:      unreachable")
@@ -2044,7 +2044,7 @@ func runPeers(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := coord.NewClient(cfg.Servers[0], cfg.AuthToken)
+	client := coord.NewClient(cfg.PrimaryServer(), cfg.AuthToken)
 	peers, err := client.ListPeers()
 	if err != nil {
 		return fmt.Errorf("list peers: %w", err)
@@ -2080,7 +2080,7 @@ func runResolve(cmd *cobra.Command, args []string) error {
 
 	hostname := args[0]
 
-	client := coord.NewClient(cfg.Servers[0], cfg.AuthToken)
+	client := coord.NewClient(cfg.PrimaryServer(), cfg.AuthToken)
 	records, err := client.GetDNSRecords()
 	if err != nil {
 		return fmt.Errorf("get DNS records: %w", err)
@@ -2104,7 +2104,7 @@ func runLeave(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := coord.NewClient(cfg.Servers[0], cfg.AuthToken)
+	client := coord.NewClient(cfg.PrimaryServer(), cfg.AuthToken)
 	if err := client.Deregister(cfg.Name); err != nil {
 		return fmt.Errorf("deregister: %w", err)
 	}

@@ -125,7 +125,7 @@ func newS3Client() (*s3Client, error) {
 			return nil, fmt.Errorf("load peer config: %w", err)
 		}
 		if len(peerCfg.Servers) > 0 {
-			serverURL = peerCfg.Servers[0]
+			serverURL = peerCfg.PrimaryServer()
 		}
 	default:
 		return nil, fmt.Errorf("context %q has no server URL or config path", activeCtx.Name)

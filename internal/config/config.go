@@ -46,7 +46,7 @@ type CoordinatorConfig struct {
 	DataDir            string                `yaml:"data_dir"`             // Data directory for persistence (default: /var/lib/tunnelmesh)
 	HeartbeatInterval  string                `yaml:"heartbeat_interval"`   // Heartbeat interval (default: 10s)
 	UserExpirationDays int                   `yaml:"user_expiration_days"` // Days until user expires after last seen (default: 270 = 9 months)
-	AdminPeers         []string              `yaml:"admin_peers"`          // Peer names that should be added to admins group (e.g., ["honker", "oldie"])
+	AdminPeers         []string              `yaml:"admin_peers"`          // Peer names or peer IDs (SHA256 of SSH key) for admins group (e.g., ["honker", "abc123..."] - peer IDs preferred for security)
 	Locations          bool                  `yaml:"locations"`            // Enable node location tracking (requires external IP geolocation API)
 	MemberlistSeeds    []string              `yaml:"memberlist_seeds"`     // Memberlist gossip cluster seed addresses (e.g., ["coord1.example.com:7946"])
 	MemberlistBindAddr string                `yaml:"memberlist_bind_addr"` // Address to bind memberlist gossip (default: ":7946")
@@ -422,6 +422,15 @@ func (c *PeerConfig) Validate() error {
 		}
 	}
 	return nil
+}
+
+// PrimaryServer returns the first server in the Servers list, or empty string if none configured.
+// This provides safe access to the primary coordinator without risking index out of bounds.
+func (c *PeerConfig) PrimaryServer() string {
+	if len(c.Servers) == 0 {
+		return ""
+	}
+	return c.Servers[0]
 }
 
 // ValidateAliases checks if DNS aliases are valid DNS labels.

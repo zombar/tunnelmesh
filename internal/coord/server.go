@@ -86,7 +86,7 @@ type Server struct {
 	version      string                // Server version for admin display
 	sseHub       *sseHub               // SSE hub for real-time dashboard updates
 	ipGeoCache   *IPGeoCache           // IP geolocation cache for location fallback
-	coordMeshIP  string                // Coordinator's mesh IP for "this.tunnelmesh" resolution
+	coordMeshIP  atomic.Value          // Coordinator's mesh IP (string) for "this.tunnelmesh" resolution
 	coordMetrics *CoordMetrics         // Prometheus metrics for coordinator
 	// S3 storage
 	s3Store             *s3.Store            // S3 file-based storage
@@ -1465,10 +1465,20 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			groupsModified := false
 
 			// Check if this peer should be added to admins group (via admin_peers config)
+			// Supports both peer names (for convenience) and peer IDs (for security)
+			// Peer IDs are preferred as they're immutable (derived from SSH public key)
 			isAdminPeer := false
-			for _, adminPeerName := range s.cfg.Coordinator.AdminPeers {
-				if adminPeerName == req.Name {
+			for _, adminEntry := range s.cfg.Coordinator.AdminPeers {
+				// Check if entry matches peer ID (SHA256 hash of SSH key) - most secure
+				if peerID != "" && adminEntry == peerID {
 					isAdminPeer = true
+					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Msg("matched admin_peers entry by peer ID (secure)")
+					break
+				}
+				// Fallback to name matching for convenience (less secure due to mutability)
+				if adminEntry == req.Name {
+					isAdminPeer = true
+					log.Warn().Str("peer", req.Name).Str("peer_id", peerID).Msg("matched admin_peers entry by name (consider using peer ID for better security)")
 					break
 				}
 			}
@@ -1537,12 +1547,15 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		liveCoordinators = s.cluster.GetCoordinatorAddresses()
 	}
 
+	// Get coordinator mesh IP safely (uses atomic.Value)
+	coordIP, _ := s.coordMeshIP.Load().(string)
+
 	resp := proto.RegisterResponse{
 		MeshIP:           meshIP,
 		MeshCIDR:         mesh.CIDR,
 		Domain:           mesh.DomainSuffix,
 		Token:            token,
-		CoordMeshIP:      s.coordMeshIP, // For "this.tunnelmesh" resolution
+		CoordMeshIP:      coordIP, // For "this.tunnelmesh" resolution
 		ServerVersion:    s.version,
 		PeerName:         req.Name, // May differ from original request if renamed
 		PeerID:           peerID,
@@ -1762,7 +1775,7 @@ func (s *Server) ListenAndServe() error {
 // SetCoordMeshIP sets the coordinator's mesh IP for "this.tunnelmesh" resolution.
 // This is called after join_mesh completes so other peers can resolve "this" to the coordinator.
 func (s *Server) SetCoordMeshIP(ip string) {
-	s.coordMeshIP = ip
+	s.coordMeshIP.Store(ip)
 	log.Info().Str("ip", ip).Msg("coordinator mesh IP set for 'this.tunnelmesh' resolution")
 }
 

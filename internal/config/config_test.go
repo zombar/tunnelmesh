@@ -173,7 +173,7 @@ dns:
 	require.NoError(t, err)
 
 	assert.Equal(t, "mynode", cfg.Name)
-	assert.Equal(t, "https://coord.example.com", cfg.Servers[0])
+	assert.Equal(t, "https://coord.example.com", cfg.PrimaryServer())
 	assert.Equal(t, "peer-token", cfg.AuthToken)
 	assert.Equal(t, 2222, cfg.SSHPort)
 	assert.Equal(t, "/path/to/key", cfg.PrivateKey)
