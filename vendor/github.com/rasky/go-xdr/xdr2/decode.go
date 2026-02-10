@@ -62,12 +62,12 @@ by v and performs a mapping of underlying XDR types to Go types as follows:
 
 Notes and Limitations:
 
-  - Automatic unmarshalling of variable and fixed-length arrays of uint8s
-    requires a special struct tag `xdropaque:"false"` since byte slices
-    and byte arrays are assumed to be opaque data and byte is a Go alias
-    for uint8 thus indistinguishable under reflection
-  - Cyclic data structures are not supported and will result in infinite
-    loops
+	* Automatic unmarshalling of variable and fixed-length arrays of uint8s
+	  requires a special struct tag `xdropaque:"false"` since byte slices
+	  and byte arrays are assumed to be opaque data and byte is a Go alias
+	  for uint8 thus indistinguishable under reflection
+	* Cyclic data structures are not supported and will result in infinite
+	  loops
 
 If any issues are encountered during the unmarshalling process, an
 UnmarshalError is returned with a human readable description as well as
@@ -111,9 +111,8 @@ type Decoder struct {
 // An UnmarshalError is returned if there are insufficient bytes remaining.
 //
 // Reference:
-//
-//	RFC Section 4.1 - Integer
-//	32-bit big-endian signed integer in range [-2147483648, 2147483647]
+// 	RFC Section 4.1 - Integer
+// 	32-bit big-endian signed integer in range [-2147483648, 2147483647]
 func (d *Decoder) DecodeInt() (int32, int, error) {
 	var buf [4]byte
 	n, err := io.ReadFull(d.r, buf[:])
@@ -134,9 +133,8 @@ func (d *Decoder) DecodeInt() (int32, int, error) {
 // An UnmarshalError is returned if there are insufficient bytes remaining.
 //
 // Reference:
-//
-//	RFC Section 4.2 - Unsigned Integer
-//	32-bit big-endian unsigned integer in range [0, 4294967295]
+// 	RFC Section 4.2 - Unsigned Integer
+// 	32-bit big-endian unsigned integer in range [0, 4294967295]
 func (d *Decoder) DecodeUint() (uint32, int, error) {
 	var buf [4]byte
 	n, err := io.ReadFull(d.r, buf[:])
@@ -160,9 +158,8 @@ func (d *Decoder) DecodeUint() (uint32, int, error) {
 // the parsed enumeration value is not one of the provided valid values.
 //
 // Reference:
-//
-//	RFC Section 4.3 - Enumeration
-//	Represented as an XDR encoded signed integer
+// 	RFC Section 4.3 - Enumeration
+// 	Represented as an XDR encoded signed integer
 func (d *Decoder) DecodeEnum(validEnums map[int32]bool) (int32, int, error) {
 	val, n, err := d.DecodeInt()
 	if err != nil {
@@ -184,9 +181,8 @@ func (d *Decoder) DecodeEnum(validEnums map[int32]bool) (int32, int, error) {
 // the parsed value is not a 0 or 1.
 //
 // Reference:
-//
-//	RFC Section 4.4 - Boolean
-//	Represented as an XDR encoded enumeration where 0 is false and 1 is true
+// 	RFC Section 4.4 - Boolean
+// 	Represented as an XDR encoded enumeration where 0 is false and 1 is true
 func (d *Decoder) DecodeBool() (bool, int, error) {
 	val, n, err := d.DecodeInt()
 	if err != nil {
@@ -210,9 +206,8 @@ func (d *Decoder) DecodeBool() (bool, int, error) {
 // An UnmarshalError is returned if there are insufficient bytes remaining.
 //
 // Reference:
-//
-//	RFC Section 4.5 - Hyper Integer
-//	64-bit big-endian signed integer in range [-9223372036854775808, 9223372036854775807]
+// 	RFC Section 4.5 - Hyper Integer
+// 	64-bit big-endian signed integer in range [-9223372036854775808, 9223372036854775807]
 func (d *Decoder) DecodeHyper() (int64, int, error) {
 	var buf [8]byte
 	n, err := io.ReadFull(d.r, buf[:])
@@ -236,9 +231,8 @@ func (d *Decoder) DecodeHyper() (int64, int, error) {
 // An UnmarshalError is returned if there are insufficient bytes remaining.
 //
 // Reference:
-//
-//	RFC Section 4.5 - Unsigned Hyper Integer
-//	64-bit big-endian unsigned integer in range [0, 18446744073709551615]
+// 	RFC Section 4.5 - Unsigned Hyper Integer
+// 	64-bit big-endian unsigned integer in range [0, 18446744073709551615]
 func (d *Decoder) DecodeUhyper() (uint64, int, error) {
 	var buf [8]byte
 	n, err := io.ReadFull(d.r, buf[:])
@@ -261,9 +255,8 @@ func (d *Decoder) DecodeUhyper() (uint64, int, error) {
 // An UnmarshalError is returned if there are insufficient bytes remaining.
 //
 // Reference:
-//
-//	RFC Section 4.6 - Floating Point
-//	32-bit single-precision IEEE 754 floating point
+// 	RFC Section 4.6 - Floating Point
+// 	32-bit single-precision IEEE 754 floating point
 func (d *Decoder) DecodeFloat() (float32, int, error) {
 	var buf [4]byte
 	n, err := io.ReadFull(d.r, buf[:])
@@ -285,9 +278,8 @@ func (d *Decoder) DecodeFloat() (float32, int, error) {
 // An UnmarshalError is returned if there are insufficient bytes remaining.
 //
 // Reference:
-//
-//	RFC Section 4.7 -  Double-Precision Floating Point
-//	64-bit double-precision IEEE 754 floating point
+// 	RFC Section 4.7 -  Double-Precision Floating Point
+// 	64-bit double-precision IEEE 754 floating point
 func (d *Decoder) DecodeDouble() (float64, int, error) {
 	var buf [8]byte
 	n, err := io.ReadFull(d.r, buf[:])
@@ -317,9 +309,8 @@ func (d *Decoder) DecodeDouble() (float64, int, error) {
 // multiple of 4.
 //
 // Reference:
-//
-//	RFC Section 4.9 - Fixed-Length Opaque Data
-//	Fixed-length uninterpreted data zero-padded to a multiple of four
+// 	RFC Section 4.9 - Fixed-Length Opaque Data
+// 	Fixed-length uninterpreted data zero-padded to a multiple of four
 func (d *Decoder) DecodeFixedOpaque(size int32) ([]byte, int, error) {
 	// Nothing to do if size is 0.
 	if size == 0 {
@@ -353,9 +344,8 @@ func (d *Decoder) DecodeFixedOpaque(size int32) ([]byte, int, error) {
 // the opaque data is larger than the max length of a Go slice.
 //
 // Reference:
-//
-//	RFC Section 4.10 - Variable-Length Opaque Data
-//	Unsigned integer length followed by fixed opaque data of that length
+// 	RFC Section 4.10 - Variable-Length Opaque Data
+// 	Unsigned integer length followed by fixed opaque data of that length
 func (d *Decoder) DecodeOpaque() ([]byte, int, error) {
 	dataLen, n, err := d.DecodeUint()
 	if err != nil {
@@ -387,10 +377,9 @@ func (d *Decoder) DecodeOpaque() ([]byte, int, error) {
 // the string data is larger than the max length of a Go slice.
 //
 // Reference:
-//
-//	RFC Section 4.11 - String
-//	Unsigned integer length followed by bytes zero-padded to a multiple of
-//	four
+// 	RFC Section 4.11 - String
+// 	Unsigned integer length followed by bytes zero-padded to a multiple of
+// 	four
 func (d *Decoder) DecodeString() (string, int, error) {
 	dataLen, n, err := d.DecodeUint()
 	if err != nil {
@@ -421,9 +410,8 @@ func (d *Decoder) DecodeString() (string, int, error) {
 // the array elements.
 //
 // Reference:
-//
-//	RFC Section 4.12 - Fixed-Length Array
-//	Individually XDR encoded array elements
+// 	RFC Section 4.12 - Fixed-Length Array
+// 	Individually XDR encoded array elements
 func (d *Decoder) decodeFixedArray(v reflect.Value, ignoreOpaque bool) (int, error) {
 	// Treat [#]byte (byte is alias for uint8) as opaque data unless
 	// ignored.
@@ -460,10 +448,9 @@ func (d *Decoder) decodeFixedArray(v reflect.Value, ignoreOpaque bool) (int, err
 // the array elements.
 //
 // Reference:
-//
-//	RFC Section 4.13 - Variable-Length Array
-//	Unsigned integer length followed by individually XDR encoded array
-//	elements
+// 	RFC Section 4.13 - Variable-Length Array
+// 	Unsigned integer length followed by individually XDR encoded array
+// 	elements
 func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool) (int, error) {
 	dataLen, n, err := d.DecodeUint()
 	if err != nil {
@@ -517,9 +504,8 @@ func (d *Decoder) decodeArray(v reflect.Value, ignoreOpaque bool) (int, error) {
 // the elements.
 //
 // Reference:
-//
-//	RFC Section 4.14 - Structure
-//	XDR encoded elements in the order of their declaration in the struct
+// 	RFC Section 4.14 - Structure
+// 	XDR encoded elements in the order of their declaration in the struct
 func (d *Decoder) decodeStruct(v reflect.Value) (int, error) {
 	var n int
 	var union string

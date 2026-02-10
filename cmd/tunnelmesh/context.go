@@ -139,8 +139,8 @@ func runContextCreate(cmd *cobra.Command, args []string) error {
 		Name:       name,
 		ConfigPath: contextConfigPath,
 		Server:     cfg.PrimaryServer(), // Use first server in list
-		Domain:     "",             // Will be populated on join
-		MeshIP:     "",             // Will be populated on join
+		Domain:     "",                  // Will be populated on join
+		MeshIP:     "",                  // Will be populated on join
 		DNSListen:  cfg.DNS.Listen,
 	}
 

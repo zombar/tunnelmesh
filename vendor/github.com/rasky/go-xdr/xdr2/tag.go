@@ -28,7 +28,7 @@ import (
 //
 // For instance:
 //
-//	`xdr:"foo,bar=2,baz=false"
+//    `xdr:"foo,bar=2,baz=false"
 //
 // After parsing this tag, Get("foo") will return "true", Get("bar")
 // will return "2", and Get("baz") will return "false".
