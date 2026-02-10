@@ -8,10 +8,7 @@ Complete command-line reference for TunnelMesh with examples and walkthroughs.
 # Generate SSH keys (first time only)
 tunnelmesh init
 
-# Run a coordination server
-sudo tunnelmesh serve -c server.yaml
-
-# Join the mesh as a peer (--context saves it for future use)
+# Join the mesh as a peer (or coordinator with coordinator.enabled: true)
 sudo tunnelmesh join -c peer.yaml --context home
 
 # List your contexts
@@ -80,8 +77,7 @@ sudo mv tunnelmesh /usr/local/bin/
 
 | Command | Description |
 | --------- | ------------- |
-| `tunnelmesh serve` | Run coordination server |
-| `tunnelmesh join` | Connect peer to mesh |
+| `tunnelmesh join` | Join mesh (as peer or coordinator) |
 | `tunnelmesh context` | Manage mesh contexts |
 | `tunnelmesh status` | Show connection status |
 | `tunnelmesh peers` | List mesh peers |
@@ -125,53 +121,16 @@ tunnelmesh init
 
 **Example output:**
 
-```
+```text
 INF keys generated path=~/.tunnelmesh/id_ed25519
 INF public key path=~/.tunnelmesh/id_ed25519.pub
 ```
 
 ---
 
-### tunnelmesh serve
-
-Run the coordination server.
-
-```bash
-tunnelmesh serve [flags]
-```
-
-**Flags:**
-
-| Flag | Description |
-| ------ | ------------- |
-| `--locations` | Enable peer location tracking (uses ip-api.com) |
-| `--enable-tracing` | Enable runtime tracing (/debug/trace endpoint) |
-
-**Example - Basic server:**
-
-```bash
-tunnelmesh serve --config server.yaml
-```
-
-**Example - With location tracking:**
-
-```bash
-tunnelmesh serve --config server.yaml --locations
-```
-
-**Generate a config:**
-
-```bash
-tunnelmesh init --server --peer --output server.yaml
-```
-
-See [server.yaml.example](../server.yaml.example) for all configuration options.
-
----
-
 ### tunnelmesh join
 
-Connect to the mesh as a peer.
+Join the mesh as a peer. If `coordinator.enabled: true` in your config, this also starts coordinator services (discovery, admin UI, relay, S3).
 
 ```bash
 tunnelmesh join [flags]
@@ -231,13 +190,21 @@ sudo tunnelmesh join \
   --wireguard
 ```
 
+**Example - Start as coordinator:**
+
+```bash
+# With config file that has coordinator.enabled: true
+sudo tunnelmesh join --config coordinator.yaml
+```
+
 **Generate a config:**
 
 ```bash
 tunnelmesh init --peer --output peer.yaml
 ```
 
-See [peer.yaml.example](../peer.yaml.example) for all configuration options.
+See [peer.yaml.example](../peer.yaml.example) for all options including
+the `coordinator` section.
 
 ---
 
@@ -267,7 +234,7 @@ tunnelmesh context <subcommand>
 Create a new context from a configuration file.
 
 ```bash
- tunnelmesh context create <name> --config <path> [--mode serve | join] 
+tunnelmesh context create <name> --config <path>
 ```
 
 **Flags:**
@@ -275,7 +242,6 @@ Create a new context from a configuration file.
 | Flag | Description |
 | ------ | ------------- |
 | `--config`, `-c` | Path to config file (required) |
-| `--mode` | Mode: `serve` or `join` (default: `join`) |
 
 **Example:**
 
@@ -283,8 +249,8 @@ Create a new context from a configuration file.
 # Create a peer context
 tunnelmesh context create home --config ~/.tunnelmesh/home.yaml
 
-# Create a server context
-tunnelmesh context create coordinator --config /etc/tunnelmesh/server.yaml --mode serve
+# Create a coordinator context (with coordinator.enabled: true in config)
+tunnelmesh context create coordinator --config /etc/tunnelmesh/coordinator.yaml
 ```
 
 ---
@@ -612,11 +578,11 @@ tunnelmesh service status
 tunnelmesh service logs --follow
 ```
 
-**Example - Install server service:**
+**Example - Install coordinator service:**
 
 ```bash
-# Create context and install
-tunnelmesh context create coordinator --config /etc/tunnelmesh/server.yaml --mode serve
+# Create context and install (config has coordinator.enabled: true)
+tunnelmesh context create coordinator --config /etc/tunnelmesh/coordinator.yaml
 sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
@@ -717,14 +683,6 @@ tunnelmesh v1.5.0
 
 TunnelMesh searches for config files in order:
 
-**Server mode:**
-
-1. Path specified by `--config` flag
-2. `server.yaml` in current directory
-3. `tunnelmesh-server.yaml` in current directory
-
-**Peer mode:**
-
 1. Path specified by `--config` flag
 2. `~/.tunnelmesh/config.yaml`
 3. `tunnelmesh.yaml` in current directory
@@ -732,17 +690,14 @@ TunnelMesh searches for config files in order:
 
 ### Configuration Reference
 
-For complete configuration options with documentation:
+For complete configuration options with documentation, see [peer.yaml.example](../peer.yaml.example).
 
-- **Server:** See [server.yaml.example](../server.yaml.example)
-- **Peer:** See [peer.yaml.example](../peer.yaml.example)
+The config includes an optional `coordinator` section for running as a coordinator.
 
-Generate config files with:
+Generate a config file with:
 
 ```bash
-tunnelmesh init --server --peer    # Both configs
-tunnelmesh init --server           # Server only
-tunnelmesh init --peer             # Peer only
+tunnelmesh init --peer    # Generate peer.yaml with all options
 ```
 
 ---
@@ -759,13 +714,13 @@ Set up TunnelMesh for personal use with a cloud server and laptop.
 # On your cloud server
 sudo mkdir -p /etc/tunnelmesh
 
-# Generate config (server + peer mode for exit peer capability)
-tunnelmesh init --server --peer --output /etc/tunnelmesh/server.yaml
+# Generate config
+tunnelmesh init --peer --output /etc/tunnelmesh/coordinator.yaml
 
-# Edit: set auth_token, enable allow_exit_traffic in join_mesh section
-sudo nano /etc/tunnelmesh/server.yaml
+# Edit: set auth_token, enable coordinator.enabled, enable allow_exit_traffic
+sudo nano /etc/tunnelmesh/coordinator.yaml
 
-tunnelmesh context create vpn --config /etc/tunnelmesh/server.yaml --mode serve
+tunnelmesh context create vpn --config /etc/tunnelmesh/coordinator.yaml
 sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
@@ -804,12 +759,12 @@ Connect a development team for direct machine access.
 
 ```bash
 # On a small cloud instance
-tunnelmesh init --server --output server.yaml
+tunnelmesh init --peer --output coordinator.yaml
 
-# Edit: set auth_token
-nano server.yaml
+# Edit: set auth_token, enable coordinator.enabled: true
+nano coordinator.yaml
 
-tunnelmesh context create team --config server.yaml --mode serve
+tunnelmesh context create team --config coordinator.yaml
 sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
@@ -848,12 +803,12 @@ Access home network from anywhere.
 ```bash
 # Deploy to cloud (see terraform docs)
 # Or manually:
-tunnelmesh init --server --peer --output server.yaml
+tunnelmesh init --peer --output coordinator.yaml
 
-# Edit: set auth_token, enable wireguard in join_mesh section
-nano server.yaml
+# Edit: set auth_token, enable coordinator.enabled: true, enable wireguard
+nano coordinator.yaml
 
-sudo tunnelmesh serve --config server.yaml
+sudo tunnelmesh join --config coordinator.yaml
 ```
 
 **Step 2: Home server joins**

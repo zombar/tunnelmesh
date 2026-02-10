@@ -331,9 +331,12 @@ nodes = {
 ```yaml
 # Home server peer config
 name: "homelab"
-server: "https://tunnelmesh.example.com"
+servers:
+  - "https://tunnelmesh.example.com"
 auth_token: "your-token"
+
 dns:
+  enabled: true
   aliases:
     - "nas"
     - "plex"
@@ -472,7 +475,7 @@ Each peer in the `nodes` map supports these options:
 
 | Option | Type | Description |
 | -------- | ------ | ------------- |
-| `coordinator` | bool | Run coordination server (max 1 per mesh) |
+| `coordinator` | bool | Enable coordinator services on this peer (supports clustering) |
 | `peer` | bool | Join mesh as a peer |
 | `wireguard` | bool | Enable WireGuard concentrator for mobile clients |
 

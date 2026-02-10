@@ -1,40 +1,62 @@
-# TunnelMesh Server Configuration for Docker testing
-listen: ":8080"
+# TunnelMesh Coordinator Peer Configuration for Docker testing
+name: "server-node"
+servers: []  # First coordinator (standalone)
 auth_token: "docker-test-token-123"
-admin_peers: ["honker", "oldie"]  # Peers that should be granted admin role
-locations: true  # Enable node location tracking (uses ip-api.com)
+ssh_port: 2222
+private_key: "/root/.tunnelmesh/id_ed25519"
 log_level: "info"
+admin_peers: ["honker", "oldie"]  # Peers that should be granted admin role
 
-# S3 storage (enables user/group management, file shares)
-s3:
+# Enable coordinator services
+coordinator:
   enabled: true
-  data_dir: "/var/lib/tunnelmesh/s3"
-  max_size: "10Gi"  # Storage quota (required)
+  listen: ":8080"
+  memberlist_seeds: []  # Standalone coordinator
 
-admin:
+  admin:
+    enabled: true
+    port: 443
+    # Admin accessible at https://server-node.tunnelmesh/ from mesh peers
+    monitoring:
+      prometheus_url: "http://localhost:9090"
+      grafana_url: "http://localhost:3000"
+
+  relay:
+    enabled: true
+
+  s3:
+    enabled: true
+    port: 9000
+    data_dir: "/var/lib/tunnelmesh/s3"
+    max_size: "10Gi"  # Storage quota (required)
+
+  locations: true  # Enable node location tracking (uses ip-api.com)
+
+# TUN interface
+tun:
+  name: "tun-mesh0"
+  mtu: 1400
+
+# DNS resolver
+dns:
   enabled: true
-  # Admin accessible at https://server-node.tunnelmesh/ from mesh peers
-  monitoring:
-    prometheus_url: "http://localhost:9090"
-    grafana_url: "http://localhost:3000"
+  listen: "127.0.0.53:53"
+  aliases:
+    - "alt.server-node"
+
+# Exit node settings
+allow_exit_traffic: true
+
+# Loki logging
+loki:
+  enabled: true
+  url: "http://localhost:3100"  # Loki runs in same network namespace
+  batch_size: 100
+  flush_interval: "5s"
 
 # WireGuard client management (enables admin panel WireGuard section)
 # wireguard:
 #   enabled: true
+#   listen_port: 51820
 #   endpoint: "your-public-ip:51820"  # Set to concentrator's public endpoint
-
-# Server joins the mesh as a peer (enables exit node functionality)
-join_mesh:
-  name: "server-node"
-  private_key: "/root/.tunnelmesh/id_ed25519"
-  allow_exit_traffic: true
-  dns:
-    enabled: true
-    listen: "127.0.0.53:53"
-    aliases:
-      - "alt.server-node"
-  loki:
-    enabled: true
-    url: "http://localhost:3100"  # Loki runs in same network namespace
-    batch_size: 100
-    flush_interval: "5s"
+#   data_dir: "/var/lib/tunnelmesh/wireguard"

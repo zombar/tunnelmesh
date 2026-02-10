@@ -19,8 +19,7 @@ routing.
 - **P2P Encrypted Tunnels** - Direct connections between peers using pluggable transports
 - **Pluggable Transport Layer** - Supports SSH, UDP (WireGuard-like), and WebSocket relay transports with automatic
   fallback
-- **Coordination Server** - Central hub for peer discovery, IP allocation, and NAT traversal coordination (not a
-  traffic router)
+- **Coordinator Peers** - Admin peers that provide discovery, IP allocation, and NAT traversal coordination (not traffic routers)
 - **Exit Peers** - Split-tunnel VPN routing: route internet traffic through designated peers while keeping mesh traffic
   direct
 - **TUN Interface** - Virtual network interface for transparent IP routing
@@ -30,7 +29,7 @@ routing.
 - **Multi-Platform** - Linux, macOS, and Windows support
 - **Admin Dashboard** - Web interface showing mesh status, peers, traffic statistics, and per-peer transport controls
 - **Node Location Map** - Optional geographic visualization of mesh peers (requires `--locations` flag)
-- **Server-as-Client** - Coordination server can also participate as a mesh peer
+- **Unified Architecture** - All nodes are peers; coordinators are peers with admin services enabled
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
 - **Internal Packet Filter** - Port-based firewall with per-peer rules, configurable via config, CLI, or admin UI
 
@@ -87,10 +86,11 @@ a system service, see the **[Getting Started Guide](docs/GETTING_STARTED.md)**.
 ```
 
 **Key points:**
+- **Unified Architecture**: All nodes are peers; coordinators are admin peers with services enabled
 - Traffic flows directly between peers via encrypted tunnels
 - Multiple transport options: SSH, UDP (ChaCha20-Poly1305), or WebSocket relay
 - Transport negotiation with automatic fallback (UDP → SSH → Relay)
-- The coordination server handles discovery, registration, and NAT traversal coordination
+- Coordinator peers handle discovery, registration, and NAT traversal coordination
 - Each peer runs a TUN interface for transparent IP routing
 - Peers behind NAT use hole-punching or relay as fallback
 
@@ -143,35 +143,46 @@ your system trust store. This allows HTTPS connections to mesh services without 
 
 ## Configuration
 
-Generate configs with `tunnelmesh init --server --peer` or see the full [server.yaml.example](server.yaml.example) and
-[peer.yaml.example](peer.yaml.example) for all options.
+TunnelMesh uses a unified configuration model where all nodes are peers. Coordinators are simply peers with `coordinator.enabled: true` that provide discovery and admin services.
 
-### Server Configuration
+Generate configs with `tunnelmesh init --peer` or see the full [peer.yaml.example](peer.yaml.example) for all options.
+
+### Coordinator Configuration
+
+Coordinators are peers that enable coordinator services. The first admin peer to join becomes a coordinator automatically.
 
 ```yaml
+name: "coordinator"
+servers:
+  - "https://coord1.example.com:8443"  # Bootstrap from existing coordinator (optional)
 auth_token: "your-secure-token"
 
-admin:
+# Enable coordinator services
+coordinator:
   enabled: true
+  listen: ":8443"
 
-relay:
-  enabled: true
-
-s3:
-  enabled: true
-
-# Server also runs as a mesh peer
-join_mesh:
-  name: "coordinator"
-  dns:
+  admin:
     enabled: true
+    port: 443
+
+  relay:
+    enabled: true
+
+  s3:
+    enabled: true
+    port: 9000
+
+dns:
+  enabled: true
 ```
 
-### Peer Configuration
+### Regular Peer Configuration
 
 ```yaml
 name: "mynode"
-server: "https://coord.example.com:8443"
+servers:
+  - "https://coord.example.com:8443"
 auth_token: "your-secure-token"
 
 dns:
@@ -281,17 +292,15 @@ rules, metrics, and alerts.
 
 The tool searches for config files in the following order:
 
-**Server:** `server.yaml`, `tunnelmesh-server.yaml`
-
-**Peer:** `~/.tunnelmesh/config.yaml`, `tunnelmesh.yaml`, `peer.yaml`
+`~/.tunnelmesh/config.yaml`, `tunnelmesh.yaml`, `peer.yaml`
 
 ## CLI Quick Reference
 
 ```bash
-# Coordinator setup (server + peer)
-tunnelmesh init --server --peer    # Generate config
-tunnelmesh serve -c server.yaml    # Start coordinator
-# First peer to join becomes admin automatically
+# Coordinator setup
+tunnelmesh init --peer              # Generate config with coordinator.enabled: true
+tunnelmesh join                     # Start as coordinator + peer
+# First admin peer to join gets full admin permissions automatically
 
 # Peer setup (joining existing mesh)
 tunnelmesh join --server coord.example.com --token <token> --context work

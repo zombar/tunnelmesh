@@ -2,17 +2,23 @@
 # === PEER-ONLY CONFIGURATION ===
 cat > /etc/tunnelmesh/peer.yaml <<'PEERCONF'
 name: "${node_name}"
-server: "${peer_server}"
+servers:
+  - "${peer_server}"
 auth_token: "${auth_token}"
 ssh_port: ${ssh_tunnel_port}
 private_key: /etc/tunnelmesh/peer.key
+
 %{ if exit_node != "" ~}
+# Route internet through exit peer
 exit_peer: "${exit_node}"
 %{ endif ~}
 %{ if allow_exit_traffic ~}
+# Allow peers to use this as exit node
 allow_exit_traffic: true
 %{ endif ~}
+
 %{ if location_latitude != null && location_longitude != null ~}
+# Manual location override
 location:
   latitude: ${location_latitude}
   longitude: ${location_longitude}
@@ -24,15 +30,18 @@ location:
 %{ endif ~}
 %{ endif ~}
 
+# TUN interface
 tun:
   name: tun-mesh
   mtu: 1400
 
+# DNS resolver
 dns:
   enabled: true
   listen: "127.0.0.1:5353"
 
 %{ if wireguard_enabled ~}
+# WireGuard concentrator
 wireguard:
   enabled: true
   listen_port: ${wg_listen_port}
@@ -41,6 +50,7 @@ wireguard:
 %{ endif ~}
 PEERCONF
 
-# Install service using built-in command
-/usr/local/bin/tunnelmesh service install --mode join --config /etc/tunnelmesh/peer.yaml
+# Create context and install service
+/usr/local/bin/tunnelmesh context create ${node_name} --config /etc/tunnelmesh/peer.yaml
+/usr/local/bin/tunnelmesh service install --context ${node_name}
 %{ endif ~}

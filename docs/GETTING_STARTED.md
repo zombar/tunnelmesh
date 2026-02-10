@@ -2,13 +2,14 @@
 
 This guide walks you through setting up a TunnelMesh network from scratch. You'll need:
 
-1. **One coordination server** - Manages peer discovery and IP allocation
-2. **One or more peers** - Peers that connect to form the mesh network
+1. **One coordinator peer** - Admin peer that manages peer discovery and IP allocation
+2. **One or more regular peers** - Peers that connect to form the mesh network
 
-## Part 1: Setting Up the Coordination Server
+## Part 1: Setting Up the Coordinator Peer
 
-The coordination server is the central hub that peers register with. It doesn't route traffic—peers connect directly to
-each other.
+The coordinator is an admin peer with coordination services enabled
+(`coordinator.enabled: true`). It provides discovery and admin services but
+doesn't route traffic—peers connect directly to each other.
 
 ### Linux (amd64)
 
@@ -66,7 +67,7 @@ tunnelmesh version
 
 ---
 
-### Create the Server Configuration
+### Create the Coordinator Configuration
 
 #### Linux/macOS
 
@@ -74,11 +75,11 @@ tunnelmesh version
 # Create config directory
 sudo mkdir -p /etc/tunnelmesh
 
-# Generate server configuration
-tunnelmesh init --server --output /etc/tunnelmesh/server.yaml
+# Generate coordinator configuration
+tunnelmesh init --peer --output /etc/tunnelmesh/coordinator.yaml
 
-# Edit and set a secure auth token
-sudo nano /etc/tunnelmesh/server.yaml
+# Edit: set a secure auth_token and enable coordinator.enabled: true
+sudo nano /etc/tunnelmesh/coordinator.yaml
 ```
 
 #### Windows (PowerShell as Administrator)
@@ -87,16 +88,16 @@ sudo nano /etc/tunnelmesh/server.yaml
 # Create config directory
 New-Item -ItemType Directory -Force -Path "C:\ProgramData\TunnelMesh"
 
-# Generate server configuration
-tunnelmesh init --server --output "C:\ProgramData\TunnelMesh\server.yaml"
+# Generate coordinator configuration
+tunnelmesh init --peer --output "C:\ProgramData\TunnelMesh\coordinator.yaml"
 
-# Edit and set a secure auth token
-notepad "C:\ProgramData\TunnelMesh\server.yaml"
+# Edit: set a secure auth_token and enable coordinator.enabled: true
+notepad "C:\ProgramData\TunnelMesh\coordinator.yaml"
 ```
 
 ---
 
-### Create a Context and Install the Server Service
+### Create a Context and Install the Coordinator Service
 
 TunnelMesh uses **contexts** to manage multiple mesh configurations. Each context tracks a config file, allocated IP,
 and service status.
@@ -104,8 +105,8 @@ and service status.
 #### Linux/macOS
 
 ```bash
-# Create a context for the server
-tunnelmesh context create server --config /etc/tunnelmesh/server.yaml --mode serve
+# Create a context for the coordinator
+tunnelmesh context create coordinator --config /etc/tunnelmesh/coordinator.yaml
 
 # Install and start as a system service
 sudo tunnelmesh service install
@@ -121,8 +122,8 @@ tunnelmesh service logs --follow
 #### Windows (PowerShell as Administrator)
 
 ```powershell
-# Create a context for the server
-tunnelmesh context create server --config "C:\ProgramData\TunnelMesh\server.yaml" --mode serve
+# Create a context for the coordinator
+tunnelmesh context create coordinator --config "C:\ProgramData\TunnelMesh\coordinator.yaml"
 
 # Install as a Windows service
 tunnelmesh service install
@@ -134,16 +135,17 @@ tunnelmesh service start
 tunnelmesh service status
 ```
 
-**Note:** The service name is derived from the context name. The "server" context creates a service named
-"tunnelmesh-server".
+**Note:** The service name is derived from the context name. The "coordinator" context creates a service named
+"tunnelmesh-coordinator".
 
 ---
 
-### Verify the Server
+### Verify the Coordinator
 
-Open a browser and navigate to `http://<server-ip>:8080/` to see the admin dashboard.
-
-You should see an empty peer list—this will populate as peers join.
+The coordinator is now running and will self-register as a peer. The admin
+dashboard is accessible via HTTPS from within the mesh at `https://this.tm/`
+once you join other peers. Verify it's running by checking the service status
+and logs.
 
 ---
 

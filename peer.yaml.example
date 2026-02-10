@@ -18,11 +18,13 @@
 # This becomes your mesh hostname: <name>.tunnelmesh
 name: "mynode"
 
-# Coordination server URL
+# Coordination server URLs (supports multiple for failover)
 # Get this from your mesh administrator
-server: "https://coord.example.com:8443"
+servers:
+  - "https://coord.example.com:8443"
+  - "https://coord2.example.com:8443"  # Optional: failover coordinator
 
-# Authentication token (must match server's auth_token)
+# Authentication token (must match coordinator's auth_token)
 # Get this from your mesh administrator
 auth_token: "your-secure-token-here"
 
@@ -37,6 +39,39 @@ private_key: "~/.tunnelmesh/id_ed25519"
 # Log level: trace, debug, info, warn, error
 # Use "debug" or "trace" for troubleshooting connection issues
 log_level: "info"
+
+# -----------------------------------------------------------------------------
+# Coordinator Services (Optional)
+# -----------------------------------------------------------------------------
+# Enable coordinator services on this peer to run discovery, admin UI,
+# relay, and S3 storage. Multiple coordinators can cluster together via
+# memberlist gossip for high availability.
+#
+# For a complete coordinator example, see: server.yaml.example
+
+# coordinator:
+#   enabled: true                # Enable coordinator services on this peer
+#   listen: ":8443"              # HTTPS listen address for peer registrations
+#
+#   # Memberlist clustering (for multi-coordinator setups)
+#   memberlist_seeds:            # Seed addresses for coordinator discovery
+#     - "coord1.example.com:7946"
+#     - "coord2.example.com:7946"
+#   memberlist_bind_addr: ":7946"  # Memberlist gossip port
+#
+#   admin:
+#     enabled: true
+#     port: 443                  # Admin UI port (mesh-only)
+#
+#   relay:
+#     enabled: true              # WebSocket relay fallback
+#
+#   s3:
+#     enabled: true
+#     port: 9000                 # S3 API port
+#     max_size: "10Gi"           # Storage quota
+#
+# For full coordinator options, see: server.yaml.example
 
 # -----------------------------------------------------------------------------
 # TUN Interface

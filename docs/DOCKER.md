@@ -39,7 +39,7 @@ The included `docker-compose.yml` sets up a complete mesh environment:
 
 | Service | Description |
 | --------- | ------------- |
-| `server` | Coordination server with admin UI |
+| `server` | Coordinator peer with admin UI |
 | `client` | Mesh peer (5 replicas by default) |
 | `prometheus` | Metrics collection |
 | `grafana` | Dashboards and visualization |
@@ -116,15 +116,24 @@ services:
 
 > **Note:** Context management (`tunnelmesh context`) is designed for host-based installations where you run multiple meshes from one machine. In Docker deployments, each container is typically dedicated to a single mesh and receives its config directly via volume mount or environment variables.
 
-### Server Configuration
+### Coordinator Configuration
 
-Create `docker/config/server.yaml`:
+Create `docker/config/coordinator.yaml`:
 
 ```yaml
-name: "server"
-listen: ":8080"
+name: "coordinator"
+servers:
+  - "http://coordinator:8080"
 auth_token: "your-secure-token"
-admin:
+
+coordinator:
+  enabled: true
+  listen: ":8080"
+  admin:
+    enabled: true
+    port: 443
+
+dns:
   enabled: true
 ```
 
@@ -134,8 +143,12 @@ Create `docker/config/peer.yaml`:
 
 ```yaml
 name: "peer-1"
-server: "http://server:8080"
+servers:
+  - "http://coordinator:8080"
 auth_token: "your-secure-token"
+
+dns:
+  enabled: true
 ```
 
 ## Network Modes
@@ -286,11 +299,11 @@ docker compose exec server tunnelmesh status
 ### Logs
 
 ```bash
-# Server logs with debug level
-docker compose exec server tunnelmesh serve --log-level debug
+# View coordinator logs
+docker compose logs -f server
 
 # View peer discovery
- docker compose logs server 2>&1 | grep -i peer 
+ docker compose logs server 2>&1 | grep -i peer
 ```
 
 ## Production Considerations
@@ -353,8 +366,8 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./server.yaml:/etc/tunnelmesh/server.yaml:ro
-    command: ["serve", "--config", "/etc/tunnelmesh/server.yaml"]
+      - ./coordinator.yaml:/etc/tunnelmesh/coordinator.yaml:ro
+    command: ["join", "--config", "/etc/tunnelmesh/coordinator.yaml"]
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 30s

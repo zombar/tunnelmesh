@@ -1,79 +1,112 @@
 # =============================================================================
-# TunnelMesh Server Configuration
+# TunnelMesh Coordinator Peer Configuration
 # =============================================================================
-# Complete reference for all coordinator options.
-# Generate a minimal config with: tunnelmesh init --server
+# Complete reference for coordinator configuration.
+# Generate a minimal config with: tunnelmesh init --peer
 #
 # Quick start:
-#   1. Copy this file to server.yaml
+#   1. Copy this file to coordinator.yaml
 #   2. Set a secure auth_token
-#   3. Run: tunnelmesh serve --config server.yaml
+#   3. Enable coordinator services (coordinator.enabled: true)
+#   4. Run: tunnelmesh join --config coordinator.yaml
+#
+# This shows a peer configuration with coordinator services enabled.
+# For a regular peer without coordinator services, see: peer.yaml.example
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Core Settings
+# Core Peer Settings
 # -----------------------------------------------------------------------------
 
-# Listen address for the coordination server
-# Default: ":8443" (HTTPS when join_mesh is configured, otherwise HTTP on :8080)
-listen: ":8443"
+# Your node's unique name in the mesh network
+# This becomes your mesh hostname: <name>.tunnelmesh
+name: "coordinator"
 
-# Authentication token - peers must provide this to register
+# Coordination server URLs
+# - First coordinator: Leave empty (this IS the coordinator)
+# - Additional coordinators: Point to existing coordinator to bootstrap
+# Examples:
+#   servers: []                                    # First coordinator (standalone)
+#   servers: ["https://coord1.example.com:8443"]  # New coordinator joining existing mesh
+servers: []
+
+# Authentication token - all peers must provide this to register
 # Generate a secure token: openssl rand -hex 32
 auth_token: "your-secure-token-here"
 
-# Admin peers - peer names that should be granted admin role
-# These peers will be added to the 'admins' group on first registration
-# Example: admin_peers: ["honker", "oldie"]
-# admin_peers: []
+# SSH server port for incoming peer connections
+# Other peers connect to this port for SSH-based tunnels
+ssh_port: 2222
+
+# Path to SSH private key
+# Generated automatically if missing, or use: tunnelmesh init
+private_key: "~/.tunnelmesh/id_ed25519"
 
 # Log level: trace, debug, info, warn, error
 # Use "debug" or "trace" for troubleshooting
 log_level: "info"
 
+# Admin peers - peer names that should be granted admin role
+# These peers will be added to the 'admins' group on first registration
+# Example: admin_peers: ["alice", "bob"]
+# admin_peers: []
+
 # -----------------------------------------------------------------------------
-# Admin Web Interface
+# Coordinator Services
+# -----------------------------------------------------------------------------
+# Enable coordinator services on this peer for discovery, admin UI, relay,
+# and S3 storage. Multiple coordinators can cluster together for HA.
+
+coordinator:
+  enabled: true                   # Enable coordinator services on this peer
+  listen: ":8443"                 # HTTPS listen address for peer registrations
+
+  # Memberlist clustering (for multi-coordinator high availability)
+  # Coordinators use memberlist gossip to discover each other and replicate state.
+  # Seeds are gossip addresses (NOT API addresses) of other coordinators.
+  # - First coordinator: Leave empty or omit
+  # - Additional coordinators: Add gossip addresses of existing coordinators
+  # Example:
+  #   memberlist_seeds: []                            # First coordinator
+  #   memberlist_seeds: ["coord1.example.com:7946"]  # Joining existing cluster
+  memberlist_seeds: []            # Seed addresses for coordinator clustering (gossip)
+  # memberlist_bind_addr: ":7946"  # Memberlist gossip port (default: 7946)
+
+# -----------------------------------------------------------------------------
+# Admin Web Interface (Coordinator)
 # -----------------------------------------------------------------------------
 # The admin dashboard shows mesh status, peers, traffic statistics, and
-# per-peer transport controls. Access is controlled by network exposure.
-#
-# Security model:
-#   - Default (no join_mesh): HTTP on 127.0.0.1:8080 (localhost only)
-#   - With join_mesh: HTTPS on mesh IP only (peers can access)
-#   - With mesh_only_admin: false: HTTP on bind_address (exposed!)
-#
-# For external access, place behind an authenticated reverse proxy.
+# per-peer transport controls. Only accessible from within the mesh network
+# at https://this.tm/ or https://coordinator.tunnelmesh/
 
-admin:
-  enabled: true
-  # bind_address: "127.0.0.1"  # Default: localhost only
-  # port: 8080                 # Default: 8080 (or 443 with join_mesh)
-  # mesh_only_admin: true      # Only serve admin on mesh IP (default with join_mesh)
+  admin:
+    enabled: true
+    port: 443                    # Admin UI port (HTTPS on mesh IP)
 
 # -----------------------------------------------------------------------------
-# WebSocket Relay
+# WebSocket Relay (Coordinator)
 # -----------------------------------------------------------------------------
 # Fallback transport for peers that can't establish direct connections.
 # Used when UDP hole-punching and SSH both fail.
 
-relay:
-  enabled: true
-  pair_timeout: "90s"          # Timeout for peer pairing handshake
+  relay:
+    enabled: true
+    pair_timeout: "90s"         # Timeout for peer pairing handshake
 
 # -----------------------------------------------------------------------------
-# S3-Compatible Object Storage
+# S3-Compatible Object Storage (Coordinator)
 # -----------------------------------------------------------------------------
 # Built-in S3 storage for mesh data. Supports buckets, objects, and user RBAC.
 # First user to register becomes admin.
 
-s3:
-  enabled: true
-  max_size: "10Gi"             # Storage quota (required, e.g., 10Gi, 500Mi, 1Ti)
-  # data_dir: "/var/lib/tunnelmesh/s3"  # Storage directory
-  # port: 9000                 # S3 API port
-  # object_expiry_days: 9125   # Days until objects expire (default: 25 years)
-  # share_expiry_days: 365     # Days until file shares expire (default: 1 year)
-  # tombstone_retention_days: 90  # Days to keep deleted items before purge (default: 90)
+  s3:
+    enabled: true
+    port: 9000                  # S3 API port
+    max_size: "10Gi"            # Storage quota (required, e.g., 10Gi, 500Mi, 1Ti)
+    # data_dir: "/var/lib/tunnelmesh/s3"  # Storage directory
+    # object_expiry_days: 9125   # Days until objects expire (default: 25 years)
+    # share_expiry_days: 365     # Days until file shares expire (default: 1 year)
+    # tombstone_retention_days: 90  # Days to keep deleted items before purge (default: 90)
 
 # -----------------------------------------------------------------------------
 # Packet Filter (Global Rules)
@@ -99,68 +132,72 @@ s3:
 #       source_peer: untrusted # Block specific peer from MySQL
 
 # Service ports auto-allowed on all peers (for Prometheus scraping, etc.)
-service_ports: [9443]
+  service_ports: [9443]
 
 # -----------------------------------------------------------------------------
-# Node Location Tracking
+# Node Location Tracking (Coordinator)
 # -----------------------------------------------------------------------------
 # Show geographic locations of peers on the admin dashboard map.
 # WARNING: Queries ip-api.com to geolocate nodes by public IP.
 
-locations: false
+  locations: false
+
+# -----------------------------------------------------------------------------
+# TUN Interface
+# -----------------------------------------------------------------------------
+# Virtual network interface for transparent IP routing.
+# All mesh traffic flows through this interface.
+
+tun:
+  name: "tun-mesh0"             # Interface name (distinct from tailscale0, wg0, etc.)
+  mtu: 1400                     # MTU for mesh traffic (accounts for tunnel overhead)
+
+# -----------------------------------------------------------------------------
+# Local DNS Resolver
+# -----------------------------------------------------------------------------
+# Resolves mesh hostnames like node.tunnelmesh to mesh IPs.
+# Configure your system to use this resolver for the mesh domain.
+
+dns:
+  enabled: true
+  listen: "127.0.0.53:5353"     # Local DNS server address
+  cache_ttl: 300                # DNS record cache TTL in seconds
+
+  # Custom DNS aliases for this node (resolved mesh-wide)
+  # Other peers can reach this node using these names
+  aliases:
+    - "coord"                   # coord.tunnelmesh -> this node's IP
+    - "api"                     # api.tunnelmesh -> this node's IP
+
+# -----------------------------------------------------------------------------
+# Exit Node (Split-Tunnel VPN)
+# -----------------------------------------------------------------------------
+# Allow other peers to use THIS node as an exit for internet traffic.
+# Requires: IP forwarding and NAT rules (configured automatically)
+
+allow_exit_traffic: true
+
+# -----------------------------------------------------------------------------
+# Node Location
+# -----------------------------------------------------------------------------
+# Manual location (overrides automatic IP geolocation).
+# Only used when the coordinator has locations: true
+
+# location:
+#   latitude: 52.3676
+#   longitude: 4.9041
+#   city: "Amsterdam"
+#   country: "Netherlands"
 
 # -----------------------------------------------------------------------------
 # WireGuard Concentrator
 # -----------------------------------------------------------------------------
-# Allow mobile devices and standard WireGuard clients to connect to the mesh.
-# Manage clients via the admin panel with QR codes for easy setup.
+# Run a WireGuard server on this peer to allow mobile devices and
+# standard WireGuard clients to connect to the mesh through this node.
+# Manage clients via the coordinator's admin panel.
 
 # wireguard:
 #   enabled: true
-#   listen_port: 51820
-#   endpoint: "server.example.com:51820"  # Public endpoint for clients
-#   data_dir: "/var/lib/tunnelmesh/wireguard"
-
-# -----------------------------------------------------------------------------
-# Server as Mesh Peer (All-in-One Deployment)
-# -----------------------------------------------------------------------------
-# The coordinator can also participate as a mesh node. This enables:
-#   - HTTPS admin UI accessible only from within the mesh
-#   - The coordinator as an exit node for internet traffic
-#   - Direct peer-to-peer connectivity from the coordinator
-#
-# When enabled, admin is served at https://this.tunnelmesh/
-# Trust the CA first: tunnelmesh trust-ca --server https://your-coordinator:8443
-
-join_mesh:
-  name: "coordinator"          # Mesh hostname (coordinator.tunnelmesh)
-  ssh_port: 2222               # SSH server for incoming peer connections
-  private_key: "~/.tunnelmesh/id_ed25519"
-
-  tun:
-    name: "tun-mesh0"          # TUN interface name
-    mtu: 1400                  # MTU for mesh traffic
-
-  dns:
-    enabled: true
-    listen: "127.0.0.53:5353"  # Local DNS server
-    cache_ttl: 300             # DNS cache TTL in seconds
-    aliases:                   # Additional DNS names for this node
-      - "coordinator"          # coordinator.tunnelmesh -> this node
-
-  # Exit node settings
-  allow_exit_traffic: true     # Allow peers to route internet through this node
-
-  # Manual location (overrides IP geolocation)
-  # location:
-  #   latitude: 52.3676
-  #   longitude: 4.9041
-  #   city: "Amsterdam"
-  #   country: "Netherlands"
-
-  # WireGuard concentrator on this peer
-  # wireguard:
-  #   enabled: true
-  #   listen_port: 51820
-  #   endpoint: "server.example.com:51820"
-  #   data_dir: "/var/lib/tunnelmesh/wireguard"
+#   listen_port: 51820          # WireGuard UDP port
+#   endpoint: "coord.example.com:51820"  # Public endpoint for clients
+#   data_dir: "/var/lib/tunnelmesh/wireguard"  # Client configs storage
