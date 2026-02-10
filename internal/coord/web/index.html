@@ -56,6 +56,7 @@
 
     <!-- All panel sections in one container - tab visibility controlled by data-tab attribute -->
     <main>
+<<<<<<< HEAD
         <!-- Alert tiles - visible in mesh and data tabs -->
         <section id="alerts-section" data-tab="mesh data" style="display: none;">
         <div class="alert-tiles">
@@ -80,9 +81,72 @@
         </div>
     </section>
 
-        <!-- Shared Panels (visible in multiple tabs) -->
-        <section id="s3-section" data-tab="app data" style="display: none;">
+
+        <section id="shares-section" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Shares</h2>
+                <button id="add-share-btn" class="btn-primary" onclick="event.stopPropagation(); openShareModal();">+ New Share</button>
+            </div>
+            <div class="collapsible-content">
+                <table id="shares">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Description</th>
+                            <th>Owner</th>
+                            <th>Quota</th>
+                            <th>Created</th>
+                            <th>Expires</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="shares-body"></tbody>
+                </table>
+                <div id="no-shares" class="empty-state" style="display: none;">
+                    No file shares yet. Create one to share files across the mesh.
+                </div>
+                <div id="shares-pagination" class="show-more-container" style="display: none;">
+                    <span id="shares-show-more"><button class="show-more-link" onclick="showMoreShares()">show more (<span id="shares-shown-count">0</span> / <span id="shares-total-count">0</span>)</button></span><span id="shares-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessShares()">show less</button></span>
+                </div>
+            </div>
+        </section>
+
+        <section id="docker-section" class="panel" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Docker</h2>
+                <button id="refresh-docker-btn" class="btn-primary" onclick="event.stopPropagation(); refreshDockerContainers();" title="Refresh containers">⟳ Refresh</button>
+            </div>
+            <div class="collapsible-content">
+                <table id="docker-containers">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Ports</th>
+                            <th>Network</th>
+                            <th>Uptime</th>
+                            <th>CPU</th>
+                            <th>Memory</th>
+                            <th>Disk</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="docker-containers-body"></tbody>
+                </table>
+                <div id="no-docker-containers" class="empty-state" style="display: none;">
+                    No Docker containers found.
+                </div>
+                <div id="docker-pagination" class="show-more-container" style="display: none;">
+                    <span id="docker-show-more"><button class="show-more-link" onclick="showMoreDocker()">show more (<span id="docker-shown-count">0</span> / <span id="docker-total-count">0</span>)</button></span><span id="docker-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessDocker()">show less</button></span>
+                </div>
+            </div>
+        </section>
+    </main>
+    </div><!-- End App Tab -->
+
+    <!-- S3 Explorer (shown in both App and Data tabs) -->
+    <section id="s3-section" style="display: none;">
+        <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Objects</h2>
             </div>
             <div class="collapsible-content">
@@ -198,6 +262,7 @@
             </div>
         </section>
 
+<<<<<<< HEAD
         <section id="shares-section" data-tab="app" style="display: none;">
             <div class="section-header section-toggle" onclick="toggleSection(this)">
                 <h2>Shares</h2>
@@ -259,6 +324,125 @@
         </section>
 
     <section id="visualizer-section" data-tab="mesh" style="display: none;">
+||||||| parent of 80b6716 (Fix S3 explorer to show in both App and Data tabs with context-aware view modes)
+        <section id="shares-section" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Shares</h2>
+                <button id="add-share-btn" class="btn-primary" onclick="event.stopPropagation(); openShareModal();">+ New Share</button>
+            </div>
+            <div class="collapsible-content">
+                <table id="shares">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Description</th>
+                            <th>Owner</th>
+                            <th>Quota</th>
+                            <th>Created</th>
+                            <th>Expires</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="shares-body"></tbody>
+                </table>
+                <div id="no-shares" class="empty-state" style="display: none;">
+                    No file shares yet. Create one to share files across the mesh.
+                </div>
+                <div id="shares-pagination" class="show-more-container" style="display: none;">
+                    <span id="shares-show-more"><button class="show-more-link" onclick="showMoreShares()">show more (<span id="shares-shown-count">0</span> / <span id="shares-total-count">0</span>)</button></span><span id="shares-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessShares()">show less</button></span>
+                </div>
+            </div>
+        </section>
+
+        <section id="docker-section" class="panel" style="display: none;">
+            <div class="section-header section-toggle" onclick="toggleSection(this)">
+                <h2>Docker</h2>
+                <button id="refresh-docker-btn" class="btn-primary" onclick="event.stopPropagation(); refreshDockerContainers();" title="Refresh containers">⟳ Refresh</button>
+            </div>
+            <div class="collapsible-content">
+                <table id="docker-containers">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Ports</th>
+                            <th>Network</th>
+                            <th>Uptime</th>
+                            <th>CPU</th>
+                            <th>Memory</th>
+                            <th>Disk</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="docker-containers-body"></tbody>
+                </table>
+                <div id="no-docker-containers" class="empty-state" style="display: none;">
+                    No Docker containers found.
+                </div>
+                <div id="docker-pagination" class="show-more-container" style="display: none;">
+                    <span id="docker-show-more"><button class="show-more-link" onclick="showMoreDocker()">show more (<span id="docker-shown-count">0</span> / <span id="docker-total-count">0</span>)</button></span><span id="docker-show-less" style="display: none;"><span class="show-more-separator">|</span><button class="show-more-link" onclick="showLessDocker()">show less</button></span>
+                </div>
+            </div>
+        </section>
+    </main>
+    </div><!-- End App Tab -->
+
+    <!-- Mesh Tab Content -->
+    <div id="mesh-tab" class="tab-content">
+    <main>
+    <section id="alerts-section" style="display: none;">
+        <div class="alert-tiles">
+            <a class="alert-tile warning clickable-card" id="alert-tile-warning" href="/prometheus/alerts">
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-warning">0</span>
+                    <span class="alert-label">Warning</span>
+                </div>
+            </a>
+            <a class="alert-tile critical clickable-card" id="alert-tile-critical" href="/prometheus/alerts">
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-critical">0</span>
+                    <span class="alert-label">Critical</span>
+                </div>
+            </a>
+            <a class="alert-tile page clickable-card" id="alert-tile-page" href="/prometheus/alerts">
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-page">0</span>
+                    <span class="alert-label">Page</span>
+                </div>
+            </a>
+        </div>
+    </section>
+
+    <section id="visualizer-section" style="display: none;">
+=======
+    <!-- Mesh Tab Content -->
+    <div id="mesh-tab" class="tab-content">
+    <main>
+    <section id="alerts-section" style="display: none;">
+        <div class="alert-tiles">
+            <a class="alert-tile warning clickable-card" id="alert-tile-warning" href="/prometheus/alerts">
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-warning">0</span>
+                    <span class="alert-label">Warning</span>
+                </div>
+            </a>
+            <a class="alert-tile critical clickable-card" id="alert-tile-critical" href="/prometheus/alerts">
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-critical">0</span>
+                    <span class="alert-label">Critical</span>
+                </div>
+            </a>
+            <a class="alert-tile page clickable-card" id="alert-tile-page" href="/prometheus/alerts">
+                <div class="alert-content">
+                    <span class="alert-count" id="alert-count-page">0</span>
+                    <span class="alert-label">Page</span>
+                </div>
+            </a>
+        </div>
+    </section>
+
+    <section id="visualizer-section" style="display: none;">
+>>>>>>> 80b6716 (Fix S3 explorer to show in both App and Data tabs with context-aware view modes)
         <div class="visualizer-card">
             <div class="visualizer-header section-toggle" onclick="toggleSection(this)">
                 <h2>Topology</h2>

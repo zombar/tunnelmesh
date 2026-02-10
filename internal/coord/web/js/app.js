@@ -2027,7 +2027,7 @@ function registerBuiltinPanels() {
         {
             id: 's3',
             sectionId: 's3-section',
-            tab: 'app',
+            tab: 'app data', // Show in both App and Data tabs
             title: 'Object Viewer',
             category: 'storage',
             resizable: true,
