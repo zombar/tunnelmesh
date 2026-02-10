@@ -37,6 +37,12 @@
         isFullscreen: false,
         // Quota info
         quota: null,
+        // View mode
+        viewMode: 'list', // 'list' or 'icon'
+        defaultViewByTab: {
+            app: 'icon',
+            data: 'list',
+        },
     };
 
     // Text file extensions
@@ -196,6 +202,61 @@
         }
     }
 
+    // Icon rendering utilities
+    function getItemIcon(item) {
+        if (item.isBucket) {
+            const isShare = item.name.startsWith('fs+');
+            return isShare ? 'share' : 'bucket';
+        }
+        if (item.isFolder) return 'folder';
+        return 'file';
+    }
+
+    function getItemDisplayName(item) {
+        if (item.isBucket && item.name.startsWith('fs+')) {
+            return item.name.substring(3); // Strip "fs+" prefix for shares
+        }
+        return item.name;
+    }
+
+    function getIconSVG(iconType) {
+        const svgs = {
+            file: '<svg class="s3-large-icon" width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>',
+            folder: '<svg class="s3-large-icon" width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>',
+            bucket: '<svg class="s3-large-icon" width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M18.06 23h-12c-.72 0-1.34-.5-1.47-1.2L2 6.2C1.87 5.5 2.42 5 3.14 5h17.72c.72 0 1.27.5 1.14 1.2l-2.59 15.6c-.13.7-.75 1.2-1.47 1.2zM9 9v6h2V9h2V7H7v2h2z"/></svg>',
+            share: '<svg class="s3-large-icon" width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/></svg>',
+        };
+        return svgs[iconType] || svgs.file;
+    }
+
+    function buildItemMetadata(item) {
+        const parts = [];
+
+        // Size/quota
+        if (item.size !== null && item.size !== undefined && !item.isFolder) {
+            parts.push(formatBytes(item.size));
+        } else if (item.quota) {
+            parts.push(`${formatBytes(item.size || 0)} / ${formatBytes(item.quota)}`);
+        }
+
+        // Date
+        if (item.lastModified) {
+            parts.push(formatDate(item.lastModified));
+        }
+
+        return parts.join(' • ');
+    }
+
+    function buildOnclickHandler(item) {
+        if (item.isBucket) {
+            return `TM.s3explorer.navigateTo('${escapeJsString(item.name)}', '')`;
+        }
+        if (item.isFolder) {
+            return `TM.s3explorer.navigateTo('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`;
+        }
+        return `TM.s3explorer.openFile('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`;
+    }
+
     // =========================================================================
     // API Functions
     // =========================================================================
@@ -334,6 +395,8 @@
 
     async function renderFileListing(resetPagination = true) {
         const tbody = document.getElementById('s3-files-body');
+        const table = document.getElementById('s3-files');
+        const iconGrid = document.getElementById('s3-icons');
         const browser = document.getElementById('s3-browser');
         const viewer = document.getElementById('s3-viewer');
         const preview = document.getElementById('s3-preview');
@@ -343,6 +406,9 @@
         const paginationEl = document.getElementById('s3-pagination');
 
         if (!tbody) return;
+
+        // Update view mode based on currently active tab
+        updateViewModeForActiveTab();
 
         // Hide viewer/preview, show browser
         if (viewer) viewer.style.display = 'none';
@@ -441,6 +507,7 @@
 
         if (items.length === 0) {
             tbody.innerHTML = '';
+            if (iconGrid) iconGrid.innerHTML = '';
             if (empty) empty.style.display = 'block';
             if (paginationEl) paginationEl.style.display = 'none';
             return;
@@ -451,33 +518,48 @@
         // Only show visible items
         const visibleItems = items.slice(0, state.visibleCount);
 
-        tbody.innerHTML = visibleItems
-            .map((item, index) => {
-                const icon = item.isFolder
-                    ? '<svg class="s3-icon s3-icon-folder" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>'
-                    : '<svg class="s3-icon s3-icon-file" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>';
-                const isTombstoned = Boolean(item.tombstonedAt);
-                const nameClass = item.isFolder ? 's3-name s3-name-folder' : 's3-name';
-                const onclick = item.isBucket
-                    ? `TM.s3explorer.navigateTo('${escapeJsString(item.name)}', '')`
-                    : item.isFolder
-                      ? `TM.s3explorer.navigateTo('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`
-                      : `TM.s3explorer.openFile('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`;
-                const itemId = item.key || item.name;
-                const isSelected = state.selectedItems.has(itemId);
-                let rowClass = isSelected ? 's3-selected' : '';
-                if (isTombstoned) rowClass += ' s3-tombstoned';
-                // Show checkboxes for files/folders (not buckets), disabled for read-only or tombstoned
-                const checkbox = item.isBucket
-                    ? ''
-                    : `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} ${state.writable && !isTombstoned ? '' : 'disabled'} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeJsString(itemId)}')" />`;
-                const tombstoneBadge = isTombstoned ? '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
+        // Render based on view mode
+        if (state.viewMode === 'icon') {
+            // Hide table, show icon grid
+            if (table) table.style.display = 'none';
+            if (iconGrid) {
+                iconGrid.style.display = 'grid';
+                renderIconGrid(visibleItems);
+            }
+        } else {
+            // Show table, hide icon grid
+            if (table) table.style.display = 'table';
+            if (iconGrid) iconGrid.style.display = 'none';
 
-                // Only show quota column for bucket list (not when inside a bucket)
-                const quotaCell = state.currentBucket ? '' : `<td>${item.quota ? formatBytes(item.quota) : '-'}</td>`;
-                // Only show owner column when inside a bucket (not for bucket list)
-                const ownerCell = state.currentBucket ? `<td>${escapeHtml(item.owner || '-')}</td>` : '';
-                return `
+            tbody.innerHTML = visibleItems
+                .map((item, index) => {
+                    const icon = item.isFolder
+                        ? '<svg class="s3-icon s3-icon-folder" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>'
+                        : '<svg class="s3-icon s3-icon-file" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>';
+                    const isTombstoned = Boolean(item.tombstonedAt);
+                    const nameClass = item.isFolder ? 's3-name s3-name-folder' : 's3-name';
+                    const onclick = item.isBucket
+                        ? `TM.s3explorer.navigateTo('${escapeJsString(item.name)}', '')`
+                        : item.isFolder
+                          ? `TM.s3explorer.navigateTo('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`
+                          : `TM.s3explorer.openFile('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`;
+                    const itemId = item.key || item.name;
+                    const isSelected = state.selectedItems.has(itemId);
+                    let rowClass = isSelected ? 's3-selected' : '';
+                    if (isTombstoned) rowClass += ' s3-tombstoned';
+                    // Show checkboxes for files/folders (not buckets), disabled for read-only or tombstoned
+                    const checkbox = item.isBucket
+                        ? ''
+                        : `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} ${state.writable && !isTombstoned ? '' : 'disabled'} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeJsString(itemId)}')" />`;
+                    const tombstoneBadge = isTombstoned ? '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
+
+                    // Only show quota column for bucket list (not when inside a bucket)
+                    const quotaCell = state.currentBucket
+                        ? ''
+                        : `<td>${item.quota ? formatBytes(item.quota) : '-'}</td>`;
+                    // Only show owner column when inside a bucket (not for bucket list)
+                    const ownerCell = state.currentBucket ? `<td>${escapeHtml(item.owner || '-')}</td>` : '';
+                    return `
                 <tr class="${rowClass}" onclick="${onclick}">
                     <td>${checkbox}</td>
                     <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span>${tombstoneBadge}</div></td>
@@ -488,8 +570,9 @@
                     <td>${formatExpiry(item.expires)}</td>
                 </tr>
             `;
-            })
-            .join('');
+                })
+                .join('');
+        }
 
         // Update pagination UI using shared helper
         const total = state.currentItems.length;
@@ -501,6 +584,70 @@
                 hasMore: total > state.visibleCount,
                 canShowLess: state.visibleCount > PAGE_SIZE,
             });
+        }
+    }
+
+    function renderIconGrid(items) {
+        const iconGrid = document.getElementById('s3-icons');
+        if (!iconGrid) return;
+
+        try {
+            iconGrid.innerHTML = items
+                .map((item) => {
+                    // Defensive checks for malformed data
+                    if (!item || typeof item !== 'object') {
+                        console.warn('Skipping malformed item in icon grid:', item);
+                        return '';
+                    }
+
+                    const iconType = getItemIcon(item);
+                    const displayName = getItemDisplayName(item);
+                    const iconSVG = getIconSVG(iconType);
+                    const metaHint = buildItemMetadata(item);
+
+                    const isTombstoned = Boolean(item.tombstonedAt);
+                    const itemId = item.key || item.name;
+                    const isSelected = state.selectedItems.has(itemId);
+
+                    // Store navigation data in data attributes (safe from XSS)
+                    const dataAttrs = [
+                        `data-item-id="${escapeHtml(itemId)}"`,
+                        `data-is-bucket="${item.isBucket ? 'true' : 'false'}"`,
+                        `data-is-folder="${item.isFolder ? 'true' : 'false'}"`,
+                        item.isBucket ? `data-bucket-name="${escapeHtml(item.name)}"` : '',
+                        item.key ? `data-item-key="${escapeHtml(item.key)}"` : '',
+                    ]
+                        .filter(Boolean)
+                        .join(' ');
+
+                    // Checkbox (not for buckets)
+                    const checkbox = item.isBucket
+                        ? ''
+                        : `<input type="checkbox" class="s3-icon-checkbox"
+                        data-item-id="${escapeHtml(itemId)}"
+                        ${isSelected ? 'checked' : ''}
+                        ${state.writable && !isTombstoned ? '' : 'disabled'} />`;
+
+                    // Tombstone badge
+                    const tombstoneBadge = isTombstoned ? '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
+
+                    return `
+                <div class="s3-icon-item ${isSelected ? 's3-selected' : ''} ${isTombstoned ? 's3-tombstoned' : ''}"
+                     ${dataAttrs}>
+                    ${checkbox}
+                    ${tombstoneBadge}
+                    ${iconSVG}
+                    <div class="s3-icon-label">${escapeHtml(displayName)}</div>
+                    ${metaHint ? `<div class="s3-icon-meta">${metaHint}</div>` : ''}
+                </div>
+            `;
+                })
+                .join('');
+        } catch (err) {
+            console.error('Error rendering icon grid:', err);
+            if (iconGrid) {
+                iconGrid.innerHTML = '<div class="empty-state">Error rendering files. Please refresh.</div>';
+            }
         }
     }
 
@@ -676,6 +823,25 @@
                 ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>'
                 : '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>';
         }
+    }
+
+    function toggleView() {
+        state.viewMode = state.viewMode === 'list' ? 'icon' : 'list';
+        updateViewToggleButton();
+        renderFileListing(false);
+    }
+
+    function updateViewToggleButton() {
+        const btn = document.getElementById('s3-view-toggle-btn');
+        if (!btn) return;
+
+        const listIcon =
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M4 14h4v-4H4v4zm0 5h4v-4H4v4zM4 9h4V5H4v4zm5 5h12v-4H9v4zm0 5h12v-4H9v4zM9 5v4h12V5H9z"/></svg>';
+        const gridIcon =
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8v8H3v-8zm0-10h8v8H3V3zm10 0h8v8h-8V3zm0 10h8v8h-8v-8z"/></svg>';
+
+        btn.innerHTML = state.viewMode === 'list' ? gridIcon : listIcon;
+        btn.title = state.viewMode === 'list' ? 'Switch to icon view' : 'Switch to list view';
     }
 
     function updateSaveButton() {
@@ -1231,6 +1397,70 @@
     // Initialization
     // =========================================================================
 
+    function detectActiveTab() {
+        // Guard against race condition: ensure tabs are loaded before detection
+        const tabsContainer = document.getElementById('main-tabs');
+        if (!tabsContainer) {
+            return 'data'; // Fallback if tabs not rendered yet
+        }
+
+        const activeTabButton = tabsContainer.querySelector('.tab.active');
+        if (activeTabButton?.dataset.tab) {
+            return activeTabButton.dataset.tab; // 'app', 'data', or 'mesh'
+        }
+        return 'data'; // Fallback
+    }
+
+    function updateViewModeForActiveTab() {
+        // Update view mode based on currently active tab
+        const activeTab = detectActiveTab();
+        const newViewMode = state.defaultViewByTab[activeTab] || 'list';
+
+        // Only update if view mode changed
+        if (state.viewMode !== newViewMode) {
+            state.viewMode = newViewMode;
+            updateViewToggleButton();
+        }
+    }
+
+    function initIconGridEvents() {
+        const iconGrid = document.getElementById('s3-icons');
+        if (!iconGrid) return;
+
+        // Use event delegation for icon grid clicks (prevents XSS via onclick)
+        iconGrid.addEventListener('click', (e) => {
+            // Find the icon item (in case user clicked on child element)
+            const iconItem = e.target.closest('.s3-icon-item');
+            if (!iconItem) return;
+
+            // Ignore if clicking on checkbox
+            if (e.target.classList.contains('s3-icon-checkbox')) return;
+
+            // Get item data from data attributes
+            const isBucket = iconItem.dataset.isBucket === 'true';
+            const isFolder = iconItem.dataset.isFolder === 'true';
+            const bucketName = iconItem.dataset.bucketName;
+            const itemKey = iconItem.dataset.itemKey;
+
+            // Navigate based on item type
+            if (isBucket) {
+                navigateTo(bucketName, '');
+            } else if (isFolder) {
+                navigateTo(state.currentBucket, itemKey);
+            } else {
+                openFile(state.currentBucket, itemKey);
+            }
+        });
+
+        // Handle checkbox clicks with event delegation
+        iconGrid.addEventListener('change', (e) => {
+            if (e.target.classList.contains('s3-icon-checkbox')) {
+                const itemId = e.target.dataset.itemId;
+                toggleSelection(itemId);
+            }
+        });
+    }
+
     async function init() {
         const editor = document.getElementById('s3-editor');
         if (editor) {
@@ -1238,8 +1468,11 @@
             editor.addEventListener('scroll', syncScroll);
         }
 
+        // Set initial view mode based on active tab
+        updateViewModeForActiveTab();
         initDragDrop();
         initKeyboardShortcuts();
+        initIconGridEvents();
 
         await renderFileListing();
     }
@@ -1270,9 +1503,21 @@
         deleteSelected,
         setAutosave,
         toggleFullscreen,
+        toggleView,
+        updateViewToggleButton,
         // Version history
         showVersionHistory,
         restoreVersionAndRefresh,
         downloadVersion,
+        // Test-only exports (prefixed with _test)
+        _test: {
+            getItemIcon,
+            getItemDisplayName,
+            getIconSVG,
+            buildItemMetadata,
+            buildOnclickHandler,
+            detectActiveTab,
+            updateViewModeForActiveTab,
+        },
     };
 });

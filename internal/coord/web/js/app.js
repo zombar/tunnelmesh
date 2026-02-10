@@ -2027,7 +2027,7 @@ function registerBuiltinPanels() {
         {
             id: 's3',
             sectionId: 's3-section',
-            tab: 'app',
+            tab: 'app data', // Show in both App and Data tabs
             title: 'Object Viewer',
             category: 'storage',
             resizable: true,
@@ -2985,3 +2985,8 @@ function s3ToggleFullscreen() {
     if (TM.s3explorer) TM.s3explorer.toggleFullscreen();
 }
 window.s3ToggleFullscreen = s3ToggleFullscreen;
+
+function s3ToggleView() {
+    if (TM.s3explorer) TM.s3explorer.toggleView();
+}
+window.s3ToggleView = s3ToggleView;

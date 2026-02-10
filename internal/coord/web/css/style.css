@@ -2190,6 +2190,103 @@ a.logs-container {
     border-color: var(--color-accent-orange);
 }
 
+/* ========== Icon Grid View ========== */
+
+/* Grid layout */
+.s3-icon-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 1rem;
+    padding: 1rem;
+    align-items: start;
+}
+
+/* Icon item container */
+.s3-icon-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.75rem;
+    border: 1px solid transparent;
+    border-radius: var(--panel-border-radius);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    position: relative;
+}
+
+.s3-icon-item:hover {
+    background: var(--color-bg-tertiary);
+    border-color: var(--color-border-primary);
+}
+
+.s3-icon-item.s3-selected {
+    background: var(--color-bg-tertiary);
+    border-color: var(--color-accent-blue);
+}
+
+.s3-icon-item.s3-tombstoned {
+    opacity: 0.5;
+}
+
+/* Large icon (64x64) - use standard blue for all types */
+.s3-large-icon {
+    width: 64px;
+    height: 64px;
+    margin-bottom: 0.5rem;
+    flex-shrink: 0;
+    color: var(--color-accent-blue);
+}
+
+/* Icon label */
+.s3-icon-label {
+    text-align: center;
+    font-size: 0.75rem;
+    color: var(--color-text-primary);
+    word-break: break-word;
+    max-width: 100%;
+    line-height: 1.3;
+}
+
+/* Checkbox in icon view */
+.s3-icon-checkbox {
+    position: absolute;
+    top: 0.25rem;
+    left: 0.25rem;
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--color-accent-blue);
+}
+
+/* Badge (deleted/tombstoned) */
+.s3-icon-item .s3-badge {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+}
+
+/* Metadata hint (size, date) */
+.s3-icon-meta {
+    font-size: 0.65rem;
+    color: var(--color-text-secondary);
+    margin-top: 0.25rem;
+}
+
+/* Responsive grid */
+@media (max-width: 900px) {
+    .s3-icon-grid {
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 0.75rem;
+    }
+}
+
+@media (max-width: 600px) {
+    .s3-icon-grid {
+        grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+        gap: 0.5rem;
+    }
+}
+
 /* Modal small variant */
 .modal-content.modal-small {
     max-width: 350px;

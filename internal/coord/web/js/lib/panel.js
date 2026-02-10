@@ -81,11 +81,15 @@
 
     /**
      * List panels by tab
-     * @param {string} tab - Tab name ('mesh' | 'data')
+     * @param {string} tab - Tab name ('mesh' | 'data' | 'app')
      * @returns {Array} Panel configurations
      */
     function listByTab(tab) {
-        return listPanels().filter((p) => p.tab === tab);
+        return listPanels().filter((p) => {
+            // Support multiple tabs separated by spaces (e.g., "app data")
+            const tabs = p.tab.split(' ');
+            return tabs.includes(tab);
+        });
     }
 
     /**
