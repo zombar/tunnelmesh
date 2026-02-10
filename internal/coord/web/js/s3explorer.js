@@ -1159,12 +1159,32 @@
         return getCharacterOffset(wysiwyg, range);
     }
 
+    // Get total text length in WYSIWYG editor
+    /* istanbul ignore next */
+    function getWysiwygTextLength(root) {
+        if (typeof document === 'undefined') return 0;
+
+        let totalLength = 0;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+
+        while (walker.nextNode()) {
+            totalLength += walker.currentNode.textContent.length;
+        }
+
+        return totalLength;
+    }
+
     // Restore WYSIWYG cursor to specific offset
+    /* istanbul ignore next */
     function restoreWysiwygCursorPosition(offset) {
         const wysiwyg = document.getElementById('s3-wysiwyg');
         if (!wysiwyg || typeof window === 'undefined') return;
 
-        const position = getNodeAndOffset(wysiwyg, offset);
+        // Bounds checking: clamp offset to valid range
+        const maxOffset = getWysiwygTextLength(wysiwyg);
+        const clampedOffset = Math.min(Math.max(0, offset), maxOffset);
+
+        const position = getNodeAndOffset(wysiwyg, clampedOffset);
         if (!position) return;
 
         try {
@@ -1904,7 +1924,7 @@
         if (!wysiwyg || typeof MutationObserver === 'undefined') return;
 
         // Add input listener for markdown auto-conversion
-        wysiwyg.addEventListener('beforeinput', handleWysiwygInput);
+        wysiwyg.addEventListener('input', handleWysiwygInput);
 
         const observer = new MutationObserver(() => {
             // Skip if observer is paused (programmatic changes)
