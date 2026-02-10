@@ -2854,6 +2854,10 @@ a.logs-container {
     flex-direction: column;
 }
 
+.s3-editor-wrap.datasheet-mode .s3-line-numbers {
+    display: none;
+}
+
 .s3-editor-wrap.datasheet-mode .s3-datasheet {
     display: flex;
 }

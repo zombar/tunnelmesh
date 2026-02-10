@@ -1085,13 +1085,6 @@
             }
 
             state.originalContent = displayContent;
-            // Store canonical markdown (source of truth for deterministic mode switching)
-            state.canonicalMarkdown = displayContent;
-            state.wysiwygSnapshot = '';
-
-            // Initialize cursor positions (start at beginning of file)
-            state.sourceCursorPosition = { start: 0, end: 0 };
-            state.wysiwygCursorPosition = { offset: 0 };
 
             // Detect datasheet mode for JSON arrays
             if (ext === 'json') {
@@ -1314,28 +1307,27 @@
         const wysiwyg = document.getElementById('s3-wysiwyg');
         const ext = getExtension(state.currentFile.key);
 
-        // For JSON files with datasheet mode
-        if (ext === 'json' && state.datasheetData) {
+        // For JSON files, allow toggling to/from datasheet mode
+        if (ext === 'json') {
             if (state.editorMode === 'datasheet') {
                 // Switch from datasheet to source
                 state.editorMode = 'source';
                 if (editor) {
-                    editor.value = state.canonicalMarkdown;
+                    editor.value = state.originalContent;
                 }
             } else {
                 // Switch from source to datasheet
-                state.editorMode = 'datasheet';
-                // Re-parse in case user edited the source
+                // Parse current editor content to see if it's a valid datasheet
                 const detect = detectDatasheetMode(editor.value);
                 if (detect.isDatasheet) {
+                    state.editorMode = 'datasheet';
                     state.datasheetData = detect.data;
                     state.datasheetSchema = inferSchema(detect.data);
                     state.datasheetPage = 1;
                     renderDatasheet();
                 } else {
                     // Can't render as datasheet, stay in source mode
-                    state.editorMode = 'source';
-                    showToast('Cannot render as datasheet - invalid JSON array format', 'error');
+                    showToast('Cannot render as datasheet - must be a JSON array of objects', 'error');
                     return;
                 }
             }
@@ -1411,8 +1403,9 @@
 
         const ext = state.currentFile ? getExtension(state.currentFile.key) : '';
 
-        // For JSON files with datasheet mode available
-        if (ext === 'json' && state.datasheetData) {
+        // For JSON files, always show toggle button (even if not currently a valid datasheet)
+        if (ext === 'json') {
+            btn.style.display = 'inline-flex';  // Make sure button is visible
             if (state.editorMode === 'datasheet') {
                 // Currently in datasheet mode, show "Source" button
                 btn.title = 'Switch to source mode';
@@ -1427,6 +1420,7 @@
         }
         // For markdown files with WYSIWYG mode
         else if (ext === 'md') {
+            btn.style.display = 'inline-flex';  // Make sure button is visible
             if (state.editorMode === 'wysiwyg') {
                 // Currently in preview mode, show "Source" button with edit icon
                 btn.title = 'Switch to source mode';
