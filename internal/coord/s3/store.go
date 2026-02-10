@@ -136,52 +136,7 @@ func NewStoreWithCAS(dataDir string, quota *QuotaManager, masterKey [32]byte) (*
 	}
 	store.cas = cas
 
-	// Migrate existing buckets to populate SizeBytes if not already set
-	if err := store.migrateBucketSizes(); err != nil {
-		// Log warning but don't fail initialization
-		// Size will be calculated on-demand
-		_ = err
-	}
-
 	return store, nil
-}
-
-// migrateBucketSizes populates SizeBytes for buckets that don't have it set (migration).
-// This is called once during store initialization.
-func (s *Store) migrateBucketSizes() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	buckets, err := s.ListBuckets()
-	if err != nil {
-		return err
-	}
-
-	for _, bucket := range buckets {
-		// Skip buckets that already have size calculated
-		if bucket.SizeBytes > 0 {
-			continue
-		}
-
-		// Calculate size from all objects
-		size, err := s.recalculateBucketSize(bucket.Name)
-		if err != nil {
-			continue // Skip buckets with errors
-		}
-
-		// Update bucket metadata
-		bucketMeta, err := s.getBucketMeta(bucket.Name)
-		if err != nil {
-			continue
-		}
-
-		bucketMeta.SizeBytes = size
-		if err := s.writeBucketMeta(bucket.Name, bucketMeta); err != nil {
-			continue
-		}
-	}
-
-	return nil
 }
 
 // DataDir returns the data directory path.
