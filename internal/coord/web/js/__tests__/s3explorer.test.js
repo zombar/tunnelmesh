@@ -2,7 +2,8 @@
 import { describe, test, expect } from 'bun:test';
 import s3explorer from '../s3explorer.js';
 
-const { getItemIcon, getItemDisplayName, getIconSVG, buildItemMetadata, buildOnclickHandler } = s3explorer._test;
+const { getItemIcon, getItemDisplayName, getIconSVG, buildItemMetadata, buildOnclickHandler, shouldUseWysiwygMode } =
+    s3explorer._test;
 
 describe('getItemIcon', () => {
     test('returns "share" for bucket with fs+ prefix', () => {
@@ -158,5 +159,36 @@ describe('buildOnclickHandler', () => {
         const item = { isBucket: true, name: "bucket'with'quotes" };
         const handler = buildOnclickHandler(item);
         expect(handler).toContain("\\'");
+    });
+});
+
+describe('shouldUseWysiwygMode', () => {
+    test('returns true for non-empty markdown files', () => {
+        expect(shouldUseWysiwygMode('md', '# Hello World')).toBe(true);
+        expect(shouldUseWysiwygMode('md', 'Some content')).toBe(true);
+        expect(shouldUseWysiwygMode('md', '   \n\n Content with whitespace   ')).toBe(true);
+    });
+
+    test('returns false for empty markdown files', () => {
+        expect(shouldUseWysiwygMode('md', '')).toBe(false);
+        expect(shouldUseWysiwygMode('md', '   ')).toBe(false);
+        expect(shouldUseWysiwygMode('md', '\n\n\t  \n')).toBe(false);
+    });
+
+    test('returns false for null/undefined content', () => {
+        expect(shouldUseWysiwygMode('md', null)).toBe(false);
+        expect(shouldUseWysiwygMode('md', undefined)).toBe(false);
+    });
+
+    test('returns false for non-markdown files', () => {
+        expect(shouldUseWysiwygMode('txt', 'Some content')).toBe(false);
+        expect(shouldUseWysiwygMode('json', '{"key": "value"}')).toBe(false);
+        expect(shouldUseWysiwygMode('js', 'console.log("hello");')).toBe(false);
+        expect(shouldUseWysiwygMode('', 'content')).toBe(false);
+    });
+
+    test('returns false for non-markdown files even when empty', () => {
+        expect(shouldUseWysiwygMode('txt', '')).toBe(false);
+        expect(shouldUseWysiwygMode('json', '')).toBe(false);
     });
 });

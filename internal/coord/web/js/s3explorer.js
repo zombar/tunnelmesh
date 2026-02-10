@@ -172,6 +172,21 @@
         return parts[parts.length - 1].toLowerCase();
     }
 
+    /**
+     * Determines if a markdown file should open in WYSIWYG (preview) mode
+     * @param {string} ext - File extension
+     * @param {string} content - File content
+     * @returns {boolean} - True if should use WYSIWYG mode
+     */
+    function shouldUseWysiwygMode(ext, content) {
+        // Only markdown files can use wysiwyg mode
+        if (ext !== 'md') return false;
+        // Empty files should open in source mode (editable)
+        if (!content || content.trim().length === 0) return false;
+        // Non-empty markdown files open in preview mode
+        return true;
+    }
+
     function _isTextFile(filename) {
         const ext = getExtension(filename);
         const name = filename.toLowerCase();
@@ -281,7 +296,7 @@
                     return { isDatasheet: true, data: parsed };
                 }
             }
-        } catch (e) {
+        } catch (_e) {
             // Invalid JSON, stay in source mode
         }
         return { isDatasheet: false, data: null };
@@ -300,7 +315,9 @@
         // Collect all unique keys across all objects
         const allKeys = new Set();
         data.forEach((obj) => {
-            Object.keys(obj).forEach((k) => allKeys.add(k));
+            Object.keys(obj).forEach((k) => {
+                allKeys.add(k);
+            });
         });
 
         // Infer type for each column
@@ -351,9 +368,7 @@
                     ? '<span class="s3-ds-badge s3-ds-badge-true">true</span>'
                     : '<span class="s3-ds-badge s3-ds-badge-false">false</span>';
             case 'date':
-                return TM.format && TM.format.formatDateTime
-                    ? TM.format.formatDateTime(value)
-                    : new Date(value).toLocaleString();
+                return TM.format?.formatDateTime ? TM.format.formatDateTime(value) : new Date(value).toLocaleString();
             case 'url':
                 return `<a href="${escapeHtml(value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`;
             case 'nested-array':
@@ -1100,8 +1115,8 @@
                     state.datasheetSchema = null;
                 }
             }
-            // Auto-switch to WYSIWYG mode for markdown files
-            else if (ext === 'md') {
+            // Auto-switch to WYSIWYG mode for non-empty markdown files
+            else if (shouldUseWysiwygMode(ext, displayContent)) {
                 state.editorMode = 'wysiwyg';
                 // Enable autosave for markdown files (unless read-only)
                 if (!isReadOnly) {
@@ -1201,6 +1216,12 @@
             }
 
             updateModeToggleButton();
+
+            // Focus editor at position 0 when in source mode
+            if (state.editorMode === 'source' && editor && !isReadOnly) {
+                editor.focus();
+                editor.setSelectionRange(0, 0);
+            }
         } catch (err) {
             showToast(`Failed to load file: ${err.message}`, 'error');
             closeFile();
@@ -1405,7 +1426,7 @@
 
         // For JSON files, always show toggle button (even if not currently a valid datasheet)
         if (ext === 'json') {
-            btn.style.display = 'inline-flex';  // Make sure button is visible
+            btn.style.display = 'inline-flex'; // Make sure button is visible
             if (state.editorMode === 'datasheet') {
                 // Currently in datasheet mode, show "Source" button
                 btn.title = 'Switch to source mode';
@@ -1420,7 +1441,7 @@
         }
         // For markdown files with WYSIWYG mode
         else if (ext === 'md') {
-            btn.style.display = 'inline-flex';  // Make sure button is visible
+            btn.style.display = 'inline-flex'; // Make sure button is visible
             if (state.editorMode === 'wysiwyg') {
                 // Currently in preview mode, show "Source" button with edit icon
                 btn.title = 'Switch to source mode';
@@ -2133,6 +2154,7 @@
             getIconSVG,
             buildItemMetadata,
             buildOnclickHandler,
+            shouldUseWysiwygMode,
         },
     };
 });
