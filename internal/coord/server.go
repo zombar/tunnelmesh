@@ -415,8 +415,9 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 
 	// Initialize replicator if clustering is enabled
 	if srv.cluster != nil && srv.s3Store != nil {
-		// Create mesh transport for replication
-		srv.meshTransport = replication.NewMeshTransport(log.Logger)
+		// Create mesh transport for replication with TLS certificate verification
+		tlsConfig := srv.ca.GetClientTLSConfig()
+		srv.meshTransport = replication.NewMeshTransport(log.Logger, tlsConfig)
 
 		// Create S3 store adapter for replication interface
 		s3Adapter := replication.NewS3StoreAdapter(srv.s3Store)

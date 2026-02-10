@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -264,6 +265,19 @@ func (ca *CertificateAuthority) CACertPEM() []byte {
 		Type:  "CERTIFICATE",
 		Bytes: ca.caCert.Raw,
 	})
+}
+
+// GetClientTLSConfig returns a TLS config for clients to verify server certificates.
+// This creates a cert pool with the CA certificate for verification.
+func (ca *CertificateAuthority) GetClientTLSConfig() *tls.Config {
+	certPool := x509.NewCertPool()
+	certPool.AddCert(ca.caCert)
+
+	return &tls.Config{
+		RootCAs:    certPool,
+		MinVersion: tls.VersionTLS12,
+		// InsecureSkipVerify: false (default) - verify server certificates
+	}
 }
 
 // handleCACert serves the CA certificate for download.

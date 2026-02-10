@@ -3,6 +3,7 @@ package replication
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,7 +24,16 @@ type MeshTransport struct {
 }
 
 // NewMeshTransport creates a new mesh-based transport for replication.
-func NewMeshTransport(logger zerolog.Logger) *MeshTransport {
+// If tlsConfig is nil, a default TLS configuration will be used (certificate verification enabled).
+func NewMeshTransport(logger zerolog.Logger, tlsConfig *tls.Config) *MeshTransport {
+	// Default TLS config if none provided
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			// InsecureSkipVerify: false (default) - verify server certificates
+		}
+	}
+
 	return &MeshTransport{
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -31,6 +41,7 @@ func NewMeshTransport(logger zerolog.Logger) *MeshTransport {
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 10,
 				IdleConnTimeout:     90 * time.Second,
+				TLSClientConfig:     tlsConfig,
 			},
 		},
 		logger: logger.With().Str("component", "mesh-transport").Logger(),
