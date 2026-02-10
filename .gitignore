@@ -43,7 +43,7 @@ peer.yaml
 *.pfx
 
 # Exception: docker test configs are OK to commit
-!docker/config/server.yaml
+!docker/config/peer.yaml
 
 # SSH keys (should not be committed)
 id_ed25519

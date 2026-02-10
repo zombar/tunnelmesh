@@ -46,7 +46,7 @@ func TestRelayManager_HandleHeartbeat(t *testing.T) {
 		Coordinator: config.CoordinatorConfig{
 			Enabled: true,
 			Listen:  ":0",
-			Relay:   config.RelayConfig{Enabled: true},
+			Relay:   config.RelayConfig{},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -115,9 +115,9 @@ func TestRelayManager_NotifyRelayRequest(t *testing.T) {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Relay:   config.RelayConfig{Enabled: true},
+
+			Listen: ":0",
+			Relay:  config.RelayConfig{},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -165,9 +165,9 @@ func TestRelayManager_NotifyHolePunch(t *testing.T) {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Relay:   config.RelayConfig{Enabled: true},
+
+			Listen: ":0",
+			Relay:  config.RelayConfig{},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -212,9 +212,9 @@ func TestRelayManager_NotifyPeerNotConnected(t *testing.T) {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Relay:   config.RelayConfig{Enabled: true},
+
+			Listen: ":0",
+			Relay:  config.RelayConfig{},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -235,9 +235,9 @@ func TestRelayManager_HeartbeatUpdatesStats(t *testing.T) {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Relay:   config.RelayConfig{Enabled: true},
+
+			Listen: ":0",
+			Relay:  config.RelayConfig{},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -347,9 +347,9 @@ func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Relay:   config.RelayConfig{Enabled: true},
+
+			Listen: ":0",
+			Relay:  config.RelayConfig{},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -407,9 +407,9 @@ func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Relay:   config.RelayConfig{Enabled: true},
+
+			Listen: ":0",
+			Relay:  config.RelayConfig{},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -462,9 +462,9 @@ func TestRelayManager_QueryFilterRules(t *testing.T) {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Relay:   config.RelayConfig{Enabled: true},
+
+			Listen: ":0",
+			Relay:  config.RelayConfig{},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -550,9 +550,9 @@ func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Relay:   config.RelayConfig{Enabled: true},
+
+			Listen: ":0",
+			Relay:  config.RelayConfig{},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -584,9 +584,9 @@ func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Relay:   config.RelayConfig{Enabled: true},
+
+			Listen: ":0",
+			Relay:  config.RelayConfig{},
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -607,9 +607,9 @@ func TestRelayManager_StoresReportedLatency(t *testing.T) {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Relay:   config.RelayConfig{Enabled: true},
+
+			Listen: ":0",
+			Relay:  config.RelayConfig{},
 		},
 	}
 	srv, err := NewServer(cfg)

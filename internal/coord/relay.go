@@ -796,14 +796,15 @@ func (r *relayManager) PushServicePorts(peerName string, ports []uint16) {
 	}
 }
 
-// setupRelayRoutes registers the relay WebSocket endpoint.
+// setupRelayRoutes registers the relay WebSocket endpoints on the public mux.
+// These endpoints are also registered on adminMux (in setupAdminRoutes) for mesh-only access.
+// Public mux: Used for initial connections and peers without mesh access.
+// Admin mux: Preferred by peers with mesh connectivity for better security.
 func (s *Server) setupRelayRoutes() {
 	if s.relay == nil {
 		s.relay = newRelayManager()
-		// Set S3 store if available (for WG concentrator persistence)
-		if s.s3SystemStore != nil {
-			s.relay.SetS3Store(s.s3SystemStore)
-		}
+		// Set S3 store (always available for WG concentrator persistence)
+		s.relay.SetS3Store(s.s3SystemStore)
 	}
 	s.mux.HandleFunc("/api/v1/relay/persistent", s.handlePersistentRelay)
 	s.mux.HandleFunc("/api/v1/relay/", s.handleRelay)
@@ -1207,13 +1208,8 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	// Push notification to target peer that someone is waiting for relay
 	s.relay.NotifyRelayRequest(targetPeer, []string{fromPeer})
 
-	// Wait for peer with timeout
-	pairTimeout := 30 * time.Second
-	if s.cfg.Coordinator.Relay.PairTimeout != "" {
-		if d, err := time.ParseDuration(s.cfg.Coordinator.Relay.PairTimeout); err == nil {
-			pairTimeout = d
-		}
-	}
+	// Wait for peer with hardcoded timeout (relay always enabled, timeout not configurable)
+	const pairTimeout = 60 * time.Second
 
 	select {
 	case <-rc.paired:

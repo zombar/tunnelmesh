@@ -68,8 +68,8 @@ type serverStats struct {
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
 	cfg          *config.PeerConfig
-	mux          *http.ServeMux // Public coordination API (peer registration, heartbeats)
-	adminMux     *http.ServeMux // Private admin interface (dashboards, monitoring) - mesh-only
+	mux          *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
+	adminMux     *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
 	adminServer  *http.Server   // HTTPS server for adminMux, bound to mesh IP only
 	peers        map[string]*peerInfo
 	peersMu      sync.RWMutex
@@ -320,11 +320,9 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 		log.Info().Msg("WireGuard client management enabled")
 	}
 
-	// Initialize S3 storage if enabled (must be before IP allocator)
-	if cfg.Coordinator.S3.Enabled {
-		if err := srv.initS3Storage(cfg); err != nil {
-			return nil, fmt.Errorf("initialize S3 storage: %w", err)
-		}
+	// Initialize S3 storage (always enabled, must be before IP allocator)
+	if err := srv.initS3Storage(cfg); err != nil {
+		return nil, fmt.Errorf("initialize S3 storage: %w", err)
 	}
 
 	// Initialize IP allocator (after S3 so it can load persisted allocations)
@@ -437,11 +435,7 @@ func (s *Server) LoadStatsHistory() error {
 
 	peerCount := s.statsHistory.PeerCount()
 	if peerCount > 0 {
-		source := "file"
-		if s.s3SystemStore != nil {
-			source = "S3"
-		}
-		log.Info().Int("peers", peerCount).Str("source", source).Msg("loaded stats history")
+		log.Info().Int("peers", peerCount).Str("source", "S3").Msg("loaded stats history")
 	}
 	return nil
 }
@@ -453,23 +447,13 @@ func (s *Server) SaveStatsHistory() error {
 		return fmt.Errorf("save stats history: %w", err)
 	}
 
-	destination := "file"
-	if s.s3SystemStore != nil {
-		destination = "S3"
-	}
-	log.Debug().Str("destination", destination).Msg("saved stats history")
+	log.Debug().Str("destination", "S3").Msg("saved stats history")
 	return nil
 }
 
 // refreshPeerNameCache reloads the peer ID -> name mapping from storage.
 // This is called during server startup and when peers are added/updated.
 func (s *Server) refreshPeerNameCache() error {
-	if s.s3SystemStore == nil {
-		// No S3 storage, cache stays empty
-		s.peerNameCache.Store(&map[string]string{})
-		return nil
-	}
-
 	peers, err := s.s3SystemStore.LoadPeers()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to load peers for name cache")
@@ -502,10 +486,6 @@ func (s *Server) getPeerName(peerID string) string {
 // saveDNSData persists DNS cache and aliases to S3.
 // This is called asynchronously after peer registration changes.
 func (s *Server) saveDNSData() {
-	if s.s3SystemStore == nil {
-		return
-	}
-
 	// Copy data while holding lock to avoid blocking peer operations during S3 writes
 	s.peersMu.RLock()
 	dnsCache := make(map[string]string, len(s.dnsCache))
@@ -543,10 +523,6 @@ func (s *Server) saveDNSData() {
 
 // recoverFilterRules loads filter rules from S3.
 func (s *Server) recoverFilterRules() error {
-	if s.s3SystemStore == nil {
-		return nil // S3 not enabled, skip
-	}
-
 	data, err := s.s3SystemStore.LoadFilterRules()
 	if err != nil {
 		return err
@@ -584,10 +560,6 @@ func (s *Server) recoverFilterRules() error {
 // SaveFilterRules persists filter rules to S3 or does nothing if S3 is disabled.
 // Filters out expired rules before saving to prevent storage bloat.
 func (s *Server) SaveFilterRules() error {
-	if s.s3SystemStore == nil {
-		return nil // S3 not enabled, skip
-	}
-
 	// Mutex prevents concurrent saves from racing
 	s.filterSaveMu.Lock()
 	defer s.filterSaveMu.Unlock()
@@ -633,10 +605,6 @@ func (s *Server) SaveFilterRules() error {
 // saveFilterRulesAsync saves filter rules asynchronously with debouncing.
 // Uses an atomic flag to prevent concurrent saves from racing.
 func (s *Server) saveFilterRulesAsync() {
-	if s.s3SystemStore == nil {
-		return
-	}
-
 	// Skip if a save is already pending (debounce)
 	if !s.filterSavePending.CompareAndSwap(false, true) {
 		return
@@ -837,22 +805,18 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/v1/dns", s.withAuth(s.handleDNS))
 
 	// Setup relay routes (JWT auth handled internally)
-	// Always initialize relay manager if relay or WireGuard is enabled (WG uses relay for API proxying)
-	if s.cfg.Coordinator.Relay.Enabled || s.cfg.Coordinator.WireGuardServer.Enabled {
-		s.setupRelayRoutes()
-	}
+	// Always setup relay routes (relay always enabled for coordinators)
+	s.setupRelayRoutes()
 
-	// Setup admin routes if enabled
-	if s.cfg.Coordinator.Admin.Enabled {
-		s.setupAdminRoutes()
+	// Always setup admin routes (admin always enabled for coordinators)
+	s.setupAdminRoutes()
 
-		// Setup monitoring reverse proxies if configured
-		if s.cfg.Coordinator.Admin.Monitoring.PrometheusURL != "" || s.cfg.Coordinator.Admin.Monitoring.GrafanaURL != "" {
-			s.SetupMonitoringProxies(MonitoringProxyConfig{
-				PrometheusURL: s.cfg.Coordinator.Admin.Monitoring.PrometheusURL,
-				GrafanaURL:    s.cfg.Coordinator.Admin.Monitoring.GrafanaURL,
-			})
-		}
+	// Setup monitoring reverse proxies if configured
+	if s.cfg.Coordinator.Monitoring.PrometheusURL != "" || s.cfg.Coordinator.Monitoring.GrafanaURL != "" {
+		s.SetupMonitoringProxies(MonitoringProxyConfig{
+			PrometheusURL: s.cfg.Coordinator.Monitoring.PrometheusURL,
+			GrafanaURL:    s.cfg.Coordinator.Monitoring.GrafanaURL,
+		})
 	}
 
 	// Setup UDP hole-punch coordination routes
@@ -879,15 +843,9 @@ const NFSPort = 2049
 func (s *Server) getServicePorts() []uint16 {
 	var ports []uint16
 
-	// Admin dashboard port (if enabled)
-	if s.cfg.Coordinator.Admin.Enabled && s.cfg.Coordinator.Admin.Port > 0 {
-		ports = append(ports, uint16(s.cfg.Coordinator.Admin.Port))
-	}
-
-	// S3 port (if enabled)
-	if s.cfg.Coordinator.S3.Enabled && s.cfg.Coordinator.S3.Port > 0 {
-		ports = append(ports, uint16(s.cfg.Coordinator.S3.Port))
-	}
+	// Coordinator services always enabled with hardcoded ports
+	ports = append(ports, 443)  // Admin (HTTPS)
+	ports = append(ports, 9000) // S3 API
 
 	// NFS port (only when there are active file shares)
 	if s.fileShareMgr != nil && len(s.fileShareMgr.List()) > 0 {
@@ -1053,7 +1011,7 @@ func (s *Server) initS3Storage(cfg *config.PeerConfig) error {
 
 	log.Info().
 		Str("data_dir", cfg.Coordinator.S3.DataDir).
-		Int("port", cfg.Coordinator.S3.Port).
+		Int("port", 9000).
 		Str("max_size", cfg.Coordinator.S3.MaxSize.String()).
 		Msg("S3 storage initialized")
 
@@ -1173,7 +1131,7 @@ func (s *Server) ensureBuiltinGroupBindings() {
 		}
 
 		// Persist if we added any bindings
-		if modified && s.s3SystemStore != nil {
+		if modified {
 			if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
 				log.Warn().Err(err).Msg("failed to persist builtin group bindings")
 			}
@@ -1376,10 +1334,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Load persisted peers once at the start to avoid race conditions and improve performance
 	// Previously: LoadPeers() was called 3 times (lines 1393, 1420, and during group checks)
 	// This cache prevents race conditions where two peers register simultaneously
-	var persistedPeers []*auth.Peer
-	if s.s3SystemStore != nil {
-		persistedPeers, _ = s.s3SystemStore.LoadPeers()
-	}
+	persistedPeers, _ := s.s3SystemStore.LoadPeers()
 
 	// Check for hostname collision with different public key
 	// Important: Check both active peers AND persisted peers to prevent admin spoofing
@@ -1556,10 +1511,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	s.dnsCache[req.Name] = meshIP
 
-	// Persist DNS data to S3 if enabled (async to avoid blocking registration)
-	if s.s3SystemStore != nil {
-		go s.saveDNSData()
-	}
+	// Persist DNS data to S3 (async to avoid blocking registration)
+	go s.saveDNSData()
 
 	// Update replicator peer list if this is a coordinator
 	if peer.IsCoordinator && s.replicator != nil {
@@ -1615,7 +1568,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Save groups once after all modifications (prevents redundant S3 writes)
-			if groupsModified && s.s3SystemStore != nil {
+			if groupsModified {
 				if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
 					log.Error().Err(err).Msg("failed to persist groups after peer registration")
 				} else {
@@ -1625,9 +1578,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Create or update peer record in peer store
-		if s.s3SystemStore != nil {
-			s.updatePeerRecord(peerID, req.Name, req.PublicKey, isNewPeer)
-		}
+		s.updatePeerRecord(peerID, req.Name, req.PublicKey, isNewPeer)
 
 		// Check if peer is admin (for both new and existing peers)
 		if s.s3Authorizer.Groups.IsMember(auth.GroupAdmins, peerID) {

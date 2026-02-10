@@ -957,31 +957,23 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			// Start admin HTTPS server if enabled
 			// Admin always uses port 443 (standard HTTPS) on mesh IP for consistency
 			// This ensures coordinator replication works (port must be predictable)
-			if cfg.Coordinator.Admin.Enabled {
-				adminAddr := net.JoinHostPort(resp.MeshIP, "443")
-
-				if err := srv.StartAdminServer(adminAddr, &tlsCert); err != nil {
-					log.Error().Err(err).Msg("failed to start admin server")
-				}
+			// Admin is always enabled for coordinators
+			adminAddr := net.JoinHostPort(resp.MeshIP, "443")
+			if err := srv.StartAdminServer(adminAddr, &tlsCert); err != nil {
+				log.Error().Err(err).Msg("failed to start admin server")
 			}
 
-			// Start S3 server if enabled
-			if cfg.Coordinator.S3.Enabled {
-				s3Port := cfg.Coordinator.S3.Port
-				if s3Port == 0 {
-					s3Port = 9000
-				}
-				s3Addr := net.JoinHostPort(resp.MeshIP, fmt.Sprintf("%d", s3Port))
+			// Always start S3 and NFS servers on coordinators
+			// S3 port hardcoded to 9000 (mesh-internal, critical for replication)
+			s3Addr := net.JoinHostPort(resp.MeshIP, "9000")
+			if err := srv.StartS3Server(s3Addr, &tlsCert); err != nil {
+				log.Error().Err(err).Msg("failed to start S3 server")
+			}
 
-				if err := srv.StartS3Server(s3Addr, &tlsCert); err != nil {
-					log.Error().Err(err).Msg("failed to start S3 server")
-				}
-
-				// Start NFS server (automatically enabled with S3)
-				nfsAddr := net.JoinHostPort(resp.MeshIP, fmt.Sprintf("%d", coord.NFSPort))
-				if err := srv.StartNFSServer(nfsAddr, &tlsCert); err != nil {
-					log.Error().Err(err).Msg("failed to start NFS server")
-				}
+			// Start NFS server (automatically enabled with S3)
+			nfsAddr := net.JoinHostPort(resp.MeshIP, fmt.Sprintf("%d", coord.NFSPort))
+			if err := srv.StartNFSServer(nfsAddr, &tlsCert); err != nil {
+				log.Error().Err(err).Msg("failed to start NFS server")
 			}
 		}
 
@@ -1484,32 +1476,31 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 
 	// Start DNS resolver if enabled
 	var dnsConfigured bool
-	if cfg.DNS.Enabled {
-		resolver := meshdns.NewResolver(resp.Domain, cfg.DNS.CacheTTL)
-		// Set coordinator's mesh IP for "this.tunnelmesh" resolution
-		if resp.CoordMeshIP != "" {
-			resolver.SetCoordMeshIP(resp.CoordMeshIP)
-		}
-		node.Resolver = resolver
+	// DNS is always enabled for all peers
+	resolver := meshdns.NewResolver(resp.Domain, cfg.DNS.CacheTTL)
+	// Set coordinator's mesh IP for "this.tunnelmesh" resolution
+	if resp.CoordMeshIP != "" {
+		resolver.SetCoordMeshIP(resp.CoordMeshIP)
+	}
+	node.Resolver = resolver
 
-		// Initial DNS sync
-		if err := syncDNS(client, resolver); err != nil {
-			log.Warn().Err(err).Msg("failed to sync DNS")
-		}
+	// Initial DNS sync
+	if err := syncDNS(client, resolver); err != nil {
+		log.Warn().Err(err).Msg("failed to sync DNS")
+	}
 
-		go func() {
-			if err := resolver.ListenAndServe(cfg.DNS.Listen); err != nil {
-				log.Error().Err(err).Msg("DNS server error")
-			}
-		}()
-		log.Info().Str("listen", cfg.DNS.Listen).Msg("DNS server started")
-
-		// Configure system resolver
-		if err := configureSystemResolver(resp.Domain, cfg.DNS.Listen); err != nil {
-			log.Warn().Err(err).Msg("failed to configure system resolver")
-		} else {
-			dnsConfigured = true
+	go func() {
+		if err := resolver.ListenAndServe(cfg.DNS.Listen); err != nil {
+			log.Error().Err(err).Msg("DNS server error")
 		}
+	}()
+	log.Info().Str("listen", cfg.DNS.Listen).Msg("DNS server started")
+
+	// Configure system resolver
+	if err := configureSystemResolver(resp.Domain, cfg.DNS.Listen); err != nil {
+		log.Warn().Err(err).Msg("failed to configure system resolver")
+	} else {
+		dnsConfigured = true
 	}
 
 	// Start packet forwarder if TUN is available
@@ -1802,13 +1793,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	// DNS info
 	fmt.Println("DNS:")
-	if cfg.DNS.Enabled {
-		fmt.Println("  Enabled:     yes")
-		fmt.Printf("  Listen:      %s\n", cfg.DNS.Listen)
-		fmt.Printf("  Cache TTL:   %ds\n", cfg.DNS.CacheTTL)
-	} else {
-		fmt.Println("  Enabled:     no")
-	}
+	fmt.Println("  Enabled:     yes (always)")
+	fmt.Printf("  Listen:      %s\n", cfg.DNS.Listen)
+	fmt.Printf("  Cache TTL:   %ds\n", cfg.DNS.CacheTTL)
 
 	return nil
 }
@@ -1944,7 +1931,6 @@ func loadConfig() (*config.PeerConfig, error) {
 						MTU:  1400,
 					},
 					DNS: config.DNSConfig{
-						Enabled:  true,
 						Listen:   activeCtx.DNSListen,
 						CacheTTL: 300,
 					},
@@ -1975,7 +1961,6 @@ func loadConfig() (*config.PeerConfig, error) {
 			MTU:  1400,
 		},
 		DNS: config.DNSConfig{
-			Enabled:  true,
 			Listen:   "127.0.0.53:5353",
 			CacheTTL: 300,
 		},

@@ -42,7 +42,7 @@ dns:
 	assert.Equal(t, "/path/to/key", cfg.PrivateKey)
 	assert.Equal(t, "tun-mesh0", cfg.TUN.Name)
 	assert.Equal(t, 1400, cfg.TUN.MTU)
-	assert.True(t, cfg.DNS.Enabled)
+	// DNS is always enabled now
 	assert.Equal(t, "127.0.0.53:5353", cfg.DNS.Listen)
 	assert.Equal(t, 60, cfg.DNS.CacheTTL)
 }
@@ -65,7 +65,7 @@ auth_token: "token"
 	assert.Equal(t, 2222, cfg.SSHPort)
 	assert.Equal(t, "tun-mesh0", cfg.TUN.Name)
 	assert.Equal(t, 1400, cfg.TUN.MTU)
-	assert.True(t, cfg.DNS.Enabled)
+	// DNS is always enabled now
 	assert.Equal(t, "127.0.0.53:5353", cfg.DNS.Listen)
 	assert.Equal(t, 300, cfg.DNS.CacheTTL)
 }
@@ -104,7 +104,6 @@ func TestPeerConfig_Validate(t *testing.T) {
 				MTU:  1400,
 			},
 			DNS: DNSConfig{
-				Enabled:  true,
 				Listen:   "127.0.0.53:5353",
 				CacheTTL: 60,
 			},
@@ -674,7 +673,7 @@ dns:
 	require.NoError(t, err)
 
 	assert.Equal(t, "mynode", cfg.Name)
-	assert.True(t, cfg.DNS.Enabled)
+	// DNS is always enabled now
 	assert.Equal(t, []string{"webserver", "api.mynode", "db-primary"}, cfg.DNS.Aliases)
 }
 

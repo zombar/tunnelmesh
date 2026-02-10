@@ -106,8 +106,8 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 			Enabled:   true,
 			Listen:    ":0",
 			Locations: true, // Enable location tracking for this test
-			Admin: config.AdminConfig{
-				Enabled: true,
+			S3: config.S3Config{
+				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi
 			},
 		},
 	}
@@ -163,8 +163,8 @@ func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 		Coordinator: config.CoordinatorConfig{
 			Enabled: true,
 			Listen:  ":0",
-			Admin: config.AdminConfig{
-				Enabled: true,
+			S3: config.S3Config{
+				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi
 			},
 		},
 	}
@@ -231,8 +231,8 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 		Coordinator: config.CoordinatorConfig{
 			Enabled: true,
 			Listen:  ":0",
-			Admin: config.AdminConfig{
-				Enabled: true,
+			S3: config.S3Config{
+				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi
 			},
 		},
 	}
@@ -300,8 +300,8 @@ func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
 		Coordinator: config.CoordinatorConfig{
 			Enabled: true,
 			Listen:  ":0",
-			Admin: config.AdminConfig{
-				Enabled: true,
+			S3: config.S3Config{
+				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi
 			},
 		},
 	}
@@ -397,12 +397,8 @@ func newTestServerWithS3AndBucket(t *testing.T) *Server {
 			Enabled: true,
 			Listen:  ":0",
 			DataDir: tempDir,
-			Admin:   config.AdminConfig{Enabled: true},
 			S3: config.S3Config{
-				Enabled: true,
-				DataDir: tempDir + "/s3",
-				Port:    9000,
-				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
+				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi
 			},
 		},
 	}

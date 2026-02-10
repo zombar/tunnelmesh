@@ -27,11 +27,7 @@ func newTestServer(t *testing.T) *Server {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Admin: config.AdminConfig{
-				Enabled: true,
-			},
+			Listen: ":0",
 		},
 	}
 	srv, err := NewServer(cfg)
@@ -552,10 +548,8 @@ func newTestServerWithWireGuard(t *testing.T) *Server {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
+			Listen: ":0",
 			WireGuardServer: config.WireGuardServerConfig{
-				Enabled:  true,
 				Endpoint: "wg.example.com:51820",
 			},
 		},
@@ -995,12 +989,9 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
+			Listen: ":0",
 			S3: config.S3Config{
-				Enabled: true,
 				DataDir: tempDir + "/s3",
-				Port:    9000,
 				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
 			},
 		},
@@ -1072,15 +1063,9 @@ func newTestServerWithS3(t *testing.T) *Server {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			Admin: config.AdminConfig{
-				Enabled: true,
-			},
+			Listen: ":0",
 			S3: config.S3Config{
-				Enabled: true,
 				DataDir: tempDir + "/s3",
-				Port:    9000,
 				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
 			},
 			Filter: config.FilterConfig{}, // Initialize Filter field
@@ -1291,12 +1276,9 @@ func TestServer_FilterRulesRecoveryFiltersExpired(t *testing.T) {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
+			Listen: ":0",
 			S3: config.S3Config{
-				Enabled: true,
 				DataDir: tempDir + "/s3",
-				Port:    9000,
 				MaxSize: 1 * 1024 * 1024 * 1024,
 			},
 		},

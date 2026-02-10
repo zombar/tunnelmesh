@@ -12,15 +12,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// AdminConfig holds configuration for the admin web interface.
-// Admin is only accessible from inside the mesh via HTTPS on mesh IP.
-// Requires join_mesh to be configured.
-type AdminConfig struct {
-	Enabled    bool             `yaml:"enabled"`
-	Port       int              `yaml:"port"`       // Port for admin server on mesh IP (default: 443)
-	Monitoring MonitoringConfig `yaml:"monitoring"` // Reverse proxy config for Prometheus/Grafana
-}
-
 // MonitoringConfig holds configuration for reverse proxying to monitoring services.
 type MonitoringConfig struct {
 	PrometheusURL string `yaml:"prometheus_url"` // URL to proxy /prometheus/ to (e.g., "http://localhost:9090")
@@ -28,9 +19,9 @@ type MonitoringConfig struct {
 }
 
 // RelayConfig holds configuration for the relay server.
+// Relay is always enabled when coordinator is enabled.
 type RelayConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	PairTimeout string `yaml:"pair_timeout"` // Duration string, e.g. "30s"
+	// No configuration needed - relay always runs with hardcoded 60s pair timeout
 }
 
 // WireGuardServerConfig holds configuration for WireGuard client management.
@@ -50,7 +41,7 @@ type CoordinatorConfig struct {
 	Locations          bool                  `yaml:"locations"`            // Enable node location tracking (requires external IP geolocation API)
 	MemberlistSeeds    []string              `yaml:"memberlist_seeds"`     // Memberlist gossip cluster seed addresses (e.g., ["coord1.example.com:7946"])
 	MemberlistBindAddr string                `yaml:"memberlist_bind_addr"` // Address to bind memberlist gossip (default: ":7946")
-	Admin              AdminConfig           `yaml:"admin"`                // Admin web interface configuration
+	Monitoring         MonitoringConfig      `yaml:"monitoring"`           // Reverse proxy config for Prometheus/Grafana
 	Relay              RelayConfig           `yaml:"relay"`                // WebSocket relay configuration
 	WireGuardServer    WireGuardServerConfig `yaml:"wireguard_server"`     // WireGuard client management
 	S3                 S3Config              `yaml:"s3"`                   // S3-compatible storage configuration
@@ -59,11 +50,10 @@ type CoordinatorConfig struct {
 }
 
 // S3Config holds configuration for the S3-compatible storage service.
+// S3 is always enabled when coordinator is enabled (port hardcoded to 9000).
 type S3Config struct {
-	Enabled                bool                   `yaml:"enabled"`                  // Enable S3 storage (default: false)
 	DataDir                string                 `yaml:"data_dir"`                 // Storage directory for S3 objects (default: {data_dir}/s3)
-	MaxSize                bytesize.Size          `yaml:"max_size"`                 // Maximum storage size (e.g., "10Gi", "500Mi") - required
-	Port                   int                    `yaml:"port"`                     // S3 API port (default: 9000)
+	MaxSize                bytesize.Size          `yaml:"max_size"`                 // Maximum storage size (e.g., "10Gi", "500Mi") - defaults to 1Gi
 	ObjectExpiryDays       int                    `yaml:"object_expiry_days"`       // Days until objects expire (default: 9125 = 25 years)
 	ShareExpiryDays        int                    `yaml:"share_expiry_days"`        // Days until file shares expire (default: 365 = 1 year)
 	TombstoneRetentionDays int                    `yaml:"tombstone_retention_days"` // Days to keep tombstoned items before deletion (default: 90)
@@ -122,8 +112,8 @@ type TUNConfig struct {
 }
 
 // DNSConfig holds configuration for the local DNS resolver.
+// DNS is always enabled for all peers.
 type DNSConfig struct {
-	Enabled  bool     `yaml:"enabled"`
 	Listen   string   `yaml:"listen"`
 	CacheTTL int      `yaml:"cache_ttl"`
 	Aliases  []string `yaml:"aliases,omitempty"` // Custom DNS aliases for this peer
@@ -247,10 +237,7 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 	if cfg.DNS.CacheTTL == 0 {
 		cfg.DNS.CacheTTL = 300
 	}
-	// DNS enabled by default
-	if !cfg.DNS.Enabled && cfg.DNS.Listen == "127.0.0.53:5353" {
-		cfg.DNS.Enabled = true
-	}
+	// DNS is always enabled for all peers
 	if cfg.HeartbeatInterval == "" {
 		cfg.HeartbeatInterval = "10s"
 	}
@@ -321,18 +308,6 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 	if len(cfg.Coordinator.ServicePorts) == 0 {
 		cfg.Coordinator.ServicePorts = []uint16{9443}
 	}
-	if !cfg.Coordinator.Admin.Enabled {
-		cfg.Coordinator.Admin.Enabled = true
-	}
-	if cfg.Coordinator.Admin.Port == 0 {
-		cfg.Coordinator.Admin.Port = 443
-	}
-	if !cfg.Coordinator.Relay.Enabled {
-		cfg.Coordinator.Relay.Enabled = true
-	}
-	if cfg.Coordinator.Relay.PairTimeout == "" {
-		cfg.Coordinator.Relay.PairTimeout = "90s"
-	}
 	// Expand home directory in coordinator data dir
 	if strings.HasPrefix(cfg.Coordinator.DataDir, "~/") {
 		homeDir, err := os.UserHomeDir()
@@ -340,13 +315,10 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 			cfg.Coordinator.DataDir = filepath.Join(homeDir, cfg.Coordinator.DataDir[2:])
 		}
 	}
-	// S3 defaults for coordinator
-	if cfg.Coordinator.S3.Enabled {
+	// S3 defaults for coordinator (always enabled when coordinator enabled)
+	if cfg.Coordinator.Enabled {
 		if cfg.Coordinator.S3.DataDir == "" {
 			cfg.Coordinator.S3.DataDir = filepath.Join(cfg.Coordinator.DataDir, "s3")
-		}
-		if cfg.Coordinator.S3.Port == 0 {
-			cfg.Coordinator.S3.Port = 9000
 		}
 		if cfg.Coordinator.S3.ObjectExpiryDays == 0 {
 			cfg.Coordinator.S3.ObjectExpiryDays = 9125
@@ -371,6 +343,13 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 		}
 		if cfg.Coordinator.S3.VersionRetention.MonthlyMonths == 0 {
 			cfg.Coordinator.S3.VersionRetention.MonthlyMonths = 6
+		}
+	}
+
+	// Default S3 to 1Gi if coordinator enabled (mandatory for state persistence)
+	if cfg.Coordinator.Enabled {
+		if cfg.Coordinator.S3.MaxSize.Bytes() == 0 {
+			cfg.Coordinator.S3.MaxSize = bytesize.Size(1 << 30) // 1Gi default
 		}
 	}
 

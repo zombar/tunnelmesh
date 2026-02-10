@@ -1,197 +1,92 @@
 # =============================================================================
 # TunnelMesh Peer Configuration
 # =============================================================================
-# Complete reference for all peer options.
-# Generate a minimal config with: tunnelmesh init --peer
-#
-# Quick start:
-#   1. Copy this file to ~/.tunnelmesh/config.yaml
-#   2. Update server URL and auth_token
-#   3. Run: tunnelmesh join --config peer.yaml --context <name>
+# This config works for both regular peers AND coordinators.
+# To enable coordinator services, set coordinator.enabled: true
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# Core Settings
-# -----------------------------------------------------------------------------
-
-# Your node's unique name in the mesh network
-# This becomes your mesh hostname: <name>.tunnelmesh
+# Your node's unique name
 name: "mynode"
 
-# Coordination server URLs (supports multiple for failover)
-# Get this from your mesh administrator
+# Coordination server URLs (leave empty if this IS the coordinator)
 servers:
   - "https://coord.example.com:8443"
-  - "https://coord2.example.com:8443"  # Optional: failover coordinator
+  # - "https://coord2.example.com:8443"  # Optional: failover
 
 # Authentication token (must match coordinator's auth_token)
-# Get this from your mesh administrator
 auth_token: "your-secure-token-here"
 
-# SSH server port for incoming peer connections
-# Other peers connect to this port for SSH-based tunnels
+# SSH server port for peer-to-peer connections
 ssh_port: 2222
 
-# Path to SSH private key
-# Generated automatically if missing, or use: tunnelmesh init
+# Path to SSH private key (auto-generated if missing)
 private_key: "~/.tunnelmesh/id_ed25519"
 
 # Log level: trace, debug, info, warn, error
-# Use "debug" or "trace" for troubleshooting connection issues
 log_level: "info"
 
 # -----------------------------------------------------------------------------
-# Coordinator Services (Optional)
+# DNS Resolver (always enabled for all peers)
 # -----------------------------------------------------------------------------
-# Enable coordinator services on this peer to run discovery, admin UI,
-# relay, and S3 storage. Multiple coordinators discover each other
-# automatically through the mesh peer list (P2P discovery).
-#
-# For a complete coordinator example, see: server.yaml.example
+dns:
+  listen: "127.0.0.53:5353"
+  cache_ttl: 300
+  aliases:
+    - "webserver"  # Creates webserver.tunnelmesh alias
+
+# -----------------------------------------------------------------------------
+# Coordinator Services (optional, for first coordinator or additional coordinators)
+# -----------------------------------------------------------------------------
+# Uncomment to enable coordinator services on this peer.
+# When enabled, S3, relay, and admin dashboard are automatically enabled.
 
 # coordinator:
-#   enabled: true                # Enable coordinator services on this peer
-#   listen: ":8443"              # HTTPS listen address for peer registrations
+#   enabled: true
+#   listen: ":8443"  # HTTPS listen address for peer registrations
 #
-#   admin:
-#     enabled: true
-#     port: 443                  # Admin UI port (mesh-only)
+#   # Monitoring reverse proxy (optional)
+#   # Requires Prometheus/Grafana configured with sub-path support
+#   monitoring:
+#     prometheus_url: "http://localhost:9090"
+#     grafana_url: "http://localhost:3000"
 #
-#   relay:
-#     enabled: true              # WebSocket relay fallback
-#
+#   # S3 storage configuration
 #   s3:
-#     enabled: true
-#     port: 9000                 # S3 API port
-#     max_size: "10Gi"           # Storage quota
+#     max_size: "10Gi"  # Defaults to 1Gi if not set
+#     data_dir: "/var/lib/tunnelmesh/s3"  # Optional
 #
-# For full coordinator options, see: server.yaml.example
+#   # Global packet filter (applied to all peers)
+#   # filter:
+#   #   default_deny: true
+#   #   rules:
+#   #     - port: 22
+#   #       protocol: tcp
+#   #       action: allow
+#
+#   # Service ports to auto-allow on all peers (for metrics scraping)
+#   service_ports: [9443]
+#
+#   # Node location tracking (queries ip-api.com for geolocation)
+#   locations: false
 
 # -----------------------------------------------------------------------------
 # TUN Interface
 # -----------------------------------------------------------------------------
-# Virtual network interface for transparent IP routing.
-# All mesh traffic flows through this interface.
-
 tun:
-  name: "tun-mesh0"            # Interface name (distinct from tailscale0, wg0, etc.)
-  mtu: 1400                    # MTU for mesh traffic (accounts for tunnel overhead)
-
-# -----------------------------------------------------------------------------
-# Local DNS Resolver
-# -----------------------------------------------------------------------------
-# Resolves mesh hostnames like node.tunnelmesh to mesh IPs.
-# Configure your system to use this resolver for the mesh domain.
-
-dns:
-  enabled: true
-  listen: "127.0.0.53:5353"    # Local DNS server address
-  cache_ttl: 300               # DNS record cache TTL in seconds
-
-  # Custom DNS aliases for this node (resolved mesh-wide)
-  # Other peers can reach this node using these names
-  aliases:
-    - "webserver"              # webserver.tunnelmesh -> this node's IP
-    - "api.mynode"             # api.mynode.tunnelmesh -> this node's IP
+  name: "tun-mesh0"
+  mtu: 1400
 
 # -----------------------------------------------------------------------------
 # Exit Node (Split-Tunnel VPN)
 # -----------------------------------------------------------------------------
-# Route internet traffic through another peer while keeping mesh traffic direct.
-# Useful for:
-#   - Accessing geo-restricted content
-#   - Privacy: route external traffic through a trusted exit point
-#   - Compliance: ensure internet traffic egresses from a specific location
-
-# Use another peer as your exit node
 # exit_peer: "server-node"     # Route internet through this peer
-
-# Allow other peers to use THIS node as an exit
-# Requires: IP forwarding and NAT rules (configured automatically)
-allow_exit_traffic: false
+allow_exit_traffic: false       # Allow others to use this as exit
 
 # -----------------------------------------------------------------------------
-# Transport Preferences
+# Local Packet Filter
 # -----------------------------------------------------------------------------
-# TunnelMesh supports multiple transports with automatic negotiation:
-#   - UDP: WireGuard-like encrypted UDP (default, lowest latency)
-#   - SSH: SSH-based tunnels (reliable, works through most firewalls)
-#   - Relay: WebSocket through coordinator (fallback when direct fails)
-#
-# Default order: UDP -> SSH -> Relay
-# These can be overridden per-peer via the admin UI.
-
-# transport:
-#   prefer: "udp"              # Preferred transport: udp, ssh, relay
-#   udp_port: 0                # Local UDP port (0 = random)
-
-# -----------------------------------------------------------------------------
-# Node Location
-# -----------------------------------------------------------------------------
-# Manual location (overrides automatic IP geolocation).
-# Only used when the coordinator has locations: true
-
-# location:
-#   latitude: 51.5074
-#   longitude: -0.1278
-#   city: "London"
-#   country: "UK"
-
-# -----------------------------------------------------------------------------
-# Packet Filter (Local Rules)
-# -----------------------------------------------------------------------------
-# Control which ports are accessible on this peer.
-# Rules are merged with coordinator rules; most restrictive wins.
-#
-# Rule priority:
-#   1. Coordinator global rules
-#   2. Peer config rules (this section)
-#   3. CLI/admin panel rules
-#   4. Auto-generated service port rules
-
 # filter:
 #   rules:
 #     - port: 80
 #       protocol: tcp
-#       action: allow           # Allow HTTP on this peer
-#     - port: 22
-#       protocol: tcp
-#       action: allow           # Allow SSH
-#     - port: 3306
-#       protocol: tcp
-#       action: deny
-#       source_peer: dev-node   # Block dev-node from MySQL
-
-# -----------------------------------------------------------------------------
-# WireGuard Concentrator
-# -----------------------------------------------------------------------------
-# Run a WireGuard server on this peer to allow mobile devices and
-# standard WireGuard clients to connect to the mesh through this node.
-# Manage clients via the coordinator's admin panel.
-
-# wireguard:
-#   enabled: true
-#   listen_port: 51820         # WireGuard UDP port
-#   endpoint: "peer.example.com:51820"  # Public endpoint for clients
-#   data_dir: "/var/lib/tunnelmesh/wireguard"  # Client configs storage
-
-# -----------------------------------------------------------------------------
-# Advanced Settings
-# -----------------------------------------------------------------------------
-
-# Prometheus metrics endpoint
-# metrics:
-#   enabled: true
-#   listen: ":9443"            # Metrics endpoint address
-
-# Heartbeat interval (how often to ping coordinator)
-# heartbeat_interval: "30s"
-
-# Connection timeout for peer-to-peer connections
-# connect_timeout: "10s"
-
-# Retry settings for failed connections
-# retry:
-#   initial_delay: "1s"
-#   max_delay: "30s"
-#   multiplier: 2.0
+#       action: allow
