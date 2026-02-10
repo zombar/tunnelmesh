@@ -189,6 +189,29 @@
                             <div class="s3-line-numbers" id="s3-line-numbers"></div>
                             <textarea class="s3-editor" id="s3-editor" spellcheck="false"></textarea>
                             <div class="s3-editor s3-wysiwyg" id="s3-wysiwyg" contenteditable="false" spellcheck="false" style="display: none;"></div>
+                            <!-- Datasheet viewer -->
+                            <div id="s3-datasheet" class="s3-datasheet" style="display: none;">
+                                <div class="s3-datasheet-toolbar">
+                                    <span class="s3-datasheet-info">
+                                        <span id="s3-ds-row-count">0</span> rows,
+                                        <span id="s3-ds-col-count">0</span> columns
+                                    </span>
+                                    <span class="s3-datasheet-info" style="margin-left: auto;">
+                                        Page <span id="s3-ds-page-current">1</span> of <span id="s3-ds-page-total">1</span>
+                                    </span>
+                                </div>
+                                <div class="s3-datasheet-container">
+                                    <table class="s3-datasheet-table" id="s3-datasheet-table">
+                                        <thead id="s3-ds-thead"></thead>
+                                        <tbody id="s3-ds-tbody"></tbody>
+                                        <tfoot id="s3-ds-tfoot"></tfoot>
+                                    </table>
+                                </div>
+                                <div class="s3-datasheet-pagination">
+                                    <button id="s3-ds-prev" class="s3-btn" onclick="TM.s3explorer.prevPage()">&larr; Previous</button>
+                                    <button id="s3-ds-next" class="s3-btn" onclick="TM.s3explorer.nextPage()">Next &rarr;</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <!-- Image/binary preview -->
@@ -594,6 +617,22 @@
 
     <!-- Hidden file input for upload -->
     <input type="file" id="s3-file-input" style="display: none;" multiple onchange="s3HandleFileSelect(event)">
+
+    <!-- Nested data viewer modal -->
+    <div id="s3-nested-modal" class="modal" style="display: none;">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3 id="s3-nested-title">Nested Data</h3>
+                <button class="modal-close" onclick="TM.s3explorer.closeNestedModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="s3-nested-body">
+                <!-- Dynamic content will be inserted here -->
+            </div>
+            <div class="modal-footer">
+                <button class="s3-btn" onclick="TM.s3explorer.closeNestedModal()">Close</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Modals (outside tabs) -->
 

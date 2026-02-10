@@ -40,7 +40,12 @@
         // View mode (defaults to 'icon' - user can toggle to 'list' view manually)
         viewMode: 'icon', // 'list' or 'icon'
         // Editor mode
-        editorMode: 'source', // 'source' or 'wysiwyg' (wysiwyg is read-only preview)
+        editorMode: 'source', // 'source' or 'wysiwyg' or 'datasheet'
+        // Datasheet-specific state
+        datasheetData: null, // Parsed JSON array for datasheet view
+        datasheetSchema: null, // { columns: [{ key, type, width }] }
+        datasheetPage: 1, // Current page number
+        datasheetPageSize: 50, // Rows per page
     };
 
     // Text file extensions
@@ -253,6 +258,321 @@
             return `TM.s3explorer.navigateTo('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`;
         }
         return `TM.s3explorer.openFile('${escapeJsString(state.currentBucket)}', '${escapeJsString(item.key)}')`;
+    }
+
+    // =========================================================================
+    // Datasheet Helper Functions
+    // =========================================================================
+
+    /**
+     * Detect if JSON content should be displayed as a datasheet
+     * @param {string} content - JSON string content
+     * @returns {{isDatasheet: boolean, data: Array|null}}
+     */
+    function detectDatasheetMode(content) {
+        try {
+            const parsed = JSON.parse(content);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                // Check if all elements are objects (not arrays or primitives)
+                const allObjects = parsed.every(
+                    (item) => typeof item === 'object' && item !== null && !Array.isArray(item),
+                );
+                if (allObjects) {
+                    return { isDatasheet: true, data: parsed };
+                }
+            }
+        } catch (e) {
+            // Invalid JSON, stay in source mode
+        }
+        return { isDatasheet: false, data: null };
+    }
+
+    /**
+     * Infer schema from JSON array data
+     * @param {Array} data - Array of objects
+     * @returns {{columns: Array<{key: string, type: string, width: number}>}}
+     */
+    function inferSchema(data) {
+        if (!data || data.length === 0) {
+            return { columns: [] };
+        }
+
+        // Collect all unique keys across all objects
+        const allKeys = new Set();
+        data.forEach((obj) => {
+            Object.keys(obj).forEach((k) => allKeys.add(k));
+        });
+
+        // Infer type for each column
+        const columns = Array.from(allKeys).map((key) => {
+            const values = data.map((obj) => obj[key]).filter((v) => v != null);
+            let type = 'string'; // default
+
+            if (values.length > 0) {
+                if (values.every((v) => typeof v === 'number')) {
+                    type = 'number';
+                } else if (values.every((v) => typeof v === 'boolean')) {
+                    type = 'boolean';
+                } else if (values.every((v) => Array.isArray(v))) {
+                    type = 'nested-array';
+                } else if (values.every((v) => typeof v === 'object' && !Array.isArray(v))) {
+                    type = 'nested-object';
+                } else if (values.some((v) => typeof v === 'string' && /^https?:\/\//.test(v))) {
+                    type = 'url';
+                } else if (values.some((v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v))) {
+                    type = 'date';
+                }
+            }
+
+            return { key, type, width: 150 }; // default 150px width
+        });
+
+        return { columns };
+    }
+
+    /**
+     * Render cell content based on type
+     * @param {any} value - Cell value
+     * @param {string} type - Column type
+     * @param {number} rowIdx - Row index
+     * @param {string} colKey - Column key
+     * @returns {string} HTML string
+     */
+    function renderCell(value, type, rowIdx, colKey) {
+        if (value === null || value === undefined) {
+            return '<span class="s3-ds-null">null</span>';
+        }
+
+        switch (type) {
+            case 'number':
+                return `<span class="s3-ds-number">${TM.format ? TM.format.formatNumber(value) : value.toLocaleString()}</span>`;
+            case 'boolean':
+                return value
+                    ? '<span class="s3-ds-badge s3-ds-badge-true">true</span>'
+                    : '<span class="s3-ds-badge s3-ds-badge-false">false</span>';
+            case 'date':
+                return TM.format && TM.format.formatDateTime
+                    ? TM.format.formatDateTime(value)
+                    : new Date(value).toLocaleString();
+            case 'url':
+                return `<a href="${escapeHtml(value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`;
+            case 'nested-array':
+                return `<span class="s3-ds-nested" onclick="TM.s3explorer.openNestedModal(${rowIdx}, '${escapeJsString(colKey)}')" title="Click to view nested array">
+                    <span class="s3-ds-nested-text">[${Array.isArray(value) ? value.length : 0} items]</span>
+                    <span class="s3-ds-nested-icon">🔍</span>
+                </span>`;
+            case 'nested-object':
+                return `<span class="s3-ds-nested" onclick="TM.s3explorer.openNestedModal(${rowIdx}, '${escapeJsString(colKey)}')" title="Click to view nested object">
+                    <span class="s3-ds-nested-text">{...}</span>
+                    <span class="s3-ds-nested-icon">🔍</span>
+                </span>`;
+            default:
+                return escapeHtml(String(value));
+        }
+    }
+
+    /**
+     * Render datasheet view
+     */
+    function renderDatasheet() {
+        const container = document.getElementById('s3-datasheet');
+        if (!container || !state.datasheetData || !state.datasheetSchema) return;
+
+        const { data, schema, page, pageSize } = {
+            data: state.datasheetData,
+            schema: state.datasheetSchema,
+            page: state.datasheetPage,
+            pageSize: state.datasheetPageSize,
+        };
+
+        // Calculate pagination
+        const totalRows = data.length;
+        const totalPages = Math.ceil(totalRows / pageSize);
+        const startRow = (page - 1) * pageSize;
+        const endRow = Math.min(startRow + pageSize, totalRows);
+        const visibleRows = data.slice(startRow, endRow);
+
+        // Update toolbar info
+        const rowCountEl = document.getElementById('s3-ds-row-count');
+        const colCountEl = document.getElementById('s3-ds-col-count');
+        const pageCurrentEl = document.getElementById('s3-ds-page-current');
+        const pageTotalEl = document.getElementById('s3-ds-page-total');
+
+        if (rowCountEl) rowCountEl.textContent = totalRows;
+        if (colCountEl) colCountEl.textContent = schema.columns.length;
+        if (pageCurrentEl) pageCurrentEl.textContent = page;
+        if (pageTotalEl) pageTotalEl.textContent = totalPages;
+
+        // Render table
+        const table = document.getElementById('s3-datasheet-table');
+        if (!table) return;
+
+        // Render header
+        const thead = document.getElementById('s3-ds-thead');
+        if (thead) {
+            const headerRow = document.createElement('tr');
+            schema.columns.forEach((col) => {
+                const th = document.createElement('th');
+                th.textContent = col.key;
+                th.title = `Type: ${col.type}`;
+                headerRow.appendChild(th);
+            });
+            thead.innerHTML = '';
+            thead.appendChild(headerRow);
+        }
+
+        // Render body
+        const tbody = document.getElementById('s3-ds-tbody');
+        if (tbody) {
+            tbody.innerHTML = '';
+            visibleRows.forEach((row, idx) => {
+                const tr = document.createElement('tr');
+                const actualRowIdx = startRow + idx;
+
+                schema.columns.forEach((col) => {
+                    const td = document.createElement('td');
+                    const value = row[col.key];
+                    td.innerHTML = renderCell(value, col.type, actualRowIdx, col.key);
+                    td.className = `s3-ds-cell s3-ds-type-${col.type}`;
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Render aggregations footer
+        renderAggregations();
+
+        // Update pagination buttons
+        const prevBtn = document.getElementById('s3-ds-prev');
+        const nextBtn = document.getElementById('s3-ds-next');
+        if (prevBtn) prevBtn.disabled = page === 1;
+        if (nextBtn) nextBtn.disabled = page === totalPages;
+    }
+
+    /**
+     * Render aggregation footer
+     */
+    function renderAggregations() {
+        const tfoot = document.getElementById('s3-ds-tfoot');
+        if (!tfoot || !state.datasheetData || !state.datasheetSchema) return;
+
+        const { data, schema } = { data: state.datasheetData, schema: state.datasheetSchema };
+
+        const tr = document.createElement('tr');
+        tr.className = 's3-ds-agg-row';
+
+        schema.columns.forEach((col) => {
+            const td = document.createElement('td');
+            td.className = 's3-ds-agg-cell';
+
+            if (col.type === 'number') {
+                const values = data.map((row) => row[col.key]).filter((v) => typeof v === 'number');
+
+                if (values.length > 0) {
+                    const sum = values.reduce((a, b) => a + b, 0);
+                    const avg = sum / values.length;
+                    const formatter = TM.format?.formatNumber || ((n) => n.toLocaleString());
+
+                    td.innerHTML = `
+                        <div class="s3-ds-agg">
+                            <span title="Sum">Σ ${formatter(sum)}</span>
+                            <span title="Average">μ ${formatter(parseFloat(avg.toFixed(2)))}</span>
+                            <span title="Count">n=${values.length}</span>
+                        </div>
+                    `;
+                }
+            }
+
+            tr.appendChild(td);
+        });
+
+        tfoot.innerHTML = '';
+        tfoot.appendChild(tr);
+    }
+
+    /**
+     * Navigate to next page
+     */
+    function nextPage() {
+        if (!state.datasheetData) return;
+        const totalPages = Math.ceil(state.datasheetData.length / state.datasheetPageSize);
+        if (state.datasheetPage < totalPages) {
+            state.datasheetPage++;
+            renderDatasheet();
+        }
+    }
+
+    /**
+     * Navigate to previous page
+     */
+    function prevPage() {
+        if (state.datasheetPage > 1) {
+            state.datasheetPage--;
+            renderDatasheet();
+        }
+    }
+
+    /**
+     * Open modal to view nested data
+     * @param {number} rowIdx - Row index
+     * @param {string} colKey - Column key
+     */
+    function openNestedModal(rowIdx, colKey) {
+        if (!state.datasheetData) return;
+
+        const value = state.datasheetData[rowIdx][colKey];
+        const modal = document.getElementById('s3-nested-modal');
+        const body = document.getElementById('s3-nested-body');
+        const title = document.getElementById('s3-nested-title');
+
+        if (!modal || !body) return;
+
+        // Set title
+        if (title) {
+            title.textContent = `Nested Data: ${colKey} [Row ${rowIdx + 1}]`;
+        }
+
+        // If nested array of objects → Render sub-datasheet
+        if (Array.isArray(value) && value.length > 0) {
+            const detect = detectDatasheetMode(JSON.stringify(value));
+            if (detect.isDatasheet) {
+                // Render as mini datasheet table
+                const schema = inferSchema(value);
+                let html = '<table class="s3-datasheet-table s3-nested-table"><thead><tr>';
+                schema.columns.forEach((col) => {
+                    html += `<th>${escapeHtml(col.key)}</th>`;
+                });
+                html += '</tr></thead><tbody>';
+                value.forEach((row, idx) => {
+                    html += '<tr>';
+                    schema.columns.forEach((col) => {
+                        html += `<td>${renderCell(row[col.key], col.type, idx, col.key)}</td>`;
+                    });
+                    html += '</tr>';
+                });
+                html += '</tbody></table>';
+                body.innerHTML = html;
+            } else {
+                // Show as formatted JSON
+                body.innerHTML = `<pre class="s3-nested-json">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+            }
+        } else {
+            // Show as formatted JSON
+            body.innerHTML = `<pre class="s3-nested-json">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+        }
+
+        modal.style.display = 'flex';
+    }
+
+    /**
+     * Close nested modal
+     */
+    function closeNestedModal() {
+        const modal = document.getElementById('s3-nested-modal');
+        if (modal) {
+            modal.style.display = 'none';
+        }
     }
 
     // =========================================================================
@@ -765,9 +1085,30 @@
             }
 
             state.originalContent = displayContent;
+            // Store canonical markdown (source of truth for deterministic mode switching)
+            state.canonicalMarkdown = displayContent;
+            state.wysiwygSnapshot = '';
 
-            // Auto-switch to WYSIWYG mode for markdown files (unless empty)
-            if (ext === 'md' && displayContent.trim().length > 0) {
+            // Initialize cursor positions (start at beginning of file)
+            state.sourceCursorPosition = { start: 0, end: 0 };
+            state.wysiwygCursorPosition = { offset: 0 };
+
+            // Detect datasheet mode for JSON arrays
+            if (ext === 'json') {
+                const datasheetDetect = detectDatasheetMode(displayContent);
+                if (datasheetDetect.isDatasheet) {
+                    state.datasheetData = datasheetDetect.data;
+                    state.datasheetSchema = inferSchema(datasheetDetect.data);
+                    state.datasheetPage = 1;
+                    state.editorMode = 'datasheet';
+                } else {
+                    state.editorMode = 'source';
+                    state.datasheetData = null;
+                    state.datasheetSchema = null;
+                }
+            }
+            // Auto-switch to WYSIWYG mode for markdown files
+            else if (ext === 'md') {
                 state.editorMode = 'wysiwyg';
                 // Enable autosave for markdown files (unless read-only)
                 if (!isReadOnly) {
@@ -775,10 +1116,6 @@
                 }
             } else {
                 state.editorMode = 'source';
-                // Enable autosave for non-empty markdown files in source mode too
-                if (ext === 'md' && !isReadOnly) {
-                    state.autosave = true;
-                }
             }
 
             if (viewer) viewer.style.display = 'block';
@@ -835,7 +1172,11 @@
             }
 
             // Render in appropriate mode
-            if (state.editorMode === 'wysiwyg') {
+            if (state.editorMode === 'datasheet') {
+                // Render datasheet view
+                renderDatasheet();
+                updateEditorUI('datasheet');
+            } else if (state.editorMode === 'wysiwyg') {
                 const wysiwyg = document.getElementById('s3-wysiwyg');
                 if (wysiwyg) {
                     if (TM.markdown) {
@@ -971,13 +1312,43 @@
 
         const editor = document.getElementById('s3-editor');
         const wysiwyg = document.getElementById('s3-wysiwyg');
+        const ext = getExtension(state.currentFile.key);
 
-        // Toggle mode
-        state.editorMode = state.editorMode === 'source' ? 'wysiwyg' : 'source';
+        // For JSON files with datasheet mode
+        if (ext === 'json' && state.datasheetData) {
+            if (state.editorMode === 'datasheet') {
+                // Switch from datasheet to source
+                state.editorMode = 'source';
+                if (editor) {
+                    editor.value = state.canonicalMarkdown;
+                }
+            } else {
+                // Switch from source to datasheet
+                state.editorMode = 'datasheet';
+                // Re-parse in case user edited the source
+                const detect = detectDatasheetMode(editor.value);
+                if (detect.isDatasheet) {
+                    state.datasheetData = detect.data;
+                    state.datasheetSchema = inferSchema(detect.data);
+                    state.datasheetPage = 1;
+                    renderDatasheet();
+                } else {
+                    // Can't render as datasheet, stay in source mode
+                    state.editorMode = 'source';
+                    showToast('Cannot render as datasheet - invalid JSON array format', 'error');
+                    return;
+                }
+            }
+        }
+        // For markdown files with WYSIWYG mode
+        else if (ext === 'md') {
+            // Toggle between source and wysiwyg
+            state.editorMode = state.editorMode === 'source' ? 'wysiwyg' : 'source';
 
-        // Render preview from current editor content
-        if (state.editorMode === 'wysiwyg' && wysiwyg && editor && TM.markdown) {
-            wysiwyg.innerHTML = TM.markdown.renderMarkdown(editor.value);
+            // Render preview from current editor content
+            if (state.editorMode === 'wysiwyg' && wysiwyg && editor && TM.markdown) {
+                wysiwyg.innerHTML = TM.markdown.renderMarkdown(editor.value);
+            }
         }
 
         // Update UI
@@ -989,23 +1360,36 @@
     function updateEditorUI(mode) {
         const editor = document.getElementById('s3-editor');
         const wysiwyg = document.getElementById('s3-wysiwyg');
+        const datasheet = document.getElementById('s3-datasheet');
         const editorWrap = document.querySelector('.s3-editor-wrap');
         const saveBtn = document.getElementById('s3-save-btn');
         const autosaveLabel = document.querySelector('.s3-autosave-label');
 
         if (!editor || !wysiwyg) return;
 
-        if (mode === 'wysiwyg') {
+        if (mode === 'datasheet') {
+            editor.style.display = 'none';
+            wysiwyg.style.display = 'none';
+            if (datasheet) datasheet.style.display = 'flex';
+            if (editorWrap) editorWrap.classList.add('datasheet-mode');
+            // Hide save and autosave in datasheet mode (view-only)
+            if (saveBtn) saveBtn.style.display = 'none';
+            if (autosaveLabel) autosaveLabel.style.display = 'none';
+        } else if (mode === 'wysiwyg') {
             editor.style.display = 'none';
             wysiwyg.style.display = 'block';
+            if (datasheet) datasheet.style.display = 'none';
             if (editorWrap) editorWrap.classList.add('wysiwyg-mode');
+            if (editorWrap) editorWrap.classList.remove('datasheet-mode');
             // Hide save and autosave in preview mode (read-only)
             if (saveBtn) saveBtn.style.display = 'none';
             if (autosaveLabel) autosaveLabel.style.display = 'none';
         } else {
             editor.style.display = 'block';
             wysiwyg.style.display = 'none';
+            if (datasheet) datasheet.style.display = 'none';
             if (editorWrap) editorWrap.classList.remove('wysiwyg-mode');
+            if (editorWrap) editorWrap.classList.remove('datasheet-mode');
             // Show save and autosave in source mode (unless read-only)
             if (saveBtn && !state.writable) {
                 saveBtn.style.display = 'none';
@@ -1025,17 +1409,39 @@
         const btn = document.getElementById('s3-mode-toggle-btn');
         if (!btn) return;
 
-        // Update icon and label based on current mode
-        if (state.editorMode === 'wysiwyg') {
-            // Currently in preview mode, show "Source" button with edit icon
-            btn.title = 'Switch to source mode';
-            btn.innerHTML =
-                '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9l.94.94L5.92 19H5v-.92L14.06 9m3.6-6c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"/></svg><span id="s3-mode-label">Source</span>';
-        } else {
-            // Currently in source mode, show "Preview" button with magnifying glass icon
-            btn.title = 'Switch to preview mode';
-            btn.innerHTML =
-                '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg><span id="s3-mode-label">Preview</span>';
+        const ext = state.currentFile ? getExtension(state.currentFile.key) : '';
+
+        // For JSON files with datasheet mode available
+        if (ext === 'json' && state.datasheetData) {
+            if (state.editorMode === 'datasheet') {
+                // Currently in datasheet mode, show "Source" button
+                btn.title = 'Switch to source mode';
+                btn.innerHTML =
+                    '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9l.94.94L5.92 19H5v-.92L14.06 9m3.6-6c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"/></svg><span id="s3-mode-label">Source</span>';
+            } else {
+                // Currently in source mode, show "Datasheet" button with table icon
+                btn.title = 'Switch to datasheet view';
+                btn.innerHTML =
+                    '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3v18h18V3H3zm16 16H5V5h14v14zm-2-12H7v2h10V7zm0 4H7v2h10v-2zm0 4H7v2h10v-2z"/></svg><span id="s3-mode-label">Datasheet</span>';
+            }
+        }
+        // For markdown files with WYSIWYG mode
+        else if (ext === 'md') {
+            if (state.editorMode === 'wysiwyg') {
+                // Currently in preview mode, show "Source" button with edit icon
+                btn.title = 'Switch to source mode';
+                btn.innerHTML =
+                    '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9l.94.94L5.92 19H5v-.92L14.06 9m3.6-6c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"/></svg><span id="s3-mode-label">Source</span>';
+            } else {
+                // Currently in source mode, show "Preview" button with magnifying glass icon
+                btn.title = 'Switch to preview mode';
+                btn.innerHTML =
+                    '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg><span id="s3-mode-label">Preview</span>';
+            }
+        }
+        // For other files, hide the toggle button
+        else {
+            btn.style.display = 'none';
         }
     }
 
@@ -1717,6 +2123,11 @@
         toggleView,
         updateViewToggleButton,
         toggleEditorMode,
+        // Datasheet
+        nextPage,
+        prevPage,
+        openNestedModal,
+        closeNestedModal,
         // Version history
         showVersionHistory,
         restoreVersionAndRefresh,

@@ -2653,3 +2653,207 @@ a.logs-container {
 #peers td:nth-child(7) {
     text-align: right;
 }
+
+/* =========================================================================
+   S3 Datasheet Viewer Styles
+   ========================================================================= */
+
+/* Datasheet container */
+.s3-datasheet {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--color-bg-primary);
+    overflow: hidden;
+}
+
+/* Toolbar */
+.s3-datasheet-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 1rem;
+    background: var(--color-bg-secondary);
+    border-bottom: 1px solid var(--color-border-primary);
+    font-size: 0.8125rem;
+    color: var(--color-text-secondary);
+}
+
+.s3-datasheet-info {
+    display: inline-flex;
+    gap: 0.5rem;
+}
+
+/* Table container */
+.s3-datasheet-container {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+}
+
+/* Table */
+.s3-datasheet-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8125rem;
+    table-layout: auto;
+}
+
+.s3-datasheet-table thead {
+    position: sticky;
+    top: 0;
+    background: var(--color-bg-secondary);
+    z-index: 10;
+}
+
+.s3-datasheet-table th {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--color-border-primary);
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    text-align: left;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.s3-datasheet-table td {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--color-border-primary);
+    color: var(--color-text-primary);
+    max-width: 400px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.s3-datasheet-table tbody tr:hover {
+    background: var(--color-bg-tertiary);
+}
+
+/* Cell type styling */
+.s3-ds-type-number {
+    text-align: right;
+}
+
+.s3-ds-type-boolean {
+    text-align: center;
+}
+
+/* Special value formatting */
+.s3-ds-null {
+    color: var(--color-text-tertiary);
+    font-style: italic;
+}
+
+.s3-ds-number {
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+}
+
+.s3-ds-badge {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    border-radius: var(--panel-border-radius);
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.s3-ds-badge-true {
+    background: rgb(46 160 67 / 0.1);
+    color: var(--color-accent-green);
+}
+
+.s3-ds-badge-false {
+    background: rgb(229 62 62 / 0.1);
+    color: var(--color-accent-red);
+}
+
+/* Nested data */
+.s3-ds-nested {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    cursor: pointer;
+    color: var(--color-accent-blue);
+}
+
+.s3-ds-nested:hover {
+    text-decoration: underline;
+}
+
+.s3-ds-nested-text {
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+    font-size: 0.75rem;
+}
+
+.s3-ds-nested-icon {
+    font-size: 1rem;
+}
+
+/* Aggregation footer */
+.s3-ds-agg-row {
+    background: var(--color-bg-tertiary);
+    border-top: 2px solid var(--color-border-primary);
+}
+
+.s3-ds-agg-cell {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+}
+
+.s3-ds-agg {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+
+.s3-ds-agg span {
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+}
+
+/* Pagination */
+.s3-datasheet-pagination {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    background: var(--color-bg-secondary);
+    border-top: 1px solid var(--color-border-primary);
+}
+
+.s3-datasheet-pagination .s3-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Nested modal content */
+.s3-nested-table {
+    font-size: 0.75rem;
+}
+
+.s3-nested-json {
+    background: var(--color-bg-secondary);
+    padding: 1rem;
+    border-radius: var(--panel-border-radius);
+    border: 1px solid var(--color-border-primary);
+    overflow: auto;
+    max-height: 400px;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+    font-size: 0.75rem;
+    color: var(--color-text-primary);
+}
+
+/* Modal size variants */
+.modal-large .modal-content {
+    max-width: 900px;
+    width: 90%;
+}
+
+/* Datasheet mode adjustments */
+.s3-editor-wrap.datasheet-mode {
+    display: flex;
+    flex-direction: column;
+}
+
+.s3-editor-wrap.datasheet-mode .s3-datasheet {
+    display: flex;
+}
