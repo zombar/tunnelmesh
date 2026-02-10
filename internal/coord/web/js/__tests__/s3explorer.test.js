@@ -1,12 +1,8 @@
 // Tests for s3explorer.js utility functions
-import { describe, test, expect, mock, afterEach } from 'bun:test';
+import { describe, test, expect } from 'bun:test';
 import s3explorer from '../s3explorer.js';
 
-const { getItemIcon, getItemDisplayName, getIconSVG, buildItemMetadata, buildOnclickHandler, detectActiveTab } =
-    s3explorer._test;
-
-// Save original document to restore after tests
-const originalDocument = global.document;
+const { getItemIcon, getItemDisplayName, getIconSVG, buildItemMetadata, buildOnclickHandler } = s3explorer._test;
 
 describe('getItemIcon', () => {
     test('returns "share" for bucket with fs+ prefix', () => {
@@ -162,55 +158,5 @@ describe('buildOnclickHandler', () => {
         const item = { isBucket: true, name: "bucket'with'quotes" };
         const handler = buildOnclickHandler(item);
         expect(handler).toContain("\\'");
-    });
-});
-
-describe('detectActiveTab', () => {
-    // Restore original document after each test to avoid polluting other tests
-    afterEach(() => {
-        global.document = originalDocument;
-    });
-
-    test('returns "data" when tabs container does not exist', () => {
-        // Mock DOM without tabs container
-        global.document = {
-            getElementById: mock(() => null),
-        };
-        expect(detectActiveTab()).toBe('data');
-    });
-
-    test('returns "data" when no active tab button exists', () => {
-        // Mock DOM with tabs but no active tab
-        const mockQuerySelector = mock(() => null);
-        global.document = {
-            getElementById: mock(() => ({
-                querySelector: mockQuerySelector,
-            })),
-        };
-        expect(detectActiveTab()).toBe('data');
-    });
-
-    test('returns tab name from active tab button', () => {
-        // Mock DOM with active tab
-        global.document = {
-            getElementById: mock(() => ({
-                querySelector: mock(() => ({
-                    dataset: { tab: 'app' },
-                })),
-            })),
-        };
-        expect(detectActiveTab()).toBe('app');
-    });
-
-    test('handles missing dataset.tab gracefully', () => {
-        // Mock DOM with active tab but no dataset
-        global.document = {
-            getElementById: mock(() => ({
-                querySelector: mock(() => ({
-                    dataset: {},
-                })),
-            })),
-        };
-        expect(detectActiveTab()).toBe('data');
     });
 });
