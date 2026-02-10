@@ -4,10 +4,22 @@ coverage:
       default:
         target: 40%
         threshold: 2%
+      frontend:
+        # Lower threshold for frontend UI code - DOM rendering is hard to test
+        target: 20%
+        threshold: 5%
+        paths:
+          - "internal/coord/web/js/**/*.js"
     patch:
       default:
         target: 40%
         threshold: 5%
+      frontend:
+        # Lower threshold for frontend UI code patches
+        target: 20%
+        threshold: 5%
+        paths:
+          - "internal/coord/web/js/**/*.js"
 ignore:
   - "cmd/**/*"  # CLI commands are difficult to unit test
 comment:
