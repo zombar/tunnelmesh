@@ -1880,12 +1880,25 @@
         // Restore S3 state
         if (params.s3_bucket) {
             if (params.s3_file) {
-                // Restore file view
-                await openFile(params.s3_bucket, params.s3_file, { skipHistory: true });
+                // Restore file view - but only if not already viewing this file
+                if (state.currentFile?.bucket !== params.s3_bucket || state.currentFile?.key !== params.s3_file) {
+                    await openFile(params.s3_bucket, params.s3_file, { skipHistory: true });
+                }
             } else {
-                // Restore bucket/folder view
+                // Restore bucket/folder view - but only if not already in this location
                 const path = params.s3_path || '';
-                await navigateTo(params.s3_bucket, path, { skipHistory: true });
+                if (state.currentBucket !== params.s3_bucket || state.currentPath !== path || state.currentFile) {
+                    await navigateTo(params.s3_bucket, path, { skipHistory: true });
+                }
+            }
+        } else {
+            // No S3 context in URL - return to bucket list if needed
+            if (state.currentFile || state.currentBucket) {
+                state.currentFile = null;
+                state.currentBucket = null;
+                state.currentPath = '';
+                state.isDirty = false;
+                await renderFileListing();
             }
         }
     }
