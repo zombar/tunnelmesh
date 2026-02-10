@@ -73,7 +73,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: go test -race -coverprofile=coverage.out ./...
       - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -138,6 +138,7 @@ jobs:
         working-directory: internal/coord/web
         run: bun test --coverage
       - name: Upload JS coverage to Codecov
+        if: github.event_name == 'pull_request'
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
