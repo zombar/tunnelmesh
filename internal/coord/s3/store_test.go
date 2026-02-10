@@ -1436,3 +1436,124 @@ func TestStreamingRead_LargeFile(t *testing.T) {
 
 	assert.Equal(t, content, readContent)
 }
+
+func TestCalculateBucketSize(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	bucket := "test-bucket"
+
+	require.NoError(t, store.CreateBucket(bucket, "owner-id"))
+
+	// Initially, bucket size should be 0
+	size, err := store.CalculateBucketSize(bucket)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), size)
+
+	// Put some objects
+	content1 := []byte("test content 1")
+	_, err = store.PutObject(bucket, "file1.txt", bytes.NewReader(content1), int64(len(content1)), "text/plain", nil)
+	require.NoError(t, err)
+
+	content2 := []byte("test content 2 is longer")
+	_, err = store.PutObject(bucket, "file2.txt", bytes.NewReader(content2), int64(len(content2)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Size should reflect both files
+	size, err = store.CalculateBucketSize(bucket)
+	require.NoError(t, err)
+	expectedSize := int64(len(content1) + len(content2))
+	assert.Equal(t, expectedSize, size)
+
+	// Update an object (size should change)
+	content3 := []byte("updated content")
+	_, err = store.PutObject(bucket, "file1.txt", bytes.NewReader(content3), int64(len(content3)), "text/plain", nil)
+	require.NoError(t, err)
+
+	size, err = store.CalculateBucketSize(bucket)
+	require.NoError(t, err)
+	expectedSize = int64(len(content3) + len(content2))
+	assert.Equal(t, expectedSize, size)
+}
+
+func TestCalculateBucketSize_NonExistentBucket(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+
+	// Non-existent bucket should return 0 size, not an error
+	size, err := store.CalculateBucketSize("non-existent")
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), size)
+}
+
+func TestCalculatePrefixSize(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	bucket := "test-bucket"
+
+	require.NoError(t, store.CreateBucket(bucket, "owner-id"))
+
+	// Create files in different folders
+	files := map[string][]byte{
+		"folder1/file1.txt": []byte("content1"),
+		"folder1/file2.txt": []byte("content2 longer"),
+		"folder2/file3.txt": []byte("content3"),
+		"root.txt":          []byte("root content"),
+	}
+
+	for key, content := range files {
+		_, err := store.PutObject(bucket, key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	// Calculate size for folder1/ prefix
+	size, err := store.CalculatePrefixSize(bucket, "folder1/")
+	require.NoError(t, err)
+	expectedSize := int64(len(files["folder1/file1.txt"]) + len(files["folder1/file2.txt"]))
+	assert.Equal(t, expectedSize, size)
+
+	// Calculate size for folder2/ prefix
+	size, err = store.CalculatePrefixSize(bucket, "folder2/")
+	require.NoError(t, err)
+	expectedSize = int64(len(files["folder2/file3.txt"]))
+	assert.Equal(t, expectedSize, size)
+
+	// Calculate size for root (empty prefix)
+	size, err = store.CalculatePrefixSize(bucket, "")
+	require.NoError(t, err)
+	var totalSize int64
+	for _, content := range files {
+		totalSize += int64(len(content))
+	}
+	assert.Equal(t, totalSize, size)
+}
+
+func TestCalculatePrefixSize_NonExistentBucket(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+
+	// Non-existent bucket should return an error
+	_, err := store.CalculatePrefixSize("non-existent", "folder/")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bucket not found")
+}
+
+func TestCalculatePrefixSize_IncludesTombstoned(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	bucket := "test-bucket"
+
+	require.NoError(t, store.CreateBucket(bucket, "owner-id"))
+
+	// Create and delete an object (tombstone it)
+	content := []byte("test content")
+	_, err := store.PutObject(bucket, "folder/file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Calculate initial size
+	sizeBeforeDelete, err := store.CalculatePrefixSize(bucket, "folder/")
+	require.NoError(t, err)
+	assert.Equal(t, int64(len(content)), sizeBeforeDelete)
+
+	// Delete (tombstone) the object
+	require.NoError(t, store.DeleteObject(bucket, "folder/file.txt"))
+
+	// Size should still include the tombstoned object until it's purged
+	sizeAfterDelete, err := store.CalculatePrefixSize(bucket, "folder/")
+	require.NoError(t, err)
+	assert.Equal(t, int64(len(content)), sizeAfterDelete, "tombstoned objects should still count toward size")
+}
