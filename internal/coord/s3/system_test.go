@@ -422,3 +422,75 @@ func TestSystemStoreSaveGroupBindingsEmpty(t *testing.T) {
 	require.NotNil(t, loaded)
 	assert.Len(t, loaded, 0)
 }
+
+func TestSystemStoreSaveLoadIPAllocations(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	data := IPAllocationsData{
+		Used: map[string]bool{
+			"10.42.0.10": true,
+			"10.42.0.11": true,
+			"10.42.0.12": true,
+		},
+		PeerToIP: map[string]string{
+			"alice": "10.42.0.10",
+			"bob":   "10.42.0.11",
+			"carol": "10.42.0.12",
+		},
+		Next: 13,
+	}
+
+	// Save
+	err = ss.SaveIPAllocations(data)
+	require.NoError(t, err)
+
+	// Load
+	loaded, err := ss.LoadIPAllocations()
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	// Verify
+	assert.Equal(t, data.Used, loaded.Used)
+	assert.Equal(t, data.PeerToIP, loaded.PeerToIP)
+	assert.Equal(t, data.Next, loaded.Next)
+}
+
+func TestSystemStoreLoadIPAllocationsNotFound(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	// Should return nil (not error) when not found
+	loaded, err := ss.LoadIPAllocations()
+	require.NoError(t, err)
+	assert.NotNil(t, loaded) // Returns empty struct with initialized maps
+	assert.NotNil(t, loaded.Used)
+	assert.NotNil(t, loaded.PeerToIP)
+	assert.Len(t, loaded.Used, 0)
+	assert.Len(t, loaded.PeerToIP, 0)
+}
+
+func TestSystemStoreSaveIPAllocationsEmpty(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ss, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	// Save empty allocation state
+	data := IPAllocationsData{
+		Used:     make(map[string]bool),
+		PeerToIP: make(map[string]string),
+		Next:     1,
+	}
+
+	err = ss.SaveIPAllocations(data)
+	require.NoError(t, err)
+
+	loaded, err := ss.LoadIPAllocations()
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Len(t, loaded.Used, 0)
+	assert.Len(t, loaded.PeerToIP, 0)
+	assert.Equal(t, uint32(1), loaded.Next)
+}

@@ -110,26 +110,39 @@ type Server struct {
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
 // It uses deterministic allocation based on peer name hash for consistency.
+// State is persisted to S3 for recovery across coordinator restarts.
 type ipAllocator struct {
-	network  *net.IPNet
-	used     map[string]bool
-	peerToIP map[string]string // peer name -> allocated IP (for consistency)
-	next     uint32
-	mu       sync.Mutex
+	network     *net.IPNet
+	used        map[string]bool
+	peerToIP    map[string]string // peer name -> allocated IP (for consistency)
+	next        uint32
+	mu          sync.Mutex
+	systemStore *s3.SystemStore // For persisting allocations to S3
 }
 
-func newIPAllocator(cidr string) (*ipAllocator, error) {
+func newIPAllocator(cidr string, systemStore *s3.SystemStore) (*ipAllocator, error) {
 	_, network, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return nil, fmt.Errorf("parse CIDR: %w", err)
 	}
 
-	return &ipAllocator{
-		network:  network,
-		used:     make(map[string]bool),
-		peerToIP: make(map[string]string),
-		next:     1, // Start from .1, skip .0 (network address)
-	}, nil
+	allocator := &ipAllocator{
+		network:     network,
+		used:        make(map[string]bool),
+		peerToIP:    make(map[string]string),
+		next:        1, // Start from .1, skip .0 (network address)
+		systemStore: systemStore,
+	}
+
+	// Load existing allocations from S3 if available
+	if systemStore != nil {
+		if err := allocator.loadFromS3(); err != nil {
+			log.Warn().Err(err).Msg("Failed to load IP allocations from S3, starting fresh")
+			// Continue with empty allocator - not a fatal error
+		}
+	}
+
+	return allocator, nil
 }
 
 // allocateForPeer allocates an IP for a specific peer, using deterministic
@@ -182,6 +195,12 @@ func (a *ipAllocator) allocateForPeer(peerName string) (string, error) {
 		if !a.used[ipStr] {
 			a.used[ipStr] = true
 			a.peerToIP[peerName] = ipStr
+
+			// Persist to S3 (async, non-blocking)
+			if a.systemStore != nil {
+				go a.saveToS3()
+			}
+
 			return ipStr, nil
 		}
 	}
@@ -193,15 +212,60 @@ func (a *ipAllocator) release(ip string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.used, ip)
+
+	// Persist to S3 (async, non-blocking)
+	if a.systemStore != nil {
+		go a.saveToS3()
+	}
+}
+
+// loadFromS3 loads IP allocations from S3 storage.
+// Called during initialization. Errors are logged but not fatal.
+func (a *ipAllocator) loadFromS3() error {
+	data, err := a.systemStore.LoadIPAllocations()
+	if err != nil {
+		return fmt.Errorf("load IP allocations: %w", err)
+	}
+
+	if data == nil {
+		// No existing data - fresh start
+		return nil
+	}
+
+	// Restore state
+	a.used = data.Used
+	a.peerToIP = data.PeerToIP
+	a.next = data.Next
+
+	log.Info().
+		Int("allocated_ips", len(a.used)).
+		Int("peer_mappings", len(a.peerToIP)).
+		Msg("Loaded IP allocations from S3")
+
+	return nil
+}
+
+// saveToS3 persists IP allocations to S3 storage.
+// Called after each allocation/release. Errors are logged but don't fail the operation.
+func (a *ipAllocator) saveToS3() {
+	// Note: Caller already holds a.mu lock, but we're called async via goroutine
+	// so we need to acquire it again
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	data := s3.IPAllocationsData{
+		Used:     a.used,
+		PeerToIP: a.peerToIP,
+		Next:     a.next,
+	}
+
+	if err := a.systemStore.SaveIPAllocations(data); err != nil {
+		log.Error().Err(err).Msg("Failed to save IP allocations to S3")
+	}
 }
 
 // NewServer creates a new coordination server.
 func NewServer(cfg *config.PeerConfig) (*Server, error) {
-	ipAlloc, err := newIPAllocator(mesh.CIDR)
-	if err != nil {
-		return nil, fmt.Errorf("create IP allocator: %w", err)
-	}
-
 	// Determine coordinator name for stats organization
 	coordinatorName := cfg.Name
 	if coordinatorName == "" {
@@ -209,12 +273,11 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 	}
 
 	srv := &Server{
-		cfg:          cfg,
-		mux:          http.NewServeMux(),
-		peers:        make(map[string]*peerInfo),
-		ipAlloc:      ipAlloc,
-		dnsCache:     make(map[string]string),
-		aliasOwner:   make(map[string]string),
+		cfg:       cfg,
+		mux:       http.NewServeMux(),
+		peers:     make(map[string]*peerInfo),
+		dnsCache:  make(map[string]string),
+		aliasOwner: make(map[string]string),
 		statsHistory: NewStatsHistory(coordinatorName),
 		serverStats: serverStats{
 			startTime: time.Now(),
@@ -240,12 +303,19 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 		log.Info().Msg("WireGuard client management enabled")
 	}
 
-	// Initialize S3 storage if enabled
+	// Initialize S3 storage if enabled (must be before IP allocator)
 	if cfg.Coordinator.S3.Enabled {
 		if err := srv.initS3Storage(cfg); err != nil {
 			return nil, fmt.Errorf("initialize S3 storage: %w", err)
 		}
 	}
+
+	// Initialize IP allocator (after S3 so it can load persisted allocations)
+	ipAlloc, err := newIPAllocator(mesh.CIDR, srv.s3SystemStore)
+	if err != nil {
+		return nil, fmt.Errorf("create IP allocator: %w", err)
+	}
+	srv.ipAlloc = ipAlloc
 
 	// Initialize Certificate Authority for mesh TLS
 	ca, err := NewCertificateAuthority(cfg.Coordinator.DataDir, mesh.DomainSuffix)

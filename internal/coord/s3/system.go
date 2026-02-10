@@ -93,6 +93,18 @@ type FilterRulesData struct {
 	Temporary []FilterRulePersisted `json:"temporary"`
 }
 
+// IP Allocator paths
+const (
+	IPAllocationsPath = "system/ip_allocations.json"
+)
+
+// IPAllocationsData stores IP allocator state for persistence.
+type IPAllocationsData struct {
+	Used     map[string]bool   `json:"used"`      // IP -> allocated
+	PeerToIP map[string]string `json:"peer_to_ip"` // Peer name -> IP
+	Next     uint32            `json:"next"`      // Sequential counter (for reference)
+}
+
 // --- Peers ---
 
 // SavePeers saves the peer list to S3 with checksum validation.
@@ -401,6 +413,32 @@ func (ss *SystemStore) LoadFilterRules() (*FilterRulesData, error) {
 	if err := ss.loadJSONWithChecksum(FilterRulesPath, &data, 3); err != nil {
 		return nil, err
 	}
+	return &data, nil
+}
+
+// --- IP Allocations ---
+
+// SaveIPAllocations saves IP allocator state to S3 with checksum validation.
+func (ss *SystemStore) SaveIPAllocations(data IPAllocationsData) error {
+	return ss.saveJSONWithChecksum(IPAllocationsPath, data)
+}
+
+// LoadIPAllocations loads IP allocator state from S3 with automatic rollback on corruption.
+// Returns nil if the object doesn't exist (first coordinator startup).
+func (ss *SystemStore) LoadIPAllocations() (*IPAllocationsData, error) {
+	var data IPAllocationsData
+	if err := ss.loadJSONWithChecksum(IPAllocationsPath, &data, 3); err != nil {
+		return nil, err
+	}
+
+	// Initialize maps if they're nil (happens on first load or empty state)
+	if data.Used == nil {
+		data.Used = make(map[string]bool)
+	}
+	if data.PeerToIP == nil {
+		data.PeerToIP = make(map[string]string)
+	}
+
 	return &data, nil
 }
 
