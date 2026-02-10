@@ -19,6 +19,7 @@
     /* Button colors */
     --color-btn-primary: #238636;
     --color-btn-primary-hover: #2ea043;
+    --color-btn-danger: #f85149;
 
     /* Focus ring */
     --color-focus-ring: rgba(88, 166, 255, 0.3);
@@ -232,83 +233,49 @@ header h1 {
     display: block;
 }
 
-/* Charts Section - matches main's width constraints */
-#charts-section {
-    max-width: 1400px;
-    margin: 1.5rem auto 0;
-    padding: 0 2rem;
-    width: 100%;
+/* Tab-based section visibility - hide sections not in active tab */
+section.tab-hidden {
+    display: none !important;
 }
 
-.charts-card {
+/* Consistent spacing for all sections - width/padding handled by main element */
+main > section {
+    margin-bottom: 1.5rem;
+}
+
+/* Responsive spacing for sections on smaller screens */
+@media (max-width: 900px) {
+    main > section {
+        margin-bottom: 1rem;
+    }
+}
+
+/* Alert section always at top - no top margin */
+#alerts-section {
+    margin-top: 0;
+    margin-bottom: 1.5rem;
+}
+
+/* Chart cards - individual floating panels like alerts */
+.chart-card {
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
-}
-
-.charts-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1rem;
-    background: var(--color-bg-secondary);
-    border-bottom: 1px solid var(--color-border-primary);
-    flex-wrap: wrap;
-    gap: 1rem;
-}
-
-.charts-header h2 {
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--color-text-primary);
-    margin: 0;
-}
-
-.charts-container {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
     padding: 1rem;
 }
 
-.chart-wrapper {
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border-primary);
-    padding: 1rem;
-    position: relative;
-    min-width: 0;
-}
-
-.chart-wrapper h3 {
+.chart-title {
     font-size: 0.875rem;
     font-weight: 500;
     color: var(--color-text-secondary);
     margin: 0 0 0.75rem 0;
 }
 
-.chart-wrapper canvas {
+.chart-card canvas {
     width: 100% !important;
     height: 200px !important;
 }
 
-@media (max-width: 900px) {
-    #charts-section {
-        padding: 0 1rem;
-        margin: 1rem auto 0;
-    }
-
-    .charts-container {
-        grid-template-columns: 1fr;
-    }
-}
-
 /* Map Section */
-#map-section {
-    max-width: 1400px;
-    margin: 1.5rem auto 0;
-    padding: 0 2rem;
-    width: 100%;
-}
-
 .map-card {
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
@@ -392,24 +359,12 @@ header h1 {
 }
 
 @media (max-width: 900px) {
-    #map-section {
-        padding: 0 1rem;
-        margin: 1rem auto 0;
-    }
-
     .map-container {
         height: 280px;
     }
 }
 
 /* Visualizer Section */
-#visualizer-section {
-    max-width: 1400px;
-    margin: 1.5rem auto 0;
-    padding: 0 2rem;
-    width: 100%;
-}
-
 .visualizer-card {
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
@@ -445,11 +400,6 @@ header h1 {
 }
 
 @media (max-width: 900px) {
-    #visualizer-section {
-        padding: 0 1rem;
-        margin: 1rem auto 0;
-    }
-
     .visualizer-container {
         height: 350px;
     }
@@ -518,7 +468,7 @@ main {
 }
 
 #peers-section h2, #dns-section h2, #wireguard-section h2, #filter-section h2,
-#s3-section h2, #peers-mgmt-section h2, #groups-section h2, #shares-section h2, #bindings-section h2 {
+#s3-section h2, #peers-mgmt-section h2, #groups-section h2, #shares-section h2, #bindings-section h2, #docker-section h2 {
     font-size: 1rem;
     font-weight: 600;
     padding: 1rem;
@@ -619,8 +569,8 @@ main {
 
 .btn-danger, .btn.btn-danger {
     background: transparent;
-    color: var(--color-accent-red);
-    border: 1px solid var(--color-accent-red);
+    color: var(--color-btn-danger);
+    border: 1px solid var(--color-btn-danger);
     border-radius: var(--btn-border-radius);
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
@@ -629,7 +579,7 @@ main {
 }
 
 .btn-danger:hover {
-    background: var(--color-accent-red);
+    background: var(--color-btn-danger);
     color: #fff;
 }
 
@@ -957,6 +907,9 @@ td {
 
 /* Show more/less pagination */
 .show-more-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
     text-align: center;
     padding: 0.5rem 1rem;
     font-size: 0.75rem;
@@ -1182,6 +1135,13 @@ footer {
     flex: 0 1 auto;
 }
 
+/* Prevent buttons in section headers from wrapping to new line */
+.section-header .btn-primary,
+.section-toggle .btn-primary {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
 .collapsible-content {
     overflow: hidden;
     transition: max-height 0.3s ease-out, opacity 0.2s ease-out;
@@ -1195,13 +1155,6 @@ footer {
 }
 
 /* Alert tiles section */
-#alerts-section {
-    max-width: 1400px;
-    margin: 1.5rem auto 0;
-    padding: 0 2rem;
-    width: 100%;
-}
-
 .alert-tiles {
     display: flex;
     gap: 1rem;
@@ -1325,7 +1278,7 @@ a.logs-container {
     display: block;
     height: 300px;
     overflow-y: auto;
-    overflow-x: hidden;
+    overflow-x: auto;
     font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
     font-size: 0.75rem;
     line-height: 1.4;
@@ -1336,6 +1289,7 @@ a.logs-container {
 /* Discreet scrollbar for logs */
 .logs-container::-webkit-scrollbar {
     width: 6px;
+    height: 6px;
 }
 
 .logs-container::-webkit-scrollbar-track {
@@ -1855,6 +1809,14 @@ a.logs-container {
     width: 18%;
 }
 
+/* Right-align Size, Quota, Modified, and Expires columns */
+.s3-col-size,
+.s3-col-quota,
+.s3-col-modified,
+.s3-col-expires {
+    text-align: right;
+}
+
 .s3-checkbox {
     width: 16px;
     height: 16px;
@@ -2247,5 +2209,19 @@ a.logs-container {
 #docker-containers td:nth-child(3),
 #docker-containers th:nth-child(4),
 #docker-containers td:nth-child(4) {
+    text-align: right;
+}
+
+/* Network table: right-align Latency, Throughput, Packets/s, Version, Status columns */
+#peers th:nth-child(3),
+#peers td:nth-child(3),
+#peers th:nth-child(4),
+#peers td:nth-child(4),
+#peers th:nth-child(5),
+#peers td:nth-child(5),
+#peers th:nth-child(6),
+#peers td:nth-child(6),
+#peers th:nth-child(7),
+#peers td:nth-child(7) {
     text-align: right;
 }

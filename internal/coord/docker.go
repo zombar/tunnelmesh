@@ -81,7 +81,12 @@ func (s *Server) handleDockerContainers(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Error().Err(err).Msg("Failed to encode Docker containers response")
+		// Don't log client disconnect errors (stream closed, broken pipe) as errors
+		// These are expected when client times out or navigates away
+		errStr := err.Error()
+		if !strings.Contains(errStr, "stream closed") && !strings.Contains(errStr, "broken pipe") {
+			log.Error().Err(err).Msg("Failed to encode Docker containers response")
+		}
 	}
 }
 

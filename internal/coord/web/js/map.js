@@ -32,10 +32,12 @@ class NodeMap {
 
         // Initialize map centered on (0, 0) with zoom 2
         // Disable scroll wheel zoom to prevent accidental zooming while scrolling page
+        // Enable zoom controls for manual zoom in/out
         this.map = L.map(this.containerId, {
             center: [20, 0],
             zoom: 2,
             scrollWheelZoom: false,
+            zoomControl: true,
             attributionControl: false,
         });
 
@@ -550,6 +552,33 @@ class NodeMap {
         if (this.map) {
             this.map.invalidateSize();
         }
+    }
+
+    // Refresh map when becoming visible (e.g., tab switch)
+    // This fixes tile rendering and ensures map is properly centered
+    refresh() {
+        if (!this.map) return;
+
+        // Delay to ensure container is fully visible before recalculating
+        setTimeout(() => {
+            if (!this.map) return;
+
+            // Recalculate map size for proper tile rendering
+            this.map.invalidateSize();
+
+            // If we have markers, fit bounds to show all markers
+            if (this.markers.size > 0) {
+                const boundsArray = [];
+                this.markers.forEach((markerData) => {
+                    boundsArray.push([markerData.loc.latitude, markerData.loc.longitude]);
+                });
+                if (boundsArray.length > 0) {
+                    const bounds = L.latLngBounds(boundsArray);
+                    this.map.fitBounds(bounds, { padding: [50, 50], maxZoom: 10, animate: false });
+                    this.bounds = bounds;
+                }
+            }
+        }, 100);
     }
 
     // Cleanup

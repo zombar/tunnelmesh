@@ -18,12 +18,28 @@ const { createPaginationController } = TM.pagination;
 const { createSparklineSVG } = TM.table;
 const { createModalController } = TM.modal;
 
+// Panel refresh lists - defines which panels to refresh for each tab
+const PANELS_MESH_TAB = ['peers', 'wg-clients', 'logs', 'alerts', 'filter']; // Mesh tab panels (visualizer/charts/map loaded via fetchData)
+const PANELS_APP_TAB = ['s3', 'shares', 'docker']; // App tab panels
+const PANELS_DATA_TAB = ['peers-mgmt', 'groups', 'bindings', 'dns']; // Data tab panels
+
 // Toggle collapsible section
 function toggleSection(header) {
     header.classList.toggle('collapsed');
     const content = header.nextElementSibling;
     if (content?.classList.contains('collapsible-content')) {
+        const wasCollapsed = content.classList.contains('collapsed');
         content.classList.toggle('collapsed');
+
+        // If we just expanded the section, refresh any maps inside
+        if (wasCollapsed) {
+            requestAnimationFrame(() => {
+                const section = header.closest('section');
+                if (section && section.id === 'map-section' && state.nodeMap) {
+                    state.nodeMap.refresh();
+                }
+            });
+        }
     }
 }
 window.toggleSection = toggleSection;
@@ -371,8 +387,7 @@ function updateDashboard(data, loadHistory = false) {
     // Store peers data for pagination
     state.currentPeers = sortedPeers;
 
-    // Render tables with pagination (reuse the render functions)
-    renderDnsTable();
+    // Render peers table with pagination
     renderPeersTable();
 
     // Show filter section and populate peer dropdown if we have peers
@@ -548,7 +563,6 @@ function renderPeersTable() {
         <tr>
             <td><strong>${peerNameEscaped}</strong>${alertBadge}${exitBadge}${exitVia}</td>
             <td><code>${peer.mesh_ip}</code>${tunnelSuffix}</td>
-            <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
             <td>${formatLatency(peer.coordinator_rtt_ms)}</td>
             <td class="sparkline-cell">
                 ${createSparklineSVG(history.throughputTx, history.throughputRx)}
@@ -565,6 +579,7 @@ function renderPeersTable() {
                 </div>
             </td>
             <td><code>${escapeHtml(peer.version || '-')}</code></td>
+            <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>
         </tr>
     `;
         })
@@ -581,51 +596,37 @@ function renderPeersTable() {
     }
 }
 
-function renderDnsTable() {
-    const peers = state.currentPeers;
-    const domainSuffix = state.domainSuffix;
+// Fetch DNS records from API
+async function fetchDnsRecords() {
+    try {
+        const resp = await fetch('/api/dns');
+        if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
 
-    if (peers.length === 0) {
+        // Sort records by hostname
+        state.currentDnsRecords = (data.records || []).sort((a, b) =>
+            a.hostname.localeCompare(b.hostname)
+        );
+
+        renderDnsTable();
+    } catch (err) {
+        console.error('Failed to fetch DNS records:', err);
+        state.currentDnsRecords = [];
+        renderDnsTable();
+    }
+}
+
+function renderDnsTable() {
+    const records = state.currentDnsRecords || [];
+
+    if (records.length === 0) {
         if (dom.dnsBody) dom.dnsBody.innerHTML = '';
         if (dom.noDns) dom.noDns.style.display = 'block';
         document.getElementById('dns-pagination').style.display = 'none';
         return;
     }
-
-    // Build DNS records list: peer names + aliases, sorted by peer name then record name
-    state.currentDnsRecords = [];
-    for (const peer of peers) {
-        // Add the peer's primary DNS name
-        state.currentDnsRecords.push({
-            name: peer.name,
-            meshIp: peer.mesh_ip,
-            peerName: peer.name,
-            isAlias: false,
-        });
-        // Add aliases for this peer
-        if (peer.aliases && peer.aliases.length > 0) {
-            for (const alias of peer.aliases) {
-                state.currentDnsRecords.push({
-                    name: alias,
-                    meshIp: peer.mesh_ip,
-                    peerName: peer.name,
-                    isAlias: true,
-                });
-            }
-        }
-    }
-
-    // Sort by peer name first (to group), then by record name
-    state.currentDnsRecords.sort((a, b) => {
-        if (a.peerName !== b.peerName) {
-            return a.peerName.localeCompare(b.peerName);
-        }
-        // Primary name comes before aliases
-        if (a.isAlias !== b.isAlias) {
-            return a.isAlias ? 1 : -1;
-        }
-        return a.name.localeCompare(b.name);
-    });
 
     if (dom.noDns) dom.noDns.style.display = 'none';
     const visibleRecords = dnsPagination.getVisibleItems();
@@ -633,16 +634,13 @@ function renderDnsTable() {
     dom.dnsBody.innerHTML = visibleRecords
         .map(
             (record) => `
-        <tr data-dns-peer="${escapeHtml(record.peerName)}">
-            <td><code${record.isAlias ? ' style="color: var(--text-secondary)"' : ''}>${record.isAlias ? '↳ ' : ''}${escapeHtml(record.name)}${domainSuffix}</code></td>
-            <td><code>${record.meshIp}</code></td>
+        <tr>
+            <td><code>${escapeHtml(record.hostname)}</code></td>
+            <td><code>${escapeHtml(record.mesh_ip)}</code></td>
         </tr>
     `,
         )
         .join('');
-
-    // Setup DNS row group highlighting
-    setupDnsGroupHighlight();
 
     // Update pagination UI using controller state
     const dnsUIState = dnsPagination.getUIState();
@@ -654,33 +652,6 @@ function renderDnsTable() {
         document.getElementById('dns-shown-count').textContent = dnsUIState.shown;
         document.getElementById('dns-total-count').textContent = dnsUIState.total;
     }
-}
-
-// Setup DNS row group highlighting on hover
-function setupDnsGroupHighlight() {
-    if (!dom.dnsBody) return;
-
-    const rows = dom.dnsBody.querySelectorAll('tr[data-dns-peer]');
-
-    rows.forEach((row) => {
-        row.addEventListener('mouseenter', () => {
-            const peerName = row.getAttribute('data-dns-peer');
-            const groupRows = dom.dnsBody.querySelectorAll(`tr[data-dns-peer="${CSS.escape(peerName)}"]`);
-
-            if (groupRows.length <= 1) return; // No grouping needed for single rows
-
-            dom.dnsBody.classList.add('dns-group-active');
-            for (const r of groupRows) r.classList.add('dns-group-highlight');
-        });
-
-        row.addEventListener('mouseleave', () => {
-            const peerName = row.getAttribute('data-dns-peer');
-            const groupRows = dom.dnsBody.querySelectorAll(`tr[data-dns-peer="${CSS.escape(peerName)}"]`);
-
-            dom.dnsBody.classList.remove('dns-group-active');
-            for (const r of groupRows) r.classList.remove('dns-group-highlight');
-        });
-    });
 }
 
 // Chart functions
@@ -2072,7 +2043,7 @@ function registerBuiltinPanels() {
             sortOrder: 20,
         },
         {
-            id: 'peer-mgmt',
+            id: 'peers-mgmt',
             sectionId: 'peers-mgmt-section',
             tab: 'data',
             title: 'Peers',
@@ -2230,6 +2201,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (dom.s3ResizeHandle && dom.s3Content) {
         initPanelResize(dom.s3ResizeHandle, dom.s3Content);
     }
+
+    // Trigger visualizer resize after DOM is fully rendered
+    // This ensures the visualizer displays correctly on initial page load
+    requestAnimationFrame(() => {
+        if (state.visualizer) {
+            state.visualizer.resize();
+        }
+    });
+
+    // Apply initial tab filtering to hide panels not in active tab
+    // This must happen BEFORE refresh triggers to avoid showing all panels briefly
+    const activeTab = document.querySelector('#main-tabs .tab.active');
+    if (activeTab) {
+        const tabName = activeTab.dataset.tab;
+        // Apply tab filtering immediately
+        switchTab(tabName);
+    }
+
+    // Trigger initial refresh for the active tab
+    // This ensures panels show their content on page load, not just after tab switch
+    if (activeTab && TM.refresh) {
+        const tabName = activeTab.dataset.tab;
+        if (tabName === 'app') {
+            TM.refresh.triggerMultiple(PANELS_APP_TAB, { cascade: false });
+        } else if (tabName === 'data') {
+            TM.refresh.triggerMultiple(PANELS_DATA_TAB, { cascade: false });
+        } else if (tabName === 'mesh') {
+            // Mesh tab panels are updated via SSE/polling from fetchData(true) called above
+            // No explicit refresh trigger needed here
+        }
+    }
 });
 
 // Initialize panel resize functionality (shared by logs and S3 panels)
@@ -2297,16 +2299,13 @@ function initPanelResize(handle, container) {
 
 // Check if S3/peer management is enabled and show sections
 async function checkPeerManagement() {
+    // Check if S3/peer management is enabled
+    // Panel visibility is managed by the panel system, not here
+    // Data loading is handled by refresh coordinator when data tab is accessed
     try {
         const resp = await fetch('api/users');
-        if (resp.ok) {
-            document.getElementById('peers-mgmt-section').style.display = 'block';
-            document.getElementById('groups-section').style.display = 'block';
-            document.getElementById('shares-section').style.display = 'block';
-            const peers = await resp.json();
-            updatePeersMgmtTable(peers);
-            fetchGroups();
-            fetchShares();
+        if (!resp.ok) {
+            // S3 not enabled - panels will be hidden by panel system
         }
     } catch (_err) {
         // Peer management not enabled
@@ -2628,6 +2627,7 @@ function initRefreshCoordinator() {
     TM.refresh.register('groups', fetchGroups);
     TM.refresh.register('shares', fetchShares);
     TM.refresh.register('bindings', fetchBindings);
+    TM.refresh.register('dns', fetchDnsRecords);
     TM.refresh.register('docker', loadDockerContainers);
 
     // Register S3 explorer refresh (init if needed, then refresh)
@@ -2676,28 +2676,47 @@ function switchTab(tabName) {
         t.classList.toggle('active', t.dataset.tab === tabName);
     });
 
-    // Update tab content
-    document.querySelectorAll('.tab-content').forEach((content) => {
-        content.classList.toggle('active', content.id === `${tabName}-tab`);
+    // Show/hide sections based on their data-tab attribute
+    // Panel system controls base visibility (permissions), we just add tab filtering
+    // Sections can belong to multiple tabs via space-separated values (e.g., data-tab="app data")
+    document.querySelectorAll('section[data-tab]').forEach((section) => {
+        const tabs = section.dataset.tab.split(' ');
+        const belongsToTab = tabs.includes(tabName);
+        // Only show if: (1) belongs to active tab, AND (2) panel system hasn't hidden it
+        if (belongsToTab) {
+            // Remove tab-based hiding - panel system controls final visibility
+            section.classList.remove('tab-hidden');
+        } else {
+            // Hide because it belongs to a different tab
+            section.classList.add('tab-hidden');
+        }
     });
 
     // Handle tab-specific initialization
     if (tabName === 'mesh') {
-        // Defer visualizer resize until after DOM updates to get correct dimensions
+        // Defer visualizer and map resize until after DOM updates to get correct dimensions
+        // Note: Mesh panels (peers, logs, filter, etc.) are updated via SSE/polling
+        // from fetchData(), not via refresh coordinator
         requestAnimationFrame(() => {
             if (state.visualizer) {
                 state.visualizer.resize();
             }
+            if (state.nodeMap) {
+                // Use refresh() instead of just invalidateSize() to handle both
+                // tile rendering and centering when returning to tab
+                state.nodeMap.refresh();
+            }
         });
     } else if (tabName === 'data') {
         // Refresh all data panels without cascading (we're already listing all of them)
-        TM.refresh.triggerMultiple(['peers-mgmt', 'groups', 'shares', 'bindings', 's3'], { cascade: false });
+        TM.refresh.triggerMultiple(PANELS_DATA_TAB, { cascade: false });
     } else if (tabName === 'app') {
-        // Load Docker panel lazily when app tab is accessed
+        // Refresh app tab panels
         if (TM.refresh) {
-            TM.refresh.trigger('docker', { cascade: false });
+            TM.refresh.triggerMultiple(PANELS_APP_TAB, { cascade: false });
         }
     }
+
 }
 window.switchTab = switchTab;
 

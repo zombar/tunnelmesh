@@ -36,7 +36,10 @@ func newRealDockerClient(socket string) (*realDockerClient, error) {
 
 // ListContainers lists all containers (running and stopped).
 func (c *realDockerClient) ListContainers(ctx context.Context) ([]ContainerInfo, error) {
-	containers, err := c.cli.ContainerList(ctx, container.ListOptions{All: true})
+	containers, err := c.cli.ContainerList(ctx, container.ListOptions{
+		All:  true,
+		Size: true, // Include size information to avoid needing inspect for disk bytes
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -237,6 +240,11 @@ func convertContainer(c container.Summary) ContainerInfo {
 	// Parse timestamps
 	info.CreatedAt = parseDockerTimestamp(c.Created)
 	// StartedAt not available in container list, will be populated in inspect
+
+	// Disk size (available when ListOptions.Size = true)
+	if c.SizeRootFs > 0 {
+		info.DiskBytes = uint64(c.SizeRootFs)
+	}
 
 	return info
 }
