@@ -93,6 +93,11 @@ func (m *mockS3Store) Get(ctx context.Context, bucket, key string) ([]byte, map[
 		metadata = make(map[string]string)
 	}
 
+	// Add content-type to metadata (mimics real S3 behavior where content-type is in metadata)
+	if obj.contentType != "" {
+		metadata["content-type"] = obj.contentType
+	}
+
 	return obj.data, metadata, nil
 }
 

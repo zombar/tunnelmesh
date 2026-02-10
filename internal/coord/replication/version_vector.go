@@ -121,6 +121,22 @@ const (
 	VectorConcurrent
 )
 
+// String returns a human-readable representation of the vector relationship.
+func (r VectorRelationship) String() string {
+	switch r {
+	case VectorEqual:
+		return "equal"
+	case VectorBefore:
+		return "before"
+	case VectorAfter:
+		return "after"
+	case VectorConcurrent:
+		return "concurrent"
+	default:
+		return "unknown"
+	}
+}
+
 // Compare returns the relationship between this version vector and another.
 func (vv VersionVector) Compare(other VersionVector) VectorRelationship {
 	if vv.Equal(other) {
