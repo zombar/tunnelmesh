@@ -782,10 +782,9 @@
             state.canonicalMarkdown = displayContent;
             state.wysiwygSnapshot = '';
 
-            // Initialize source cursor position to end of file
-            // (so first switch from WYSIWYG to source doesn't reset to position 0)
-            const contentLength = displayContent.length;
-            state.sourceCursorPosition = { start: contentLength, end: contentLength };
+            // Initialize cursor positions (start at beginning of file)
+            state.sourceCursorPosition = { start: 0, end: 0 };
+            state.wysiwygCursorPosition = { offset: 0 };
 
             // Auto-switch to WYSIWYG mode for markdown files
             if (ext === 'md') {
@@ -898,79 +897,13 @@
     async function closeFile() {
         if (state.isDirty) {
             const fileName = state.currentFile.key.split('/').pop();
-            const choice = await showSaveDialog(fileName);
-
-            if (choice === 'cancel') {
-                return; // Stay in file
+            if (confirm(`Save changes to "${fileName}" before closing?`)) {
+                await saveFile();
             }
-
-            if (choice === 'save') {
-                await saveFile(); // Save and close
-            }
-            // If choice === 'discard', just close without saving
         }
         state.currentFile = null;
         state.isDirty = false;
         renderFileListing();
-    }
-
-    // Show a three-button save dialog
-    function showSaveDialog(fileName) {
-        return new Promise((resolve) => {
-            const message = `Do you want to save changes to "${fileName}"?`;
-
-            // Create modal elements
-            const overlay = document.createElement('div');
-            overlay.style.cssText = `
-                position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-                background: rgba(0,0,0,0.5); display: flex;
-                align-items: center; justify-content: center; z-index: 10000;
-            `;
-
-            const dialog = document.createElement('div');
-            dialog.style.cssText = `
-                background: var(--bg-secondary, #1e1e1e); padding: 20px;
-                border-radius: 8px; min-width: 400px; max-width: 500px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            `;
-
-            const messageEl = document.createElement('div');
-            messageEl.textContent = message;
-            messageEl.style.cssText = 'margin-bottom: 20px; font-size: 14px;';
-
-            const buttonContainer = document.createElement('div');
-            buttonContainer.style.cssText = 'display: flex; gap: 10px; justify-content: flex-end;';
-
-            const createButton = (text, value, primary = false) => {
-                const btn = document.createElement('button');
-                btn.textContent = text;
-                btn.className = primary ? 'btn-primary' : 'btn-secondary';
-                btn.onclick = () => {
-                    document.body.removeChild(overlay);
-                    resolve(value);
-                };
-                return btn;
-            };
-
-            buttonContainer.appendChild(createButton("Don't Save", 'discard'));
-            buttonContainer.appendChild(createButton('Cancel', 'cancel'));
-            buttonContainer.appendChild(createButton('Save', 'save', true));
-
-            dialog.appendChild(messageEl);
-            dialog.appendChild(buttonContainer);
-            overlay.appendChild(dialog);
-            document.body.appendChild(overlay);
-
-            // ESC key cancels
-            const escHandler = (e) => {
-                if (e.key === 'Escape') {
-                    document.body.removeChild(overlay);
-                    document.removeEventListener('keydown', escHandler);
-                    resolve('cancel');
-                }
-            };
-            document.addEventListener('keydown', escHandler);
-        });
     }
 
     function updateLineNumbers() {
@@ -1260,16 +1193,10 @@
     async function navigateTo(bucket, path) {
         if (state.isDirty) {
             const fileName = state.currentFile.key.split('/').pop();
-            const choice = await showSaveDialog(fileName);
-
-            if (choice === 'cancel') {
-                return; // Stay in current file
+            if (!confirm(`Save changes to "${fileName}" before navigating away?`)) {
+                return; // Cancel navigation
             }
-
-            if (choice === 'save') {
-                await saveFile(); // Save before navigating
-            }
-            // If choice === 'discard', navigate without saving
+            await saveFile();
         }
 
         state.currentBucket = bucket;
@@ -1884,53 +1811,33 @@
     function convertMarkdownPatternsInNode(node) {
         // Only process text nodes
         if (node.nodeType !== Node.TEXT_NODE) return false;
+        if (!TM.markdown || !TM.markdown.processInline) return false;
 
         const text = node.textContent;
-        let modified = false;
 
-        // Detect markdown patterns and convert to HTML
-        // Pattern priority: code (highest), bold, italic, strikethrough
-        const patterns = [
-            // Inline code: `code`
-            { regex: /`([^`]+)`/g, tag: 'code', format: (match, content) => `<code>${content}</code>` },
-            // Bold: **text** or __text__
-            {
-                regex: /(\*\*|__)([^\*_]+)\1/g,
-                tag: 'strong',
-                format: (match, marker, content) => `<strong>${content}</strong>`,
-            },
-            // Italic: *text* or _text_ (but not ** or __)
-            {
-                regex: /(?<!\*)(\*|_)(?!\1)([^\*_]+)\1(?!\1)/g,
-                tag: 'em',
-                format: (match, marker, content) => `<em>${content}</em>`,
-            },
-            // Strikethrough: ~~text~~
-            { regex: /~~([^~]+)~~/g, tag: 's', format: (match, content) => `<s>${content}</s>` },
-        ];
+        // Use markdown library's processInline() for consistency
+        // This ensures ALL patterns supported by the library are auto-converted
+        const processedHtml = TM.markdown.processInline(text);
 
-        for (const pattern of patterns) {
-            if (pattern.regex.test(text)) {
-                const newHtml = text.replace(pattern.regex, pattern.format);
-                if (newHtml !== text) {
-                    const tempDiv = document.createElement('div');
-                    tempDiv.innerHTML = newHtml;
-
-                    // Replace the text node with the formatted HTML
-                    const parent = node.parentNode;
-                    if (parent) {
-                        while (tempDiv.firstChild) {
-                            parent.insertBefore(tempDiv.firstChild, node);
-                        }
-                        parent.removeChild(node);
-                        modified = true;
-                        break; // Only apply first matching pattern
-                    }
-                }
-            }
+        // Check if anything changed
+        if (processedHtml === TM.markdown.escapeHtml(text)) {
+            return false; // No markdown patterns found
         }
 
-        return modified;
+        // Replace the text node with the formatted HTML
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = processedHtml;
+
+        const parent = node.parentNode;
+        if (parent) {
+            while (tempDiv.firstChild) {
+                parent.insertBefore(tempDiv.firstChild, node);
+            }
+            parent.removeChild(node);
+            return true;
+        }
+
+        return false;
     }
 
     function handleWysiwygInput(e) {

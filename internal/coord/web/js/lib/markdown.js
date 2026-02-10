@@ -676,6 +676,7 @@
         htmlToMarkdown,
         escapeHtml,
         unescapeHtml,
+        processInline, // Export for WYSIWYG auto-conversion
         _test,
     };
 });
