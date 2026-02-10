@@ -1,13 +1,21 @@
 package docker
 
 import (
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 )
 
+// metricsTestMutex serializes tests that access global metrics registry
+// to prevent data races when tests run in parallel.
+var metricsTestMutex sync.Mutex
+
 func TestInitMetrics(t *testing.T) {
+	metricsTestMutex.Lock()
+	defer metricsTestMutex.Unlock()
+
 	metrics := initMetrics("test-peer")
 	if metrics == nil {
 		t.Fatal("initMetrics returned nil")
@@ -40,6 +48,9 @@ func TestInitMetrics(t *testing.T) {
 }
 
 func TestRecordStats(t *testing.T) {
+	metricsTestMutex.Lock()
+	defer metricsTestMutex.Unlock()
+
 	initMetrics("test-peer")
 
 	cfg := &config.DockerConfig{Socket: "unix:///var/run/docker.sock"}
@@ -68,6 +79,9 @@ func TestRecordStats(t *testing.T) {
 }
 
 func TestRecordContainerInfo(t *testing.T) {
+	metricsTestMutex.Lock()
+	defer metricsTestMutex.Unlock()
+
 	initMetrics("test-peer")
 
 	cfg := &config.DockerConfig{Socket: "unix:///var/run/docker.sock"}

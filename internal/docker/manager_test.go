@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,22 +13,32 @@ import (
 type mockDockerClient struct {
 	containers []ContainerInfo
 	err        error
+	mu         sync.RWMutex // Protect concurrent access to containers
 }
 
 func (m *mockDockerClient) ListContainers(ctx context.Context) ([]ContainerInfo, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	return m.containers, nil
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	// Return a copy to avoid race conditions
+	result := make([]ContainerInfo, len(m.containers))
+	copy(result, m.containers)
+	return result, nil
 }
 
 func (m *mockDockerClient) InspectContainer(ctx context.Context, id string) (*ContainerInfo, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for _, c := range m.containers {
 		if c.ID == id || c.ShortID == id {
-			return &c, nil
+			// Return a copy to avoid race conditions
+			containerCopy := c
+			return &containerCopy, nil
 		}
 	}
 	return nil, nil
@@ -111,6 +122,9 @@ func TestNewManager(t *testing.T) {
 }
 
 func TestListContainers(t *testing.T) {
+	metricsTestMutex.Lock()
+	defer metricsTestMutex.Unlock()
+
 	now := time.Now()
 	mockContainers := []ContainerInfo{
 		{
@@ -168,6 +182,9 @@ func TestListContainers(t *testing.T) {
 }
 
 func TestListContainersEmpty(t *testing.T) {
+	metricsTestMutex.Lock()
+	defer metricsTestMutex.Unlock()
+
 	mock := &mockDockerClient{containers: []ContainerInfo{}}
 	cfg := &config.DockerConfig{Socket: "unix:///var/run/docker.sock"}
 	mgr := NewManager(cfg, "test-peer", nil, nil)
