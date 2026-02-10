@@ -17,7 +17,8 @@ func TestLoadPeerConfig(t *testing.T) {
 
 	content := `
 name: "mynode"
-server: "https://coord.example.com"
+servers:
+  - "https://coord.example.com"
 auth_token: "peer-token"
 ssh_port: 2222
 private_key: "/path/to/key"
