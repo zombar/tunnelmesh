@@ -41,6 +41,9 @@
     --viz-edge-online: rgb(88 166 255 / 0.4);
     --viz-edge-offline: rgb(248 81 73 / 0.3);
     --viz-label-text: #e6edf3;
+
+    /* Font stacks */
+    --font-mono: ui-monospace, sfmono-regular, 'SF Mono', menlo, consolas, 'Courier New', monospace;
 }
 
 * {
@@ -770,7 +773,7 @@ code {
     padding: 0.1rem 0.3rem;
     border-radius: 3px;
     font-size: 0.8rem;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
 }
 
 table {
@@ -1280,7 +1283,7 @@ a.logs-container {
     display: block;
     height: 300px;
     overflow: auto;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.75rem;
     line-height: 1.4;
     text-decoration: none;
@@ -2076,7 +2079,7 @@ a.logs-container {
     border-bottom: 1px solid var(--color-accent-orange);
     color: var(--color-accent-orange);
     padding: 0.25rem 0.75rem;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.65rem;
     font-weight: 600;
     letter-spacing: 0.15em;
@@ -2101,7 +2104,7 @@ a.logs-container {
     padding: 0.75rem 0;
     background: var(--color-bg-secondary);
     border-right: 1px solid var(--color-border-primary);
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.8125rem;
     line-height: 1.5;
     color: var(--color-text-secondary);
@@ -2123,7 +2126,7 @@ a.logs-container {
     outline: none;
     background: var(--color-bg-primary);
     color: var(--color-text-primary);
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.8125rem;
     line-height: 1.5;
     padding: 0.75rem;
@@ -2248,7 +2251,7 @@ a.logs-container {
     color: var(--color-accent-orange);
     padding: 0.15rem 0.4rem;
     border-radius: 2px;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.85em;
     letter-spacing: 0.01em;
     border: 1px solid var(--color-border-secondary);
@@ -2752,7 +2755,7 @@ a.logs-container {
 }
 
 .s3-ds-number {
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+    font-family: var(--font-mono);
 }
 
 .s3-ds-badge {
@@ -2787,7 +2790,7 @@ a.logs-container {
 }
 
 .s3-ds-nested-text {
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+    font-family: var(--font-mono);
     font-size: 0.75rem;
 }
 
@@ -2816,7 +2819,7 @@ a.logs-container {
 }
 
 .s3-ds-agg span {
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+    font-family: var(--font-mono);
 }
 
 /* Pagination */
@@ -2846,7 +2849,7 @@ a.logs-container {
     border: 1px solid var(--color-border-primary);
     overflow-x: auto;
     max-height: 400px;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Courier New', monospace;
+    font-family: var(--font-mono);
     font-size: 0.8125rem;
     line-height: 1.5;
     color: var(--color-text-primary);
@@ -2893,7 +2896,7 @@ a.logs-container {
     overflow: auto;
     padding: 1rem;
     background: var(--color-bg-primary);
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.7rem;
     line-height: 1.6;
 }

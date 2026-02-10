@@ -475,12 +475,10 @@
         // Calculate dynamic page size based on viewport
         state.datasheetPageSize = calculateDatasheetPageSize();
 
-        const { data, schema, page, pageSize } = {
-            data: state.datasheetData,
-            schema: state.datasheetSchema,
-            page: state.datasheetPage,
-            pageSize: state.datasheetPageSize,
-        };
+        const data = state.datasheetData;
+        const schema = state.datasheetSchema;
+        const page = state.datasheetPage;
+        const pageSize = state.datasheetPageSize;
 
         // Calculate pagination
         const totalRows = data.length;
