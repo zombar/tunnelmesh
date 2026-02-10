@@ -1906,8 +1906,8 @@
     /**
      * Handle browser back/forward button
      */
-    function handlePopState() {
-        restoreFromHistory();
+    async function handlePopState() {
+        await restoreFromHistory();
     }
 
     // =========================================================================
