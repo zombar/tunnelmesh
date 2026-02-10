@@ -383,8 +383,36 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 		coordAddr = ":8080"
 	}
 
-	// TODO: Initialize replicator with peer list-based coordinator discovery
-	// Coordinators will discover each other through the peer list using is_coordinator flag
+	// Initialize S3 replication for multi-coordinator deployments
+	// Coordinators discover each other through the peer list using is_coordinator flag
+	if srv.s3Store != nil {
+		// Create mesh transport for replication messages (HTTPS between coordinators)
+		srv.meshTransport = replication.NewMeshTransport(log.Logger, nil)
+
+		// Create S3 store adapter for replication
+		s3Adapter := replication.NewS3StoreAdapter(srv.s3Store)
+
+		// Build node ID from coordinator name
+		nodeID := cfg.Name
+		if nodeID == "" {
+			nodeID = "coordinator"
+		}
+
+		// Initialize replicator
+		srv.replicator = replication.NewReplicator(replication.Config{
+			NodeID:               nodeID,
+			Transport:            srv.meshTransport,
+			S3Store:              s3Adapter,
+			Logger:               log.Logger,
+			AckTimeout:           10 * time.Second,
+			RetryInterval:        30 * time.Second,
+			MaxPendingOperations: 10000,
+		})
+
+		log.Info().
+			Str("node_id", nodeID).
+			Msg("replication engine initialized - coordinators will discover each other via peer list")
+	}
 
 	srv.setupRoutes()
 	return srv, nil
