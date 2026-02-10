@@ -540,8 +540,8 @@
 
         if (empty) empty.style.display = 'none';
 
-        // Only show visible items
-        const visibleItems = items.slice(0, state.visibleCount);
+        // Icon view shows all items (no pagination), list view uses pagination
+        const visibleItems = state.viewMode === 'icon' ? items : items.slice(0, state.visibleCount);
 
         // Render based on view mode
         if (state.viewMode === 'icon') {
@@ -599,16 +599,22 @@
                 .join('');
         }
 
-        // Update pagination UI using shared helper
-        const total = state.currentItems.length;
-        const shown = Math.min(state.visibleCount, total);
-        if (typeof window.updateSectionPagination === 'function') {
-            window.updateSectionPagination('s3', {
-                total,
-                shown,
-                hasMore: total > state.visibleCount,
-                canShowLess: state.visibleCount > PAGE_SIZE,
-            });
+        // Update pagination UI (only for list view, hide in icon view)
+        if (state.viewMode === 'icon') {
+            // Hide pagination in icon view (show all with scrolling)
+            if (paginationEl) paginationEl.style.display = 'none';
+        } else {
+            // Show pagination in list view
+            const total = state.currentItems.length;
+            const shown = Math.min(state.visibleCount, total);
+            if (typeof window.updateSectionPagination === 'function') {
+                window.updateSectionPagination('s3', {
+                    total,
+                    shown,
+                    hasMore: total > state.visibleCount,
+                    canShowLess: state.visibleCount > PAGE_SIZE,
+                });
+            }
         }
     }
 
