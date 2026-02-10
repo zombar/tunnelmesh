@@ -32,13 +32,13 @@ func GetPeerExpirationDays() int {
 // Peer represents a TunnelMesh peer identified by an ED25519 public key.
 // Peer identity is derived from the peer's SSH key - no separate peer registration needed.
 type Peer struct {
-	ID        string    `json:"id"`         // SHA256(pubkey)[:8] hex, or "svc:name" for services
-	PublicKey string    `json:"public_key"` // Base64-encoded ED25519 public key
-	Name      string    `json:"name"`       // Optional display name (defaults to peer name)
-	CreatedAt time.Time `json:"created_at"`
-	LastSeen  time.Time `json:"last_seen,omitempty"`
-	Expired   bool      `json:"expired,omitempty"`    // True if account is expired
-	ExpiredAt time.Time `json:"expired_at,omitempty"` // When the account was expired
+	ID        string     `json:"id"`         // SHA256(pubkey)[:8] hex, or "svc:name" for services
+	PublicKey string     `json:"public_key"` // Base64-encoded ED25519 public key
+	Name      string     `json:"name"`       // Optional display name (defaults to peer name)
+	CreatedAt time.Time  `json:"created_at"`
+	LastSeen  time.Time  `json:"last_seen,omitempty"`
+	Expired   bool       `json:"expired,omitempty"`    // True if account is expired
+	ExpiredAt *time.Time `json:"expired_at,omitempty"` // When the account was expired (nil if never expired)
 }
 
 // IsService returns true if this is a service peer (ID starts with "svc:").

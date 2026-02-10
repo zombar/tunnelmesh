@@ -91,12 +91,13 @@ func TestPeer_IsExpired_NotExpired(t *testing.T) {
 }
 
 func TestPeer_IsExpired_ExplicitlyExpired(t *testing.T) {
+	expiredAt := time.Now().Add(-1 * time.Hour)
 	peer := Peer{
 		ID:        "abc123def456",
 		Name:      "Alice",
 		LastSeen:  time.Now().Add(-1 * time.Hour),
 		Expired:   true,
-		ExpiredAt: time.Now().Add(-1 * time.Hour),
+		ExpiredAt: &expiredAt,
 	}
 
 	assert.True(t, peer.IsExpired())
@@ -124,11 +125,12 @@ func TestPeer_IsExpired_ServiceUserNeverExpires(t *testing.T) {
 }
 
 func TestPeer_IsExpired_ServiceUserCanBeExplicitlyExpired(t *testing.T) {
+	expiredAt := time.Now()
 	peer := Peer{
 		ID:        "svc:coordinator",
 		Name:      "Coordinator Service",
 		Expired:   true,
-		ExpiredAt: time.Now(),
+		ExpiredAt: &expiredAt,
 	}
 
 	// Service peers can still be explicitly expired (when peer is removed)
