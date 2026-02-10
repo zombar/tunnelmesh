@@ -3,7 +3,7 @@
   "rules": {
     "selector-class-pattern": null,
     "custom-property-pattern": null,
-    "color-function-notation": "legacy",
+    "color-function-notation": "modern",
     "alpha-value-notation": "number",
     "selector-id-pattern": null,
     "no-descending-specificity": null

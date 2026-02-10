@@ -976,7 +976,7 @@
         state.editorMode = state.editorMode === 'source' ? 'wysiwyg' : 'source';
 
         // Render preview from current editor content
-        if (state.editorMode === 'wysiwyg' && wysiwyg && TM.markdown) {
+        if (state.editorMode === 'wysiwyg' && wysiwyg && editor && TM.markdown) {
             wysiwyg.innerHTML = TM.markdown.renderMarkdown(editor.value);
         }
 

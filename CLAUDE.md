@@ -25,6 +25,11 @@ go test -race ./...     # Run with race detector
 golangci-lint run       # Run linter
 make fmt                # Format code
 
+# Frontend Linting (requires Node.js 20+)
+npm install             # Install dependencies (stylelint, biome)
+npx stylelint "internal/coord/web/css/**/*.css"  # Lint CSS
+npx biome check internal/coord/web/js/           # Lint JavaScript
+
 # Docker
 make docker-up          # Start full stack (server + clients + monitoring)
 make docker-down        # Stop containers

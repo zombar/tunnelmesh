@@ -53,15 +53,27 @@
 
     /**
      * Sanitize URL to prevent XSS
+     * Uses allowlist approach - only permits safe schemes
      * @param {string} url - URL to sanitize
      * @returns {string}
      */
     function sanitizeUrl(url) {
+        if (!url) return '#';
         const trimmed = url.trim();
-        if (trimmed.startsWith('javascript:') || trimmed.startsWith('data:')) {
-            return '#';
+        const lower = trimmed.toLowerCase();
+
+        // Allowlist: only permit safe schemes (case-insensitive)
+        if (/^(https?|mailto|tel):/.test(lower)) {
+            return trimmed; // Return original case-preserved URL
         }
-        return trimmed;
+
+        // Relative URLs are safe (no scheme)
+        if (!lower.includes(':')) {
+            return trimmed;
+        }
+
+        // Block everything else (javascript:, data:, vbscript:, file:, etc.)
+        return '#';
     }
 
     // --- Inline Formatting ---
