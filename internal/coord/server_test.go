@@ -19,11 +19,11 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
-func newTestServer(t *testing.T) *Server {
-	// Create temp directory for S3 storage
+// newTestConfig creates a test configuration with proper S3 setup
+func newTestConfig(t *testing.T) *config.PeerConfig {
 	tmpDir := t.TempDir()
 
-	cfg := &config.PeerConfig{
+	return &config.PeerConfig{
 		Name:      "test-coord",
 		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
@@ -38,6 +38,10 @@ func newTestServer(t *testing.T) *Server {
 			},
 		},
 	}
+}
+
+func newTestServer(t *testing.T) *Server {
+	cfg := newTestConfig(t)
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 	return srv

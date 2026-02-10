@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
-	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -95,22 +94,10 @@ func TestDownsampleHistory(t *testing.T) {
 }
 
 func TestAdminOverview_IncludesLocation(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
-			Enabled:   true,
-			Listen:    ":0",
-			Locations: true, // Enable location tracking for this test
-			S3: config.S3Config{
-				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi
-			},
-		},
-	}
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.Locations = true // Enable location tracking for this test
+
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
@@ -153,21 +140,9 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 }
 
 func TestAdminOverview_ExitPeerInfo(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			S3: config.S3Config{
-				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi
-			},
-		},
-	}
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
@@ -221,21 +196,9 @@ func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 }
 
 func TestAdminOverview_ConnectionTypes(t *testing.T) {
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			S3: config.S3Config{
-				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi
-			},
-		},
-	}
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
@@ -290,21 +253,9 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 
 func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
 	// Create a server with coordinator enabled to have adminMux
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			S3: config.S3Config{
-				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi
-			},
-		},
-	}
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
@@ -385,23 +336,10 @@ func TestDownsampleHistory_Uniformity(t *testing.T) {
 
 func newTestServerWithS3AndBucket(t *testing.T) *Server {
 	t.Helper()
-	tempDir := t.TempDir()
-	cfg := &config.PeerConfig{
-		Name:      "test-coord",
-		Servers:   []string{"http://localhost:8080"},
-		AuthToken: "test-token",
-		TUN: config.TUNConfig{
-			MTU: 1400,
-		},
-		Coordinator: config.CoordinatorConfig{
-			Enabled: true,
-			Listen:  ":0",
-			DataDir: tempDir,
-			S3: config.S3Config{
-				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi
-			},
-		},
-	}
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.DataDir = t.TempDir()
+
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
 
