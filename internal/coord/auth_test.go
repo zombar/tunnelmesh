@@ -23,6 +23,7 @@ func TestServer_GenerateAndValidateToken(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	defer func() { _ = srv.Shutdown() }()
 
 	// Generate token
 	token, err := srv.GenerateToken("peer1", "172.30.0.1")
@@ -51,6 +52,7 @@ func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	defer func() { _ = srv1.Shutdown() }()
 
 	srv2, err := NewServer(&config.PeerConfig{
 		Name:      "test-coord2",
@@ -65,6 +67,7 @@ func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	defer func() { _ = srv2.Shutdown() }()
 
 	// Generate token with one server
 	token, err := srv1.GenerateToken("peer1", "172.30.0.1")
@@ -89,6 +92,7 @@ func TestServer_ValidateToken_InvalidToken(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	defer func() { _ = srv.Shutdown() }()
 
 	// Test with invalid token
 	_, err = srv.ValidateToken("invalid-token")

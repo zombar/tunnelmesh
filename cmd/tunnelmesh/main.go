@@ -1641,6 +1641,14 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Wait for context cancellation (shutdown signal)
 	<-ctx.Done()
 
+	// Shutdown coordinator server if running
+	if srv != nil {
+		log.Info().Msg("shutting down coordinator server")
+		if err := srv.Shutdown(); err != nil {
+			log.Warn().Err(err).Msg("failed to shutdown coordinator server")
+		}
+	}
+
 	// Clean up system resolver
 	if dnsConfigured {
 		removeSystemResolver(resp.Domain)
