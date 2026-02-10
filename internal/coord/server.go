@@ -109,7 +109,7 @@ type Server struct {
 	// Peer name cache for owner display (cached to avoid LoadPeers() on every request)
 	peerNameCache atomic.Pointer[map[string]string] // Peer ID -> name mapping
 	// Replication for multi-coordinator setup
-	replicator    *replication.Replicator   // S3 replication engine (nil if not enabled)
+	replicator    *replication.Replicator    // S3 replication engine (nil if not enabled)
 	meshTransport *replication.MeshTransport // Transport for replication messages
 }
 
@@ -202,8 +202,10 @@ func (a *ipAllocator) allocateForPeer(peerName string) (string, error) {
 			a.peerToIP[peerName] = ipStr
 
 			// Persist to S3 (async, non-blocking)
+			// Copy data while holding lock to avoid race condition
 			if a.systemStore != nil {
-				go a.saveToS3()
+				data := a.copyDataLocked()
+				go a.saveToS3Async(data)
 			}
 
 			return ipStr, nil
@@ -219,8 +221,10 @@ func (a *ipAllocator) release(ip string) {
 	delete(a.used, ip)
 
 	// Persist to S3 (async, non-blocking)
+	// Copy data while holding lock to avoid race condition
 	if a.systemStore != nil {
-		go a.saveToS3()
+		data := a.copyDataLocked()
+		go a.saveToS3Async(data)
 	}
 }
 
@@ -250,20 +254,31 @@ func (a *ipAllocator) loadFromS3() error {
 	return nil
 }
 
-// saveToS3 persists IP allocations to S3 storage.
-// Called after each allocation/release. Errors are logged but don't fail the operation.
-func (a *ipAllocator) saveToS3() {
-	// Note: Caller already holds a.mu lock, but we're called async via goroutine
-	// so we need to acquire it again
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	data := s3.IPAllocationsData{
-		Used:     a.used,
-		PeerToIP: a.peerToIP,
-		Next:     a.next,
+// copyDataLocked creates a deep copy of IP allocation data.
+// Must be called while holding a.mu lock.
+func (a *ipAllocator) copyDataLocked() s3.IPAllocationsData {
+	// Deep copy maps to avoid data races
+	usedCopy := make(map[string]bool, len(a.used))
+	for k, v := range a.used {
+		usedCopy[k] = v
 	}
 
+	peerToIPCopy := make(map[string]string, len(a.peerToIP))
+	for k, v := range a.peerToIP {
+		peerToIPCopy[k] = v
+	}
+
+	return s3.IPAllocationsData{
+		Used:     usedCopy,
+		PeerToIP: peerToIPCopy,
+		Next:     a.next,
+	}
+}
+
+// saveToS3Async persists IP allocations to S3 storage asynchronously.
+// Called after each allocation/release. Errors are logged but don't fail the operation.
+// Takes a copy of the data to avoid holding locks during I/O.
+func (a *ipAllocator) saveToS3Async(data s3.IPAllocationsData) {
 	if err := a.systemStore.SaveIPAllocations(data); err != nil {
 		log.Error().Err(err).Msg("Failed to save IP allocations to S3")
 	}
