@@ -1951,6 +1951,12 @@ func (s *Server) GetSystemStore() *s3.SystemStore {
 	return s.s3SystemStore
 }
 
+// GetReplicator returns the replicator for multi-coordinator deployments.
+// Returns nil if replication is not enabled.
+func (s *Server) GetReplicator() *replication.Replicator {
+	return s.replicator
+}
+
 // StartAdminServer starts the admin interface on the specified address.
 // If tlsCert is provided, the server uses HTTPS; otherwise HTTP.
 // This is called after join_mesh completes to bind admin to the mesh IP.

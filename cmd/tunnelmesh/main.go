@@ -922,6 +922,33 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		srv.SetCoordMeshIP(resp.MeshIP)
 		srv.SetMetricsRegistry(metrics.Registry)
 
+		// Discover and add existing coordinators to replication targets
+		// This ensures new coordinators bidirectionally replicate with existing ones
+		if srv.GetReplicator() != nil {
+			peers, err := client.ListPeers()
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to discover existing coordinators for replication")
+			} else {
+				discovered := 0
+				for _, peer := range peers {
+					// Add coordinator peers to replication targets (excluding self)
+					if peer.IsCoordinator && peer.MeshIP != resp.MeshIP {
+						srv.GetReplicator().AddPeer(peer.MeshIP)
+						discovered++
+						log.Debug().
+							Str("peer", peer.Name).
+							Str("mesh_ip", peer.MeshIP).
+							Msg("discovered existing coordinator for replication")
+					}
+				}
+				if discovered > 0 {
+					log.Info().
+						Int("coordinators", discovered).
+						Msg("discovered existing coordinators for replication")
+				}
+			}
+		}
+
 		// Load TLS certificate once for all services
 		tlsCert, err := tls.LoadX509KeyPair(tlsMgr.CertPath(), tlsMgr.KeyPath())
 		if err != nil {
