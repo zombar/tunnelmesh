@@ -65,7 +65,7 @@ type serverStats struct {
 // This separation ensures the admin interface (dashboards, monitoring, config) is never
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
-	cfg          *config.ServerConfig
+	cfg          *config.PeerConfig
 	mux          *http.ServeMux // Public coordination API (peer registration, heartbeats)
 	adminMux     *http.ServeMux // Private admin interface (dashboards, monitoring) - mesh-only
 	adminServer  *http.Server   // HTTPS server for adminMux, bound to mesh IP only
@@ -193,16 +193,16 @@ func (a *ipAllocator) release(ip string) {
 }
 
 // NewServer creates a new coordination server.
-func NewServer(cfg *config.ServerConfig) (*Server, error) {
+func NewServer(cfg *config.PeerConfig) (*Server, error) {
 	ipAlloc, err := newIPAllocator(mesh.CIDR)
 	if err != nil {
 		return nil, fmt.Errorf("create IP allocator: %w", err)
 	}
 
 	// Determine coordinator name for stats organization
-	coordinatorName := "coordinator"
-	if cfg.JoinMesh != nil && cfg.JoinMesh.Name != "" {
-		coordinatorName = cfg.JoinMesh.Name
+	coordinatorName := cfg.Name
+	if coordinatorName == "" {
+		coordinatorName = "coordinator"
 	}
 
 	srv := &Server{
@@ -221,31 +221,31 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	// Initialize IP geolocation cache if locations feature is enabled
-	if cfg.Locations {
+	if cfg.Coordinator.Locations {
 		srv.ipGeoCache = NewIPGeoCache("") // Use default ip-api.com URL
 		log.Info().Msg("node location tracking enabled (uses external IP geolocation API)")
 	}
 
 	// Set peer expiration days from config
-	if cfg.UserExpirationDays > 0 {
-		auth.SetPeerExpirationDays(cfg.UserExpirationDays)
+	if cfg.Coordinator.UserExpirationDays > 0 {
+		auth.SetPeerExpirationDays(cfg.Coordinator.UserExpirationDays)
 	}
 
 	// Initialize WireGuard client store if enabled
-	if cfg.WireGuard.Enabled {
+	if cfg.Coordinator.WireGuardServer.Enabled {
 		srv.wgStore = wireguard.NewStore(mesh.CIDR)
 		log.Info().Msg("WireGuard client management enabled")
 	}
 
 	// Initialize S3 storage if enabled
-	if cfg.S3.Enabled {
+	if cfg.Coordinator.S3.Enabled {
 		if err := srv.initS3Storage(cfg); err != nil {
 			return nil, fmt.Errorf("initialize S3 storage: %w", err)
 		}
 	}
 
 	// Initialize Certificate Authority for mesh TLS
-	ca, err := NewCertificateAuthority(cfg.DataDir, mesh.DomainSuffix)
+	ca, err := NewCertificateAuthority(cfg.Coordinator.DataDir, mesh.DomainSuffix)
 	if err != nil {
 		return nil, fmt.Errorf("initialize CA: %w", err)
 	}
@@ -257,11 +257,11 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 	}
 
 	// Initialize packet filter
-	srv.filter = routing.NewPacketFilter(cfg.Filter.IsDefaultDeny())
+	srv.filter = routing.NewPacketFilter(cfg.Coordinator.Filter.IsDefaultDeny())
 
 	// Load coordinator config rules
-	coordRules := make([]routing.FilterRule, len(cfg.Filter.Rules))
-	for i, r := range cfg.Filter.Rules {
+	coordRules := make([]routing.FilterRule, len(cfg.Coordinator.Filter.Rules))
+	for i, r := range cfg.Coordinator.Filter.Rules {
 		coordRules[i] = routing.FilterRule{
 			Port:       r.Port,
 			Protocol:   r.ProtocolNumber(),
@@ -272,8 +272,8 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 	srv.filter.SetCoordinatorRules(coordRules)
 
 	// Set service rules from config
-	serviceRules := make([]routing.FilterRule, len(cfg.ServicePorts))
-	for i, port := range cfg.ServicePorts {
+	serviceRules := make([]routing.FilterRule, len(cfg.Coordinator.ServicePorts))
+	for i, port := range cfg.Coordinator.ServicePorts {
 		serviceRules[i] = routing.FilterRule{
 			Port:     port,
 			Protocol: routing.ProtoTCP,
@@ -293,13 +293,13 @@ func NewServer(cfg *config.ServerConfig) (*Server, error) {
 
 // statsHistoryPath returns the file path for stats history persistence.
 func (s *Server) statsHistoryPath() string {
-	return filepath.Join(s.cfg.DataDir, "stats_history.json")
+	return filepath.Join(s.cfg.Coordinator.DataDir, "stats_history.json")
 }
 
 // LoadStatsHistory loads stats history from S3 or disk.
 func (s *Server) LoadStatsHistory() error {
 	// Ensure data directory exists (needed for file fallback)
-	if err := os.MkdirAll(s.cfg.DataDir, 0755); err != nil {
+	if err := os.MkdirAll(s.cfg.Coordinator.DataDir, 0755); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
 
@@ -688,19 +688,19 @@ func (s *Server) setupRoutes() {
 
 	// Setup relay routes (JWT auth handled internally)
 	// Always initialize relay manager if relay or WireGuard is enabled (WG uses relay for API proxying)
-	if s.cfg.Relay.Enabled || s.cfg.WireGuard.Enabled {
+	if s.cfg.Coordinator.Relay.Enabled || s.cfg.Coordinator.WireGuardServer.Enabled {
 		s.setupRelayRoutes()
 	}
 
 	// Setup admin routes if enabled
-	if s.cfg.Admin.Enabled {
+	if s.cfg.Coordinator.Admin.Enabled {
 		s.setupAdminRoutes()
 
 		// Setup monitoring reverse proxies if configured
-		if s.cfg.Admin.Monitoring.PrometheusURL != "" || s.cfg.Admin.Monitoring.GrafanaURL != "" {
+		if s.cfg.Coordinator.Admin.Monitoring.PrometheusURL != "" || s.cfg.Coordinator.Admin.Monitoring.GrafanaURL != "" {
 			s.SetupMonitoringProxies(MonitoringProxyConfig{
-				PrometheusURL: s.cfg.Admin.Monitoring.PrometheusURL,
-				GrafanaURL:    s.cfg.Admin.Monitoring.GrafanaURL,
+				PrometheusURL: s.cfg.Coordinator.Admin.Monitoring.PrometheusURL,
+				GrafanaURL:    s.cfg.Coordinator.Admin.Monitoring.GrafanaURL,
 			})
 		}
 	}
@@ -709,7 +709,7 @@ func (s *Server) setupRoutes() {
 	s.setupHolePunchRoutes()
 
 	// Setup WireGuard concentrator sync endpoint (JWT auth)
-	if s.cfg.WireGuard.Enabled {
+	if s.cfg.Coordinator.WireGuardServer.Enabled {
 		s.setupWireGuardRoutes()
 	}
 }
@@ -727,13 +727,13 @@ func (s *Server) getServicePorts() []uint16 {
 	var ports []uint16
 
 	// Admin dashboard port (if enabled)
-	if s.cfg.Admin.Enabled && s.cfg.Admin.Port > 0 {
-		ports = append(ports, uint16(s.cfg.Admin.Port))
+	if s.cfg.Coordinator.Admin.Enabled && s.cfg.Coordinator.Admin.Port > 0 {
+		ports = append(ports, uint16(s.cfg.Coordinator.Admin.Port))
 	}
 
 	// S3 port (if enabled)
-	if s.cfg.S3.Enabled && s.cfg.S3.Port > 0 {
-		ports = append(ports, uint16(s.cfg.S3.Port))
+	if s.cfg.Coordinator.S3.Enabled && s.cfg.Coordinator.S3.Port > 0 {
+		ports = append(ports, uint16(s.cfg.Coordinator.S3.Port))
 	}
 
 	// NFS port (only when there are active file shares)
@@ -742,7 +742,7 @@ func (s *Server) getServicePorts() []uint16 {
 	}
 
 	// Configured service ports (includes metrics port 9443 by default)
-	ports = append(ports, s.cfg.ServicePorts...)
+	ports = append(ports, s.cfg.Coordinator.ServicePorts...)
 
 	return ports
 }
@@ -780,37 +780,37 @@ func (s *Server) loadOrCreateCASKey(dataDir string) ([32]byte, error) {
 }
 
 // initS3Storage initializes the S3 storage subsystem.
-func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
+func (s *Server) initS3Storage(cfg *config.PeerConfig) error {
 	// Require max_size to be configured for quota enforcement
-	if cfg.S3.MaxSize.Bytes() <= 0 {
+	if cfg.Coordinator.S3.MaxSize.Bytes() <= 0 {
 		return fmt.Errorf("s3.max_size must be configured (e.g., 10Gi) for quota enforcement")
 	}
-	quota := s3.NewQuotaManager(cfg.S3.MaxSize.Bytes())
+	quota := s3.NewQuotaManager(cfg.Coordinator.S3.MaxSize.Bytes())
 
 	// Load or create master key for CAS encryption
-	masterKey, err := s.loadOrCreateCASKey(cfg.S3.DataDir)
+	masterKey, err := s.loadOrCreateCASKey(cfg.Coordinator.S3.DataDir)
 	if err != nil {
 		return fmt.Errorf("initialize CAS key: %w", err)
 	}
 
 	// Create store with CAS for content-addressed storage
-	store, err := s3.NewStoreWithCAS(cfg.S3.DataDir, quota, masterKey)
+	store, err := s3.NewStoreWithCAS(cfg.Coordinator.S3.DataDir, quota, masterKey)
 	if err != nil {
 		return fmt.Errorf("create S3 store: %w", err)
 	}
 	s.s3Store = store
 
 	// Set expiry defaults from config
-	store.SetDefaultObjectExpiryDays(cfg.S3.ObjectExpiryDays)
-	store.SetDefaultShareExpiryDays(cfg.S3.ShareExpiryDays)
+	store.SetDefaultObjectExpiryDays(cfg.Coordinator.S3.ObjectExpiryDays)
+	store.SetDefaultShareExpiryDays(cfg.Coordinator.S3.ShareExpiryDays)
 
 	// Set version retention config
-	store.SetVersionRetentionDays(cfg.S3.VersionRetentionDays)
-	store.SetMaxVersionsPerObject(cfg.S3.MaxVersionsPerObject)
+	store.SetVersionRetentionDays(cfg.Coordinator.S3.VersionRetentionDays)
+	store.SetMaxVersionsPerObject(cfg.Coordinator.S3.MaxVersionsPerObject)
 	store.SetVersionRetentionPolicy(s3.VersionRetentionPolicy{
-		RecentDays:    cfg.S3.VersionRetention.RecentDays,
-		WeeklyWeeks:   cfg.S3.VersionRetention.WeeklyWeeks,
-		MonthlyMonths: cfg.S3.VersionRetention.MonthlyMonths,
+		RecentDays:    cfg.Coordinator.S3.VersionRetention.RecentDays,
+		WeeklyWeeks:   cfg.Coordinator.S3.VersionRetention.WeeklyWeeks,
+		MonthlyMonths: cfg.Coordinator.S3.VersionRetention.MonthlyMonths,
 	})
 
 	// Create authorizer with group support
@@ -899,9 +899,9 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 	}
 
 	log.Info().
-		Str("data_dir", cfg.S3.DataDir).
-		Int("port", cfg.S3.Port).
-		Str("max_size", cfg.S3.MaxSize.String()).
+		Str("data_dir", cfg.Coordinator.S3.DataDir).
+		Int("port", cfg.Coordinator.S3.Port).
+		Str("max_size", cfg.Coordinator.S3.MaxSize.String()).
 		Msg("S3 storage initialized")
 
 	return nil
@@ -909,9 +909,9 @@ func (s *Server) initS3Storage(cfg *config.ServerConfig) error {
 
 // recoverCoordinatorState recovers ephemeral coordinator state from S3.
 // This includes stats history, WG concentrator assignment, and DNS cache/aliases.
-func (s *Server) recoverCoordinatorState(cfg *config.ServerConfig, systemStore *s3.SystemStore) {
+func (s *Server) recoverCoordinatorState(cfg *config.PeerConfig, systemStore *s3.SystemStore) {
 	// Migrate stats history from file to S3 if needed
-	statsHistoryFile := filepath.Join(cfg.DataDir, "stats_history.json")
+	statsHistoryFile := filepath.Join(cfg.Coordinator.DataDir, "stats_history.json")
 	if migrated, err := systemStore.MigrateFromFile(statsHistoryFile, s3.StatsHistoryPath); err != nil {
 		log.Warn().Err(err).Msg("failed to migrate stats history to S3")
 	} else if migrated {
@@ -1306,7 +1306,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	existing, isExisting := s.peers[req.Name]
 
-	if s.cfg.Locations {
+	if s.cfg.Coordinator.Locations {
 		switch {
 		case req.Location != nil:
 			// Manual location provided - use it
@@ -1405,7 +1405,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	// Auto-register peer: add to "everyone" group and create peer record on first registration
 	// Peer identity is derived from peer's SSH key - no separate registration needed
-	var isFirstPeer bool
+	isAdmin := false
 	if peerID != "" && s.s3Authorizer != nil && s.s3Authorizer.Groups != nil {
 		isNewPeer := !s.s3Authorizer.Groups.IsMember(auth.GroupEveryone, peerID)
 		if isNewPeer {
@@ -1413,7 +1413,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 			// Check if this peer should be added to admins group (via admin_peers config)
 			isAdminPeer := false
-			for _, adminPeerName := range s.cfg.AdminPeers {
+			for _, adminPeerName := range s.cfg.Coordinator.AdminPeers {
 				if adminPeerName == req.Name {
 					isAdminPeer = true
 					break
@@ -1425,6 +1425,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				} else {
 					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Msg("peer added to admins group via admin_peers config")
 					groupsModified = true
+					isAdmin = true
 				}
 			}
 
@@ -1450,6 +1451,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		if s.s3SystemStore != nil {
 			s.updatePeerRecord(peerID, req.Name, req.PublicKey, isNewPeer)
 		}
+
+		// Check if peer is admin (for both new and existing peers)
+		if s.s3Authorizer.Groups.IsMember(auth.GroupAdmins, peerID) {
+			isAdmin = true
+		}
 	}
 
 	// Generate JWT token for relay authentication
@@ -1468,7 +1474,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	logEvent.Msg("peer registered")
 
 	// Trigger IP geolocation only for new peers or when IP has changed (if locations enabled)
-	if needsGeoLookup && s.cfg.Locations && s.ipGeoCache != nil {
+	if needsGeoLookup && s.cfg.Coordinator.Locations && s.ipGeoCache != nil {
 		go s.lookupPeerLocation(req.Name, geoLookupIP)
 	}
 
@@ -1481,7 +1487,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		ServerVersion: s.version,
 		PeerName:      req.Name, // May differ from original request if renamed
 		PeerID:        peerID,
-		IsFirstPeer:   isFirstPeer,
+		IsAdmin:       isAdmin,
 	}
 
 	// Generate TLS certificate for the peer
@@ -1689,8 +1695,8 @@ func (s *Server) lookupPeerLocation(peerName, ip string) {
 
 // ListenAndServe starts the coordination server.
 func (s *Server) ListenAndServe() error {
-	log.Info().Str("listen", s.cfg.Listen).Msg("starting coordination server")
-	return http.ListenAndServe(s.cfg.Listen, s)
+	log.Info().Str("listen", s.cfg.Coordinator.Listen).Msg("starting coordination server")
+	return http.ListenAndServe(s.cfg.Coordinator.Listen, s)
 }
 
 // SetCoordMeshIP sets the coordinator's mesh IP for "this.tunnelmesh" resolution.

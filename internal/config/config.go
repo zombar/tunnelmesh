@@ -39,6 +39,25 @@ type WireGuardServerConfig struct {
 	Endpoint string `yaml:"endpoint"` // Public endpoint for clients (concentrator address:port)
 }
 
+// CoordinatorConfig holds configuration for coordinator services (run by admin peers).
+type CoordinatorConfig struct {
+	Enabled             bool                  `yaml:"enabled"`               // Enable coordinator services (auto-enabled if peer is admin)
+	Listen              string                `yaml:"listen"`                // Coordination API listen address (e.g., ":8443")
+	DataDir             string                `yaml:"data_dir"`              // Data directory for persistence (default: /var/lib/tunnelmesh)
+	HeartbeatInterval   string                `yaml:"heartbeat_interval"`    // Heartbeat interval (default: 10s)
+	UserExpirationDays  int                   `yaml:"user_expiration_days"`  // Days until user expires after last seen (default: 270 = 9 months)
+	AdminPeers          []string              `yaml:"admin_peers"`           // Peer names that should be added to admins group (e.g., ["honker", "oldie"])
+	Locations           bool                  `yaml:"locations"`             // Enable node location tracking (requires external IP geolocation API)
+	MemberlistSeeds     []string              `yaml:"memberlist_seeds"`      // Memberlist gossip cluster seed addresses (e.g., ["coord1.example.com:7946"])
+	MemberlistBindAddr  string                `yaml:"memberlist_bind_addr"`  // Address to bind memberlist gossip (default: ":7946")
+	Admin               AdminConfig           `yaml:"admin"`                 // Admin web interface configuration
+	Relay               RelayConfig           `yaml:"relay"`                 // WebSocket relay configuration
+	WireGuardServer     WireGuardServerConfig `yaml:"wireguard_server"`      // WireGuard client management
+	S3                  S3Config              `yaml:"s3"`                    // S3-compatible storage configuration
+	Filter              FilterConfig          `yaml:"filter"`                // Global packet filter rules for all peers
+	ServicePorts        []uint16              `yaml:"service_ports"`         // Service ports to auto-allow on peers (default: [9443] for metrics)
+}
+
 // S3Config holds configuration for the S3-compatible storage service.
 type S3Config struct {
 	Enabled                bool                   `yaml:"enabled"`                  // Enable S3 storage (default: false)
@@ -72,29 +91,10 @@ type WireGuardPeerConfig struct {
 	SyncInterval string `yaml:"sync_interval"` // Config sync interval (default: "30s")
 }
 
-// ServerConfig holds configuration for the coordination server.
-type ServerConfig struct {
-	Listen             string                `yaml:"listen"`
-	AuthToken          string                `yaml:"auth_token"`
-	DataDir            string                `yaml:"data_dir"`             // Data directory for persistence (default: /var/lib/tunnelmesh)
-	HeartbeatInterval  string                `yaml:"heartbeat_interval"`   // Heartbeat interval (default: 10s)
-	UserExpirationDays int                   `yaml:"user_expiration_days"` // Days until user expires after last seen (default: 270 = 9 months)
-	AdminPeers         []string              `yaml:"admin_peers"`          // Peer names that should be added to admins group (e.g., ["honker", "oldie"])
-	Locations          bool                  `yaml:"locations"`            // Enable node location tracking (requires external IP geolocation API)
-	LogLevel           string                `yaml:"log_level"`            // trace, debug, info, warn, error (default: info)
-	Admin              AdminConfig           `yaml:"admin"`
-	Relay              RelayConfig           `yaml:"relay"`
-	WireGuard          WireGuardServerConfig `yaml:"wireguard"`
-	S3                 S3Config              `yaml:"s3"`            // S3-compatible storage configuration
-	Filter             FilterConfig          `yaml:"filter"`        // Global packet filter rules for all peers
-	ServicePorts       []uint16              `yaml:"service_ports"` // Service ports to auto-allow on peers (default: [9443] for metrics)
-	JoinMesh           *PeerConfig           `yaml:"join_mesh,omitempty"`
-}
-
 // PeerConfig holds configuration for a peer node.
 type PeerConfig struct {
 	Name              string              `yaml:"name"`
-	Server            string              `yaml:"server"`
+	Servers           []string            `yaml:"servers"`            // Coordinator URLs (e.g., ["https://coord1.example.com:8443"])
 	AuthToken         string              `yaml:"auth_token"`
 	SSHPort           int                 `yaml:"ssh_port"`
 	PrivateKey        string              `yaml:"private_key"`
@@ -112,6 +112,7 @@ type PeerConfig struct {
 	Filter            FilterConfig        `yaml:"filter"`             // Local packet filter rules
 	Loki              LokiConfig          `yaml:"loki"`               // Loki log shipping configuration
 	Docker            DockerConfig        `yaml:"docker"`             // Docker container orchestration
+	Coordinator       CoordinatorConfig   `yaml:"coordinator"`        // Coordinator services (optional, auto-enabled if admin)
 }
 
 // TUNConfig holds configuration for the TUN interface.
@@ -217,127 +218,6 @@ func (g *GeolocationConfig) IsSet() bool {
 
 // LoadServerConfig loads server configuration from a YAML file.
 // nolint:gocyclo // Server config loading handles many optional fields
-func LoadServerConfig(path string) (*ServerConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read config file: %w", err)
-	}
-
-	cfg := &ServerConfig{}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parse config file: %w", err)
-	}
-
-	// Apply defaults
-	if cfg.DataDir == "" {
-		cfg.DataDir = "/var/lib/tunnelmesh"
-	}
-	// Expand home directory in data dir
-	if strings.HasPrefix(cfg.DataDir, "~/") {
-		homeDir, err := os.UserHomeDir()
-		if err == nil {
-			cfg.DataDir = filepath.Join(homeDir, cfg.DataDir[2:])
-		}
-	}
-	// Admin defaults (only accessible from mesh via HTTPS)
-	cfg.Admin.Enabled = true
-	if cfg.Admin.Port == 0 {
-		cfg.Admin.Port = 443 // Standard HTTPS port for mesh-only admin
-	}
-	// Relay enabled by default
-	if !cfg.Relay.Enabled {
-		cfg.Relay.Enabled = true
-	}
-	if cfg.Relay.PairTimeout == "" {
-		cfg.Relay.PairTimeout = "90s"
-	}
-	if cfg.HeartbeatInterval == "" {
-		cfg.HeartbeatInterval = "10s"
-	}
-	if len(cfg.ServicePorts) == 0 {
-		cfg.ServicePorts = []uint16{9443} // Default: metrics port for Prometheus scraping
-	}
-	if cfg.UserExpirationDays == 0 {
-		cfg.UserExpirationDays = 270 // Default: 9 months
-	}
-
-	// S3 defaults
-	if cfg.S3.Enabled {
-		if cfg.S3.DataDir == "" {
-			cfg.S3.DataDir = filepath.Join(cfg.DataDir, "s3")
-		}
-		if cfg.S3.Port == 0 {
-			cfg.S3.Port = 9000
-		}
-		if cfg.S3.ObjectExpiryDays == 0 {
-			cfg.S3.ObjectExpiryDays = 9125 // Default: 25 years
-		}
-		if cfg.S3.ShareExpiryDays == 0 {
-			cfg.S3.ShareExpiryDays = 365 // Default: 1 year
-		}
-		if cfg.S3.TombstoneRetentionDays == 0 {
-			cfg.S3.TombstoneRetentionDays = 90 // Default: 90 days
-		}
-		if cfg.S3.VersionRetentionDays == 0 {
-			cfg.S3.VersionRetentionDays = 30 // Default: 30 days
-		}
-		if cfg.S3.MaxVersionsPerObject == 0 {
-			cfg.S3.MaxVersionsPerObject = 100 // Default: 100 versions per object
-		}
-		// Smart retention defaults (tiered pruning)
-		if cfg.S3.VersionRetention.RecentDays == 0 {
-			cfg.S3.VersionRetention.RecentDays = 7 // Keep all versions from last 7 days
-		}
-		if cfg.S3.VersionRetention.WeeklyWeeks == 0 {
-			cfg.S3.VersionRetention.WeeklyWeeks = 4 // Keep weekly versions for 4 weeks
-		}
-		if cfg.S3.VersionRetention.MonthlyMonths == 0 {
-			cfg.S3.VersionRetention.MonthlyMonths = 6 // Keep monthly versions for 6 months
-		}
-	}
-
-	// WireGuard defaults are applied on demand (endpoint must be set manually)
-
-	// Apply defaults to JoinMesh if configured
-	if cfg.JoinMesh != nil {
-		if cfg.JoinMesh.SSHPort == 0 {
-			cfg.JoinMesh.SSHPort = 2222
-		}
-		if cfg.JoinMesh.TUN.Name == "" {
-			cfg.JoinMesh.TUN.Name = "tun-mesh0"
-		}
-		if cfg.JoinMesh.TUN.MTU == 0 {
-			cfg.JoinMesh.TUN.MTU = 1400
-		}
-		if cfg.JoinMesh.DNS.Listen == "" {
-			cfg.JoinMesh.DNS.Listen = "127.0.0.53:5353"
-		}
-		if cfg.JoinMesh.DNS.CacheTTL == 0 {
-			cfg.JoinMesh.DNS.CacheTTL = 300
-		}
-		if cfg.JoinMesh.MetricsPort == 0 {
-			cfg.JoinMesh.MetricsPort = 9443
-		}
-		// Loki defaults for JoinMesh
-		if cfg.JoinMesh.Loki.Enabled {
-			if cfg.JoinMesh.Loki.BatchSize == 0 {
-				cfg.JoinMesh.Loki.BatchSize = 100
-			}
-			if cfg.JoinMesh.Loki.FlushInterval == "" {
-				cfg.JoinMesh.Loki.FlushInterval = "5s"
-			}
-		}
-		// Expand home directory in private key path
-		if strings.HasPrefix(cfg.JoinMesh.PrivateKey, "~/") {
-			homeDir, err := os.UserHomeDir()
-			if err == nil {
-				cfg.JoinMesh.PrivateKey = filepath.Join(homeDir, cfg.JoinMesh.PrivateKey[2:])
-			}
-		}
-	}
-
-	return cfg, nil
-}
 
 // LoadPeerConfig loads peer configuration from a YAML file.
 func LoadPeerConfig(path string) (*PeerConfig, error) {
@@ -425,32 +305,78 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 	}
 	// AutoPortForward defaults to true (opt-out model) if not explicitly set
 
+	// Coordinator defaults
+	if cfg.Coordinator.DataDir == "" {
+		cfg.Coordinator.DataDir = "/var/lib/tunnelmesh"
+	}
+	if cfg.Coordinator.HeartbeatInterval == "" {
+		cfg.Coordinator.HeartbeatInterval = "10s"
+	}
+	if cfg.Coordinator.UserExpirationDays == 0 {
+		cfg.Coordinator.UserExpirationDays = 270
+	}
+	if cfg.Coordinator.MemberlistBindAddr == "" {
+		cfg.Coordinator.MemberlistBindAddr = ":7946"
+	}
+	if len(cfg.Coordinator.ServicePorts) == 0 {
+		cfg.Coordinator.ServicePorts = []uint16{9443}
+	}
+	if !cfg.Coordinator.Admin.Enabled {
+		cfg.Coordinator.Admin.Enabled = true
+	}
+	if cfg.Coordinator.Admin.Port == 0 {
+		cfg.Coordinator.Admin.Port = 443
+	}
+	if !cfg.Coordinator.Relay.Enabled {
+		cfg.Coordinator.Relay.Enabled = true
+	}
+	if cfg.Coordinator.Relay.PairTimeout == "" {
+		cfg.Coordinator.Relay.PairTimeout = "90s"
+	}
+	// Expand home directory in coordinator data dir
+	if strings.HasPrefix(cfg.Coordinator.DataDir, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			cfg.Coordinator.DataDir = filepath.Join(homeDir, cfg.Coordinator.DataDir[2:])
+		}
+	}
+	// S3 defaults for coordinator
+	if cfg.Coordinator.S3.Enabled {
+		if cfg.Coordinator.S3.DataDir == "" {
+			cfg.Coordinator.S3.DataDir = filepath.Join(cfg.Coordinator.DataDir, "s3")
+		}
+		if cfg.Coordinator.S3.Port == 0 {
+			cfg.Coordinator.S3.Port = 9000
+		}
+		if cfg.Coordinator.S3.ObjectExpiryDays == 0 {
+			cfg.Coordinator.S3.ObjectExpiryDays = 9125
+		}
+		if cfg.Coordinator.S3.ShareExpiryDays == 0 {
+			cfg.Coordinator.S3.ShareExpiryDays = 365
+		}
+		if cfg.Coordinator.S3.TombstoneRetentionDays == 0 {
+			cfg.Coordinator.S3.TombstoneRetentionDays = 90
+		}
+		if cfg.Coordinator.S3.VersionRetentionDays == 0 {
+			cfg.Coordinator.S3.VersionRetentionDays = 30
+		}
+		if cfg.Coordinator.S3.MaxVersionsPerObject == 0 {
+			cfg.Coordinator.S3.MaxVersionsPerObject = 100
+		}
+		if cfg.Coordinator.S3.VersionRetention.RecentDays == 0 {
+			cfg.Coordinator.S3.VersionRetention.RecentDays = 7
+		}
+		if cfg.Coordinator.S3.VersionRetention.WeeklyWeeks == 0 {
+			cfg.Coordinator.S3.VersionRetention.WeeklyWeeks = 4
+		}
+		if cfg.Coordinator.S3.VersionRetention.MonthlyMonths == 0 {
+			cfg.Coordinator.S3.VersionRetention.MonthlyMonths = 6
+		}
+	}
+
 	return cfg, nil
 }
 
-// Validate checks if the server configuration is valid.
-func (c *ServerConfig) Validate() error {
-	if c.Listen == "" {
-		return fmt.Errorf("listen address is required")
-	}
-	if c.AuthToken == "" {
-		return fmt.Errorf("auth_token is required")
-	}
-	// Validate filter config
-	if err := c.Filter.Validate(); err != nil {
-		return err
-	}
-	// Validate JoinMesh if configured
-	if c.JoinMesh != nil {
-		if c.JoinMesh.Name == "" {
-			return fmt.Errorf("join_mesh.name is required")
-		}
-		if c.JoinMesh.SSHPort <= 0 || c.JoinMesh.SSHPort > 65535 {
-			return fmt.Errorf("join_mesh.ssh_port must be between 1 and 65535")
-		}
-	}
-	return nil
-}
 
 // IsMetricsEnabled returns whether Prometheus metrics collection is enabled.
 // Returns true by default (when MetricsEnabled is nil or explicitly true).
@@ -464,8 +390,8 @@ func (c *PeerConfig) Validate() error {
 	if c.Name == "" {
 		return fmt.Errorf("name is required")
 	}
-	if c.Server == "" {
-		return fmt.Errorf("server is required")
+	if len(c.Servers) == 0 {
+		return fmt.Errorf("servers is required")
 	}
 	if c.SSHPort <= 0 || c.SSHPort > 65535 {
 		return fmt.Errorf("ssh_port must be between 1 and 65535")
@@ -486,6 +412,15 @@ func (c *PeerConfig) Validate() error {
 	// Validate filter config
 	if err := c.Filter.Validate(); err != nil {
 		return err
+	}
+	// Validate coordinator config if enabled
+	if c.Coordinator.Enabled {
+		if c.Coordinator.Listen == "" {
+			return fmt.Errorf("coordinator.listen is required when coordinator is enabled")
+		}
+		if err := c.Coordinator.Filter.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

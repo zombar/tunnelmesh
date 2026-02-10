@@ -154,7 +154,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		TotalHeartbeats:  s.serverStats.totalHeartbeats,
 		MeshCIDR:         mesh.CIDR,
 		DomainSuffix:     mesh.DomainSuffix,
-		LocationsEnabled: s.cfg.Locations,
+		LocationsEnabled: s.cfg.Coordinator.Locations,
 		Peers:            make([]AdminPeerInfo, 0, len(s.peers)),
 	}
 
@@ -209,7 +209,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Only include location if the feature is enabled
-		if s.cfg.Locations {
+		if s.cfg.Coordinator.Locations {
 			peerInfo.Location = info.peer.Location
 		}
 
@@ -266,13 +266,7 @@ func (s *Server) handleAdminOverview(w http.ResponseWriter, r *http.Request) {
 // setupAdminRoutes registers the admin API routes and static file server.
 // Note: Admin routes have no authentication - access is controlled by network binding.
 // Admin is only accessible from inside the mesh via HTTPS on mesh IP (https://this.tunnelmesh/)
-// Requires join_mesh to be configured.
 func (s *Server) setupAdminRoutes() {
-	if s.cfg.JoinMesh == nil {
-		// Admin panel requires join_mesh - coordinator must be a mesh peer
-		return
-	}
-
 	// Serve embedded static files
 	staticFS, _ := fs.Sub(web.Assets, ".")
 	fileServer := http.FileServer(http.FS(staticFS))

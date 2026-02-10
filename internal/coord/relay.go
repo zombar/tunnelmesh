@@ -964,7 +964,7 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 			peer.lastStatsTime = now
 			peer.heartbeatCount++
 			// Update location from heartbeat (keeps map positions after coordinator restart)
-			if s.cfg.Locations && stats.Location != nil && stats.Location.IsSet() {
+			if s.cfg.Coordinator.Locations && stats.Location != nil && stats.Location.IsSet() {
 				peer.peer.Location = stats.Location
 			}
 			// Store reported latency metrics (only update if peer reported a value)
@@ -1209,8 +1209,8 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 
 	// Wait for peer with timeout
 	pairTimeout := 30 * time.Second
-	if s.cfg.Relay.PairTimeout != "" {
-		if d, err := time.ParseDuration(s.cfg.Relay.PairTimeout); err == nil {
+	if s.cfg.Coordinator.Relay.PairTimeout != "" {
+		if d, err := time.ParseDuration(s.cfg.Coordinator.Relay.PairTimeout); err == nil {
 			pairTimeout = d
 		}
 	}

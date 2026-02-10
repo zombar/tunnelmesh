@@ -104,8 +104,16 @@ func TestSSEHub_BroadcastFullBuffer(t *testing.T) {
 }
 
 func TestHandleSSE(t *testing.T) {
-	cfg := &config.ServerConfig{
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+		},
 	}
 
 	srv, err := NewServer(cfg)
@@ -159,8 +167,16 @@ func TestHandleSSE(t *testing.T) {
 }
 
 func TestNotifyHeartbeat_NoClients(t *testing.T) {
-	cfg := &config.ServerConfig{
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+		},
 	}
 
 	srv, err := NewServer(cfg)
@@ -181,8 +197,16 @@ func TestSSEEventFormat(t *testing.T) {
 	hub.register(client)
 
 	// Create a server just for notification
-	cfg := &config.ServerConfig{
+	cfg := &config.PeerConfig{
+		Name:      "test-coord",
+		Servers:   []string{"http://localhost:8080"},
 		AuthToken: "test-token",
+		TUN: config.TUNConfig{
+			MTU: 1400,
+		},
+		Coordinator: config.CoordinatorConfig{
+			Enabled: true,
+		},
 	}
 	srv, _ := NewServer(cfg)
 	srv.sseHub = hub
