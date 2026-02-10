@@ -782,6 +782,11 @@
             state.canonicalMarkdown = displayContent;
             state.wysiwygSnapshot = '';
 
+            // Initialize source cursor position to end of file
+            // (so first switch from WYSIWYG to source doesn't reset to position 0)
+            const contentLength = displayContent.length;
+            state.sourceCursorPosition = { start: contentLength, end: contentLength };
+
             // Auto-switch to WYSIWYG mode for markdown files
             if (ext === 'md') {
                 state.editorMode = 'wysiwyg';
@@ -890,15 +895,82 @@
         }
     }
 
-    function closeFile() {
+    async function closeFile() {
         if (state.isDirty) {
-            if (!confirm('You have unsaved changes. Discard them?')) {
-                return;
+            const fileName = state.currentFile.key.split('/').pop();
+            const choice = await showSaveDialog(fileName);
+
+            if (choice === 'cancel') {
+                return; // Stay in file
             }
+
+            if (choice === 'save') {
+                await saveFile(); // Save and close
+            }
+            // If choice === 'discard', just close without saving
         }
         state.currentFile = null;
         state.isDirty = false;
         renderFileListing();
+    }
+
+    // Show a three-button save dialog
+    function showSaveDialog(fileName) {
+        return new Promise((resolve) => {
+            const message = `Do you want to save changes to "${fileName}"?`;
+
+            // Create modal elements
+            const overlay = document.createElement('div');
+            overlay.style.cssText = `
+                position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0,0,0,0.5); display: flex;
+                align-items: center; justify-content: center; z-index: 10000;
+            `;
+
+            const dialog = document.createElement('div');
+            dialog.style.cssText = `
+                background: var(--bg-secondary, #1e1e1e); padding: 20px;
+                border-radius: 8px; min-width: 400px; max-width: 500px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            `;
+
+            const messageEl = document.createElement('div');
+            messageEl.textContent = message;
+            messageEl.style.cssText = 'margin-bottom: 20px; font-size: 14px;';
+
+            const buttonContainer = document.createElement('div');
+            buttonContainer.style.cssText = 'display: flex; gap: 10px; justify-content: flex-end;';
+
+            const createButton = (text, value, primary = false) => {
+                const btn = document.createElement('button');
+                btn.textContent = text;
+                btn.className = primary ? 'btn-primary' : 'btn-secondary';
+                btn.onclick = () => {
+                    document.body.removeChild(overlay);
+                    resolve(value);
+                };
+                return btn;
+            };
+
+            buttonContainer.appendChild(createButton("Don't Save", 'discard'));
+            buttonContainer.appendChild(createButton('Cancel', 'cancel'));
+            buttonContainer.appendChild(createButton('Save', 'save', true));
+
+            dialog.appendChild(messageEl);
+            dialog.appendChild(buttonContainer);
+            overlay.appendChild(dialog);
+            document.body.appendChild(overlay);
+
+            // ESC key cancels
+            const escHandler = (e) => {
+                if (e.key === 'Escape') {
+                    document.body.removeChild(overlay);
+                    document.removeEventListener('keydown', escHandler);
+                    resolve('cancel');
+                }
+            };
+            document.addEventListener('keydown', escHandler);
+        });
     }
 
     function updateLineNumbers() {
@@ -1187,9 +1259,17 @@
 
     async function navigateTo(bucket, path) {
         if (state.isDirty) {
-            if (!confirm('You have unsaved changes. Discard them?')) {
-                return;
+            const fileName = state.currentFile.key.split('/').pop();
+            const choice = await showSaveDialog(fileName);
+
+            if (choice === 'cancel') {
+                return; // Stay in current file
             }
+
+            if (choice === 'save') {
+                await saveFile(); // Save before navigating
+            }
+            // If choice === 'discard', navigate without saving
         }
 
         state.currentBucket = bucket;
@@ -1801,9 +1881,134 @@
         });
     }
 
+    function convertMarkdownPatternsInNode(node) {
+        // Only process text nodes
+        if (node.nodeType !== Node.TEXT_NODE) return false;
+
+        const text = node.textContent;
+        let modified = false;
+
+        // Detect markdown patterns and convert to HTML
+        // Pattern priority: code (highest), bold, italic, strikethrough
+        const patterns = [
+            // Inline code: `code`
+            { regex: /`([^`]+)`/g, tag: 'code', format: (match, content) => `<code>${content}</code>` },
+            // Bold: **text** or __text__
+            {
+                regex: /(\*\*|__)([^\*_]+)\1/g,
+                tag: 'strong',
+                format: (match, marker, content) => `<strong>${content}</strong>`,
+            },
+            // Italic: *text* or _text_ (but not ** or __)
+            {
+                regex: /(?<!\*)(\*|_)(?!\1)([^\*_]+)\1(?!\1)/g,
+                tag: 'em',
+                format: (match, marker, content) => `<em>${content}</em>`,
+            },
+            // Strikethrough: ~~text~~
+            { regex: /~~([^~]+)~~/g, tag: 's', format: (match, content) => `<s>${content}</s>` },
+        ];
+
+        for (const pattern of patterns) {
+            if (pattern.regex.test(text)) {
+                const newHtml = text.replace(pattern.regex, pattern.format);
+                if (newHtml !== text) {
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = newHtml;
+
+                    // Replace the text node with the formatted HTML
+                    const parent = node.parentNode;
+                    if (parent) {
+                        while (tempDiv.firstChild) {
+                            parent.insertBefore(tempDiv.firstChild, node);
+                        }
+                        parent.removeChild(node);
+                        modified = true;
+                        break; // Only apply first matching pattern
+                    }
+                }
+            }
+        }
+
+        return modified;
+    }
+
+    function handleWysiwygInput(e) {
+        const wysiwyg = document.getElementById('s3-wysiwyg');
+        if (!wysiwyg || state.editorMode !== 'wysiwyg') return;
+
+        // Only auto-convert on space or Enter
+        if (e.inputType !== 'insertText' && e.inputType !== 'insertParagraph') return;
+        if (e.data !== ' ' && e.data !== null) return; // null for Enter
+
+        // Get the current selection
+        const selection = window.getSelection();
+        if (!selection.rangeCount) return;
+
+        const range = selection.getRangeAt(0);
+        const textNode = range.startContainer;
+
+        // Only process if we're in a text node
+        if (textNode.nodeType !== Node.TEXT_NODE) return;
+
+        // Save cursor position
+        const cursorOffset = range.startOffset;
+
+        // Pause observer during conversion
+        state.mutationObserverPaused = true;
+
+        // Try to convert markdown patterns
+        const modified = convertMarkdownPatternsInNode(textNode);
+
+        if (modified) {
+            // Restore cursor position after conversion
+            try {
+                const newRange = document.createRange();
+                const walker = document.createTreeWalker(
+                    wysiwyg,
+                    NodeFilter.SHOW_TEXT,
+                    null,
+                );
+
+                let currentOffset = 0;
+                let targetNode = null;
+                let targetOffset = 0;
+
+                // Find the text node at the cursor position
+                while (walker.nextNode()) {
+                    const node = walker.currentNode;
+                    const nodeLength = node.textContent.length;
+
+                    if (currentOffset + nodeLength >= cursorOffset) {
+                        targetNode = node;
+                        targetOffset = cursorOffset - currentOffset;
+                        break;
+                    }
+
+                    currentOffset += nodeLength;
+                }
+
+                if (targetNode) {
+                    newRange.setStart(targetNode, Math.min(targetOffset, targetNode.textContent.length));
+                    newRange.collapse(true);
+                    selection.removeAllRanges();
+                    selection.addRange(newRange);
+                }
+            } catch (e) {
+                console.debug('Could not restore cursor after markdown conversion:', e);
+            }
+        }
+
+        // Resume observer
+        state.mutationObserverPaused = false;
+    }
+
     function initWysiwygEditor() {
         const wysiwyg = document.getElementById('s3-wysiwyg');
         if (!wysiwyg || typeof MutationObserver === 'undefined') return;
+
+        // Add input listener for markdown auto-conversion
+        wysiwyg.addEventListener('beforeinput', handleWysiwygInput);
 
         const observer = new MutationObserver(() => {
             // Skip if observer is paused (programmatic changes)
