@@ -37,8 +37,8 @@
         isFullscreen: false,
         // Quota info
         quota: null,
-        // View mode
-        viewMode: 'list', // 'list' or 'icon'
+        // View mode (defaults to 'icon' - user can toggle to 'list' view manually)
+        viewMode: 'icon', // 'list' or 'icon'
     };
 
     // Text file extensions

@@ -606,7 +606,9 @@ async function fetchDnsRecords() {
         const data = await resp.json();
 
         // Sort records by hostname
-        state.currentDnsRecords = (data.records || []).sort((a, b) => a.hostname.localeCompare(b.hostname));
+        state.currentDnsRecords = (data.records || []).sort((a, b) =>
+            a.hostname.localeCompare(b.hostname),
+        );
 
         renderDnsTable();
     } catch (err) {
@@ -2714,6 +2716,7 @@ function switchTab(tabName) {
             TM.refresh.triggerMultiple(PANELS_APP_TAB, { cascade: false });
         }
     }
+
 }
 window.switchTab = switchTab;
 
