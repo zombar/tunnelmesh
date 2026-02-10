@@ -1846,6 +1846,7 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 
 	result := make([]S3ObjectInfo, 0)
 	prefixSet := make(map[string]bool)
+	prefixSizes := make(map[string]int64) // Track folder sizes for batch calculation
 
 	for _, obj := range objects {
 		// Handle delimiter (folder grouping)
@@ -1856,10 +1857,8 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 				commonPrefix := prefix + keyAfterPrefix[:idx+1]
 				if !prefixSet[commonPrefix] {
 					prefixSet[commonPrefix] = true
-					result = append(result, S3ObjectInfo{
-						Key:      commonPrefix,
-						IsPrefix: true,
-					})
+					// Size will be calculated below
+					prefixSizes[commonPrefix] = 0
 				}
 				continue
 			}
@@ -1879,6 +1878,22 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 			info.TombstonedAt = obj.TombstonedAt.Format(time.RFC3339)
 		}
 		result = append(result, info)
+	}
+
+	// Calculate sizes for all folders (prefixes) found
+	for commonPrefix := range prefixSizes {
+		size, err := s.s3Store.CalculatePrefixSize(bucket, commonPrefix)
+		if err != nil {
+			size = 0 // Gracefully handle errors - show 0 size rather than failing
+		}
+		prefixSizes[commonPrefix] = size
+
+		// Add folder to result with calculated size
+		result = append(result, S3ObjectInfo{
+			Key:      commonPrefix,
+			Size:     size,
+			IsPrefix: true,
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")

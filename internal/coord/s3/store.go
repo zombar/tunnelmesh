@@ -504,6 +504,42 @@ func (s *Store) CalculateBucketSize(bucketName string) (int64, error) {
 	return bucketMeta.SizeBytes, nil
 }
 
+// CalculatePrefixSize calculates the total size of all objects under a prefix (including tombstoned).
+// This is used for displaying folder sizes in the S3 explorer.
+// Returns the total size in bytes.
+func (s *Store) CalculatePrefixSize(bucketName, prefix string) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Verify bucket exists
+	if _, err := s.getBucketMeta(bucketName); err != nil {
+		return 0, err
+	}
+
+	var totalSize int64
+
+	// Iterate through all objects with the given prefix
+	marker := ""
+	for {
+		objects, isTruncated, nextMarker, err := s.ListObjects(bucketName, prefix, marker, 1000)
+		if err != nil {
+			return 0, fmt.Errorf("list objects: %w", err)
+		}
+
+		// Sum sizes of ALL objects (including tombstoned - they still consume disk space)
+		for _, obj := range objects {
+			totalSize += obj.Size
+		}
+
+		if !isTruncated {
+			break
+		}
+		marker = nextMarker
+	}
+
+	return totalSize, nil
+}
+
 // recalculateBucketSize recalculates bucket size from all objects (including tombstoned).
 // This is used for migration/repair when SizeBytes is not yet populated.
 // Must be called with write lock held.
