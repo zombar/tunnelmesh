@@ -591,33 +591,49 @@
         const iconGrid = document.getElementById('s3-icons');
         if (!iconGrid) return;
 
-        iconGrid.innerHTML = items
-            .map((item) => {
-                const iconType = getItemIcon(item);
-                const displayName = getItemDisplayName(item);
-                const iconSVG = getIconSVG(iconType);
-                const metaHint = buildItemMetadata(item);
+        try {
+            iconGrid.innerHTML = items
+                .map((item) => {
+                    // Defensive checks for malformed data
+                    if (!item || typeof item !== 'object') {
+                        console.warn('Skipping malformed item in icon grid:', item);
+                        return '';
+                    }
 
-                const isTombstoned = Boolean(item.tombstonedAt);
-                const itemId = item.key || item.name;
-                const isSelected = state.selectedItems.has(itemId);
-                const onclick = buildOnclickHandler(item);
+                    const iconType = getItemIcon(item);
+                    const displayName = getItemDisplayName(item);
+                    const iconSVG = getIconSVG(iconType);
+                    const metaHint = buildItemMetadata(item);
 
-                // Checkbox (not for buckets)
-                const checkbox = item.isBucket
-                    ? ''
-                    : `<input type="checkbox" class="s3-icon-checkbox"
+                    const isTombstoned = Boolean(item.tombstonedAt);
+                    const itemId = item.key || item.name;
+                    const isSelected = state.selectedItems.has(itemId);
+
+                    // Store navigation data in data attributes (safe from XSS)
+                    const dataAttrs = [
+                        `data-item-id="${escapeHtml(itemId)}"`,
+                        `data-is-bucket="${item.isBucket ? 'true' : 'false'}"`,
+                        `data-is-folder="${item.isFolder ? 'true' : 'false'}"`,
+                        item.isBucket ? `data-bucket-name="${escapeHtml(item.name)}"` : '',
+                        item.key ? `data-item-key="${escapeHtml(item.key)}"` : '',
+                    ]
+                        .filter(Boolean)
+                        .join(' ');
+
+                    // Checkbox (not for buckets)
+                    const checkbox = item.isBucket
+                        ? ''
+                        : `<input type="checkbox" class="s3-icon-checkbox"
                         data-item-id="${escapeHtml(itemId)}"
                         ${isSelected ? 'checked' : ''}
-                        ${state.writable && !isTombstoned ? '' : 'disabled'}
-                        onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeJsString(itemId)}')" />`;
+                        ${state.writable && !isTombstoned ? '' : 'disabled'} />`;
 
-                // Tombstone badge
-                const tombstoneBadge = isTombstoned ? '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
+                    // Tombstone badge
+                    const tombstoneBadge = isTombstoned ? '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
 
-                return `
+                    return `
                 <div class="s3-icon-item ${isSelected ? 's3-selected' : ''} ${isTombstoned ? 's3-tombstoned' : ''}"
-                     onclick="${onclick}">
+                     ${dataAttrs}>
                     ${checkbox}
                     ${tombstoneBadge}
                     ${iconSVG}
@@ -625,8 +641,14 @@
                     ${metaHint ? `<div class="s3-icon-meta">${metaHint}</div>` : ''}
                 </div>
             `;
-            })
-            .join('');
+                })
+                .join('');
+        } catch (err) {
+            console.error('Error rendering icon grid:', err);
+            if (iconGrid) {
+                iconGrid.innerHTML = '<div class="empty-state">Error rendering files. Please refresh.</div>';
+            }
+        }
     }
 
     function showMore() {
@@ -1376,8 +1398,14 @@
     // =========================================================================
 
     function detectActiveTab() {
-        const activeTabButton = document.querySelector('#main-tabs .tab.active');
-        if (activeTabButton) {
+        // Guard against race condition: ensure tabs are loaded before detection
+        const tabsContainer = document.getElementById('main-tabs');
+        if (!tabsContainer) {
+            return 'data'; // Fallback if tabs not rendered yet
+        }
+
+        const activeTabButton = tabsContainer.querySelector('.tab.active');
+        if (activeTabButton?.dataset.tab) {
             return activeTabButton.dataset.tab; // 'app', 'data', or 'mesh'
         }
         return 'data'; // Fallback
@@ -1395,6 +1423,44 @@
         }
     }
 
+    function initIconGridEvents() {
+        const iconGrid = document.getElementById('s3-icons');
+        if (!iconGrid) return;
+
+        // Use event delegation for icon grid clicks (prevents XSS via onclick)
+        iconGrid.addEventListener('click', (e) => {
+            // Find the icon item (in case user clicked on child element)
+            const iconItem = e.target.closest('.s3-icon-item');
+            if (!iconItem) return;
+
+            // Ignore if clicking on checkbox
+            if (e.target.classList.contains('s3-icon-checkbox')) return;
+
+            // Get item data from data attributes
+            const isBucket = iconItem.dataset.isBucket === 'true';
+            const isFolder = iconItem.dataset.isFolder === 'true';
+            const bucketName = iconItem.dataset.bucketName;
+            const itemKey = iconItem.dataset.itemKey;
+
+            // Navigate based on item type
+            if (isBucket) {
+                navigateTo(bucketName, '');
+            } else if (isFolder) {
+                navigateTo(state.currentBucket, itemKey);
+            } else {
+                openFile(state.currentBucket, itemKey);
+            }
+        });
+
+        // Handle checkbox clicks with event delegation
+        iconGrid.addEventListener('change', (e) => {
+            if (e.target.classList.contains('s3-icon-checkbox')) {
+                const itemId = e.target.dataset.itemId;
+                toggleSelection(itemId);
+            }
+        });
+    }
+
     async function init() {
         const editor = document.getElementById('s3-editor');
         if (editor) {
@@ -1406,6 +1472,7 @@
         updateViewModeForActiveTab();
         initDragDrop();
         initKeyboardShortcuts();
+        initIconGridEvents();
 
         await renderFileListing();
     }
@@ -1442,5 +1509,15 @@
         showVersionHistory,
         restoreVersionAndRefresh,
         downloadVersion,
+        // Test-only exports (prefixed with _test)
+        _test: {
+            getItemIcon,
+            getItemDisplayName,
+            getIconSVG,
+            buildItemMetadata,
+            buildOnclickHandler,
+            detectActiveTab,
+            updateViewModeForActiveTab,
+        },
     };
 });
