@@ -766,8 +766,8 @@
 
             state.originalContent = displayContent;
 
-            // Auto-switch to WYSIWYG mode for markdown files
-            if (ext === 'md') {
+            // Auto-switch to WYSIWYG mode for markdown files (unless empty)
+            if (ext === 'md' && displayContent.trim().length > 0) {
                 state.editorMode = 'wysiwyg';
                 // Enable autosave for markdown files (unless read-only)
                 if (!isReadOnly) {
@@ -775,6 +775,10 @@
                 }
             } else {
                 state.editorMode = 'source';
+                // Enable autosave for non-empty markdown files in source mode too
+                if (ext === 'md' && !isReadOnly) {
+                    state.autosave = true;
+                }
             }
 
             if (viewer) viewer.style.display = 'block';
