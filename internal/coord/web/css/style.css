@@ -2921,7 +2921,7 @@ a.logs-container {
 .tree-count {
     color: var(--color-text-secondary);
     font-style: italic;
-    font-size: 0.8125rem;
+    font-size: 0.6875rem;
 }
 
 .tree-children {
