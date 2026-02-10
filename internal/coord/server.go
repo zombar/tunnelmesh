@@ -1375,6 +1375,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.peersMu.Lock()
 	defer s.peersMu.Unlock()
 
+	// Load persisted peers once at the start to avoid race conditions and improve performance
+	// Previously: LoadPeers() was called 3 times (lines 1393, 1420, and during group checks)
+	// This cache prevents race conditions where two peers register simultaneously
+	var persistedPeers []*auth.Peer
+	if s.s3SystemStore != nil {
+		persistedPeers, _ = s.s3SystemStore.LoadPeers()
+	}
+
 	// Check for hostname collision with different public key
 	// Important: Check both active peers AND persisted peers to prevent admin spoofing
 	// An attacker could register with a privileged name when the legitimate peer is offline
@@ -1389,18 +1397,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Also check persisted peers in S3 (critical for security)
-	if !needsRename && s.s3SystemStore != nil {
-		if peers, err := s.s3SystemStore.LoadPeers(); err == nil {
-			for _, peer := range peers {
-				if peer.Name == req.Name && peer.PublicKey != req.PublicKey {
-					needsRename = true
-					log.Warn().
-						Str("name", req.Name).
-						Str("existing_peer_id", peer.ID).
-						Str("new_public_key", req.PublicKey).
-						Msg("peer name already registered with different key in S3")
-					break
-				}
+	if !needsRename && persistedPeers != nil {
+		for _, peer := range persistedPeers {
+			if peer.Name == req.Name && peer.PublicKey != req.PublicKey {
+				needsRename = true
+				log.Warn().
+					Str("name", req.Name).
+					Str("existing_peer_id", peer.ID).
+					Str("new_public_key", req.PublicKey).
+					Msg("peer name already registered with different key in S3")
+				break
 			}
 		}
 	}
@@ -1416,13 +1422,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				activeTaken = true
 			}
 			persistedTaken := false
-			if !activeTaken && s.s3SystemStore != nil {
-				if peers, err := s.s3SystemStore.LoadPeers(); err == nil {
-					for _, peer := range peers {
-						if peer.Name == candidateName {
-							persistedTaken = true
-							break
-						}
+			if !activeTaken && persistedPeers != nil {
+				for _, peer := range persistedPeers {
+					if peer.Name == candidateName {
+						persistedTaken = true
+						break
 					}
 				}
 			}
