@@ -217,9 +217,9 @@ func (g *GeolocationConfig) IsSet() bool {
 }
 
 // LoadServerConfig loads server configuration from a YAML file.
-// nolint:gocyclo // Server config loading handles many optional fields
-
 // LoadPeerConfig loads peer configuration from a YAML file.
+//
+//nolint:gocyclo // Config loading requires handling many optional fields with defaults
 func LoadPeerConfig(path string) (*PeerConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

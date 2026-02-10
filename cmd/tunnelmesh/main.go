@@ -658,6 +658,7 @@ func discoverAndRegisterWithCoordinator(
 	return nil, nil, fmt.Errorf("failed to register with any coordinator (tried %d): %w", len(coordinators), lastErr)
 }
 
+//nolint:gocyclo // Join function coordinates multiple complex subsystems (peer, coordinator, TUN, DNS, etc)
 func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, onJoined OnJoinedFunc) error {
 	// Always use system hostname as node name
 	cfg.Name, _ = os.Hostname()
