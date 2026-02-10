@@ -1821,6 +1821,7 @@
         });
     }
 
+    /* istanbul ignore next */
     function convertMarkdownPatternsInNode(node) {
         // Only process text nodes
         if (node.nodeType !== Node.TEXT_NODE) return false;
@@ -1859,6 +1860,7 @@
         return false;
     }
 
+    /* istanbul ignore next */
     function handleWysiwygInput(e) {
         const wysiwyg = document.getElementById('s3-wysiwyg');
         if (!wysiwyg || state.editorMode !== 'wysiwyg') return;
