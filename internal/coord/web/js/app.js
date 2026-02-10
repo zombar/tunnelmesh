@@ -2672,9 +2672,35 @@ function initTabs() {
             switchTab(tabName);
         });
     });
+
+    // Restore tab from URL hash on initial load
+    const hash = window.location.hash.slice(1);
+    const params = new URLSearchParams(hash);
+    const tabName = params.get('tab');
+
+    if (tabName && ['app', 'data', 'mesh'].includes(tabName)) {
+        switchTab(tabName, { skipHistory: true });
+    }
 }
 
-function switchTab(tabName) {
+/**
+ * Update browser history with tab change
+ */
+function updateTabHistory(tabName) {
+    // Parse current hash to preserve S3 state
+    const hash = window.location.hash.slice(1);
+    const params = new URLSearchParams(hash);
+
+    // Update tab parameter
+    params.set('tab', tabName);
+
+    const newHash = params.toString();
+    const url = newHash ? `#${newHash}` : '#';
+
+    window.history.pushState(null, '', url);
+}
+
+function switchTab(tabName, options = {}) {
     // Update tab buttons
     document.querySelectorAll('#main-tabs .tab').forEach((t) => {
         t.classList.toggle('active', t.dataset.tab === tabName);
@@ -2719,6 +2745,11 @@ function switchTab(tabName) {
         if (TM.refresh) {
             TM.refresh.triggerMultiple(PANELS_APP_TAB, { cascade: false });
         }
+    }
+
+    // Update browser history (unless restoring from history)
+    if (!options.skipHistory) {
+        updateTabHistory(tabName);
     }
 }
 window.switchTab = switchTab;

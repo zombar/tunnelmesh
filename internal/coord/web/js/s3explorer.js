@@ -1236,7 +1236,7 @@
         return nonPrintable / sample.length > 0.1; // >10% non-printable = binary
     }
 
-    async function openFile(bucket, key) {
+    async function openFile(bucket, key, options = {}) {
         const browser = document.getElementById('s3-browser');
         const viewer = document.getElementById('s3-viewer');
         const preview = document.getElementById('s3-preview');
@@ -1455,6 +1455,11 @@
                 editor.focus();
                 editor.setSelectionRange(0, 0);
             }
+
+            // Update browser history (unless restoring from history)
+            if (!options.skipHistory) {
+                updateBrowserHistory();
+            }
         } catch (err) {
             showToast(`Failed to load file: ${err.message}`, 'error');
             closeFile();
@@ -1474,6 +1479,9 @@
         updateCloseButton();
         updateViewToggleButton();
         renderFileListing();
+
+        // Update browser history to reflect closed file
+        updateBrowserHistory();
     }
 
     /**
@@ -1791,10 +1799,109 @@
     }
 
     // =========================================================================
+    // Browser History Management
+    // =========================================================================
+
+    /**
+     * Parse URL hash parameters
+     * Example: #tab=data&s3_bucket=mybucket&s3_path=folder/
+     */
+    function parseHashParams() {
+        const hash = window.location.hash.slice(1); // Remove '#'
+        const params = {};
+        if (!hash) return params;
+
+        hash.split('&').forEach((param) => {
+            const [key, value] = param.split('=');
+            if (key && value !== undefined) {
+                params[key] = decodeURIComponent(value);
+            }
+        });
+        return params;
+    }
+
+    /**
+     * Build URL hash from current state
+     */
+    function buildHashFromState(tabName) {
+        const params = new URLSearchParams();
+
+        // Always include tab
+        if (tabName) {
+            params.set('tab', tabName);
+        }
+
+        // Include S3 state if navigating in S3
+        if (state.currentFile) {
+            // Viewing a file
+            params.set('s3_bucket', state.currentFile.bucket);
+            params.set('s3_file', state.currentFile.key);
+        } else if (state.currentBucket) {
+            // Browsing a bucket/folder
+            params.set('s3_bucket', state.currentBucket);
+            if (state.currentPath) {
+                params.set('s3_path', state.currentPath);
+            }
+        }
+
+        return params.toString();
+    }
+
+    /**
+     * Update browser history with current S3 state
+     * @param {boolean} replace - Use replaceState instead of pushState
+     */
+    function updateBrowserHistory(replace = false) {
+        // Get current tab from DOM
+        const activeTab = document.querySelector('#main-tabs .tab.active');
+        const tabName = activeTab ? activeTab.dataset.tab : 'app';
+
+        const hash = buildHashFromState(tabName);
+        const url = hash ? `#${hash}` : '#';
+
+        if (replace) {
+            window.history.replaceState(null, '', url);
+        } else {
+            window.history.pushState(null, '', url);
+        }
+    }
+
+    /**
+     * Restore S3 state from URL hash parameters
+     */
+    async function restoreFromHistory() {
+        const params = parseHashParams();
+
+        // Restore tab first (if present)
+        if (params.tab && typeof window.switchTab === 'function') {
+            window.switchTab(params.tab, { skipHistory: true });
+        }
+
+        // Restore S3 state
+        if (params.s3_bucket) {
+            if (params.s3_file) {
+                // Restore file view
+                await openFile(params.s3_bucket, params.s3_file, { skipHistory: true });
+            } else {
+                // Restore bucket/folder view
+                const path = params.s3_path || '';
+                await navigateTo(params.s3_bucket, path, { skipHistory: true });
+            }
+        }
+    }
+
+    /**
+     * Handle browser back/forward button
+     */
+    function handlePopState() {
+        restoreFromHistory();
+    }
+
+    // =========================================================================
     // Navigation
     // =========================================================================
 
-    async function navigateTo(bucket, path) {
+    async function navigateTo(bucket, path, options = {}) {
         if (state.isDirty) {
             const fileName = state.currentFile.key.split('/').pop();
             if (!confirm(`Save changes to "${fileName}" before navigating away?`)) {
@@ -1817,6 +1924,11 @@
 
         updateCloseButton();
         await renderFileListing();
+
+        // Update browser history (unless restoring from history)
+        if (!options.skipHistory) {
+            updateBrowserHistory();
+        }
     }
 
     // =========================================================================
@@ -2545,6 +2657,9 @@
         updateViewToggleButton();
         updateCloseButton();
 
+        // Listen for browser back/forward navigation
+        window.addEventListener('popstate', handlePopState);
+
         // Listen for panel data changes to refresh S3 explorer
         // (user might be browsing state metadata like filter rules, groups, etc.)
         if (typeof TM !== 'undefined' && TM.events) {
@@ -2568,7 +2683,13 @@
             window.addEventListener('resize', handleResize);
         }
 
-        await renderFileListing();
+        // Restore state from URL hash on initial load
+        const params = parseHashParams();
+        if (params.s3_bucket || params.s3_file) {
+            await restoreFromHistory();
+        } else {
+            await renderFileListing();
+        }
     }
 
     // =========================================================================
