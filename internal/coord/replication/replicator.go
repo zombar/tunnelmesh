@@ -1,0 +1,525 @@
+package replication
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/rs/zerolog"
+)
+
+// Transport defines the interface for sending replication messages.
+// This will be implemented by the mesh transport layer (UDP/SSH/Relay).
+type Transport interface {
+	// SendToCoordinator sends a message to another coordinator by mesh IP
+	SendToCoordinator(ctx context.Context, coordMeshIP string, data []byte) error
+
+	// RegisterHandler registers a handler for incoming replication messages
+	RegisterHandler(handler func(from string, data []byte) error)
+}
+
+// S3Store defines the interface for S3 storage operations.
+type S3Store interface {
+	// Get retrieves an object from S3
+	Get(ctx context.Context, bucket, key string) (data []byte, metadata map[string]string, err error)
+
+	// Put stores an object in S3
+	Put(ctx context.Context, bucket, key string, data []byte, contentType string, metadata map[string]string) error
+
+	// List lists all objects in a bucket
+	List(ctx context.Context, bucket string) ([]string, error)
+
+	// ListBuckets lists all buckets
+	ListBuckets(ctx context.Context) ([]string, error)
+}
+
+// Replicator manages replication of S3 data between coordinators.
+type Replicator struct {
+	nodeID    string
+	transport Transport
+	s3        S3Store
+	state     *State
+	logger    zerolog.Logger
+
+	// Peer coordinators
+	mu    sync.RWMutex
+	peers map[string]bool // map[coordMeshIP]true
+
+	// Pending ACKs
+	pendingMu sync.RWMutex
+	pending   map[string]*pendingReplication // map[messageID]*pendingReplication
+
+	// Metrics
+	metricsMu     sync.RWMutex
+	sentCount     uint64
+	receivedCount uint64
+	conflictCount uint64
+	errorCount    uint64
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+}
+
+// pendingReplication tracks a replication operation awaiting ACK.
+type pendingReplication struct {
+	bucket  string
+	key     string
+	sentAt  time.Time
+	ackChan chan *AckPayload
+	timeout *time.Timer
+}
+
+// Config contains configuration for the replicator.
+type Config struct {
+	NodeID        string
+	Transport     Transport
+	S3Store       S3Store
+	Logger        zerolog.Logger
+	AckTimeout    time.Duration // How long to wait for ACK before retrying
+	RetryInterval time.Duration // How long to wait before retrying failed replication
+}
+
+// NewReplicator creates a new replicator instance.
+func NewReplicator(config Config) *Replicator {
+	if config.AckTimeout == 0 {
+		config.AckTimeout = 10 * time.Second
+	}
+	if config.RetryInterval == 0 {
+		config.RetryInterval = 30 * time.Second
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	r := &Replicator{
+		nodeID:    config.NodeID,
+		transport: config.Transport,
+		s3:        config.S3Store,
+		state:     NewState(config.NodeID),
+		logger:    config.Logger.With().Str("component", "replicator").Logger(),
+		peers:     make(map[string]bool),
+		pending:   make(map[string]*pendingReplication),
+		ctx:       ctx,
+		cancel:    cancel,
+	}
+
+	// Register message handler
+	config.Transport.RegisterHandler(r.handleIncomingMessage)
+
+	return r
+}
+
+// Start starts the replicator background tasks.
+func (r *Replicator) Start() error {
+	r.logger.Info().Msg("Starting replicator")
+
+	// Start ACK timeout cleanup goroutine
+	r.wg.Add(1)
+	go r.ackTimeoutWorker()
+
+	return nil
+}
+
+// Stop stops the replicator and waits for background tasks to finish.
+func (r *Replicator) Stop() error {
+	r.logger.Info().Msg("Stopping replicator")
+	r.cancel()
+	r.wg.Wait()
+	return nil
+}
+
+// AddPeer adds a coordinator peer to replicate to.
+func (r *Replicator) AddPeer(coordMeshIP string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.peers[coordMeshIP] {
+		r.logger.Info().Str("peer", coordMeshIP).Msg("Added replication peer")
+		r.peers[coordMeshIP] = true
+	}
+}
+
+// RemovePeer removes a coordinator peer.
+func (r *Replicator) RemovePeer(coordMeshIP string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.peers[coordMeshIP] {
+		r.logger.Info().Str("peer", coordMeshIP).Msg("Removed replication peer")
+		delete(r.peers, coordMeshIP)
+	}
+}
+
+// GetPeers returns a copy of the current peer list.
+func (r *Replicator) GetPeers() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	peers := make([]string, 0, len(r.peers))
+	for peer := range r.peers {
+		peers = append(peers, peer)
+	}
+	return peers
+}
+
+// ReplicateOperation replicates an S3 operation to all coordinator peers.
+// This should be called after successfully writing to local S3.
+func (r *Replicator) ReplicateOperation(ctx context.Context, bucket, key string, data []byte, contentType string, metadata map[string]string) error {
+	// Update local version vector
+	vv := r.state.Update(bucket, key)
+
+	r.logger.Debug().
+		Str("bucket", bucket).
+		Str("key", key).
+		Str("version_vector", vv.String()).
+		Msg("Replicating operation")
+
+	// Get peers to replicate to
+	peers := r.GetPeers()
+	if len(peers) == 0 {
+		r.logger.Debug().Msg("No peers to replicate to")
+		return nil
+	}
+
+	// Create replicate payload
+	payload := ReplicatePayload{
+		Bucket:        bucket,
+		Key:           key,
+		Data:          data,
+		VersionVector: vv,
+		ContentType:   contentType,
+		Metadata:      metadata,
+	}
+
+	// Send to all peers (fire and forget for now, ACKs handled asynchronously)
+	var lastErr error
+	for _, peer := range peers {
+		if err := r.sendReplicateMessage(ctx, peer, payload); err != nil {
+			r.logger.Error().Err(err).Str("peer", peer).Msg("Failed to send replicate message")
+			lastErr = err
+			r.incrementErrorCount()
+		} else {
+			r.incrementSentCount()
+		}
+	}
+
+	return lastErr
+}
+
+// sendReplicateMessage sends a replication message to a peer.
+func (r *Replicator) sendReplicateMessage(ctx context.Context, peer string, payload ReplicatePayload) error {
+	msgID := uuid.New().String()
+
+	msg, err := NewReplicateMessage(msgID, r.nodeID, payload)
+	if err != nil {
+		return fmt.Errorf("create replicate message: %w", err)
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal message: %w", err)
+	}
+
+	// Track pending ACK
+	r.trackPendingACK(msgID, payload.Bucket, payload.Key)
+
+	// Send via transport
+	if err := r.transport.SendToCoordinator(ctx, peer, data); err != nil {
+		r.removePendingACK(msgID)
+		return fmt.Errorf("send to coordinator: %w", err)
+	}
+
+	return nil
+}
+
+// handleIncomingMessage processes incoming replication messages.
+func (r *Replicator) handleIncomingMessage(from string, data []byte) error {
+	msg, err := UnmarshalMessage(data)
+	if err != nil {
+		r.logger.Error().Err(err).Msg("Failed to unmarshal message")
+		r.incrementErrorCount()
+		return fmt.Errorf("unmarshal message: %w", err)
+	}
+
+	r.logger.Debug().
+		Str("type", string(msg.Type)).
+		Str("from", from).
+		Str("id", msg.ID).
+		Msg("Received replication message")
+
+	switch msg.Type {
+	case MessageTypeReplicate:
+		return r.handleReplicate(msg)
+	case MessageTypeAck:
+		return r.handleAck(msg)
+	case MessageTypeSyncRequest:
+		return r.handleSyncRequest(msg)
+	case MessageTypeSyncResponse:
+		return r.handleSyncResponse(msg)
+	default:
+		r.logger.Warn().Str("type", string(msg.Type)).Msg("Unknown message type")
+		return fmt.Errorf("unknown message type: %s", msg.Type)
+	}
+}
+
+// handleReplicate processes an incoming replication operation.
+func (r *Replicator) handleReplicate(msg *Message) error {
+	payload, err := msg.DecodeReplicatePayload()
+	if err != nil {
+		return fmt.Errorf("decode replicate payload: %w", err)
+	}
+
+	r.incrementReceivedCount()
+
+	r.logger.Debug().
+		Str("bucket", payload.Bucket).
+		Str("key", payload.Key).
+		Str("from", msg.From).
+		Str("version_vector", payload.VersionVector.String()).
+		Msg("Processing replicate message")
+
+	// Check for conflicts
+	rel, needsResolution := r.state.CheckConflict(payload.Bucket, payload.Key, payload.VersionVector)
+
+	if needsResolution {
+		r.incrementConflictCount()
+		r.logger.Warn().
+			Str("bucket", payload.Bucket).
+			Str("key", payload.Key).
+			Str("relationship", fmt.Sprintf("%d", rel)).
+			Msg("Conflict detected")
+
+		// Resolve conflict
+		localVV := r.state.Get(payload.Bucket, payload.Key)
+		winner := ResolveConflict(localVV, payload.VersionVector)
+
+		// If remote won, apply the update
+		if winner.Equal(payload.VersionVector) {
+			if err := r.applyReplication(payload); err != nil {
+				return r.sendAck(msg.ID, msg.From, false, err.Error(), localVV)
+			}
+		}
+		// If local won, just merge version vectors
+		mergedVV, _ := r.state.Merge(payload.Bucket, payload.Key, payload.VersionVector)
+		return r.sendAck(msg.ID, msg.From, true, "", mergedVV)
+	}
+
+	// No conflict - check if we should apply
+	if rel == VectorBefore || rel == VectorEqual {
+		// Remote is newer or same, apply it
+		if err := r.applyReplication(payload); err != nil {
+			localVV := r.state.Get(payload.Bucket, payload.Key)
+			return r.sendAck(msg.ID, msg.From, false, err.Error(), localVV)
+		}
+	}
+
+	// Merge version vectors
+	mergedVV, _ := r.state.Merge(payload.Bucket, payload.Key, payload.VersionVector)
+
+	// Send ACK
+	return r.sendAck(msg.ID, msg.From, true, "", mergedVV)
+}
+
+// applyReplication applies a replication operation to local S3.
+func (r *Replicator) applyReplication(payload *ReplicatePayload) error {
+	ctx, cancel := context.WithTimeout(r.ctx, 30*time.Second)
+	defer cancel()
+
+	if err := r.s3.Put(ctx, payload.Bucket, payload.Key, payload.Data, payload.ContentType, payload.Metadata); err != nil {
+		r.logger.Error().Err(err).
+			Str("bucket", payload.Bucket).
+			Str("key", payload.Key).
+			Msg("Failed to apply replication to S3")
+		r.incrementErrorCount()
+		return fmt.Errorf("put to s3: %w", err)
+	}
+
+	r.logger.Info().
+		Str("bucket", payload.Bucket).
+		Str("key", payload.Key).
+		Msg("Successfully applied replication")
+
+	return nil
+}
+
+// sendAck sends an acknowledgment message.
+func (r *Replicator) sendAck(replicateID, to string, success bool, errorMsg string, vv VersionVector) error {
+	ackPayload := AckPayload{
+		ReplicateID:   replicateID,
+		Success:       success,
+		ErrorMessage:  errorMsg,
+		VersionVector: vv,
+	}
+
+	msgID := uuid.New().String()
+	msg, err := NewAckMessage(msgID, r.nodeID, ackPayload)
+	if err != nil {
+		return fmt.Errorf("create ack message: %w", err)
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal ack: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(r.ctx, 5*time.Second)
+	defer cancel()
+
+	if err := r.transport.SendToCoordinator(ctx, to, data); err != nil {
+		r.logger.Error().Err(err).Str("to", to).Msg("Failed to send ACK")
+		return fmt.Errorf("send ack: %w", err)
+	}
+
+	return nil
+}
+
+// handleAck processes an incoming ACK message.
+func (r *Replicator) handleAck(msg *Message) error {
+	payload, err := msg.DecodeAckPayload()
+	if err != nil {
+		return fmt.Errorf("decode ack payload: %w", err)
+	}
+
+	r.logger.Debug().
+		Str("replicate_id", payload.ReplicateID).
+		Bool("success", payload.Success).
+		Msg("Received ACK")
+
+	// Notify pending operation
+	r.pendingMu.RLock()
+	pending, exists := r.pending[payload.ReplicateID]
+	r.pendingMu.RUnlock()
+
+	if exists {
+		select {
+		case pending.ackChan <- payload:
+			// ACK delivered
+		default:
+			// Channel full or closed
+		}
+	}
+
+	return nil
+}
+
+// handleSyncRequest processes a sync request (not implemented yet).
+func (r *Replicator) handleSyncRequest(msg *Message) error {
+	r.logger.Debug().Str("from", msg.From).Msg("Received sync request")
+	// TODO: Implement full state sync
+	return nil
+}
+
+// handleSyncResponse processes a sync response (not implemented yet).
+func (r *Replicator) handleSyncResponse(msg *Message) error {
+	r.logger.Debug().Str("from", msg.From).Msg("Received sync response")
+	// TODO: Implement full state sync
+	return nil
+}
+
+// trackPendingACK tracks a pending ACK for a replication operation.
+func (r *Replicator) trackPendingACK(msgID, bucket, key string) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+
+	r.pending[msgID] = &pendingReplication{
+		bucket:  bucket,
+		key:     key,
+		sentAt:  time.Now(),
+		ackChan: make(chan *AckPayload, 1),
+		timeout: time.AfterFunc(10*time.Second, func() {
+			r.removePendingACK(msgID)
+		}),
+	}
+}
+
+// removePendingACK removes a pending ACK entry.
+func (r *Replicator) removePendingACK(msgID string) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+
+	if pending, exists := r.pending[msgID]; exists {
+		pending.timeout.Stop()
+		close(pending.ackChan)
+		delete(r.pending, msgID)
+	}
+}
+
+// ackTimeoutWorker periodically cleans up timed-out ACKs.
+func (r *Replicator) ackTimeoutWorker() {
+	defer r.wg.Done()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-ticker.C:
+			// Cleanup is handled by individual timeouts
+		}
+	}
+}
+
+// GetStats returns replication statistics.
+type Stats struct {
+	SentCount     uint64 `json:"sent_count"`
+	ReceivedCount uint64 `json:"received_count"`
+	ConflictCount uint64 `json:"conflict_count"`
+	ErrorCount    uint64 `json:"error_count"`
+	PeerCount     int    `json:"peer_count"`
+	PendingACKs   int    `json:"pending_acks"`
+}
+
+func (r *Replicator) GetStats() Stats {
+	r.metricsMu.RLock()
+	defer r.metricsMu.RUnlock()
+
+	r.pendingMu.RLock()
+	pendingCount := len(r.pending)
+	r.pendingMu.RUnlock()
+
+	r.mu.RLock()
+	peerCount := len(r.peers)
+	r.mu.RUnlock()
+
+	return Stats{
+		SentCount:     r.sentCount,
+		ReceivedCount: r.receivedCount,
+		ConflictCount: r.conflictCount,
+		ErrorCount:    r.errorCount,
+		PeerCount:     peerCount,
+		PendingACKs:   pendingCount,
+	}
+}
+
+func (r *Replicator) incrementSentCount() {
+	r.metricsMu.Lock()
+	r.sentCount++
+	r.metricsMu.Unlock()
+}
+
+func (r *Replicator) incrementReceivedCount() {
+	r.metricsMu.Lock()
+	r.receivedCount++
+	r.metricsMu.Unlock()
+}
+
+func (r *Replicator) incrementConflictCount() {
+	r.metricsMu.Lock()
+	r.conflictCount++
+	r.metricsMu.Unlock()
+}
+
+func (r *Replicator) incrementErrorCount() {
+	r.metricsMu.Lock()
+	r.errorCount++
+	r.metricsMu.Unlock()
+}
+
+// GetState returns the replication state tracker.
+func (r *Replicator) GetState() *State {
+	return r.state
+}

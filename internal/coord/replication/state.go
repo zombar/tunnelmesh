@@ -188,19 +188,19 @@ func (s *State) LoadSnapshot(data []byte) error {
 	return nil
 }
 
-// Stats returns statistics about the replication state.
-type Stats struct {
+// StateStats returns statistics about the replication state.
+type StateStats struct {
 	NodeID       string `json:"node_id"`
 	TrackedKeys  int    `json:"tracked_keys"`
 	TotalUpdates uint64 `json:"total_updates"` // Sum of all version vector counts
 }
 
 // GetStats returns current replication state statistics.
-func (s *State) GetStats() Stats {
+func (s *State) GetStats() StateStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	stats := Stats{
+	stats := StateStats{
 		NodeID:      s.nodeID,
 		TrackedKeys: len(s.vectors),
 	}
