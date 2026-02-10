@@ -182,7 +182,10 @@ func (s *State) LoadSnapshot(data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.nodeID = snapshot.NodeID
+	// SECURITY FIX #8: Don't overwrite our own nodeID with the sender's nodeID
+	// The snapshot.NodeID is the sender's identity, not ours
+	// We only want to load the version vectors to understand remote state
+	// s.nodeID = snapshot.NodeID  // REMOVED: This would corrupt our identity
 	s.vectors = snapshot.Vectors
 
 	return nil

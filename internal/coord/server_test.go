@@ -15,10 +15,14 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	s3 "github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
+	"github.com/tunnelmesh/tunnelmesh/pkg/bytesize"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
 func newTestServer(t *testing.T) *Server {
+	// Create temp directory for S3 storage
+	tmpDir := t.TempDir()
+
 	cfg := &config.PeerConfig{
 		Name:      "test-coord",
 		Servers:   []string{"http://localhost:8080"},
@@ -28,6 +32,10 @@ func newTestServer(t *testing.T) *Server {
 		},
 		Coordinator: config.CoordinatorConfig{
 			Listen: ":0",
+			S3: config.S3Config{
+				DataDir: tmpDir,
+				MaxSize: bytesize.Size(1 << 30), // 1Gi for tests
+			},
 		},
 	}
 	srv, err := NewServer(cfg)

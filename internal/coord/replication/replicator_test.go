@@ -348,25 +348,33 @@ func TestReplicator_HandleAck(t *testing.T) {
 	ackData, err := ackMsg.Marshal()
 	require.NoError(t, err)
 
-	// Simulate receiving ACK
-	err = transport.simulateReceive("coord2.mesh", ackData)
-	assert.NoError(t, err)
-
-	// Pending ACK should receive the ack
+	// Get pending entry before sending ACK (it will be removed after ACK is delivered)
 	r.pendingMu.RLock()
 	pending, exists := r.pending[msgID]
+	ackChan := pending.ackChan // Keep reference to channel before it's removed
 	r.pendingMu.RUnlock()
 
 	assert.True(t, exists)
 
+	// Simulate receiving ACK
+	err = transport.simulateReceive("coord2.mesh", ackData)
+	assert.NoError(t, err)
+
 	// Try to receive from ackChan (should be available)
+	// Note: The pending entry is removed immediately after ACK delivery (security fix #6)
 	select {
-	case ack := <-pending.ackChan:
+	case ack := <-ackChan:
 		assert.True(t, ack.Success)
 		assert.Equal(t, msgID, ack.ReplicateID)
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("ACK was not delivered to pending channel")
 	}
+
+	// Verify the pending entry was cleaned up (security fix #6)
+	r.pendingMu.RLock()
+	_, stillExists := r.pending[msgID]
+	r.pendingMu.RUnlock()
+	assert.False(t, stillExists, "Pending entry should be removed after ACK delivery")
 }
 
 func TestReplicator_GetStats(t *testing.T) {

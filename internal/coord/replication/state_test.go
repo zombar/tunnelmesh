@@ -255,7 +255,8 @@ func TestState_LoadSnapshot(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify restoration
-	assert.Equal(t, "coord1", restored.nodeID) // NodeID restored
+	// SECURITY FIX #8: NodeID should NOT change when loading snapshot (prevents identity corruption)
+	assert.Equal(t, "coord2", restored.nodeID) // NodeID should remain unchanged
 	assert.Equal(t, original.Count(), restored.Count())
 
 	// Verify individual keys

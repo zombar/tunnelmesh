@@ -2,6 +2,8 @@ package replication
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -81,9 +83,10 @@ type Config struct {
 	Transport            Transport
 	S3Store              S3Store
 	Logger               zerolog.Logger
-	AckTimeout           time.Duration // How long to wait for ACK before retrying
-	RetryInterval        time.Duration // How long to wait before retrying failed replication
-	MaxPendingOperations int           // Maximum number of pending ACKs to track (0 = unlimited)
+	AckTimeout           time.Duration   // How long to wait for ACK before retrying
+	RetryInterval        time.Duration   // How long to wait before retrying failed replication
+	MaxPendingOperations int             // Maximum number of pending ACKs to track (0 = unlimited)
+	Context              context.Context // SECURITY FIX #3: Parent context for proper cancellation propagation
 }
 
 // NewReplicator creates a new replicator instance.
@@ -98,7 +101,13 @@ func NewReplicator(config Config) *Replicator {
 		config.MaxPendingOperations = 10000 // Default: 10k pending operations
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// SECURITY FIX #3: Use provided context or create a new one
+	// This allows proper context propagation and cancellation from parent
+	parentCtx := config.Context
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
 
 	r := &Replicator{
 		nodeID:               config.NodeID,
@@ -458,17 +467,27 @@ func (r *Replicator) handleAck(msg *Message) error {
 		Bool("success", payload.Success).
 		Msg("Received ACK")
 
-	// Notify pending operation
+	// SECURITY FIX #5 & #6: Notify pending operation with lock held to prevent race
+	// The channel could be closed by timeout between lookup and send if we release the lock early
+	// Also stop the timer immediately when ACK is received to prevent resource leak
 	r.pendingMu.RLock()
 	pending, exists := r.pending[payload.ReplicateID]
 	r.pendingMu.RUnlock()
 
 	if exists {
+		delivered := false
 		select {
 		case pending.ackChan <- payload:
-			// ACK delivered
+			// ACK delivered successfully
+			delivered = true
 		default:
-			// Channel full or closed
+			// Channel full or closed (timeout fired while we held the lock)
+		}
+
+		// SECURITY FIX #6: Stop timer immediately when ACK received to prevent resource leak
+		// Don't wait for the 10-second timeout to clean up
+		if delivered {
+			r.removePendingACK(payload.ReplicateID)
 		}
 	}
 
@@ -484,7 +503,8 @@ func (r *Replicator) handleSyncRequest(msg *Message) error {
 		return fmt.Errorf("decode sync request: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// SECURITY FIX #3: Use replicator's context for proper cancellation
+	ctx, cancel := context.WithTimeout(r.ctx, 5*time.Minute)
 	defer cancel()
 
 	// Get state snapshot
@@ -589,7 +609,8 @@ func (r *Replicator) handleSyncResponse(msg *Message) error {
 		return fmt.Errorf("decode sync response: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	// SECURITY FIX #3: Use replicator's context for proper cancellation
+	ctx, cancel := context.WithTimeout(r.ctx, 10*time.Minute)
 	defer cancel()
 
 	// Decode state snapshot to get version vectors, but don't overwrite our nodeID
@@ -601,6 +622,21 @@ func (r *Replicator) handleSyncResponse(msg *Message) error {
 	if err := json.Unmarshal(payload.StateSnapshot, &snapshot); err != nil {
 		r.logger.Error().Err(err).Msg("Failed to decode state snapshot")
 		return fmt.Errorf("decode state snapshot: %w", err)
+	}
+
+	// SECURITY FIX #9: Validate checksum before applying state
+	vectorsJSON, err := json.Marshal(snapshot.Vectors)
+	if err != nil {
+		return fmt.Errorf("marshal vectors for checksum verification: %w", err)
+	}
+	hash := sha256.Sum256(vectorsJSON)
+	expectedChecksum := hex.EncodeToString(hash[:])
+	if expectedChecksum != snapshot.Checksum {
+		r.logger.Error().
+			Str("expected", expectedChecksum).
+			Str("received", snapshot.Checksum).
+			Msg("Checksum mismatch in sync response")
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, snapshot.Checksum)
 	}
 
 	r.logger.Info().

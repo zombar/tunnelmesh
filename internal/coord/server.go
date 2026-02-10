@@ -1516,10 +1516,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	// Update replicator peer list if this is a coordinator
 	if peer.IsCoordinator && s.replicator != nil {
-		// Don't add self to replication targets
-		if coordIP, ok := s.coordMeshIP.Load().(string); !ok || meshIP != coordIP {
+		// SECURITY FIX #4: Don't add self to replication targets
+		// Check peer name instead of mesh IP to avoid race condition with coordMeshIP.Store()
+		// which happens asynchronously after registration completes
+		if req.Name != s.cfg.Name {
 			s.replicator.AddPeer(meshIP)
 			log.Debug().Str("peer", req.Name).Str("mesh_ip", meshIP).Msg("added coordinator to replication targets")
+		} else {
+			log.Debug().Str("peer", req.Name).Msg("skipping self-replication (coordinator registering itself)")
 		}
 	}
 
@@ -1751,30 +1755,68 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Verify this is a replication message
+	// SECURITY: Verify this is a replication message
 	if r.Header.Get("X-Replication-Protocol") != "v1" {
 		s.jsonError(w, "invalid replication protocol version", http.StatusBadRequest)
 		return
 	}
 
-	// Read message data
+	// SECURITY FIX #1: Authenticate that the request is from a coordinator peer
+	peerName := s.getRequestOwner(r)
+	if peerName == "" {
+		log.Warn().Str("remote_addr", r.RemoteAddr).Msg("replication request from unauthenticated peer")
+		s.jsonError(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	// Verify the peer is a coordinator
+	s.peersMu.RLock()
+	peerInfo, exists := s.peers[peerName]
+	s.peersMu.RUnlock()
+
+	if !exists {
+		log.Warn().Str("peer", peerName).Msg("replication request from unknown peer")
+		s.jsonError(w, "unknown peer", http.StatusForbidden)
+		return
+	}
+
+	if !peerInfo.peer.IsCoordinator {
+		log.Warn().Str("peer", peerName).Msg("replication request from non-coordinator peer")
+		s.jsonError(w, "coordinator access required", http.StatusForbidden)
+		return
+	}
+
+	// SECURITY FIX #2: Limit message size to prevent OOM attacks (100MB max)
+	const maxReplicationMessageSize = 100 * 1024 * 1024 // 100MB
+	if r.ContentLength < 0 {
+		s.jsonError(w, "content-length required", http.StatusBadRequest)
+		return
+	}
+	if r.ContentLength > maxReplicationMessageSize {
+		log.Warn().
+			Int64("size", r.ContentLength).
+			Int64("max", maxReplicationMessageSize).
+			Str("peer", peerName).
+			Msg("replication message exceeds size limit")
+		s.jsonError(w, "message too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	// Read message data with bounded allocation
 	data := make([]byte, r.ContentLength)
-	if _, err := r.Body.Read(data); err != nil && err != io.EOF {
+	if _, err := io.ReadFull(r.Body, data); err != nil {
 		s.jsonError(w, "failed to read message", http.StatusBadRequest)
 		return
 	}
 
-	// Extract sender from header or body
-	from := r.Header.Get("X-Replication-From")
-	if from == "" {
-		// Try to extract from remote address
-		from = r.RemoteAddr
-	}
+	// SECURITY FIX #10: Use authenticated peer identity as sender, not spoofable header
+	// The peer's mesh IP is the authoritative source of truth
+	from := peerInfo.peer.MeshIP
 
 	// Handle via mesh transport
 	if s.meshTransport != nil {
 		if err := s.meshTransport.HandleIncomingMessage(from, data); err != nil {
-			log.Warn().Err(err).Str("from", from).Msg("failed to handle replication message")
+			log.Warn().Err(err).Str("from", from).Str("peer", peerName).Msg("failed to handle replication message")
 			s.jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
