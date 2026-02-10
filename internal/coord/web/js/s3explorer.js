@@ -850,11 +850,14 @@
                     if (TM.markdown) {
                         // Pause observer during programmatic change
                         state.mutationObserverPaused = true;
-                        wysiwyg.innerHTML = TM.markdown.renderMarkdown(state.canonicalMarkdown);
-                        wysiwyg.contentEditable = isReadOnly ? 'false' : 'true';
-                        // Save snapshot for dirty detection
-                        state.wysiwygSnapshot = wysiwyg.innerHTML;
-                        state.mutationObserverPaused = false;
+                        try {
+                            wysiwyg.innerHTML = TM.markdown.renderMarkdown(state.canonicalMarkdown);
+                            wysiwyg.contentEditable = isReadOnly ? 'false' : 'true';
+                            // Save snapshot for dirty detection
+                            state.wysiwygSnapshot = wysiwyg.innerHTML;
+                        } finally {
+                            state.mutationObserverPaused = false;
+                        }
                     } else {
                         console.error('TM.markdown not loaded - falling back to source mode');
                         state.editorMode = 'source';
@@ -894,6 +897,13 @@
                 await saveFile();
             }
         }
+
+        // Clean up observer to prevent memory leaks
+        if (state.wysiwygObserver) {
+            state.wysiwygObserver.disconnect();
+            state.wysiwygObserver = null;
+        }
+
         state.currentFile = null;
         state.isDirty = false;
         renderFileListing();
@@ -1018,15 +1028,16 @@
             if (wysiwyg && TM.markdown) {
                 // Pause observer during programmatic change
                 state.mutationObserverPaused = true;
+                try {
+                    // Render from canonical markdown
+                    wysiwyg.innerHTML = TM.markdown.renderMarkdown(state.canonicalMarkdown);
+                    wysiwyg.contentEditable = state.writable ? 'true' : 'false';
 
-                // Render from canonical markdown
-                wysiwyg.innerHTML = TM.markdown.renderMarkdown(state.canonicalMarkdown);
-                wysiwyg.contentEditable = state.writable ? 'true' : 'false';
-
-                // Save snapshot for dirty detection
-                state.wysiwygSnapshot = wysiwyg.innerHTML;
-
-                state.mutationObserverPaused = false;
+                    // Save snapshot for dirty detection
+                    state.wysiwygSnapshot = wysiwyg.innerHTML;
+                } finally {
+                    state.mutationObserverPaused = false;
+                }
             }
         } else {
             // Render canonical markdown in source editor
@@ -1041,8 +1052,10 @@
             if (newMode === 'source') {
                 // Restore source cursor
                 if (editor) {
-                    editor.selectionStart = state.sourceCursorPosition.start;
-                    editor.selectionEnd = state.sourceCursorPosition.end;
+                    // Bounds checking: ensure cursor positions are valid
+                    const maxPos = editor.value.length;
+                    editor.selectionStart = Math.min(state.sourceCursorPosition.start, maxPos);
+                    editor.selectionEnd = Math.min(state.sourceCursorPosition.end, maxPos);
                     editor.focus();
                 }
             } else {
@@ -1830,47 +1843,48 @@
 
         // Pause observer during conversion
         state.mutationObserverPaused = true;
+        try {
+            // Try to convert markdown patterns
+            const modified = convertMarkdownPatternsInNode(textNode);
 
-        // Try to convert markdown patterns
-        const modified = convertMarkdownPatternsInNode(textNode);
+            if (modified) {
+                // Restore cursor position after conversion
+                try {
+                    const newRange = document.createRange();
+                    const walker = document.createTreeWalker(wysiwyg, NodeFilter.SHOW_TEXT, null);
 
-        if (modified) {
-            // Restore cursor position after conversion
-            try {
-                const newRange = document.createRange();
-                const walker = document.createTreeWalker(wysiwyg, NodeFilter.SHOW_TEXT, null);
+                    let currentOffset = 0;
+                    let targetNode = null;
+                    let targetOffset = 0;
 
-                let currentOffset = 0;
-                let targetNode = null;
-                let targetOffset = 0;
+                    // Find the text node at the cursor position
+                    while (walker.nextNode()) {
+                        const node = walker.currentNode;
+                        const nodeLength = node.textContent.length;
 
-                // Find the text node at the cursor position
-                while (walker.nextNode()) {
-                    const node = walker.currentNode;
-                    const nodeLength = node.textContent.length;
+                        if (currentOffset + nodeLength >= cursorOffset) {
+                            targetNode = node;
+                            targetOffset = cursorOffset - currentOffset;
+                            break;
+                        }
 
-                    if (currentOffset + nodeLength >= cursorOffset) {
-                        targetNode = node;
-                        targetOffset = cursorOffset - currentOffset;
-                        break;
+                        currentOffset += nodeLength;
                     }
 
-                    currentOffset += nodeLength;
+                    if (targetNode) {
+                        newRange.setStart(targetNode, Math.min(targetOffset, targetNode.textContent.length));
+                        newRange.collapse(true);
+                        selection.removeAllRanges();
+                        selection.addRange(newRange);
+                    }
+                } catch (e) {
+                    console.debug('Could not restore cursor after markdown conversion:', e);
                 }
-
-                if (targetNode) {
-                    newRange.setStart(targetNode, Math.min(targetOffset, targetNode.textContent.length));
-                    newRange.collapse(true);
-                    selection.removeAllRanges();
-                    selection.addRange(newRange);
-                }
-            } catch (e) {
-                console.debug('Could not restore cursor after markdown conversion:', e);
             }
+        } finally {
+            // Resume observer
+            state.mutationObserverPaused = false;
         }
-
-        // Resume observer
-        state.mutationObserverPaused = false;
     }
 
     function initWysiwygEditor() {
