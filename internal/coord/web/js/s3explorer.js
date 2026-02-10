@@ -39,10 +39,6 @@
         quota: null,
         // View mode
         viewMode: 'list', // 'list' or 'icon'
-        defaultViewByTab: {
-            app: 'icon',
-            data: 'list',
-        },
     };
 
     // Text file extensions
@@ -406,9 +402,6 @@
         const paginationEl = document.getElementById('s3-pagination');
 
         if (!tbody) return;
-
-        // Update view mode based on currently active tab
-        updateViewModeForActiveTab();
 
         // Hide viewer/preview, show browser
         if (viewer) viewer.style.display = 'none';
@@ -1397,32 +1390,6 @@
     // Initialization
     // =========================================================================
 
-    function detectActiveTab() {
-        // Guard against race condition: ensure tabs are loaded before detection
-        const tabsContainer = document.getElementById('main-tabs');
-        if (!tabsContainer) {
-            return 'data'; // Fallback if tabs not rendered yet
-        }
-
-        const activeTabButton = tabsContainer.querySelector('.tab.active');
-        if (activeTabButton?.dataset.tab) {
-            return activeTabButton.dataset.tab; // 'app', 'data', or 'mesh'
-        }
-        return 'data'; // Fallback
-    }
-
-    function updateViewModeForActiveTab() {
-        // Update view mode based on currently active tab
-        const activeTab = detectActiveTab();
-        const newViewMode = state.defaultViewByTab[activeTab] || 'list';
-
-        // Only update if view mode changed
-        if (state.viewMode !== newViewMode) {
-            state.viewMode = newViewMode;
-            updateViewToggleButton();
-        }
-    }
-
     function initIconGridEvents() {
         const iconGrid = document.getElementById('s3-icons');
         if (!iconGrid) return;
@@ -1468,8 +1435,6 @@
             editor.addEventListener('scroll', syncScroll);
         }
 
-        // Set initial view mode based on active tab
-        updateViewModeForActiveTab();
         initDragDrop();
         initKeyboardShortcuts();
         initIconGridEvents();
@@ -1516,8 +1481,6 @@
             getIconSVG,
             buildItemMetadata,
             buildOnclickHandler,
-            detectActiveTab,
-            updateViewModeForActiveTab,
         },
     };
 });
