@@ -20,6 +20,7 @@
     <script src="js/lib/table.js"></script>
     <script src="js/lib/modal.js"></script>
     <script src="js/lib/panel.js"></script>
+    <script src="js/lib/markdown.js"></script>
     <!-- Component classes -->
     <script src="js/visualizer.js"></script>
     <script src="js/map.js"></script>
@@ -135,9 +136,9 @@
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
                                 <span>History</span>
                             </button>
-                            <button class="s3-btn" onclick="s3CloseFile()" title="Close file">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                                <span>Close</span>
+                            <button class="s3-btn" id="s3-mode-toggle-btn" onclick="s3ToggleEditorMode()" title="Toggle WYSIWYG">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9l.94.94L5.92 19H5v-.92L14.06 9m3.6-6c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"/></svg>
+                                <span id="s3-mode-label">WYSIWYG</span>
                             </button>
                         </div>
                         <div class="s3-toolbar-spacer"></div>
@@ -146,6 +147,9 @@
                         </button>
                         <button class="s3-btn s3-btn-icon" id="s3-fullscreen-btn" onclick="s3ToggleFullscreen()" title="Toggle fullscreen">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                        </button>
+                        <button class="s3-btn s3-btn-icon" onclick="s3CloseFile()" title="Close file">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                         </button>
                     </div>
                 </div>
@@ -184,6 +188,7 @@
                         <div class="s3-editor-wrap">
                             <div class="s3-line-numbers" id="s3-line-numbers"></div>
                             <textarea class="s3-editor" id="s3-editor" spellcheck="false"></textarea>
+                            <div class="s3-editor s3-wysiwyg" id="s3-wysiwyg" contenteditable="false" spellcheck="false" style="display: none;"></div>
                         </div>
                     </div>
                     <!-- Image/binary preview -->

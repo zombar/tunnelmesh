@@ -1703,8 +1703,8 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(parts[1], "objects/") {
 			objPath := strings.TrimPrefix(parts[1], "objects/")
 
-			// Check for version subresources (e.g., objects/{key}/versions, objects/{key}/restore)
-			// Split on /versions or /restore to extract key and subresource
+			// Check for version subresources (e.g., objects/{key}/versions, objects/{key}/restore, objects/{key}/undelete)
+			// Split on /versions, /restore, or /undelete to extract key and subresource
 			var key, subresource string
 			if idx := strings.Index(objPath, "/versions"); idx >= 0 {
 				key = objPath[:idx]
@@ -1712,6 +1712,9 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 			} else if idx := strings.Index(objPath, "/restore"); idx >= 0 {
 				key = objPath[:idx]
 				subresource = "restore"
+			} else if idx := strings.Index(objPath, "/undelete"); idx >= 0 {
+				key = objPath[:idx]
+				subresource = "undelete"
 			} else {
 				key = objPath
 			}
@@ -1733,6 +1736,8 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 				s.handleS3ListVersions(w, r, bucket, key)
 			case "restore":
 				s.handleS3RestoreVersion(w, r, bucket, key)
+			case "undelete":
+				s.handleS3UndeleteObject(w, r, bucket, key)
 			default:
 				s.handleS3Object(w, r, bucket, key)
 			}
@@ -2141,6 +2146,40 @@ func (s *Server) handleS3RestoreVersion(w http.ResponseWriter, r *http.Request, 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":     "restored",
 		"version_id": meta.VersionID,
+	})
+}
+
+// handleS3UndeleteObject restores a tombstoned (deleted) object.
+func (s *Server) handleS3UndeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check bucket write permission
+	if bucket == auth.SystemBucket {
+		s.jsonError(w, "bucket is read-only", http.StatusForbidden)
+		return
+	}
+
+	// Untombstone the object
+	if err := s.s3Store.UntombstoneObject(bucket, key); err != nil {
+		switch {
+		case errors.Is(err, s3.ErrBucketNotFound):
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		case errors.Is(err, s3.ErrObjectNotFound):
+			s.jsonError(w, "object not found", http.StatusNotFound)
+		case errors.Is(err, s3.ErrAccessDenied):
+			s.jsonError(w, "access denied", http.StatusForbidden)
+		default:
+			s.jsonError(w, "failed to restore object: "+err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "restored",
 	})
 }
 

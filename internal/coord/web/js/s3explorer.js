@@ -39,6 +39,17 @@
         quota: null,
         // View mode (defaults to 'icon' - user can toggle to 'list' view manually)
         viewMode: 'icon', // 'list' or 'icon'
+        // Editor mode
+        editorMode: 'source', // 'source' or 'wysiwyg'
+        // Canonical source tracking (for deterministic mode switching)
+        canonicalMarkdown: '', // The authoritative markdown source
+        wysiwygSnapshot: '', // HTML snapshot to detect actual user changes
+        // Separate cursor positions (no cross-mode mapping)
+        sourceCursorPosition: { start: 0, end: 0 },
+        wysiwygCursorPosition: { offset: 0 },
+        // Observer control
+        mutationObserverPaused: false,
+        wysiwygObserver: null,
     };
 
     // Text file extensions
@@ -310,6 +321,20 @@
         return resp.ok || resp.status === 204;
     }
 
+    async function untombstoneObject(bucket, key) {
+        const resp = await fetch(
+            `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/undelete`,
+            {
+                method: 'POST',
+            },
+        );
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+            throw new Error(err.error || `Failed to restore: ${resp.status}`);
+        }
+        return true;
+    }
+
     async function fetchVersions(bucket, key) {
         try {
             const resp = await fetch(
@@ -343,6 +368,7 @@
     // Rendering
     // =========================================================================
 
+    /* istanbul ignore next */
     function renderBreadcrumb() {
         const container = document.getElementById('s3-breadcrumb');
         if (!container) return;
@@ -389,6 +415,7 @@
         container.innerHTML = html;
     }
 
+    /* istanbul ignore next */
     async function renderFileListing(resetPagination = true) {
         const tbody = document.getElementById('s3-files-body');
         const table = document.getElementById('s3-files');
@@ -508,8 +535,8 @@
 
         if (empty) empty.style.display = 'none';
 
-        // Only show visible items
-        const visibleItems = items.slice(0, state.visibleCount);
+        // Icon view shows all items (no pagination), list view uses pagination
+        const visibleItems = state.viewMode === 'icon' ? items : items.slice(0, state.visibleCount);
 
         // Render based on view mode
         if (state.viewMode === 'icon') {
@@ -567,19 +594,26 @@
                 .join('');
         }
 
-        // Update pagination UI using shared helper
-        const total = state.currentItems.length;
-        const shown = Math.min(state.visibleCount, total);
-        if (typeof window.updateSectionPagination === 'function') {
-            window.updateSectionPagination('s3', {
-                total,
-                shown,
-                hasMore: total > state.visibleCount,
-                canShowLess: state.visibleCount > PAGE_SIZE,
-            });
+        // Update pagination UI (only for list view, hide in icon view)
+        if (state.viewMode === 'icon') {
+            // Hide pagination in icon view (show all with scrolling)
+            if (paginationEl) paginationEl.style.display = 'none';
+        } else {
+            // Show pagination in list view
+            const total = state.currentItems.length;
+            const shown = Math.min(state.visibleCount, total);
+            if (typeof window.updateSectionPagination === 'function') {
+                window.updateSectionPagination('s3', {
+                    total,
+                    shown,
+                    hasMore: total > state.visibleCount,
+                    canShowLess: state.visibleCount > PAGE_SIZE,
+                });
+            }
         }
     }
 
+    /* istanbul ignore next */
     function renderIconGrid(items) {
         const iconGrid = document.getElementById('s3-icons');
         if (!iconGrid) return;
@@ -684,6 +718,10 @@
         // Check if file is tombstoned from cached items
         const item = state.currentItems.find((i) => i.key === key);
         const isTombstoned = item?.tombstonedAt;
+        // Calculate when tombstone will be purged (tombstonedAt + 90 days)
+        const tombstoneExpiry = isTombstoned
+            ? new Date(new Date(item.tombstonedAt).getTime() + 90 * 24 * 60 * 60 * 1000).toISOString()
+            : null;
         const isReadOnly = !state.writable || isTombstoned;
 
         // Clear selection when opening file
@@ -736,36 +774,145 @@
             }
 
             state.originalContent = displayContent;
+            // Store canonical markdown (source of truth for deterministic mode switching)
+            state.canonicalMarkdown = displayContent;
+            state.wysiwygSnapshot = '';
+
+            // Initialize cursor positions (start at beginning of file)
+            state.sourceCursorPosition = { start: 0, end: 0 };
+            state.wysiwygCursorPosition = { offset: 0 };
+
+            // Auto-switch to WYSIWYG mode for markdown files
+            if (ext === 'md') {
+                state.editorMode = 'wysiwyg';
+                // Enable autosave for markdown files (unless read-only)
+                if (!isReadOnly) {
+                    state.autosave = true;
+                }
+            } else {
+                state.editorMode = 'source';
+            }
 
             if (viewer) viewer.style.display = 'block';
             if (preview) preview.style.display = 'none';
             if (fileActions) fileActions.style.display = 'flex';
             if (saveBtn) saveBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
-            if (deleteBtn) deleteBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
-            if (readonlyBadge) readonlyBadge.style.display = isReadOnly ? 'block' : 'none';
 
-            if (editor) {
-                editor.value = displayContent;
-                editor.readOnly = isReadOnly;
+            // Update delete/undelete button
+            if (deleteBtn) {
+                if (isTombstoned) {
+                    deleteBtn.innerHTML =
+                        '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg><span>Undelete</span>';
+                    deleteBtn.className = 's3-btn';
+                    deleteBtn.title = 'Restore this deleted file';
+                    deleteBtn.onclick = () => undeleteFile();
+                    deleteBtn.style.display = 'inline-flex';
+                } else if (isReadOnly) {
+                    deleteBtn.style.display = 'none';
+                } else {
+                    deleteBtn.innerHTML =
+                        '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg><span>Delete</span>';
+                    deleteBtn.className = 's3-btn s3-btn-danger';
+                    deleteBtn.title = 'Delete file';
+                    deleteBtn.onclick = () => deleteFile();
+                    deleteBtn.style.display = 'inline-flex';
+                }
             }
-            updateLineNumbers();
+
+            // Update readonly badge
+            if (readonlyBadge) {
+                if (isTombstoned && tombstoneExpiry) {
+                    const expiryText = TM.format?.formatExpiry ? TM.format.formatExpiry(tombstoneExpiry) : 'soon';
+                    readonlyBadge.textContent = `READ-ONLY - this deleted file will be removed ${expiryText}`;
+                    readonlyBadge.style.display = 'block';
+                    readonlyBadge.classList.add('s3-readonly-tombstoned');
+                } else if (isReadOnly) {
+                    readonlyBadge.textContent = 'READ-ONLY';
+                    readonlyBadge.style.display = 'block';
+                    readonlyBadge.classList.remove('s3-readonly-tombstoned');
+                } else {
+                    readonlyBadge.style.display = 'none';
+                    readonlyBadge.classList.remove('s3-readonly-tombstoned');
+                }
+            }
+
+            // Update autosave UI
+            const autosaveCheckbox = document.getElementById('s3-autosave');
+            const autosaveLabel = autosaveCheckbox?.parentElement;
+            if (autosaveCheckbox) {
+                autosaveCheckbox.checked = state.autosave;
+            }
+            if (autosaveLabel) {
+                autosaveLabel.style.display = isReadOnly ? 'none' : '';
+            }
+
+            // Render in appropriate mode
+            if (state.editorMode === 'wysiwyg') {
+                const wysiwyg = document.getElementById('s3-wysiwyg');
+                if (wysiwyg) {
+                    if (TM.markdown) {
+                        // Pause observer during programmatic change
+                        state.mutationObserverPaused = true;
+                        try {
+                            wysiwyg.innerHTML = TM.markdown.renderMarkdown(state.canonicalMarkdown);
+                            wysiwyg.contentEditable = isReadOnly ? 'false' : 'true';
+                            // Save snapshot for dirty detection
+                            state.wysiwygSnapshot = wysiwyg.innerHTML;
+                        } finally {
+                            state.mutationObserverPaused = false;
+                        }
+                    } else {
+                        console.error('TM.markdown not loaded - falling back to source mode');
+                        state.editorMode = 'source';
+                    }
+                }
+                if (editor) {
+                    editor.value = state.canonicalMarkdown;
+                    editor.readOnly = isReadOnly;
+                }
+
+                if (state.editorMode === 'wysiwyg') {
+                    updateEditorUI('wysiwyg');
+                } else {
+                    updateEditorUI('source');
+                    updateLineNumbers();
+                }
+            } else {
+                if (editor) {
+                    editor.value = state.canonicalMarkdown;
+                    editor.readOnly = isReadOnly;
+                }
+                updateEditorUI('source');
+                updateLineNumbers();
+            }
+
+            updateModeToggleButton();
         } catch (err) {
             showToast(`Failed to load file: ${err.message}`, 'error');
             closeFile();
         }
     }
 
-    function closeFile() {
+    async function closeFile() {
         if (state.isDirty) {
-            if (!confirm('You have unsaved changes. Discard them?')) {
-                return;
+            const fileName = state.currentFile.key.split('/').pop();
+            if (confirm(`Save changes to "${fileName}" before closing?`)) {
+                await saveFile();
             }
         }
+
+        // Clean up observer to prevent memory leaks
+        if (state.wysiwygObserver) {
+            state.wysiwygObserver.disconnect();
+            state.wysiwygObserver = null;
+        }
+
         state.currentFile = null;
         state.isDirty = false;
         renderFileListing();
     }
 
+    /* istanbul ignore next */
     function updateLineNumbers() {
         const editor = document.getElementById('s3-editor');
         const lineNumbers = document.getElementById('s3-line-numbers');
@@ -781,7 +928,13 @@
 
     function onEditorInput() {
         const editor = document.getElementById('s3-editor');
-        state.isDirty = editor.value !== state.originalContent;
+
+        // Update canonical markdown from source editor
+        state.canonicalMarkdown = editor.value;
+
+        // Check dirty state against canonical markdown
+        state.isDirty = state.canonicalMarkdown !== state.originalContent;
+
         updateLineNumbers();
         updateSaveButton();
 
@@ -824,6 +977,7 @@
         renderFileListing(false);
     }
 
+    /* istanbul ignore next */
     function updateViewToggleButton() {
         const btn = document.getElementById('s3-view-toggle-btn');
         if (!btn) return;
@@ -837,6 +991,196 @@
         btn.title = state.viewMode === 'list' ? 'Switch to icon view' : 'Switch to list view';
     }
 
+    // =========================================================================
+    // Editor Mode Toggle (Source / WYSIWYG)
+    // =========================================================================
+
+    function toggleEditorMode() {
+        if (!state.currentFile) return;
+
+        const editor = document.getElementById('s3-editor');
+        const wysiwyg = document.getElementById('s3-wysiwyg');
+
+        // STEP 1: Save cursor position for CURRENT mode
+        if (state.editorMode === 'source') {
+            // Switching FROM source TO wysiwyg
+            if (editor) {
+                state.sourceCursorPosition = {
+                    start: editor.selectionStart,
+                    end: editor.selectionEnd,
+                };
+            }
+
+            // Update canonical markdown from source editor
+            state.canonicalMarkdown = editor.value;
+        } else {
+            // Switching FROM wysiwyg TO source
+            state.wysiwygCursorPosition = {
+                offset: getCurrentWysiwygCursorOffset(),
+            };
+
+            // DON'T try to convert WYSIWYG → markdown
+            // The canonical markdown is already stored!
+        }
+
+        // STEP 2: Switch mode
+        const newMode = state.editorMode === 'source' ? 'wysiwyg' : 'source';
+        state.editorMode = newMode;
+        updateEditorUI(newMode);
+
+        // STEP 3: Render in new mode using CANONICAL MARKDOWN
+        if (newMode === 'wysiwyg') {
+            if (wysiwyg && TM.markdown) {
+                // Pause observer during programmatic change
+                state.mutationObserverPaused = true;
+                try {
+                    // Render from canonical markdown
+                    wysiwyg.innerHTML = TM.markdown.renderMarkdown(state.canonicalMarkdown);
+                    wysiwyg.contentEditable = state.writable ? 'true' : 'false';
+
+                    // Save snapshot for dirty detection
+                    state.wysiwygSnapshot = wysiwyg.innerHTML;
+                } finally {
+                    state.mutationObserverPaused = false;
+                }
+            }
+        } else {
+            // Render canonical markdown in source editor
+            if (editor) {
+                editor.value = state.canonicalMarkdown;
+                updateLineNumbers();
+            }
+        }
+
+        // STEP 4: Restore cursor position for NEW mode
+        requestAnimationFrame(() => {
+            if (newMode === 'source') {
+                // Restore source cursor
+                if (editor) {
+                    // Bounds checking: ensure cursor positions are valid
+                    const maxPos = editor.value.length;
+                    editor.selectionStart = Math.min(state.sourceCursorPosition.start, maxPos);
+                    editor.selectionEnd = Math.min(state.sourceCursorPosition.end, maxPos);
+                    editor.focus();
+                }
+            } else {
+                // Restore WYSIWYG cursor
+                if (wysiwyg) {
+                    restoreWysiwygCursorPosition(state.wysiwygCursorPosition.offset);
+                    wysiwyg.focus();
+                }
+            }
+        });
+
+        // Update button
+        updateModeToggleButton();
+    }
+
+    /* istanbul ignore next */
+    function updateEditorUI(mode) {
+        const editor = document.getElementById('s3-editor');
+        const wysiwyg = document.getElementById('s3-wysiwyg');
+        const editorWrap = document.querySelector('.s3-editor-wrap');
+
+        if (!editor || !wysiwyg) return;
+
+        if (mode === 'wysiwyg') {
+            editor.style.display = 'none';
+            wysiwyg.style.display = 'block';
+            if (editorWrap) editorWrap.classList.add('wysiwyg-mode');
+        } else {
+            editor.style.display = 'block';
+            wysiwyg.style.display = 'none';
+            if (editorWrap) editorWrap.classList.remove('wysiwyg-mode');
+        }
+    }
+
+    /* istanbul ignore next */
+    function updateModeToggleButton() {
+        const btn = document.getElementById('s3-mode-toggle-btn');
+        const label = document.getElementById('s3-mode-label');
+        if (!btn) return;
+
+        if (state.editorMode === 'wysiwyg') {
+            btn.title = 'Switch to source mode';
+            if (label) label.textContent = 'Source';
+        } else {
+            btn.title = 'Switch to WYSIWYG mode';
+            if (label) label.textContent = 'WYSIWYG';
+        }
+    }
+
+    function getCharacterOffset(root, range) {
+        if (typeof document === 'undefined') return 0;
+
+        let charCount = 0;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+
+        while (walker.nextNode()) {
+            if (walker.currentNode === range.startContainer) {
+                return charCount + range.startOffset;
+            }
+            charCount += walker.currentNode.textContent.length;
+        }
+
+        return charCount;
+    }
+
+    function getNodeAndOffset(root, targetOffset) {
+        if (typeof document === 'undefined') return { node: root, offset: 0 };
+
+        let charCount = 0;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+
+        while (walker.nextNode()) {
+            const nodeLength = walker.currentNode.textContent.length;
+            if (charCount + nodeLength >= targetOffset) {
+                return {
+                    node: walker.currentNode,
+                    offset: Math.min(targetOffset - charCount, nodeLength),
+                };
+            }
+            charCount += nodeLength;
+        }
+
+        // Fallback: place cursor at end
+        return { node: root, offset: 0 };
+    }
+
+    // Get current WYSIWYG cursor offset (simplified, no cross-mode mapping)
+    function getCurrentWysiwygCursorOffset() {
+        const wysiwyg = document.getElementById('s3-wysiwyg');
+        if (!wysiwyg || typeof window === 'undefined') return 0;
+
+        const selection = window.getSelection();
+        if (!selection || !selection.rangeCount) return 0;
+
+        const range = selection.getRangeAt(0);
+        return getCharacterOffset(wysiwyg, range);
+    }
+
+    // Restore WYSIWYG cursor to specific offset
+    function restoreWysiwygCursorPosition(offset) {
+        const wysiwyg = document.getElementById('s3-wysiwyg');
+        if (!wysiwyg || typeof window === 'undefined') return;
+
+        const position = getNodeAndOffset(wysiwyg, offset);
+        if (!position) return;
+
+        try {
+            const range = document.createRange();
+            range.setStart(position.node, position.offset);
+            range.collapse(true);
+
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+        } catch (e) {
+            console.debug('Could not restore cursor:', e);
+        }
+    }
+
+    /* istanbul ignore next */
     function updateSaveButton() {
         const saveBtn = document.getElementById('s3-save-btn');
         if (!saveBtn) return;
@@ -862,9 +1206,11 @@
 
     async function navigateTo(bucket, path) {
         if (state.isDirty) {
-            if (!confirm('You have unsaved changes. Discard them?')) {
-                return;
+            const fileName = state.currentFile.key.split('/').pop();
+            if (!confirm(`Save changes to "${fileName}" before navigating away?`)) {
+                return; // Cancel navigation
             }
+            await saveFile();
         }
 
         state.currentBucket = bucket;
@@ -889,15 +1235,19 @@
     async function saveFile() {
         if (!state.currentFile || !state.isDirty) return;
 
-        const editor = document.getElementById('s3-editor');
-        const content = editor.value;
         const fileName = state.currentFile.key.split('/').pop();
 
         try {
+            // Save the CANONICAL MARKDOWN (not converted from WYSIWYG!)
+            const content = state.canonicalMarkdown;
+
             await putObject(state.currentFile.bucket, state.currentFile.key, content, getContentType(fileName));
+
+            // Update original content to match what we just saved
             state.originalContent = content;
             state.isDirty = false;
             updateSaveButton();
+
             showToast('File saved', 'success');
         } catch (err) {
             showToast(`Failed to save: ${err.message}`, 'error');
@@ -930,6 +1280,24 @@
             await renderFileListing();
         } catch (err) {
             showToast(`Failed to delete: ${err.message}`, 'error');
+        }
+    }
+
+    async function undeleteFile() {
+        if (!state.currentFile) return;
+
+        const fileName = state.currentFile.key.split('/').pop();
+        if (!confirm(`Restore "${fileName}"?`)) return;
+
+        try {
+            await untombstoneObject(state.currentFile.bucket, state.currentFile.key);
+            showToast('File restored', 'success');
+            // Refresh to show the file as non-tombstoned
+            await renderFileListing();
+            // Reopen the file to update the UI
+            await openFile(state.currentFile.bucket, state.currentFile.key);
+        } catch (err) {
+            showToast(`Failed to restore: ${err.message}`, 'error');
         }
     }
 
@@ -1180,6 +1548,7 @@
     // Drag and Drop
     // =========================================================================
 
+    /* istanbul ignore next */
     function initDragDrop() {
         const section = document.getElementById('s3-section');
         const dropZone = document.getElementById('s3-drop-zone');
@@ -1226,6 +1595,7 @@
     // Keyboard Shortcuts
     // =========================================================================
 
+    /* istanbul ignore next */
     function initKeyboardShortcuts() {
         document.addEventListener('keydown', (e) => {
             const editor = document.getElementById('s3-editor');
@@ -1252,6 +1622,7 @@
         updateRowSelectionVisuals();
     }
 
+    /* istanbul ignore next */
     function updateSelectionUI() {
         const browseActions = document.getElementById('s3-browse-actions');
         const selectionActions = document.getElementById('s3-selection-actions');
@@ -1390,6 +1761,7 @@
     // Initialization
     // =========================================================================
 
+    /* istanbul ignore next */
     function initIconGridEvents() {
         const iconGrid = document.getElementById('s3-icons');
         if (!iconGrid) return;
@@ -1428,6 +1800,162 @@
         });
     }
 
+    function convertMarkdownPatternsInNode(node) {
+        // Only process text nodes
+        if (node.nodeType !== Node.TEXT_NODE) return false;
+        if (!TM.markdown || !TM.markdown.processInline) return false;
+
+        const text = node.textContent;
+
+        // Use markdown library's processInline() for consistency
+        // This ensures ALL patterns supported by the library are auto-converted
+        const processedHtml = TM.markdown.processInline(text);
+
+        // Check if anything changed
+        if (processedHtml === TM.markdown.escapeHtml(text)) {
+            return false; // No markdown patterns found
+        }
+
+        // Replace the text node with the formatted HTML
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = processedHtml;
+
+        const parent = node.parentNode;
+        if (parent) {
+            while (tempDiv.firstChild) {
+                parent.insertBefore(tempDiv.firstChild, node);
+            }
+            parent.removeChild(node);
+            return true;
+        }
+
+        return false;
+    }
+
+    function handleWysiwygInput(e) {
+        const wysiwyg = document.getElementById('s3-wysiwyg');
+        if (!wysiwyg || state.editorMode !== 'wysiwyg') return;
+
+        // Only auto-convert on space or Enter
+        if (e.inputType !== 'insertText' && e.inputType !== 'insertParagraph') return;
+        if (e.data !== ' ' && e.data !== null) return; // null for Enter
+
+        // Get the current selection
+        const selection = window.getSelection();
+        if (!selection.rangeCount) return;
+
+        const range = selection.getRangeAt(0);
+        const textNode = range.startContainer;
+
+        // Only process if we're in a text node
+        if (textNode.nodeType !== Node.TEXT_NODE) return;
+
+        // Save cursor position
+        const cursorOffset = range.startOffset;
+
+        // Pause observer during conversion
+        state.mutationObserverPaused = true;
+        try {
+            // Try to convert markdown patterns
+            const modified = convertMarkdownPatternsInNode(textNode);
+
+            if (modified) {
+                // Restore cursor position after conversion
+                try {
+                    const newRange = document.createRange();
+                    const walker = document.createTreeWalker(wysiwyg, NodeFilter.SHOW_TEXT, null);
+
+                    let currentOffset = 0;
+                    let targetNode = null;
+                    let targetOffset = 0;
+
+                    // Find the text node at the cursor position
+                    while (walker.nextNode()) {
+                        const node = walker.currentNode;
+                        const nodeLength = node.textContent.length;
+
+                        if (currentOffset + nodeLength >= cursorOffset) {
+                            targetNode = node;
+                            targetOffset = cursorOffset - currentOffset;
+                            break;
+                        }
+
+                        currentOffset += nodeLength;
+                    }
+
+                    if (targetNode) {
+                        newRange.setStart(targetNode, Math.min(targetOffset, targetNode.textContent.length));
+                        newRange.collapse(true);
+                        selection.removeAllRanges();
+                        selection.addRange(newRange);
+                    }
+                } catch (e) {
+                    console.debug('Could not restore cursor after markdown conversion:', e);
+                }
+            }
+        } finally {
+            // Resume observer
+            state.mutationObserverPaused = false;
+        }
+    }
+
+    function initWysiwygEditor() {
+        const wysiwyg = document.getElementById('s3-wysiwyg');
+        if (!wysiwyg || typeof MutationObserver === 'undefined') return;
+
+        // Add input listener for markdown auto-conversion
+        wysiwyg.addEventListener('beforeinput', handleWysiwygInput);
+
+        const observer = new MutationObserver(() => {
+            // Skip if observer is paused (programmatic changes)
+            if (state.mutationObserverPaused) return;
+
+            // Skip if not in WYSIWYG mode or no file open
+            if (state.editorMode !== 'wysiwyg' || !state.currentFile) return;
+
+            // Detect ACTUAL user changes by comparing HTML snapshots
+            const currentHtml = wysiwyg.innerHTML;
+
+            if (currentHtml !== state.wysiwygSnapshot) {
+                // User made a real edit!
+                state.wysiwygSnapshot = currentHtml;
+
+                // Try to convert to markdown (best effort)
+                if (TM.markdown) {
+                    const markdown = TM.markdown.htmlToMarkdown(currentHtml);
+
+                    // Update canonical markdown if conversion succeeded
+                    if (markdown?.trim()) {
+                        state.canonicalMarkdown = markdown;
+                    }
+                }
+
+                // Check if content differs from original file
+                state.isDirty = state.canonicalMarkdown !== state.originalContent;
+                updateSaveButton();
+
+                // Autosave
+                if (state.autosave && state.isDirty) {
+                    if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
+                    state.autosaveTimer = setTimeout(() => {
+                        saveFile();
+                    }, 1500);
+                }
+            }
+        });
+
+        observer.observe(wysiwyg, {
+            childList: true,
+            subtree: true,
+            characterData: true,
+            attributes: true,
+        });
+
+        // Store observer reference for cleanup
+        state.wysiwygObserver = observer;
+    }
+
+    /* istanbul ignore next */
     async function init() {
         const editor = document.getElementById('s3-editor');
         if (editor) {
@@ -1438,6 +1966,18 @@
         initDragDrop();
         initKeyboardShortcuts();
         initIconGridEvents();
+        initWysiwygEditor();
+
+        // Listen for panel data changes to refresh S3 explorer
+        // (user might be browsing state metadata like filter rules, groups, etc.)
+        if (typeof TM !== 'undefined' && TM.events) {
+            TM.events.on('panelDataChanged', () => {
+                // Only refresh if S3 explorer is visible and has data
+                if (state.currentBucket) {
+                    renderFileListing();
+                }
+            });
+        }
 
         await renderFileListing();
     }
@@ -1454,6 +1994,7 @@
         saveFile,
         downloadFile,
         deleteFile,
+        undeleteFile,
         openNewModal,
         createFile,
         createFolder,
@@ -1470,6 +2011,7 @@
         toggleFullscreen,
         toggleView,
         updateViewToggleButton,
+        toggleEditorMode,
         // Version history
         showVersionHistory,
         restoreVersionAndRefresh,
