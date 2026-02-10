@@ -19,7 +19,7 @@ const { createSparklineSVG } = TM.table;
 const { createModalController } = TM.modal;
 
 // Panel refresh lists - defines which panels to refresh for each tab
-const PANELS_MESH_TAB = ['peers', 'wg-clients', 'logs', 'alerts', 'filter']; // Mesh tab panels (visualizer/charts/map loaded via fetchData)
+const _PANELS_MESH_TAB = ['peers', 'wg-clients', 'logs', 'alerts', 'filter']; // Mesh tab panels (visualizer/charts/map loaded via fetchData)
 const PANELS_APP_TAB = ['s3', 'shares', 'docker']; // App tab panels
 const PANELS_DATA_TAB = ['peers-mgmt', 'groups', 'bindings', 'dns']; // Data tab panels
 
@@ -606,9 +606,7 @@ async function fetchDnsRecords() {
         const data = await resp.json();
 
         // Sort records by hostname
-        state.currentDnsRecords = (data.records || []).sort((a, b) =>
-            a.hostname.localeCompare(b.hostname)
-        );
+        state.currentDnsRecords = (data.records || []).sort((a, b) => a.hostname.localeCompare(b.hostname));
 
         renderDnsTable();
     } catch (err) {
@@ -1838,6 +1836,7 @@ async function addFilterRule() {
         );
         closeFilterModal();
         loadFilterRules();
+        events.emit('panelDataChanged', 'filter');
     } catch (err) {
         console.error('Failed to add filter rule:', err);
         showToast('Failed to add filter rule', 'error');
@@ -1866,6 +1865,7 @@ async function removeFilterRule(peerName, port, protocol, sourcePeer) {
 
         showToast('Filter rule removed', 'success');
         loadFilterRules();
+        events.emit('panelDataChanged', 'filter');
     } catch (err) {
         console.error('Failed to remove filter rule:', err);
         showToast('Failed to remove filter rule', 'error');
@@ -2358,7 +2358,7 @@ function renderPeersMgmtTable() {
 }
 
 // Alias for backward compat
-function updatePeersMgmtTable(peers) {
+function _updatePeersMgmtTable(peers) {
     state.currentPeersMgmt = peers || [];
     renderPeersMgmtTable();
 }
@@ -2446,6 +2446,7 @@ async function createGroup() {
             showToast(`Group "${name}" created`, 'success');
             closeGroupModal();
             TM.refresh.trigger('groups');
+            events.emit('panelDataChanged', 'groups');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to create group', 'error');
@@ -2464,6 +2465,7 @@ async function deleteGroup(name) {
         if (resp.ok) {
             showToast(`Group "${name}" deleted`, 'success');
             TM.refresh.trigger('groups');
+            events.emit('panelDataChanged', 'groups');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to delete group', 'error');
@@ -2578,6 +2580,7 @@ async function createShare() {
             closeShareModal();
             // Trigger refresh for shares panel (will cascade to bindings and S3)
             TM.refresh.trigger('shares');
+            events.emit('panelDataChanged', 'shares');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to create share', 'error');
@@ -2597,6 +2600,7 @@ async function deleteShare(name) {
             showToast(`File share "${name}" deleted`, 'success');
             // Trigger refresh for shares panel (will cascade to bindings and S3)
             TM.refresh.trigger('shares');
+            events.emit('panelDataChanged', 'shares');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to delete share', 'error');
@@ -2716,7 +2720,6 @@ function switchTab(tabName) {
             TM.refresh.triggerMultiple(PANELS_APP_TAB, { cascade: false });
         }
     }
-
 }
 window.switchTab = switchTab;
 
@@ -2849,6 +2852,7 @@ async function createBinding() {
             showToast('Role binding created', 'success');
             closeBindingModal();
             TM.refresh.trigger('bindings');
+            events.emit('panelDataChanged', 'bindings');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to create binding', 'error');
@@ -2867,6 +2871,7 @@ async function deleteBinding(name) {
         if (resp.ok) {
             showToast('Role binding deleted', 'success');
             TM.refresh.trigger('bindings');
+            events.emit('panelDataChanged', 'bindings');
         } else {
             const data = await resp.json();
             showToast(data.error || 'Failed to delete binding', 'error');
@@ -2930,6 +2935,11 @@ function s3Delete() {
     if (TM.s3explorer) TM.s3explorer.deleteFile();
 }
 window.s3Delete = s3Delete;
+
+function s3ToggleEditorMode() {
+    if (TM.s3explorer) TM.s3explorer.toggleEditorMode();
+}
+window.s3ToggleEditorMode = s3ToggleEditorMode;
 
 function s3CloseFile() {
     if (TM.s3explorer) TM.s3explorer.closeFile();

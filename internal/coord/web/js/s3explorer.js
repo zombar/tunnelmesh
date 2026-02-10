@@ -43,6 +43,17 @@
             app: 'icon',
             data: 'list',
         },
+        // Editor mode
+        editorMode: 'source', // 'source' or 'wysiwyg'
+        // Canonical source tracking (for deterministic mode switching)
+        canonicalMarkdown: '', // The authoritative markdown source
+        wysiwygSnapshot: '', // HTML snapshot to detect actual user changes
+        // Separate cursor positions (no cross-mode mapping)
+        sourceCursorPosition: { start: 0, end: 0 },
+        wysiwygCursorPosition: { offset: 0 },
+        // Observer control
+        mutationObserverPaused: false,
+        wysiwygObserver: null,
     };
 
     // Text file extensions
@@ -312,6 +323,20 @@
             method: 'DELETE',
         });
         return resp.ok || resp.status === 204;
+    }
+
+    async function untombstoneObject(bucket, key) {
+        const resp = await fetch(
+            `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/undelete`,
+            {
+                method: 'POST',
+            },
+        );
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+            throw new Error(err.error || `Failed to restore: ${resp.status}`);
+        }
+        return true;
     }
 
     async function fetchVersions(bucket, key) {
@@ -691,6 +716,10 @@
         // Check if file is tombstoned from cached items
         const item = state.currentItems.find((i) => i.key === key);
         const isTombstoned = item?.tombstonedAt;
+        // Calculate when tombstone will be purged (tombstonedAt + 90 days)
+        const tombstoneExpiry = isTombstoned
+            ? new Date(new Date(item.tombstonedAt).getTime() + 90 * 24 * 60 * 60 * 1000).toISOString()
+            : null;
         const isReadOnly = !state.writable || isTombstoned;
 
         // Clear selection when opening file
@@ -743,19 +772,112 @@
             }
 
             state.originalContent = displayContent;
+            // Store canonical markdown (source of truth for deterministic mode switching)
+            state.canonicalMarkdown = displayContent;
+            state.wysiwygSnapshot = '';
+
+            // Auto-switch to WYSIWYG mode for markdown files
+            if (ext === 'md') {
+                state.editorMode = 'wysiwyg';
+                // Enable autosave for markdown files (unless read-only)
+                if (!isReadOnly) {
+                    state.autosave = true;
+                }
+            } else {
+                state.editorMode = 'source';
+            }
 
             if (viewer) viewer.style.display = 'block';
             if (preview) preview.style.display = 'none';
             if (fileActions) fileActions.style.display = 'flex';
             if (saveBtn) saveBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
-            if (deleteBtn) deleteBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
-            if (readonlyBadge) readonlyBadge.style.display = isReadOnly ? 'block' : 'none';
 
-            if (editor) {
-                editor.value = displayContent;
-                editor.readOnly = isReadOnly;
+            // Update delete/undelete button
+            if (deleteBtn) {
+                if (isTombstoned) {
+                    deleteBtn.innerHTML =
+                        '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg><span>Undelete</span>';
+                    deleteBtn.className = 's3-btn';
+                    deleteBtn.title = 'Restore this deleted file';
+                    deleteBtn.onclick = () => undeleteFile();
+                    deleteBtn.style.display = 'inline-flex';
+                } else if (isReadOnly) {
+                    deleteBtn.style.display = 'none';
+                } else {
+                    deleteBtn.innerHTML =
+                        '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg><span>Delete</span>';
+                    deleteBtn.className = 's3-btn s3-btn-danger';
+                    deleteBtn.title = 'Delete file';
+                    deleteBtn.onclick = () => deleteFile();
+                    deleteBtn.style.display = 'inline-flex';
+                }
             }
-            updateLineNumbers();
+
+            // Update readonly badge
+            if (readonlyBadge) {
+                if (isTombstoned && tombstoneExpiry) {
+                    const expiryText = TM.format?.formatExpiry ? TM.format.formatExpiry(tombstoneExpiry) : 'soon';
+                    readonlyBadge.textContent = `READ-ONLY - this deleted file will be removed ${expiryText}`;
+                    readonlyBadge.style.display = 'block';
+                    readonlyBadge.classList.add('s3-readonly-tombstoned');
+                } else if (isReadOnly) {
+                    readonlyBadge.textContent = 'READ-ONLY';
+                    readonlyBadge.style.display = 'block';
+                    readonlyBadge.classList.remove('s3-readonly-tombstoned');
+                } else {
+                    readonlyBadge.style.display = 'none';
+                    readonlyBadge.classList.remove('s3-readonly-tombstoned');
+                }
+            }
+
+            // Update autosave UI
+            const autosaveCheckbox = document.getElementById('s3-autosave');
+            const autosaveLabel = autosaveCheckbox?.parentElement;
+            if (autosaveCheckbox) {
+                autosaveCheckbox.checked = state.autosave;
+            }
+            if (autosaveLabel) {
+                autosaveLabel.style.display = isReadOnly ? 'none' : '';
+            }
+
+            // Render in appropriate mode
+            if (state.editorMode === 'wysiwyg') {
+                const wysiwyg = document.getElementById('s3-wysiwyg');
+                if (wysiwyg) {
+                    if (TM.markdown) {
+                        // Pause observer during programmatic change
+                        state.mutationObserverPaused = true;
+                        wysiwyg.innerHTML = TM.markdown.renderMarkdown(state.canonicalMarkdown);
+                        wysiwyg.contentEditable = isReadOnly ? 'false' : 'true';
+                        // Save snapshot for dirty detection
+                        state.wysiwygSnapshot = wysiwyg.innerHTML;
+                        state.mutationObserverPaused = false;
+                    } else {
+                        console.error('TM.markdown not loaded - falling back to source mode');
+                        state.editorMode = 'source';
+                    }
+                }
+                if (editor) {
+                    editor.value = state.canonicalMarkdown;
+                    editor.readOnly = isReadOnly;
+                }
+
+                if (state.editorMode === 'wysiwyg') {
+                    updateEditorUI('wysiwyg');
+                } else {
+                    updateEditorUI('source');
+                    updateLineNumbers();
+                }
+            } else {
+                if (editor) {
+                    editor.value = state.canonicalMarkdown;
+                    editor.readOnly = isReadOnly;
+                }
+                updateEditorUI('source');
+                updateLineNumbers();
+            }
+
+            updateModeToggleButton();
         } catch (err) {
             showToast(`Failed to load file: ${err.message}`, 'error');
             closeFile();
@@ -788,7 +910,13 @@
 
     function onEditorInput() {
         const editor = document.getElementById('s3-editor');
-        state.isDirty = editor.value !== state.originalContent;
+
+        // Update canonical markdown from source editor
+        state.canonicalMarkdown = editor.value;
+
+        // Check dirty state against canonical markdown
+        state.isDirty = state.canonicalMarkdown !== state.originalContent;
+
         updateLineNumbers();
         updateSaveButton();
 
@@ -844,6 +972,190 @@
         btn.title = state.viewMode === 'list' ? 'Switch to icon view' : 'Switch to list view';
     }
 
+    // =========================================================================
+    // Editor Mode Toggle (Source / WYSIWYG)
+    // =========================================================================
+
+    function toggleEditorMode() {
+        if (!state.currentFile) return;
+
+        const editor = document.getElementById('s3-editor');
+        const wysiwyg = document.getElementById('s3-wysiwyg');
+
+        // STEP 1: Save cursor position for CURRENT mode
+        if (state.editorMode === 'source') {
+            // Switching FROM source TO wysiwyg
+            if (editor) {
+                state.sourceCursorPosition = {
+                    start: editor.selectionStart,
+                    end: editor.selectionEnd,
+                };
+            }
+
+            // Update canonical markdown from source editor
+            state.canonicalMarkdown = editor.value;
+        } else {
+            // Switching FROM wysiwyg TO source
+            state.wysiwygCursorPosition = {
+                offset: getCurrentWysiwygCursorOffset(),
+            };
+
+            // DON'T try to convert WYSIWYG → markdown
+            // The canonical markdown is already stored!
+        }
+
+        // STEP 2: Switch mode
+        const newMode = state.editorMode === 'source' ? 'wysiwyg' : 'source';
+        state.editorMode = newMode;
+        updateEditorUI(newMode);
+
+        // STEP 3: Render in new mode using CANONICAL MARKDOWN
+        if (newMode === 'wysiwyg') {
+            if (wysiwyg && TM.markdown) {
+                // Pause observer during programmatic change
+                state.mutationObserverPaused = true;
+
+                // Render from canonical markdown
+                wysiwyg.innerHTML = TM.markdown.renderMarkdown(state.canonicalMarkdown);
+                wysiwyg.contentEditable = state.writable ? 'true' : 'false';
+
+                // Save snapshot for dirty detection
+                state.wysiwygSnapshot = wysiwyg.innerHTML;
+
+                state.mutationObserverPaused = false;
+            }
+        } else {
+            // Render canonical markdown in source editor
+            if (editor) {
+                editor.value = state.canonicalMarkdown;
+                updateLineNumbers();
+            }
+        }
+
+        // STEP 4: Restore cursor position for NEW mode
+        requestAnimationFrame(() => {
+            if (newMode === 'source') {
+                // Restore source cursor
+                if (editor) {
+                    editor.selectionStart = state.sourceCursorPosition.start;
+                    editor.selectionEnd = state.sourceCursorPosition.end;
+                    editor.focus();
+                }
+            } else {
+                // Restore WYSIWYG cursor
+                if (wysiwyg) {
+                    restoreWysiwygCursorPosition(state.wysiwygCursorPosition.offset);
+                    wysiwyg.focus();
+                }
+            }
+        });
+
+        // Update button
+        updateModeToggleButton();
+    }
+
+    function updateEditorUI(mode) {
+        const editor = document.getElementById('s3-editor');
+        const wysiwyg = document.getElementById('s3-wysiwyg');
+        const editorWrap = document.querySelector('.s3-editor-wrap');
+
+        if (!editor || !wysiwyg) return;
+
+        if (mode === 'wysiwyg') {
+            editor.style.display = 'none';
+            wysiwyg.style.display = 'block';
+            if (editorWrap) editorWrap.classList.add('wysiwyg-mode');
+        } else {
+            editor.style.display = 'block';
+            wysiwyg.style.display = 'none';
+            if (editorWrap) editorWrap.classList.remove('wysiwyg-mode');
+        }
+    }
+
+    function updateModeToggleButton() {
+        const btn = document.getElementById('s3-mode-toggle-btn');
+        const label = document.getElementById('s3-mode-label');
+        if (!btn) return;
+
+        if (state.editorMode === 'wysiwyg') {
+            btn.title = 'Switch to source mode';
+            if (label) label.textContent = 'Source';
+        } else {
+            btn.title = 'Switch to WYSIWYG mode';
+            if (label) label.textContent = 'WYSIWYG';
+        }
+    }
+
+    function getCharacterOffset(root, range) {
+        if (typeof document === 'undefined') return 0;
+
+        let charCount = 0;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+
+        while (walker.nextNode()) {
+            if (walker.currentNode === range.startContainer) {
+                return charCount + range.startOffset;
+            }
+            charCount += walker.currentNode.textContent.length;
+        }
+
+        return charCount;
+    }
+
+    function getNodeAndOffset(root, targetOffset) {
+        if (typeof document === 'undefined') return { node: root, offset: 0 };
+
+        let charCount = 0;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+
+        while (walker.nextNode()) {
+            const nodeLength = walker.currentNode.textContent.length;
+            if (charCount + nodeLength >= targetOffset) {
+                return {
+                    node: walker.currentNode,
+                    offset: Math.min(targetOffset - charCount, nodeLength),
+                };
+            }
+            charCount += nodeLength;
+        }
+
+        // Fallback: place cursor at end
+        return { node: root, offset: 0 };
+    }
+
+    // Get current WYSIWYG cursor offset (simplified, no cross-mode mapping)
+    function getCurrentWysiwygCursorOffset() {
+        const wysiwyg = document.getElementById('s3-wysiwyg');
+        if (!wysiwyg || typeof window === 'undefined') return 0;
+
+        const selection = window.getSelection();
+        if (!selection || !selection.rangeCount) return 0;
+
+        const range = selection.getRangeAt(0);
+        return getCharacterOffset(wysiwyg, range);
+    }
+
+    // Restore WYSIWYG cursor to specific offset
+    function restoreWysiwygCursorPosition(offset) {
+        const wysiwyg = document.getElementById('s3-wysiwyg');
+        if (!wysiwyg || typeof window === 'undefined') return;
+
+        const position = getNodeAndOffset(wysiwyg, offset);
+        if (!position) return;
+
+        try {
+            const range = document.createRange();
+            range.setStart(position.node, position.offset);
+            range.collapse(true);
+
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+        } catch (e) {
+            console.debug('Could not restore cursor:', e);
+        }
+    }
+
     function updateSaveButton() {
         const saveBtn = document.getElementById('s3-save-btn');
         if (!saveBtn) return;
@@ -896,15 +1208,19 @@
     async function saveFile() {
         if (!state.currentFile || !state.isDirty) return;
 
-        const editor = document.getElementById('s3-editor');
-        const content = editor.value;
         const fileName = state.currentFile.key.split('/').pop();
 
         try {
+            // Save the CANONICAL MARKDOWN (not converted from WYSIWYG!)
+            const content = state.canonicalMarkdown;
+
             await putObject(state.currentFile.bucket, state.currentFile.key, content, getContentType(fileName));
+
+            // Update original content to match what we just saved
             state.originalContent = content;
             state.isDirty = false;
             updateSaveButton();
+
             showToast('File saved', 'success');
         } catch (err) {
             showToast(`Failed to save: ${err.message}`, 'error');
@@ -937,6 +1253,24 @@
             await renderFileListing();
         } catch (err) {
             showToast(`Failed to delete: ${err.message}`, 'error');
+        }
+    }
+
+    async function undeleteFile() {
+        if (!state.currentFile) return;
+
+        const fileName = state.currentFile.key.split('/').pop();
+        if (!confirm(`Restore "${fileName}"?`)) return;
+
+        try {
+            await untombstoneObject(state.currentFile.bucket, state.currentFile.key);
+            showToast('File restored', 'success');
+            // Refresh to show the file as non-tombstoned
+            await renderFileListing();
+            // Reopen the file to update the UI
+            await openFile(state.currentFile.bucket, state.currentFile.key);
+        } catch (err) {
+            showToast(`Failed to restore: ${err.message}`, 'error');
         }
     }
 
@@ -1461,6 +1795,59 @@
         });
     }
 
+    function initWysiwygEditor() {
+        const wysiwyg = document.getElementById('s3-wysiwyg');
+        if (!wysiwyg || typeof MutationObserver === 'undefined') return;
+
+        const observer = new MutationObserver(() => {
+            // Skip if observer is paused (programmatic changes)
+            if (state.mutationObserverPaused) return;
+
+            // Skip if not in WYSIWYG mode or no file open
+            if (state.editorMode !== 'wysiwyg' || !state.currentFile) return;
+
+            // Detect ACTUAL user changes by comparing HTML snapshots
+            const currentHtml = wysiwyg.innerHTML;
+
+            if (currentHtml !== state.wysiwygSnapshot) {
+                // User made a real edit!
+                state.wysiwygSnapshot = currentHtml;
+
+                // Try to convert to markdown (best effort)
+                if (TM.markdown) {
+                    const markdown = TM.markdown.htmlToMarkdown(currentHtml);
+
+                    // Update canonical markdown if conversion succeeded
+                    if (markdown?.trim()) {
+                        state.canonicalMarkdown = markdown;
+                    }
+                }
+
+                // Check if content differs from original file
+                state.isDirty = state.canonicalMarkdown !== state.originalContent;
+                updateSaveButton();
+
+                // Autosave
+                if (state.autosave && state.isDirty) {
+                    if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
+                    state.autosaveTimer = setTimeout(() => {
+                        saveFile();
+                    }, 1500);
+                }
+            }
+        });
+
+        observer.observe(wysiwyg, {
+            childList: true,
+            subtree: true,
+            characterData: true,
+            attributes: true,
+        });
+
+        // Store observer reference for cleanup
+        state.wysiwygObserver = observer;
+    }
+
     async function init() {
         const editor = document.getElementById('s3-editor');
         if (editor) {
@@ -1473,6 +1860,18 @@
         initDragDrop();
         initKeyboardShortcuts();
         initIconGridEvents();
+        initWysiwygEditor();
+
+        // Listen for panel data changes to refresh S3 explorer
+        // (user might be browsing state metadata like filter rules, groups, etc.)
+        if (typeof TM !== 'undefined' && TM.events) {
+            TM.events.on('panelDataChanged', () => {
+                // Only refresh if S3 explorer is visible and has data
+                if (state.currentBucket) {
+                    renderFileListing();
+                }
+            });
+        }
 
         await renderFileListing();
     }
@@ -1489,6 +1888,7 @@
         saveFile,
         downloadFile,
         deleteFile,
+        undeleteFile,
         openNewModal,
         createFile,
         createFolder,
@@ -1505,6 +1905,7 @@
         toggleFullscreen,
         toggleView,
         updateViewToggleButton,
+        toggleEditorMode,
         // Version history
         showVersionHistory,
         restoreVersionAndRefresh,
