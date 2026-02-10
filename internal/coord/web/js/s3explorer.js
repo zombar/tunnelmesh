@@ -12,10 +12,16 @@
     'use strict';
 
     // =========================================================================
-    // State
+    // Constants
     // =========================================================================
 
     const PAGE_SIZE = 7;
+    const DATASHEET_PAGE_SIZE = 50; // Rows per page in datasheet view
+    const DEFAULT_COLUMN_WIDTH = 150; // Default column width in pixels
+
+    // =========================================================================
+    // State
+    // =========================================================================
 
     const state = {
         buckets: [],
@@ -45,7 +51,7 @@
         datasheetData: null, // Parsed JSON array for datasheet view
         datasheetSchema: null, // { columns: [{ key, type, width }] }
         datasheetPage: 1, // Current page number
-        datasheetPageSize: 50, // Rows per page
+        datasheetPageSize: DATASHEET_PAGE_SIZE, // Rows per page
         // Tree view state
         treeviewData: null, // Parsed JSON object/array for tree view
         treeviewCollapsed: new Set(), // Set of collapsed paths (e.g., 'data.items[0]')
@@ -308,19 +314,39 @@
     function detectDatasheetMode(content) {
         try {
             const parsed = JSON.parse(content);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-                // Check if all elements are objects (not arrays or primitives)
-                const allObjects = parsed.every(
-                    (item) => typeof item === 'object' && item !== null && !Array.isArray(item),
-                );
-                if (allObjects) {
-                    return { isDatasheet: true, data: parsed };
-                }
+            if (!Array.isArray(parsed)) {
+                return {
+                    isDatasheet: false,
+                    data: null,
+                    reason: 'Not a JSON array (found object or primitive)',
+                };
             }
-        } catch (_e) {
-            // Invalid JSON, stay in source mode
+            if (parsed.length === 0) {
+                return {
+                    isDatasheet: false,
+                    data: null,
+                    reason: 'Empty array',
+                };
+            }
+            // Check if all elements are objects (not arrays or primitives)
+            const allObjects = parsed.every(
+                (item) => typeof item === 'object' && item !== null && !Array.isArray(item),
+            );
+            if (!allObjects) {
+                return {
+                    isDatasheet: false,
+                    data: null,
+                    reason: 'Array contains non-object elements (primitives or nested arrays)',
+                };
+            }
+            return { isDatasheet: true, data: parsed, reason: null };
+        } catch (e) {
+            return {
+                isDatasheet: false,
+                data: null,
+                reason: `Invalid JSON: ${e.message}`,
+            };
         }
-        return { isDatasheet: false, data: null };
     }
 
     /**
@@ -355,14 +381,14 @@
                     type = 'nested-array';
                 } else if (values.every((v) => typeof v === 'object' && !Array.isArray(v))) {
                     type = 'nested-object';
-                } else if (values.some((v) => typeof v === 'string' && /^https?:\/\//.test(v))) {
+                } else if (values.every((v) => typeof v === 'string' && /^https?:\/\//.test(v))) {
                     type = 'url';
-                } else if (values.some((v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v))) {
+                } else if (values.every((v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v))) {
                     type = 'date';
                 }
             }
 
-            return { key, type, width: 150 }; // default 150px width
+            return { key, type, width: DEFAULT_COLUMN_WIDTH };
         });
 
         return { columns };
@@ -391,14 +417,14 @@
             case 'date':
                 return TM.format?.formatDateTime ? TM.format.formatDateTime(value) : new Date(value).toLocaleString();
             case 'url':
-                return `<a href="${escapeHtml(value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`;
+                return `<a href="${encodeURI(value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`;
             case 'nested-array':
-                return `<span class="s3-ds-nested" onclick="TM.s3explorer.openNestedModal(${rowIdx}, '${escapeJsString(colKey)}')" title="Click to view nested array">
+                return `<span class="s3-ds-nested" data-row-idx="${rowIdx}" data-col-key="${escapeHtml(colKey)}" title="Click to view nested array">
                     <span class="s3-ds-nested-text">[${Array.isArray(value) ? value.length : 0} items]</span>
                     <span class="s3-ds-nested-icon">🔍</span>
                 </span>`;
             case 'nested-object':
-                return `<span class="s3-ds-nested" onclick="TM.s3explorer.openNestedModal(${rowIdx}, '${escapeJsString(colKey)}')" title="Click to view nested object">
+                return `<span class="s3-ds-nested" data-row-idx="${rowIdx}" data-col-key="${escapeHtml(colKey)}" title="Click to view nested object">
                     <span class="s3-ds-nested-text">{...}</span>
                     <span class="s3-ds-nested-icon">🔍</span>
                 </span>`;
@@ -658,7 +684,20 @@
     function openNestedModal(rowIdx, colKey) {
         if (!state.datasheetData) return;
 
-        const value = state.datasheetData[rowIdx][colKey];
+        // Validate row index bounds
+        if (rowIdx < 0 || rowIdx >= state.datasheetData.length) {
+            console.error(`Invalid row index: ${rowIdx}, data length: ${state.datasheetData.length}`);
+            return;
+        }
+
+        // Validate row and column key exist
+        const row = state.datasheetData[rowIdx];
+        if (!row || !(colKey in row)) {
+            console.error(`Invalid column key: ${colKey} for row ${rowIdx}`);
+            return;
+        }
+
+        const value = row[colKey];
         const modal = document.getElementById('s3-nested-modal');
         const body = document.getElementById('s3-nested-body');
         const title = document.getElementById('s3-nested-title');
@@ -1490,12 +1529,20 @@
                     if (detect.isDatasheet) {
                         state.editorMode = 'datasheet';
                         state.datasheetData = detect.data;
-                        state.datasheetSchema = inferSchema(detect.data);
+
+                        // Cache schema inference: only recompute if content changed
+                        // or if we don't have a cached schema
+                        const contentUnchanged = editor.value === state.originalContent;
+                        if (!state.datasheetSchema || !contentUnchanged) {
+                            state.datasheetSchema = inferSchema(detect.data);
+                        }
+
                         state.datasheetPage = 1;
                         state.treeviewData = null;
                         renderDatasheet();
                     } else {
-                        showToast('Cannot render as datasheet - must be a JSON array of objects', 'error');
+                        const reason = detect.reason || 'must be a JSON array of objects';
+                        showToast(`Cannot render as datasheet: ${reason}`, 'error');
                         return;
                     }
                 } else if (jsonType.isObject) {
@@ -2274,6 +2321,31 @@
         });
     }
 
+    /**
+     * Initialize datasheet event delegation
+     * Handles clicks on nested data cells without inline onclick handlers (XSS prevention)
+     */
+    function initDatasheetEvents() {
+        const datasheetTable = document.getElementById('s3-datasheet-table');
+        if (!datasheetTable) return;
+
+        // Use event delegation for nested data clicks (prevents XSS via onclick)
+        datasheetTable.addEventListener('click', (e) => {
+            // Find the nested data element (in case user clicked on child element)
+            const nestedElement = e.target.closest('.s3-ds-nested');
+            if (!nestedElement) return;
+
+            // Get row and column data from data attributes
+            const rowIdx = Number.parseInt(nestedElement.dataset.rowIdx, 10);
+            const colKey = nestedElement.dataset.colKey;
+
+            // Validate inputs before calling openNestedModal
+            if (Number.isNaN(rowIdx) || !colKey) return;
+
+            openNestedModal(rowIdx, colKey);
+        });
+    }
+
     /* istanbul ignore next */
     async function init() {
         const editor = document.getElementById('s3-editor');
@@ -2285,6 +2357,7 @@
         initDragDrop();
         initKeyboardShortcuts();
         initIconGridEvents();
+        initDatasheetEvents();
         updateViewToggleButton();
 
         // Listen for panel data changes to refresh S3 explorer
@@ -2351,6 +2424,8 @@
             buildOnclickHandler,
             shouldUseWysiwygMode,
             detectJsonType,
+            detectDatasheetMode,
+            inferSchema,
         },
     };
 });
