@@ -37,11 +37,12 @@ type S3Store interface {
 
 // Replicator manages replication of S3 data between coordinators.
 type Replicator struct {
-	nodeID    string
-	transport Transport
-	s3        S3Store
-	state     *State
-	logger    zerolog.Logger
+	nodeID               string
+	transport            Transport
+	s3                   S3Store
+	state                *State
+	logger               zerolog.Logger
+	maxPendingOperations int // Maximum pending ACKs (0 = unlimited)
 
 	// Peer coordinators
 	mu    sync.RWMutex
@@ -57,6 +58,7 @@ type Replicator struct {
 	receivedCount uint64
 	conflictCount uint64
 	errorCount    uint64
+	droppedCount  uint64 // Operations dropped due to pending limit
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -74,12 +76,13 @@ type pendingReplication struct {
 
 // Config contains configuration for the replicator.
 type Config struct {
-	NodeID        string
-	Transport     Transport
-	S3Store       S3Store
-	Logger        zerolog.Logger
-	AckTimeout    time.Duration // How long to wait for ACK before retrying
-	RetryInterval time.Duration // How long to wait before retrying failed replication
+	NodeID               string
+	Transport            Transport
+	S3Store              S3Store
+	Logger               zerolog.Logger
+	AckTimeout           time.Duration // How long to wait for ACK before retrying
+	RetryInterval        time.Duration // How long to wait before retrying failed replication
+	MaxPendingOperations int           // Maximum number of pending ACKs to track (0 = unlimited)
 }
 
 // NewReplicator creates a new replicator instance.
@@ -90,19 +93,23 @@ func NewReplicator(config Config) *Replicator {
 	if config.RetryInterval == 0 {
 		config.RetryInterval = 30 * time.Second
 	}
+	if config.MaxPendingOperations == 0 {
+		config.MaxPendingOperations = 10000 // Default: 10k pending operations
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	r := &Replicator{
-		nodeID:    config.NodeID,
-		transport: config.Transport,
-		s3:        config.S3Store,
-		state:     NewState(config.NodeID),
-		logger:    config.Logger.With().Str("component", "replicator").Logger(),
-		peers:     make(map[string]bool),
-		pending:   make(map[string]*pendingReplication),
-		ctx:       ctx,
-		cancel:    cancel,
+		nodeID:               config.NodeID,
+		transport:            config.Transport,
+		s3:                   config.S3Store,
+		state:                NewState(config.NodeID),
+		logger:               config.Logger.With().Str("component", "replicator").Logger(),
+		maxPendingOperations: config.MaxPendingOperations,
+		peers:                make(map[string]bool),
+		pending:              make(map[string]*pendingReplication),
+		ctx:                  ctx,
+		cancel:               cancel,
 	}
 
 	// Register message handler
@@ -222,8 +229,10 @@ func (r *Replicator) sendReplicateMessage(ctx context.Context, peer string, payl
 		return fmt.Errorf("marshal message: %w", err)
 	}
 
-	// Track pending ACK
-	r.trackPendingACK(msgID, payload.Bucket, payload.Key)
+	// Track pending ACK - returns false if dropped due to limit
+	if !r.trackPendingACK(msgID, payload.Bucket, payload.Key) {
+		return fmt.Errorf("dropped: pending operations limit reached")
+	}
 
 	// Send via transport
 	if err := r.transport.SendToCoordinator(ctx, peer, data); err != nil {
@@ -419,9 +428,22 @@ func (r *Replicator) handleSyncResponse(msg *Message) error {
 }
 
 // trackPendingACK tracks a pending ACK for a replication operation.
-func (r *Replicator) trackPendingACK(msgID, bucket, key string) {
+// Returns false if the operation was dropped due to pending limit.
+func (r *Replicator) trackPendingACK(msgID, bucket, key string) bool {
 	r.pendingMu.Lock()
 	defer r.pendingMu.Unlock()
+
+	// Check if we've reached the pending operations limit
+	if len(r.pending) >= r.maxPendingOperations {
+		r.logger.Warn().
+			Int("pending", len(r.pending)).
+			Int("limit", r.maxPendingOperations).
+			Str("bucket", bucket).
+			Str("key", key).
+			Msg("dropping replication operation: pending limit reached")
+		r.incrementDroppedCount()
+		return false
+	}
 
 	r.pending[msgID] = &pendingReplication{
 		bucket:  bucket,
@@ -432,6 +454,7 @@ func (r *Replicator) trackPendingACK(msgID, bucket, key string) {
 			r.removePendingACK(msgID)
 		}),
 	}
+	return true
 }
 
 // removePendingACK removes a pending ACK entry.
@@ -469,6 +492,7 @@ type Stats struct {
 	ReceivedCount uint64 `json:"received_count"`
 	ConflictCount uint64 `json:"conflict_count"`
 	ErrorCount    uint64 `json:"error_count"`
+	DroppedCount  uint64 `json:"dropped_count"`
 	PeerCount     int    `json:"peer_count"`
 	PendingACKs   int    `json:"pending_acks"`
 }
@@ -490,6 +514,7 @@ func (r *Replicator) GetStats() Stats {
 		ReceivedCount: r.receivedCount,
 		ConflictCount: r.conflictCount,
 		ErrorCount:    r.errorCount,
+		DroppedCount:  r.droppedCount,
 		PeerCount:     peerCount,
 		PendingACKs:   pendingCount,
 	}
@@ -516,6 +541,12 @@ func (r *Replicator) incrementConflictCount() {
 func (r *Replicator) incrementErrorCount() {
 	r.metricsMu.Lock()
 	r.errorCount++
+	r.metricsMu.Unlock()
+}
+
+func (r *Replicator) incrementDroppedCount() {
+	r.metricsMu.Lock()
+	r.droppedCount++
 	r.metricsMu.Unlock()
 }
 
