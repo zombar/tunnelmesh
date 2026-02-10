@@ -326,6 +326,12 @@ func (s *Server) setupAdminRoutes() {
 	// System health check
 	s.adminMux.HandleFunc("/api/system/health", s.handleSystemHealth)
 
+	// Coordinator replication endpoint (mesh-only, used by other coordinators)
+	// This MUST be on adminMux (not public mux) to ensure replication only happens within the mesh
+	if s.replicator != nil {
+		s.adminMux.HandleFunc("/api/replication/message", s.handleReplicationMessage)
+	}
+
 	// Expose metrics on admin interface for Prometheus scraping via mesh IP
 	s.adminMux.Handle("/metrics", promhttp.Handler())
 

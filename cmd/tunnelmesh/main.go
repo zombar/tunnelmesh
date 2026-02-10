@@ -955,12 +955,10 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			log.Error().Err(err).Msg("failed to load TLS certificate for coordinator services")
 		} else {
 			// Start admin HTTPS server if enabled
+			// Admin always uses port 443 (standard HTTPS) on mesh IP for consistency
+			// This ensures coordinator replication works (port must be predictable)
 			if cfg.Coordinator.Admin.Enabled {
-				adminPort := cfg.Coordinator.Admin.Port
-				if adminPort == 0 {
-					adminPort = 443
-				}
-				adminAddr := net.JoinHostPort(resp.MeshIP, fmt.Sprintf("%d", adminPort))
+				adminAddr := net.JoinHostPort(resp.MeshIP, "443")
 
 				if err := srv.StartAdminServer(adminAddr, &tlsCert); err != nil {
 					log.Error().Err(err).Msg("failed to start admin server")

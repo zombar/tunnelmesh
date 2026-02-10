@@ -16,7 +16,8 @@ import (
 // MeshTransport implements the Transport interface using HTTP to send messages
 // between coordinators over the mesh network.
 type MeshTransport struct {
-	// Base URL pattern for coordinators: https://{meshIP}:8443/api/replication/message
+	// Base URL pattern for coordinators: https://{meshIP}/api/replication/message
+	// Uses standard HTTPS port 443 (admin interface), which is mesh-only (not exposed to public internet)
 	httpClient *http.Client
 	handler    func(from string, data []byte) error
 	handlerMu  sync.RWMutex
@@ -51,8 +52,9 @@ func NewMeshTransport(logger zerolog.Logger, tlsConfig *tls.Config) *MeshTranspo
 // SendToCoordinator sends a replication message to another coordinator via HTTP.
 // The coordMeshIP should be the coordinator's mesh IP address (e.g., "10.42.0.1").
 func (mt *MeshTransport) SendToCoordinator(ctx context.Context, coordMeshIP string, data []byte) error {
-	// Build URL: https://{meshIP}:8443/api/replication/message
-	url := fmt.Sprintf("https://%s:8443/api/replication/message", coordMeshIP)
+	// Build URL: https://{meshIP}/api/replication/message
+	// Uses standard HTTPS port 443 (admin interface), which is only accessible from within the mesh
+	url := fmt.Sprintf("https://%s/api/replication/message", coordMeshIP)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
 	if err != nil {

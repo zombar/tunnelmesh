@@ -863,10 +863,8 @@ func (s *Server) setupRoutes() {
 		s.setupWireGuardRoutes()
 	}
 
-	// Setup replication endpoint (used by other coordinators)
-	if s.replicator != nil {
-		s.mux.HandleFunc("/api/replication/message", s.handleReplicationMessage)
-	}
+	// Note: Replication endpoint moved to adminMux (see admin.go) to ensure
+	// replication only happens within the mesh network, not from public internet
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

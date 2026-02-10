@@ -116,7 +116,7 @@ func TestSendToCoordinator_URLConstruction(t *testing.T) {
 
 	_ = mt.SendToCoordinator(ctx, coordIP, []byte("test"))
 
-	expectedURL := "https://10.42.0.5:8443/api/replication/message"
+	expectedURL := "https://10.42.0.5/api/replication/message"
 	if mockTransport.capturedReq.URL.String() != expectedURL {
 		t.Errorf("expected URL %q, got %q", expectedURL, mockTransport.capturedReq.URL.String())
 	}
@@ -268,7 +268,7 @@ func TestSendToCoordinator_NetworkError(t *testing.T) {
 
 	expectedErr := &url.Error{
 		Op:  "Post",
-		URL: "https://10.42.0.1:8443/api/replication/message",
+		URL: "https://10.42.0.1/api/replication/message",
 		Err: errors.New("network unreachable"),
 	}
 
