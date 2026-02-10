@@ -7,7 +7,12 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint:css": "stylelint 'internal/coord/web/css/**/*.css'",
+    "lint:css:fix": "stylelint 'internal/coord/web/css/**/*.css' --fix",
+    "lint:js": "biome check internal/coord/web/js/",
+    "lint:js:fix": "biome check --write internal/coord/web/js/",
+    "lint": "npm run lint:css && npm run lint:js"
   },
   "repository": {
     "type": "git",

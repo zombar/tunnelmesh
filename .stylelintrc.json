@@ -6,6 +6,7 @@
     "color-function-notation": "modern",
     "alpha-value-notation": "number",
     "selector-id-pattern": null,
-    "no-descending-specificity": null
+    "no-descending-specificity": null,
+    "media-feature-range-notation": "prefix"
   }
 }
