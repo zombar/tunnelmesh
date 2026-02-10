@@ -1655,6 +1655,18 @@ a.logs-container {
     background: var(--color-border-secondary);
 }
 
+/* Primary button (green) */
+.s3-btn.btn-primary {
+    background: var(--color-btn-primary);
+    border-color: var(--color-btn-primary);
+    color: #fff;
+}
+
+.s3-btn.btn-primary:hover {
+    background: var(--color-btn-primary-hover);
+    border-color: var(--color-btn-primary-hover);
+}
+
 /* Save button highlight when dirty */
 .s3-btn-save.dirty {
     background: var(--color-btn-primary);
