@@ -1871,11 +1871,7 @@
             // Restore cursor position after conversion
             try {
                 const newRange = document.createRange();
-                const walker = document.createTreeWalker(
-                    wysiwyg,
-                    NodeFilter.SHOW_TEXT,
-                    null,
-                );
+                const walker = document.createTreeWalker(wysiwyg, NodeFilter.SHOW_TEXT, null);
 
                 let currentOffset = 0;
                 let targetNode = null;
