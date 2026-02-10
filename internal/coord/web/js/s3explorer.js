@@ -40,16 +40,7 @@
         // View mode (defaults to 'icon' - user can toggle to 'list' view manually)
         viewMode: 'icon', // 'list' or 'icon'
         // Editor mode
-        editorMode: 'source', // 'source' or 'wysiwyg'
-        // Canonical source tracking (for deterministic mode switching)
-        canonicalMarkdown: '', // The authoritative markdown source
-        wysiwygSnapshot: '', // HTML snapshot to detect actual user changes
-        // Separate cursor positions (no cross-mode mapping)
-        sourceCursorPosition: { start: 0, end: 0 },
-        wysiwygCursorPosition: { offset: 0 },
-        // Observer control
-        mutationObserverPaused: false,
-        wysiwygObserver: null,
+        editorMode: 'source', // 'source' or 'wysiwyg' (wysiwyg is read-only preview)
     };
 
     // Text file extensions
@@ -774,13 +765,6 @@
             }
 
             state.originalContent = displayContent;
-            // Store canonical markdown (source of truth for deterministic mode switching)
-            state.canonicalMarkdown = displayContent;
-            state.wysiwygSnapshot = '';
-
-            // Initialize cursor positions (start at beginning of file)
-            state.sourceCursorPosition = { start: 0, end: 0 };
-            state.wysiwygCursorPosition = { offset: 0 };
 
             // Auto-switch to WYSIWYG mode for markdown files
             if (ext === 'md') {
@@ -851,23 +835,15 @@
                 const wysiwyg = document.getElementById('s3-wysiwyg');
                 if (wysiwyg) {
                     if (TM.markdown) {
-                        // Pause observer during programmatic change
-                        state.mutationObserverPaused = true;
-                        try {
-                            wysiwyg.innerHTML = TM.markdown.renderMarkdown(state.canonicalMarkdown);
-                            wysiwyg.contentEditable = isReadOnly ? 'false' : 'true';
-                            // Save snapshot for dirty detection
-                            state.wysiwygSnapshot = wysiwyg.innerHTML;
-                        } finally {
-                            state.mutationObserverPaused = false;
-                        }
+                        // Render markdown as read-only preview
+                        wysiwyg.innerHTML = TM.markdown.renderMarkdown(state.originalContent);
                     } else {
                         console.error('TM.markdown not loaded - falling back to source mode');
                         state.editorMode = 'source';
                     }
                 }
                 if (editor) {
-                    editor.value = state.canonicalMarkdown;
+                    editor.value = state.originalContent;
                     editor.readOnly = isReadOnly;
                 }
 
@@ -879,7 +855,7 @@
                 }
             } else {
                 if (editor) {
-                    editor.value = state.canonicalMarkdown;
+                    editor.value = state.originalContent;
                     editor.readOnly = isReadOnly;
                 }
                 updateEditorUI('source');
@@ -899,12 +875,6 @@
             if (confirm(`Save changes to "${fileName}" before closing?`)) {
                 await saveFile();
             }
-        }
-
-        // Clean up observer to prevent memory leaks
-        if (state.wysiwygObserver) {
-            state.wysiwygObserver.disconnect();
-            state.wysiwygObserver = null;
         }
 
         state.currentFile = null;
@@ -929,11 +899,8 @@
     function onEditorInput() {
         const editor = document.getElementById('s3-editor');
 
-        // Update canonical markdown from source editor
-        state.canonicalMarkdown = editor.value;
-
-        // Check dirty state against canonical markdown
-        state.isDirty = state.canonicalMarkdown !== state.originalContent;
+        // Check dirty state
+        state.isDirty = editor.value !== state.originalContent;
 
         updateLineNumbers();
         updateSaveButton();
@@ -1001,78 +968,16 @@
         const editor = document.getElementById('s3-editor');
         const wysiwyg = document.getElementById('s3-wysiwyg');
 
-        // STEP 1: Save cursor position for CURRENT mode
-        if (state.editorMode === 'source') {
-            // Switching FROM source TO wysiwyg
-            if (editor) {
-                state.sourceCursorPosition = {
-                    start: editor.selectionStart,
-                    end: editor.selectionEnd,
-                };
-            }
+        // Toggle mode
+        state.editorMode = state.editorMode === 'source' ? 'wysiwyg' : 'source';
 
-            // Update canonical markdown from source editor
-            state.canonicalMarkdown = editor.value;
-        } else {
-            // Switching FROM wysiwyg TO source
-            state.wysiwygCursorPosition = {
-                offset: getCurrentWysiwygCursorOffset(),
-            };
-
-            // DON'T try to convert WYSIWYG → markdown
-            // The canonical markdown is already stored!
+        // Render preview from current editor content
+        if (state.editorMode === 'wysiwyg' && wysiwyg && TM.markdown) {
+            wysiwyg.innerHTML = TM.markdown.renderMarkdown(editor.value);
         }
 
-        // STEP 2: Switch mode
-        const newMode = state.editorMode === 'source' ? 'wysiwyg' : 'source';
-        state.editorMode = newMode;
-        updateEditorUI(newMode);
-
-        // STEP 3: Render in new mode using CANONICAL MARKDOWN
-        if (newMode === 'wysiwyg') {
-            if (wysiwyg && TM.markdown) {
-                // Pause observer during programmatic change
-                state.mutationObserverPaused = true;
-                try {
-                    // Render from canonical markdown
-                    wysiwyg.innerHTML = TM.markdown.renderMarkdown(state.canonicalMarkdown);
-                    wysiwyg.contentEditable = state.writable ? 'true' : 'false';
-
-                    // Save snapshot for dirty detection
-                    state.wysiwygSnapshot = wysiwyg.innerHTML;
-                } finally {
-                    state.mutationObserverPaused = false;
-                }
-            }
-        } else {
-            // Render canonical markdown in source editor
-            if (editor) {
-                editor.value = state.canonicalMarkdown;
-                updateLineNumbers();
-            }
-        }
-
-        // STEP 4: Restore cursor position for NEW mode
-        requestAnimationFrame(() => {
-            if (newMode === 'source') {
-                // Restore source cursor
-                if (editor) {
-                    // Bounds checking: ensure cursor positions are valid
-                    const maxPos = editor.value.length;
-                    editor.selectionStart = Math.min(state.sourceCursorPosition.start, maxPos);
-                    editor.selectionEnd = Math.min(state.sourceCursorPosition.end, maxPos);
-                    editor.focus();
-                }
-            } else {
-                // Restore WYSIWYG cursor
-                if (wysiwyg) {
-                    restoreWysiwygCursorPosition(state.wysiwygCursorPosition.offset);
-                    wysiwyg.focus();
-                }
-            }
-        });
-
-        // Update button
+        // Update UI
+        updateEditorUI(state.editorMode);
         updateModeToggleButton();
     }
 
@@ -1081,6 +986,8 @@
         const editor = document.getElementById('s3-editor');
         const wysiwyg = document.getElementById('s3-wysiwyg');
         const editorWrap = document.querySelector('.s3-editor-wrap');
+        const saveBtn = document.getElementById('s3-save-btn');
+        const autosaveLabel = document.querySelector('.s3-autosave-label');
 
         if (!editor || !wysiwyg) return;
 
@@ -1088,10 +995,24 @@
             editor.style.display = 'none';
             wysiwyg.style.display = 'block';
             if (editorWrap) editorWrap.classList.add('wysiwyg-mode');
+            // Hide save and autosave in preview mode (read-only)
+            if (saveBtn) saveBtn.style.display = 'none';
+            if (autosaveLabel) autosaveLabel.style.display = 'none';
         } else {
             editor.style.display = 'block';
             wysiwyg.style.display = 'none';
             if (editorWrap) editorWrap.classList.remove('wysiwyg-mode');
+            // Show save and autosave in source mode (unless read-only)
+            if (saveBtn && !state.writable) {
+                saveBtn.style.display = 'none';
+            } else if (saveBtn) {
+                saveBtn.style.display = 'inline-flex';
+            }
+            if (autosaveLabel && !state.writable) {
+                autosaveLabel.style.display = 'none';
+            } else if (autosaveLabel) {
+                autosaveLabel.style.display = '';
+            }
         }
     }
 
@@ -1105,99 +1026,8 @@
             btn.title = 'Switch to source mode';
             if (label) label.textContent = 'Source';
         } else {
-            btn.title = 'Switch to WYSIWYG mode';
-            if (label) label.textContent = 'WYSIWYG';
-        }
-    }
-
-    function getCharacterOffset(root, range) {
-        if (typeof document === 'undefined') return 0;
-
-        let charCount = 0;
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-
-        while (walker.nextNode()) {
-            if (walker.currentNode === range.startContainer) {
-                return charCount + range.startOffset;
-            }
-            charCount += walker.currentNode.textContent.length;
-        }
-
-        return charCount;
-    }
-
-    function getNodeAndOffset(root, targetOffset) {
-        if (typeof document === 'undefined') return { node: root, offset: 0 };
-
-        let charCount = 0;
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-
-        while (walker.nextNode()) {
-            const nodeLength = walker.currentNode.textContent.length;
-            if (charCount + nodeLength >= targetOffset) {
-                return {
-                    node: walker.currentNode,
-                    offset: Math.min(targetOffset - charCount, nodeLength),
-                };
-            }
-            charCount += nodeLength;
-        }
-
-        // Fallback: place cursor at end
-        return { node: root, offset: 0 };
-    }
-
-    // Get current WYSIWYG cursor offset (simplified, no cross-mode mapping)
-    function getCurrentWysiwygCursorOffset() {
-        const wysiwyg = document.getElementById('s3-wysiwyg');
-        if (!wysiwyg || typeof window === 'undefined') return 0;
-
-        const selection = window.getSelection();
-        if (!selection || !selection.rangeCount) return 0;
-
-        const range = selection.getRangeAt(0);
-        return getCharacterOffset(wysiwyg, range);
-    }
-
-    // Get total text length in WYSIWYG editor
-    /* istanbul ignore next */
-    function getWysiwygTextLength(root) {
-        // FIX: Add null check for robustness (PR #278 review feedback)
-        if (typeof document === 'undefined' || !root) return 0;
-
-        let totalLength = 0;
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-
-        while (walker.nextNode()) {
-            totalLength += walker.currentNode.textContent.length;
-        }
-
-        return totalLength;
-    }
-
-    // Restore WYSIWYG cursor to specific offset
-    /* istanbul ignore next */
-    function restoreWysiwygCursorPosition(offset) {
-        const wysiwyg = document.getElementById('s3-wysiwyg');
-        if (!wysiwyg || typeof window === 'undefined') return;
-
-        // Bounds checking: clamp offset to valid range
-        const maxOffset = getWysiwygTextLength(wysiwyg);
-        const clampedOffset = Math.min(Math.max(0, offset), maxOffset);
-
-        const position = getNodeAndOffset(wysiwyg, clampedOffset);
-        if (!position) return;
-
-        try {
-            const range = document.createRange();
-            range.setStart(position.node, position.offset);
-            range.collapse(true);
-
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(range);
-        } catch (e) {
-            console.debug('Could not restore cursor:', e);
+            btn.title = 'Switch to preview mode';
+            if (label) label.textContent = 'Preview';
         }
     }
 
@@ -1256,11 +1086,12 @@
     async function saveFile() {
         if (!state.currentFile || !state.isDirty) return;
 
+        const editor = document.getElementById('s3-editor');
         const fileName = state.currentFile.key.split('/').pop();
 
         try {
-            // Save the CANONICAL MARKDOWN (not converted from WYSIWYG!)
-            const content = state.canonicalMarkdown;
+            // Save from source editor
+            const content = editor.value;
 
             await putObject(state.currentFile.bucket, state.currentFile.key, content, getContentType(fileName));
 
@@ -1822,176 +1653,6 @@
     }
 
     /* istanbul ignore next */
-    function convertMarkdownPatternsInNode(node) {
-        // Only process text nodes
-        if (node.nodeType !== Node.TEXT_NODE) return false;
-        if (!TM.markdown || !TM.markdown.processInline) return false;
-
-        const text = node.textContent;
-        console.debug('[WYSIWYG] Processing text:', text);
-
-        // Use markdown library's processInline() for consistency
-        // This ensures ALL patterns supported by the library are auto-converted
-        const processedHtml = TM.markdown.processInline(text);
-        console.debug('[WYSIWYG] Processed HTML:', processedHtml);
-
-        // FIX: Check if HTML contains formatting tags (not just escaped text)
-        // If processInline() added <strong>, <em>, <code>, etc., it found patterns
-        const hasFormatting = /<(strong|em|code|del|a|img)\b/.test(processedHtml);
-        console.debug('[WYSIWYG] Has formatting:', hasFormatting);
-
-        if (!hasFormatting) {
-            return false; // No markdown patterns found
-        }
-
-        // Replace the text node with the formatted HTML
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = processedHtml;
-
-        const parent = node.parentNode;
-        if (parent) {
-            while (tempDiv.firstChild) {
-                parent.insertBefore(tempDiv.firstChild, node);
-            }
-            parent.removeChild(node);
-            return true;
-        }
-
-        return false;
-    }
-
-    /* istanbul ignore next */
-    function handleWysiwygInput(e) {
-        const wysiwyg = document.getElementById('s3-wysiwyg');
-        if (!wysiwyg || state.editorMode !== 'wysiwyg') return;
-
-        // Only auto-convert on space or Enter
-        if (e.inputType !== 'insertText' && e.inputType !== 'insertParagraph') return;
-        if (e.data !== ' ' && e.data !== null) return; // null for Enter
-
-        // Get the current selection
-        const selection = window.getSelection();
-        if (!selection.rangeCount) return;
-
-        const range = selection.getRangeAt(0);
-        let textNode = range.startContainer;
-
-        // FIX: If selection is on element, find the text node inside
-        if (textNode.nodeType !== Node.TEXT_NODE) {
-            // Try to find text node in children
-            if (textNode.lastChild && textNode.lastChild.nodeType === Node.TEXT_NODE) {
-                textNode = textNode.lastChild;
-            } else {
-                return; // No text node to process
-            }
-        }
-
-        // Save cursor position
-        const cursorOffset = range.startOffset;
-
-        // Pause observer during conversion
-        state.mutationObserverPaused = true;
-        try {
-            // Try to convert markdown patterns
-            const modified = convertMarkdownPatternsInNode(textNode);
-
-            if (modified) {
-                // Restore cursor position after conversion
-                try {
-                    const newRange = document.createRange();
-                    const walker = document.createTreeWalker(wysiwyg, NodeFilter.SHOW_TEXT, null);
-
-                    let currentOffset = 0;
-                    let targetNode = null;
-                    let targetOffset = 0;
-
-                    // Find the text node at the cursor position
-                    while (walker.nextNode()) {
-                        const node = walker.currentNode;
-                        const nodeLength = node.textContent.length;
-
-                        if (currentOffset + nodeLength >= cursorOffset) {
-                            targetNode = node;
-                            targetOffset = cursorOffset - currentOffset;
-                            break;
-                        }
-
-                        currentOffset += nodeLength;
-                    }
-
-                    if (targetNode) {
-                        newRange.setStart(targetNode, Math.min(targetOffset, targetNode.textContent.length));
-                        newRange.collapse(true);
-                        selection.removeAllRanges();
-                        selection.addRange(newRange);
-                    }
-                } catch (e) {
-                    console.debug('Could not restore cursor after markdown conversion:', e);
-                }
-            }
-        } finally {
-            // Resume observer
-            state.mutationObserverPaused = false;
-        }
-    }
-
-    function initWysiwygEditor() {
-        const wysiwyg = document.getElementById('s3-wysiwyg');
-        if (!wysiwyg || typeof MutationObserver === 'undefined') return;
-
-        // Add input listener for markdown auto-conversion
-        wysiwyg.addEventListener('input', handleWysiwygInput);
-
-        const observer = new MutationObserver(() => {
-            // Skip if observer is paused (programmatic changes)
-            if (state.mutationObserverPaused) return;
-
-            // Skip if not in WYSIWYG mode or no file open
-            if (state.editorMode !== 'wysiwyg' || !state.currentFile) return;
-
-            // Detect ACTUAL user changes by comparing HTML snapshots
-            const currentHtml = wysiwyg.innerHTML;
-
-            if (currentHtml !== state.wysiwygSnapshot) {
-                // User made a real edit!
-                state.wysiwygSnapshot = currentHtml;
-
-                // Try to convert to markdown (best effort)
-                if (TM.markdown) {
-                    const markdown = TM.markdown.htmlToMarkdown(currentHtml);
-
-                    // Update canonical markdown if conversion succeeded
-                    if (markdown?.trim()) {
-                        state.canonicalMarkdown = markdown;
-                    }
-                }
-
-                // Check if content differs from original file
-                state.isDirty = state.canonicalMarkdown !== state.originalContent;
-                updateSaveButton();
-
-                // Autosave
-                if (state.autosave && state.isDirty) {
-                    if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
-                    state.autosaveTimer = setTimeout(() => {
-                        saveFile();
-                    }, 1500);
-                }
-            }
-        });
-
-        observer.observe(wysiwyg, {
-            childList: true,
-            subtree: true,
-            characterData: true,
-            attributes: true,
-        });
-
-        // Store observer reference for cleanup
-        state.wysiwygObserver = observer;
-    }
-
-    /* istanbul ignore next */
     async function init() {
         const editor = document.getElementById('s3-editor');
         if (editor) {
@@ -2002,7 +1663,6 @@
         initDragDrop();
         initKeyboardShortcuts();
         initIconGridEvents();
-        initWysiwygEditor();
 
         // Listen for panel data changes to refresh S3 explorer
         // (user might be browsing state metadata like filter rules, groups, etc.)

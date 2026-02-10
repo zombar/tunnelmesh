@@ -124,6 +124,10 @@
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
                                 <span>Save</span>
                             </button>
+                            <button class="s3-btn s3-btn-primary" id="s3-mode-toggle-btn" onclick="s3ToggleEditorMode()" title="Toggle between source and preview">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9l.94.94L5.92 19H5v-.92L14.06 9m3.6-6c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"/></svg>
+                                <span id="s3-mode-label">Preview</span>
+                            </button>
                             <button class="s3-btn" onclick="s3Download()" title="Download file">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
                                 <span>Download</span>
@@ -135,10 +139,6 @@
                             <button class="s3-btn" onclick="TM.s3explorer.showVersionHistory()" title="Version history">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
                                 <span>History</span>
-                            </button>
-                            <button class="s3-btn" id="s3-mode-toggle-btn" onclick="s3ToggleEditorMode()" title="Toggle WYSIWYG">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9l.94.94L5.92 19H5v-.92L14.06 9m3.6-6c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"/></svg>
-                                <span id="s3-mode-label">WYSIWYG</span>
                             </button>
                         </div>
                         <div class="s3-toolbar-spacer"></div>
