@@ -1666,18 +1666,6 @@ a.logs-container {
     border-color: var(--color-btn-primary-hover);
 }
 
-/* Primary button */
-.s3-btn-primary {
-    background: var(--color-btn-primary);
-    border-color: var(--color-btn-primary);
-    color: #fff;
-}
-
-.s3-btn-primary:hover {
-    background: var(--color-btn-primary-hover);
-    border-color: var(--color-btn-primary-hover);
-}
-
 /* Danger button */
 .s3-btn-danger:hover {
     background: var(--color-btn-danger);

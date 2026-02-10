@@ -1026,12 +1026,15 @@
         const label = document.getElementById('s3-mode-label');
         if (!btn) return;
 
+        // Update icon and label based on current mode
         if (state.editorMode === 'wysiwyg') {
+            // Currently in preview mode, show "Source" button with edit icon
             btn.title = 'Switch to source mode';
-            if (label) label.textContent = 'Source';
+            btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14.06 9l.94.94L5.92 19H5v-.92L14.06 9m3.6-6c-.25 0-.51.1-.7.29l-1.83 1.83 3.75 3.75 1.83-1.83c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.2-.2-.45-.29-.71-.29zm-3.6 3.19L3 17.25V21h3.75L17.81 9.94l-3.75-3.75z"/></svg><span id="s3-mode-label">Source</span>';
         } else {
+            // Currently in source mode, show "Preview" button with magnifying glass icon
             btn.title = 'Switch to preview mode';
-            if (label) label.textContent = 'Preview';
+            btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg><span id="s3-mode-label">Preview</span>';
         }
     }
 
@@ -1667,6 +1670,7 @@
         initDragDrop();
         initKeyboardShortcuts();
         initIconGridEvents();
+        updateViewToggleButton();
 
         // Listen for panel data changes to refresh S3 explorer
         // (user might be browsing state metadata like filter rules, groups, etc.)
