@@ -24,7 +24,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
-	"github.com/tunnelmesh/tunnelmesh/internal/coord/cluster"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/nfs"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/replication"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
@@ -69,10 +68,9 @@ type serverStats struct {
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
 	cfg          *config.PeerConfig
-	mux          *http.ServeMux              // Public coordination API (peer registration, heartbeats)
-	adminMux     *http.ServeMux              // Private admin interface (dashboards, monitoring) - mesh-only
-	adminServer  *http.Server                // HTTPS server for adminMux, bound to mesh IP only
-	cluster      *cluster.CoordinatorCluster // Memberlist cluster (nil if not using clustering)
+	mux          *http.ServeMux // Public coordination API (peer registration, heartbeats)
+	adminMux     *http.ServeMux // Private admin interface (dashboards, monitoring) - mesh-only
+	adminServer  *http.Server   // HTTPS server for adminMux, bound to mesh IP only
 	peers        map[string]*peerInfo
 	peersMu      sync.RWMutex
 	ipAlloc      *ipAllocator
@@ -384,55 +382,9 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 	if coordAddr == "" {
 		coordAddr = ":8080"
 	}
-	clusterName := fmt.Sprintf("%s%s", cfg.Name, coordAddr)
 
-	// Initialize memberlist cluster if seeds are configured
-	if len(cfg.Coordinator.MemberlistSeeds) > 0 {
-		clust, err := cluster.NewCoordinatorCluster(
-			cfg.Coordinator.MemberlistBindAddr,
-			clusterName,
-			cfg.Coordinator.MemberlistSeeds,
-		)
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to initialize coordinator cluster (will run standalone)")
-		} else {
-			srv.cluster = clust
-			log.Info().
-				Int("members", clust.NumMembers()).
-				Strs("seeds", cfg.Coordinator.MemberlistSeeds).
-				Msg("coordinator cluster initialized")
-		}
-	}
-
-	// Initialize replicator if clustering is enabled
-	if srv.cluster != nil && srv.s3Store != nil {
-		// Create mesh transport for replication with TLS certificate verification
-		tlsConfig := srv.ca.GetClientTLSConfig()
-		srv.meshTransport = replication.NewMeshTransport(log.Logger, tlsConfig)
-
-		// Create S3 store adapter for replication interface
-		s3Adapter := replication.NewS3StoreAdapter(srv.s3Store)
-
-		// Create replicator with transport and S3 store
-		repConfig := replication.Config{
-			NodeID:    clusterName, // Use cluster name as node ID
-			Transport: srv.meshTransport,
-			S3Store:   s3Adapter,
-			Logger:    log.Logger,
-		}
-		srv.replicator = replication.NewReplicator(repConfig)
-
-		// Add cluster members as replication peers
-		for _, addr := range srv.cluster.GetCoordinatorAddresses() {
-			// Extract mesh IP from address (format: "coord.tunnelmesh:8443" or "10.42.0.1:8443")
-			// For now, we'll use the full address as peer ID
-			srv.replicator.AddPeer(addr)
-		}
-
-		log.Info().
-			Int("peers", len(srv.cluster.GetCoordinatorAddresses())).
-			Msg("replicator initialized with cluster peers")
-	}
+	// TODO: Initialize replicator with peer list-based coordinator discovery
+	// Coordinators will discover each other through the peer list using is_coordinator flag
 
 	srv.setupRoutes()
 	return srv, nil
@@ -716,19 +668,6 @@ func (s *Server) Shutdown() error {
 		if err := s.replicator.Stop(); err != nil {
 			log.Error().Err(err).Msg("failed to stop replicator")
 			errs = append(errs, fmt.Errorf("stop replicator: %w", err))
-		}
-	}
-
-	// Leave memberlist cluster and unpublish SRV record
-	if s.cluster != nil {
-		log.Info().Msg("leaving coordinator cluster")
-		if err := s.cluster.Leave(); err != nil {
-			log.Error().Err(err).Msg("failed to leave cluster gracefully")
-			errs = append(errs, fmt.Errorf("leave cluster: %w", err))
-		}
-		if err := s.cluster.Shutdown(); err != nil {
-			log.Error().Err(err).Msg("failed to shutdown cluster")
-			errs = append(errs, fmt.Errorf("shutdown cluster: %w", err))
 		}
 	}
 
@@ -1592,6 +1531,15 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		go s.saveDNSData()
 	}
 
+	// Update replicator peer list if this is a coordinator
+	if peer.IsCoordinator && s.replicator != nil {
+		// Don't add self to replication targets
+		if coordIP, ok := s.coordMeshIP.Load().(string); !ok || meshIP != coordIP {
+			s.replicator.AddPeer(meshIP)
+			log.Debug().Str("peer", req.Name).Str("mesh_ip", meshIP).Msg("added coordinator to replication targets")
+		}
+	}
+
 	// Auto-register peer: add to "everyone" group and create peer record on first registration
 	// Peer identity is derived from peer's SSH key - no separate registration needed
 	isAdmin := false
@@ -1760,6 +1708,12 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 			}
 			delete(s.peers, name)
 			delete(s.dnsCache, name)
+
+			// Remove from replicator if this was a coordinator
+			if info.peer.IsCoordinator && s.replicator != nil {
+				s.replicator.RemovePeer(info.peer.MeshIP)
+				log.Debug().Str("peer", name).Str("mesh_ip", info.peer.MeshIP).Msg("removed coordinator from replication targets")
+			}
 		}
 		s.peersMu.Unlock()
 
