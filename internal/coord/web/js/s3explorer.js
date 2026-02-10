@@ -2331,17 +2331,44 @@
         if (!confirm(confirmMsg)) return;
 
         try {
+            let deletedCount = 0;
             for (const itemId of state.selectedItems) {
                 const item = state.currentItems.find((i) => (i.key || i.name) === itemId);
                 if (!item || item.isBucket) continue;
 
-                const key = item.key || item.name;
-                await deleteObject(state.currentBucket, key);
+                // Handle folder deletion
+                if (item.isFolder) {
+                    const folderPrefix = item.key; // Already ends with '/'
+
+                    // Check if folder is empty (only contains .folder marker or nothing)
+                    const objects = await fetchObjects(state.currentBucket, folderPrefix);
+                    const nonMarkerObjects = objects.filter((obj) => !obj.key.endsWith('/.folder'));
+
+                    if (nonMarkerObjects.length > 0) {
+                        showToast(
+                            `Cannot delete "${item.name}" - folder contains ${nonMarkerObjects.length} item${nonMarkerObjects.length > 1 ? 's' : ''}`,
+                            'error',
+                        );
+                        continue;
+                    }
+
+                    // Delete the .folder marker if it exists
+                    const markerKey = `${folderPrefix}.folder`;
+                    await deleteObject(state.currentBucket, markerKey);
+                    deletedCount++;
+                } else {
+                    // Regular file deletion
+                    const key = item.key || item.name;
+                    await deleteObject(state.currentBucket, key);
+                    deletedCount++;
+                }
             }
 
             state.selectedItems.clear();
             updateSelectionUI();
-            showToast(`Deleted ${count} item${count > 1 ? 's' : ''}`, 'success');
+            if (deletedCount > 0) {
+                showToast(`Deleted ${deletedCount} item${deletedCount > 1 ? 's' : ''}`, 'success');
+            }
             await renderFileListing();
         } catch (err) {
             console.error('Delete failed:', err);
