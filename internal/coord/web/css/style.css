@@ -1679,11 +1679,15 @@ a.logs-container {
     border-color: var(--color-btn-primary-hover);
 }
 
-/* Danger button */
-.s3-btn-danger:hover {
+/* Danger button (red) */
+.s3-btn-danger {
     background: var(--color-btn-danger);
     border-color: var(--color-btn-danger);
     color: #fff;
+}
+
+.s3-btn-danger:hover {
+    opacity: 0.9;
 }
 
 .s3-btn-icon {
