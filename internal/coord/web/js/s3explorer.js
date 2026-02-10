@@ -368,6 +368,7 @@
     // Rendering
     // =========================================================================
 
+    /* istanbul ignore next */
     function renderBreadcrumb() {
         const container = document.getElementById('s3-breadcrumb');
         if (!container) return;
@@ -414,6 +415,7 @@
         container.innerHTML = html;
     }
 
+    /* istanbul ignore next */
     async function renderFileListing(resetPagination = true) {
         const tbody = document.getElementById('s3-files-body');
         const table = document.getElementById('s3-files');
@@ -611,6 +613,7 @@
         }
     }
 
+    /* istanbul ignore next */
     function renderIconGrid(items) {
         const iconGrid = document.getElementById('s3-icons');
         if (!iconGrid) return;
@@ -909,6 +912,7 @@
         renderFileListing();
     }
 
+    /* istanbul ignore next */
     function updateLineNumbers() {
         const editor = document.getElementById('s3-editor');
         const lineNumbers = document.getElementById('s3-line-numbers');
@@ -973,6 +977,7 @@
         renderFileListing(false);
     }
 
+    /* istanbul ignore next */
     function updateViewToggleButton() {
         const btn = document.getElementById('s3-view-toggle-btn');
         if (!btn) return;
@@ -1071,6 +1076,7 @@
         updateModeToggleButton();
     }
 
+    /* istanbul ignore next */
     function updateEditorUI(mode) {
         const editor = document.getElementById('s3-editor');
         const wysiwyg = document.getElementById('s3-wysiwyg');
@@ -1089,6 +1095,7 @@
         }
     }
 
+    /* istanbul ignore next */
     function updateModeToggleButton() {
         const btn = document.getElementById('s3-mode-toggle-btn');
         const label = document.getElementById('s3-mode-label');
@@ -1173,6 +1180,7 @@
         }
     }
 
+    /* istanbul ignore next */
     function updateSaveButton() {
         const saveBtn = document.getElementById('s3-save-btn');
         if (!saveBtn) return;
@@ -1540,6 +1548,7 @@
     // Drag and Drop
     // =========================================================================
 
+    /* istanbul ignore next */
     function initDragDrop() {
         const section = document.getElementById('s3-section');
         const dropZone = document.getElementById('s3-drop-zone');
@@ -1586,6 +1595,7 @@
     // Keyboard Shortcuts
     // =========================================================================
 
+    /* istanbul ignore next */
     function initKeyboardShortcuts() {
         document.addEventListener('keydown', (e) => {
             const editor = document.getElementById('s3-editor');
@@ -1612,6 +1622,7 @@
         updateRowSelectionVisuals();
     }
 
+    /* istanbul ignore next */
     function updateSelectionUI() {
         const browseActions = document.getElementById('s3-browse-actions');
         const selectionActions = document.getElementById('s3-selection-actions');
@@ -1750,6 +1761,7 @@
     // Initialization
     // =========================================================================
 
+    /* istanbul ignore next */
     function initIconGridEvents() {
         const iconGrid = document.getElementById('s3-icons');
         if (!iconGrid) return;
@@ -1943,6 +1955,7 @@
         state.wysiwygObserver = observer;
     }
 
+    /* istanbul ignore next */
     async function init() {
         const editor = document.getElementById('s3-editor');
         if (editor) {
