@@ -550,8 +550,12 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		cfg.AllowExitTraffic = true
 	}
 
-	if len(cfg.Servers) == 0 || cfg.AuthToken == "" {
-		return fmt.Errorf("servers and token are required\nHint: run with --server and --token flags to update context credentials")
+	// Validate configuration (allow empty servers for standalone coordinators)
+	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
+		return fmt.Errorf("servers required for non-coordinator peers\nHint: run with --server flag to update context credentials")
+	}
+	if cfg.AuthToken == "" {
+		return fmt.Errorf("auth_token is required\nHint: run with --token flag to update context credentials")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
