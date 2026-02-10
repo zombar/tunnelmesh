@@ -44,20 +44,14 @@ log_level: "info"
 # Coordinator Services (Optional)
 # -----------------------------------------------------------------------------
 # Enable coordinator services on this peer to run discovery, admin UI,
-# relay, and S3 storage. Multiple coordinators can cluster together via
-# memberlist gossip for high availability.
+# relay, and S3 storage. Multiple coordinators discover each other
+# automatically through the mesh peer list (P2P discovery).
 #
 # For a complete coordinator example, see: server.yaml.example
 
 # coordinator:
 #   enabled: true                # Enable coordinator services on this peer
 #   listen: ":8443"              # HTTPS listen address for peer registrations
-#
-#   # Memberlist clustering (for multi-coordinator setups)
-#   memberlist_seeds:            # Seed addresses for coordinator discovery
-#     - "coord1.example.com:7946"
-#     - "coord2.example.com:7946"
-#   memberlist_bind_addr: ":7946"  # Memberlist gossip port
 #
 #   admin:
 #     enabled: true

@@ -1,7 +1,8 @@
 # TunnelMesh Peer Configuration Template
 # Variables are substituted by entrypoint script
 name: "${NODE_NAME}"
-server: "${SERVER_URL}"
+servers:
+  - "${SERVER_URL}"
 auth_token: "${AUTH_TOKEN}"
 ssh_port: 2222
 log_level: "info"

@@ -55,22 +55,12 @@ log_level: "info"
 # Coordinator Services
 # -----------------------------------------------------------------------------
 # Enable coordinator services on this peer for discovery, admin UI, relay,
-# and S3 storage. Multiple coordinators can cluster together for HA.
+# and S3 storage. Multiple coordinators discover each other automatically
+# through the mesh peer list (P2P discovery).
 
 coordinator:
   enabled: true                   # Enable coordinator services on this peer
   listen: ":8443"                 # HTTPS listen address for peer registrations
-
-  # Memberlist clustering (for multi-coordinator high availability)
-  # Coordinators use memberlist gossip to discover each other and replicate state.
-  # Seeds are gossip addresses (NOT API addresses) of other coordinators.
-  # - First coordinator: Leave empty or omit
-  # - Additional coordinators: Add gossip addresses of existing coordinators
-  # Example:
-  #   memberlist_seeds: []                            # First coordinator
-  #   memberlist_seeds: ["coord1.example.com:7946"]  # Joining existing cluster
-  memberlist_seeds: []            # Seed addresses for coordinator clustering (gossip)
-  # memberlist_bind_addr: ":7946"  # Memberlist gossip port (default: 7946)
 
 # -----------------------------------------------------------------------------
 # Admin Web Interface (Coordinator)
