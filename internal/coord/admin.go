@@ -1081,6 +1081,7 @@ func (s *Server) handleShares(w http.ResponseWriter, r *http.Request) {
 type FileShareResponse struct {
 	*s3.FileShare
 	OwnerName string `json:"owner_name,omitempty"` // Human-readable owner name (looked up from peer ID)
+	SizeBytes int64  `json:"size_bytes"`           // Actual size of all objects in the share bucket
 }
 
 // handleSharesList returns all file shares.
@@ -1092,12 +1093,17 @@ func (s *Server) handleSharesList(w http.ResponseWriter, _ *http.Request) {
 
 	shares := s.fileShareMgr.List()
 
-	// Convert shares to response format with owner names from cache
+	// Convert shares to response format with owner names and calculated sizes
 	response := make([]FileShareResponse, len(shares))
 	for i, share := range shares {
+		// Calculate bucket size (returns 0 on error, which is fine for display)
+		bucketName := s.fileShareMgr.BucketName(share.Name)
+		sizeBytes, _ := s.s3Store.CalculateBucketSize(bucketName)
+
 		response[i] = FileShareResponse{
 			FileShare: share,
 			OwnerName: s.getPeerName(share.Owner),
+			SizeBytes: sizeBytes,
 		}
 	}
 

@@ -2836,19 +2836,21 @@ a.logs-container {
 
 /* Nested modal content */
 .s3-nested-table {
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
 }
 
 .s3-nested-json {
-    background: var(--color-bg-secondary);
+    background: var(--color-bg-tertiary);
     padding: 1rem;
-    border-radius: var(--panel-border-radius);
+    border-radius: 2px;
     border: 1px solid var(--color-border-primary);
-    overflow: auto;
+    overflow-x: auto;
     max-height: 400px;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
-    font-size: 0.75rem;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Courier New', monospace;
+    font-size: 0.8125rem;
+    line-height: 1.5;
     color: var(--color-text-primary);
+    margin: 0;
 }
 
 /* Modal size variants */
