@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/cluster"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/nfs"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/replication"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/wireguard"
 	"github.com/tunnelmesh/tunnelmesh/internal/dns"
@@ -106,6 +108,9 @@ type Server struct {
 	dockerMgr *docker.Manager // Docker manager (nil if Docker not enabled)
 	// Peer name cache for owner display (cached to avoid LoadPeers() on every request)
 	peerNameCache atomic.Pointer[map[string]string] // Peer ID -> name mapping
+	// Replication for multi-coordinator setup
+	replicator    *replication.Replicator   // S3 replication engine (nil if not enabled)
+	meshTransport *replication.MeshTransport // Transport for replication messages
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -273,11 +278,11 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 	}
 
 	srv := &Server{
-		cfg:       cfg,
-		mux:       http.NewServeMux(),
-		peers:     make(map[string]*peerInfo),
-		dnsCache:  make(map[string]string),
-		aliasOwner: make(map[string]string),
+		cfg:          cfg,
+		mux:          http.NewServeMux(),
+		peers:        make(map[string]*peerInfo),
+		dnsCache:     make(map[string]string),
+		aliasOwner:   make(map[string]string),
 		statsHistory: NewStatsHistory(coordinatorName),
 		serverStats: serverStats{
 			startTime: time.Now(),
@@ -360,16 +365,16 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 		log.Warn().Err(err).Msg("failed to load filter rules, starting fresh")
 	}
 
+	// Build coordinator identity (cluster name) for replication
+	coordAddr := cfg.Coordinator.Listen
+	if coordAddr == "" {
+		coordAddr = ":8080"
+	}
+	clusterName := fmt.Sprintf("%s%s", cfg.Name, coordAddr)
+
 	// Initialize memberlist cluster if seeds are configured
 	if len(cfg.Coordinator.MemberlistSeeds) > 0 {
-		coordAddr := cfg.Coordinator.Listen
-		if coordAddr == "" {
-			coordAddr = ":8080"
-		}
-		// Use coordinator name as address for cluster identity
-		clusterName := fmt.Sprintf("%s%s", cfg.Name, coordAddr)
-
-		cluster, err := cluster.NewCoordinatorCluster(
+		clust, err := cluster.NewCoordinatorCluster(
 			cfg.Coordinator.MemberlistBindAddr,
 			clusterName,
 			cfg.Coordinator.MemberlistSeeds,
@@ -377,9 +382,9 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to initialize coordinator cluster (will run standalone)")
 		} else {
-			srv.cluster = cluster
+			srv.cluster = clust
 			log.Info().
-				Int("members", cluster.NumMembers()).
+				Int("members", clust.NumMembers()).
 				Strs("seeds", cfg.Coordinator.MemberlistSeeds).
 				Msg("coordinator cluster initialized")
 		}
@@ -391,6 +396,35 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 		if err := dns.PublishCoordinator(srvName, cfg.Coordinator.Listen); err != nil {
 			log.Warn().Err(err).Msg("failed to publish coordinator SRV record")
 		}
+	}
+
+	// Initialize replicator if clustering is enabled
+	if srv.cluster != nil && srv.s3Store != nil {
+		// Create mesh transport for replication
+		srv.meshTransport = replication.NewMeshTransport(log.Logger)
+
+		// Create S3 store adapter for replication interface
+		s3Adapter := replication.NewS3StoreAdapter(srv.s3Store)
+
+		// Create replicator with transport and S3 store
+		repConfig := replication.Config{
+			NodeID:    clusterName, // Use cluster name as node ID
+			Transport: srv.meshTransport,
+			S3Store:   s3Adapter,
+			Logger:    log.Logger,
+		}
+		srv.replicator = replication.NewReplicator(repConfig)
+
+		// Add cluster members as replication peers
+		for _, addr := range srv.cluster.GetCoordinatorAddresses() {
+			// Extract mesh IP from address (format: "coord.tunnelmesh:8443" or "10.42.0.1:8443")
+			// For now, we'll use the full address as peer ID
+			srv.replicator.AddPeer(addr)
+		}
+
+		log.Info().
+			Int("peers", len(srv.cluster.GetCoordinatorAddresses())).
+			Msg("replicator initialized with cluster peers")
 	}
 
 	srv.setupRoutes()
@@ -669,6 +703,15 @@ func (s *Server) Shutdown() error {
 		}
 	}
 
+	// Stop replicator if running
+	if s.replicator != nil {
+		log.Info().Msg("stopping replicator")
+		if err := s.replicator.Stop(); err != nil {
+			log.Error().Err(err).Msg("failed to stop replicator")
+			errs = append(errs, fmt.Errorf("stop replicator: %w", err))
+		}
+	}
+
 	// Leave memberlist cluster and unpublish SRV record
 	if s.cluster != nil {
 		log.Info().Msg("leaving coordinator cluster")
@@ -776,6 +819,20 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 	}()
 }
 
+// StartReplicator starts the replication engine if enabled.
+func (s *Server) StartReplicator() error {
+	if s.replicator == nil {
+		return nil // Replication not enabled
+	}
+
+	if err := s.replicator.Start(); err != nil {
+		return fmt.Errorf("start replicator: %w", err)
+	}
+
+	log.Info().Msg("replicator started")
+	return nil
+}
+
 // updateCASMetrics collects and updates CAS/chunking metrics.
 func (s *Server) updateCASMetrics() {
 	if s.s3Store == nil {
@@ -834,6 +891,11 @@ func (s *Server) setupRoutes() {
 	// Setup WireGuard concentrator sync endpoint (JWT auth)
 	if s.cfg.Coordinator.WireGuardServer.Enabled {
 		s.setupWireGuardRoutes()
+	}
+
+	// Setup replication endpoint (used by other coordinators)
+	if s.replicator != nil {
+		s.mux.HandleFunc("/api/replication/message", s.handleReplicationMessage)
 	}
 }
 
@@ -1748,6 +1810,45 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 	resp := proto.DNSUpdateNotification{Records: records}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleReplicationMessage handles incoming replication messages from other coordinators.
+func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Verify this is a replication message
+	if r.Header.Get("X-Replication-Protocol") != "v1" {
+		s.jsonError(w, "invalid replication protocol version", http.StatusBadRequest)
+		return
+	}
+
+	// Read message data
+	data := make([]byte, r.ContentLength)
+	if _, err := r.Body.Read(data); err != nil && err != io.EOF {
+		s.jsonError(w, "failed to read message", http.StatusBadRequest)
+		return
+	}
+
+	// Extract sender from header or body
+	from := r.Header.Get("X-Replication-From")
+	if from == "" {
+		// Try to extract from remote address
+		from = r.RemoteAddr
+	}
+
+	// Handle via mesh transport
+	if s.meshTransport != nil {
+		if err := s.meshTransport.HandleIncomingMessage(from, data); err != nil {
+			log.Warn().Err(err).Str("from", from).Msg("failed to handle replication message")
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // updatePeerRecord creates or updates a peer record in the peer store.

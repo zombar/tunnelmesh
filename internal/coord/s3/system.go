@@ -100,9 +100,9 @@ const (
 
 // IPAllocationsData stores IP allocator state for persistence.
 type IPAllocationsData struct {
-	Used     map[string]bool   `json:"used"`      // IP -> allocated
+	Used     map[string]bool   `json:"used"`       // IP -> allocated
 	PeerToIP map[string]string `json:"peer_to_ip"` // Peer name -> IP
-	Next     uint32            `json:"next"`      // Sequential counter (for reference)
+	Next     uint32            `json:"next"`       // Sequential counter (for reference)
 }
 
 // --- Peers ---

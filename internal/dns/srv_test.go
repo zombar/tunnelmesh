@@ -227,7 +227,7 @@ func TestHandleSRVQuery(t *testing.T) {
 				require.True(t, ok, "record should be *dns.SRV")
 				assert.Equal(t, "_coord._tcp.tunnelmesh.", srv.Hdr.Name)
 				assert.Equal(t, dns.TypeSRV, srv.Hdr.Rrtype)
-				assert.Equal(t, dns.ClassINET, srv.Hdr.Class)
+				assert.Equal(t, uint16(dns.ClassINET), srv.Hdr.Class)
 				assert.Equal(t, uint32(300), srv.Hdr.Ttl)
 				assert.Equal(t, uint16(10), srv.Priority)
 				assert.Equal(t, uint16(10), srv.Weight)
