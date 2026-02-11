@@ -224,6 +224,7 @@ function setupSSE() {
 
     state.eventSource.addEventListener('heartbeat', (e) => {
         // Refresh dashboard when a heartbeat is received
+        console.log('[DEBUG] Heartbeat received');
         fetchData(false);
     });
 
@@ -655,6 +656,7 @@ function renderDnsTable() {
 // Chart functions
 
 function initCharts() {
+    console.log('[DEBUG] initCharts called');
     const baseChartOptions = {
         responsive: true,
         maintainAspectRatio: false,
@@ -706,6 +708,7 @@ function initCharts() {
             data: { datasets: [] },
             options: throughputOptions,
         });
+        console.log('[DEBUG] Throughput chart created, canvas size:', dom.throughputChart.width, 'x', dom.throughputChart.height);
     }
 
     // Packets chart
@@ -761,26 +764,28 @@ function initializeChartData(data) {
     const peerLastTs = {}; // Track when each peer was last seen
 
     data.peers.forEach((peer) => {
-        if (!peer.history || peer.history.length === 0) return;
-
-        // History comes newest first, reverse to get oldest first
-        const history = [...peer.history].reverse();
+        // Initialize peer history map even if no history yet
         peerHistories[peer.name] = {};
 
-        history.forEach((point) => {
-            const quantized = quantizeTimestamp(new Date(point.ts).getTime());
-            allTimestamps.add(quantized);
-            // Store by quantized timestamp (last value wins if multiple in same interval)
-            peerHistories[peer.name][quantized] = point;
+        if (peer.history && peer.history.length > 0) {
+            // History comes newest first, reverse to get oldest first
+            const history = [...peer.history].reverse();
 
-            // Track first/last timestamps for this peer
-            if (!peerFirstTs[peer.name] || quantized < peerFirstTs[peer.name]) {
-                peerFirstTs[peer.name] = quantized;
-            }
-            if (!peerLastTs[peer.name] || quantized > peerLastTs[peer.name]) {
-                peerLastTs[peer.name] = quantized;
-            }
-        });
+            history.forEach((point) => {
+                const quantized = quantizeTimestamp(new Date(point.ts).getTime());
+                allTimestamps.add(quantized);
+                // Store by quantized timestamp (last value wins if multiple in same interval)
+                peerHistories[peer.name][quantized] = point;
+
+                // Track first/last timestamps for this peer
+                if (!peerFirstTs[peer.name] || quantized < peerFirstTs[peer.name]) {
+                    peerFirstTs[peer.name] = quantized;
+                }
+                if (!peerLastTs[peer.name] || quantized > peerLastTs[peer.name]) {
+                    peerLastTs[peer.name] = quantized;
+                }
+            });
+        }
     });
 
     // Sort timestamps
@@ -793,6 +798,15 @@ function initializeChartData(data) {
         const packetsData = [];
         const firstTs = peerFirstTs[peerName];
         const lastTs = peerLastTs[peerName];
+
+        // If peer has no history, initialize with nulls matching existing timeline
+        // This keeps arrays aligned when new data points are added
+        if (!firstTs && !lastTs) {
+            state.charts.chartData.throughput[peerName] = new Array(sortedTimestamps.length).fill(null);
+            state.charts.chartData.packets[peerName] = new Array(sortedTimestamps.length).fill(null);
+            // Don't set lastSeenTimes - let updateChartsWithNewData handle first heartbeat
+            return;
+        }
 
         sortedTimestamps.forEach((ts) => {
             const point = historyMap[ts];
@@ -849,7 +863,9 @@ function fitChartsToData() {
 }
 
 function updateChartsWithNewData(peers) {
+    console.log('[DEBUG] updateChartsWithNewData called, peers:', peers?.length);
     if (!state.charts.throughput || !state.charts.packets) {
+        console.log('[DEBUG] Charts not initialized, skipping update');
         return;
     }
 
@@ -884,8 +900,10 @@ function updateChartsWithNewData(peers) {
 
     // No new data
     if (newPoints.length === 0) {
+        console.log('[DEBUG] No new data points to add');
         return;
     }
+    console.log('[DEBUG] Adding', newPoints.length, 'new data points');
 
     // Group new points by quantized timestamp (10-second intervals)
     const groups = new Map();
@@ -899,6 +917,19 @@ function updateChartsWithNewData(peers) {
 
     // Sort groups by timestamp and add each as a data point
     const sortedGroups = Array.from(groups.values()).sort((a, b) => a.timestamp - b.timestamp);
+
+    // First pass: Ensure all online peers exist in chartData
+    // This must happen BEFORE we start adding new timestamps, otherwise peers
+    // whose first heartbeat arrives at an existing timestamp never get initialized
+    peers.forEach((peer) => {
+        if (!state.charts.chartData.throughput[peer.name]) {
+            // New peer - initialize with nulls for all existing timestamps
+            const currentLen = state.charts.chartData.labels.length;
+            state.charts.chartData.throughput[peer.name] = new Array(currentLen).fill(null);
+            state.charts.chartData.packets[peer.name] = new Array(currentLen).fill(null);
+            console.log('[DEBUG] New peer detected and initialized:', peer.name);
+        }
+    });
 
     // Get the last timestamp in the chart (if any)
     const lastChartTime =
@@ -938,11 +969,12 @@ function updateChartsWithNewData(peers) {
         const allPeers = new Set([...Object.keys(state.charts.chartData.throughput), ...Object.keys(group.peers)]);
 
         allPeers.forEach((peerName) => {
-            // Check if this is a new peer
+            // Check if this is a new peer (fallback - should be caught by first pass above)
             const isNewPeer = !state.charts.chartData.throughput[peerName];
 
             // Initialize arrays if needed (fill with nulls for timestamps before they existed)
             if (isNewPeer) {
+                console.log('[DEBUG] New peer detected (fallback):', peerName);
                 const chartLen = state.charts.chartData.labels.length - 1; // -1 because we just added the new timestamp
                 state.charts.chartData.throughput[peerName] = new Array(chartLen).fill(null);
                 state.charts.chartData.packets[peerName] = new Array(chartLen).fill(null);
@@ -986,6 +1018,9 @@ function updateChartsWithNewData(peers) {
     });
 
     rebuildChartDatasets();
+
+    // Update x-axis range to show all data including new points
+    fitChartsToData();
 }
 
 // Calculate color for each peer based on how much they deviate from average
@@ -1087,6 +1122,7 @@ function rebuildChartDatasets() {
     const throughputDatasets = Object.entries(state.charts.chartData.throughput).map(([peerName, values]) => {
         return buildDataset(peerName, values, throughputColors[peerName] || GREEN_GRADIENT[2]);
     });
+    console.log('[DEBUG] rebuildChartDatasets: peer names:', Object.keys(state.charts.chartData.throughput));
 
     // Build packets datasets
     const packetsDatasets = Object.entries(state.charts.chartData.packets).map(([peerName, values]) => {
@@ -1094,13 +1130,17 @@ function rebuildChartDatasets() {
     });
 
     if (state.charts.throughput) {
+        state.charts.throughput.data.labels = labels;
         state.charts.throughput.data.datasets = throughputDatasets;
         state.charts.throughput.update();
+        console.log('[DEBUG] Throughput chart updated, labels:', labels.length, 'datasets:', throughputDatasets.length);
     }
 
     if (state.charts.packets) {
+        state.charts.packets.data.labels = labels;
         state.charts.packets.data.datasets = packetsDatasets;
         state.charts.packets.update();
+        console.log('[DEBUG] Packets chart updated, labels:', labels.length, 'datasets:', packetsDatasets.length);
     }
 }
 
@@ -1340,13 +1380,18 @@ function formatLogJson(obj) {
 }
 
 async function fetchAlerts() {
+    console.log('[DEBUG] fetchAlerts called, alertsEnabled:', state.alertsEnabled);
     if (!state.alertsEnabled) return;
 
-    try {
+    try{
         const resp = await fetch('/prometheus/api/v1/alerts');
-        if (!resp.ok) return;
+        if (!resp.ok) {
+            console.log('[DEBUG] fetchAlerts failed, status:', resp.status);
+            return;
+        }
 
         const data = await resp.json();
+        console.log('[DEBUG] fetchAlerts got', data.data?.alerts?.length, 'alerts');
         processAlertData(data);
     } catch (err) {
         console.error('Failed to fetch alerts:', err);
@@ -1990,11 +2035,14 @@ function registerBuiltinPanels() {
             sortOrder: 30,
             onShow: () => {
                 // When panel becomes visible after permission load, resize charts once
+                console.log('[DEBUG] Charts onShow callback, throughput exists:', !!state.charts.throughput, ', packets exists:', !!state.charts.packets);
                 if (state.charts.throughput) {
                     state.charts.throughput.resize();
+                    console.log('[DEBUG] Throughput chart resized to:', state.charts.throughput.width, 'x', state.charts.throughput.height);
                 }
                 if (state.charts.packets) {
                     state.charts.packets.resize();
+                    console.log('[DEBUG] Packets chart resized to:', state.charts.packets.width, 'x', state.charts.packets.height);
                 }
             },
         },
@@ -2048,7 +2096,7 @@ function registerBuiltinPanels() {
         {
             id: 's3',
             sectionId: 's3-section',
-            tab: 'app data', // Show in both App and Data tabs
+            tab: 'app',
             title: 'Object Viewer',
             category: 'storage',
             resizable: true,
