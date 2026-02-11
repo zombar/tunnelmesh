@@ -96,7 +96,6 @@ jobs:
   test-go126:
     name: Test (Go 1.26)
     runs-on: ubuntu-latest
-    if: false  # Temporarily disabled due to race detector issues
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6

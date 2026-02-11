@@ -48,6 +48,10 @@ func cleanupServer(t *testing.T, srv *Server) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)
+
+	// Wait for filesystem operations to complete (especially on Windows where
+	// file handles can remain open briefly after Close() returns)
+	time.Sleep(2 * time.Second)
 }
 
 func newTestServer(t *testing.T) *Server {
