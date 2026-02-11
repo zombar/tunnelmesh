@@ -2069,15 +2069,15 @@ func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Walk through all buckets and sync metadata files
+	// Sync all directories to ensure directory entries are flushed.
+	// This is more reliable than trying to sync individual files.
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
-	err := filepath.Walk(bucketsDir, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(bucketsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err
+			return nil // Skip errors, continue walking
 		}
-		// Only sync regular files (not directories)
-		if !info.IsDir() {
-			if f, err := os.OpenFile(path, os.O_RDONLY, 0); err == nil {
+		if info.IsDir() {
+			if f, err := os.Open(path); err == nil {
 				_ = f.Sync()
 				_ = f.Close()
 			}
@@ -2085,20 +2085,14 @@ func (s *Store) Close() error {
 		return nil
 	})
 
-	if err != nil {
-		return fmt.Errorf("sync bucket files: %w", err)
+	// Sync the root data directory
+	if f, err := os.Open(s.dataDir); err == nil {
+		_ = f.Sync()
+		_ = f.Close()
 	}
 
-	// Sync the data directory itself
-	f, err := os.Open(s.dataDir)
-	if err != nil {
-		return fmt.Errorf("open data dir: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("sync data dir: %w", err)
-	}
+	// Small grace period for kernel to complete pending operations
+	time.Sleep(10 * time.Millisecond)
 
 	return nil
 }
