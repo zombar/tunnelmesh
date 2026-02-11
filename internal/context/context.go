@@ -15,6 +15,7 @@ import (
 type Context struct {
 	Name       string `json:"name"`
 	ConfigPath string `json:"config_path"`
+	PeerName   string `json:"peer_name,omitempty"` // Peer name in the mesh (can differ from context name)
 	Server     string `json:"server,omitempty"`
 	Domain     string `json:"domain,omitempty"`
 	MeshIP     string `json:"mesh_ip,omitempty"`

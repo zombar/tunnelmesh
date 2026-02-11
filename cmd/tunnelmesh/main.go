@@ -918,6 +918,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			ctx := meshctx.Context{
 				Name:       joinContext,
 				ConfigPath: cfgFile,
+				PeerName:   cfg.Name, // Save peer name so it persists across rejoins
 				Server:     cfg.PrimaryServer(),
 				Domain:     resp.Domain,
 				MeshIP:     resp.MeshIP,
@@ -2030,6 +2031,7 @@ func loadConfig() (*config.PeerConfig, error) {
 			// Auth token is read from TUNNELMESH_TOKEN environment variable
 			if activeCtx.Server != "" {
 				return &config.PeerConfig{
+					Name:       activeCtx.PeerName, // Restore saved peer name
 					Servers:    []string{activeCtx.Server},
 					SSHPort:    2222,
 					PrivateKey: filepath.Join(homeDir, ".tunnelmesh", "id_ed25519"),
