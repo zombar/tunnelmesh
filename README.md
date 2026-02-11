@@ -165,28 +165,25 @@ When you run `tunnelmesh join` without a server URL, it automatically bootstraps
 tunnelmesh join --token $TOKEN
 ```
 
-This creates a new mesh with default coordinator settings. For custom configuration:
+This creates a new mesh with default coordinator settings (admin panel on :443, S3 on :9000, relay auto-enabled).
+
+For custom configuration:
 
 ```yaml
 name: "coordinator"
 
 # Coordinator services (auto-enabled when no server URL provided)
 coordinator:
-  listen: ":8443"  # Default is :8443
+  listen: ":8443"  # Coordination API listen address (default: ":8443")
+  data_dir: "/var/lib/tunnelmesh"  # Data directory for persistence
 
-  admin:
-    enabled: true
-    port: 443
+  # Admin panel, relay, and S3 are always enabled (hardcoded ports: 443, 9000)
+  # DNS is always enabled for all peers
 
-  relay:
-    enabled: true
-
-  s3:
-    enabled: true
-    port: 9000
-
-dns:
-  enabled: true
+  # Optional: reverse proxy for monitoring tools
+  monitoring:
+    prometheus_url: "http://localhost:9090"
+    grafana_url: "http://localhost:3000"
 ```
 
 ### Regular Peer Configuration
@@ -199,8 +196,12 @@ tunnelmesh join coord.example.com:8443 --token a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d
 ```yaml
 name: "mynode"
 
+# DNS is always enabled. Optional configuration:
 dns:
-  enabled: true
+  listen: "127.0.0.53:5353"  # DNS listen address (default)
+  aliases:  # Custom DNS aliases for this peer
+    - "nas"
+    - "homeserver"
 ```
 
 ### Transport Layer
