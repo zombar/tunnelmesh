@@ -1036,6 +1036,7 @@ function calculatePeerColors(dataMap) {
 }
 
 function rebuildChartDatasets() {
+    console.log('[Charts] rebuildChartDatasets called, labels:', state.charts.chartData.labels?.length);
     const labels = state.charts.chartData.labels;
 
     // Calculate colors based on outlier status
@@ -1102,13 +1103,17 @@ function rebuildChartDatasets() {
     });
 
     if (state.charts.throughput) {
+        console.log('[Charts] Updating throughput chart, datasets:', throughputDatasets.length);
         state.charts.throughput.data.datasets = throughputDatasets;
         state.charts.throughput.update();
+        console.log('[Charts] Throughput chart update() called');
     }
 
     if (state.charts.packets) {
+        console.log('[Charts] Updating packets chart, datasets:', packetsDatasets.length);
         state.charts.packets.data.datasets = packetsDatasets;
         state.charts.packets.update();
+        console.log('[Charts] Packets chart update() called');
     }
 }
 
