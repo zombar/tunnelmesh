@@ -4,6 +4,8 @@
 
 TunnelMesh is a P2P mesh networking tool written in Go that creates encrypted tunnels between nodes. It uses the Noise protocol (IKpsk2) with ChaCha20-Poly1305 encryption for secure communication.
 
+**This is a greenfield project** - breaking changes are allowed and encouraged when they improve the codebase. Backwards compatibility is not a constraint during active development.
+
 **Key components:**
 - **Coordinator**: Central server for peer discovery, IP allocation, DNS, and relay fallback
 - **Peer**: Mesh peer with TUN interface for transparent IP routing
