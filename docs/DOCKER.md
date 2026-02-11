@@ -132,14 +132,11 @@ Optional `coordinator.yaml` for custom settings:
 ```yaml
 name: "coordinator"
 
+# Coordinator services (auto-enabled when no server URL provided)
+# Admin panel, relay, and S3 are always enabled (ports: 443, 9000)
 coordinator:
-  listen: ":8080"  # Default is :8443
-  admin:
-    enabled: true
-    port: 443
-
-dns:
-  enabled: true
+  listen: ":8080"  # Coordination API (default: ":8443")
+  data_dir: "/var/lib/tunnelmesh"
 ```
 
 ### Peer Configuration
@@ -149,8 +146,9 @@ Create `docker/config/peer.yaml`:
 ```yaml
 name: "peer-1"
 
+# DNS is always enabled
 dns:
-  enabled: true
+  listen: "127.0.0.53:5353"
 ```
 
 Start peer:

@@ -17,7 +17,7 @@ The NFS server:
 
 NFS is automatically enabled when:
 
-1. S3 storage is enabled (`s3.enabled: true` in server config)
+1. The coordinator is running (S3 is always enabled on coordinators)
 2. At least one file share exists
 
 No additional configuration is required.
@@ -57,13 +57,13 @@ Or use Finder: Go → Connect to Server → `nfs://this.tm/myshare`
 
 **Linux (`/etc/fstab`):**
 
-```
+```text
 this.tm:/myshare /mnt/myshare nfs vers=3,tcp,_netdev 0 0
 ```
 
 **macOS (`/etc/fstab`):**
 
-```
+```text
 this.tm:/myshare /Volumes/myshare nfs vers=3,tcp 0 0
 ```
 

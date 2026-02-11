@@ -332,8 +332,8 @@ nodes = {
 # Home server peer config
 name: "homelab"
 
+# DNS is always enabled
 dns:
-  enabled: true
   aliases:
     - "nas"
     - "plex"

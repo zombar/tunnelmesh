@@ -16,25 +16,24 @@ The S3 storage service:
 
 ## Configuration
 
-Add the S3 configuration to your server config:
+S3 is automatically enabled on all coordinators (hardcoded port: 9000).
+
+Optional S3 configuration in coordinator config:
 
 ```yaml
-s3:
-  enabled: true
-  max_size: "100Gi"                  # Storage quota (required)
-  data_dir: /var/lib/tunnelmesh/s3   # Storage directory
-  port: 9000                         # S3 API port
-
+# S3 is always enabled on coordinators (port 9000, mesh IP only)
+coordinator:
+  s3:
+    max_size: "100Gi"                  # Storage quota (required)
+    data_dir: /var/lib/tunnelmesh/s3   # Storage directory
 ```
 
 ### Configuration Options
 
 | Option | Default | Description |
 | -------- | --------- | ------------- |
-| `enabled` | `false` | Enable S3 storage service |
-| `max_size` | - | Storage quota (required, e.g., `10Gi`, `500Mi`, `1Ti`) |
+| `max_size` | `1Gi` | Storage quota (e.g., `10Gi`, `500Mi`, `1Ti`) |
 | `data_dir` | `{data_dir}/s3` | Directory for object storage |
-| `port` | `9000` | Port for S3 API (mesh IP only) |
 | `object_expiry_days` | `9125` | Days until objects auto-expire (25 years) |
 | `share_expiry_days` | `365` | Days until file shares expire (1 year) |
 | `tombstone_retention_days` | `90` | Days to keep soft-deleted items before purge |
@@ -129,7 +128,7 @@ tunnelmesh object delete my-bucket/path/to/file.txt
 
 The coordinator uses a reserved `_tunnelmesh` bucket for internal state:
 
-```
+```text
 _tunnelmesh/
   auth/
     users.json      # Registered users
@@ -296,7 +295,7 @@ tunnelmesh storage status
 
 All S3 data is stored in the configured `data_dir`:
 
-```
+```text
 {data_dir}/
   buckets/
     {bucket}/

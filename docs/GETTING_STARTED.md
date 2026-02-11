@@ -364,8 +364,8 @@ cat /etc/tunnelmesh/peer.yaml
 
 ### DNS resolution not working
 
-1. Confirm `dns.enabled: true` in config
-2. Check if DNS is listening: `netstat -ln | grep 5353`
+1. DNS is always enabled - check if it's listening: `netstat -ln | grep 5353`
+2. Verify DNS listen address in config (default: `127.0.0.53:5353`)
 3. Configure system to use the local resolver (see main README)
 
 ---
