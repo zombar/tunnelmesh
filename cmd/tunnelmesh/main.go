@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -295,6 +296,19 @@ Examples:
 	}
 }
 
+// ensureCoordinatorConfig enables coordinator mode when no server URL is provided (bootstrap).
+// This allows the first node in a mesh to automatically become a coordinator.
+func ensureCoordinatorConfig(cfg *config.PeerConfig) {
+	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
+		log.Info().Msg("no server URL provided - enabling coordinator mode for bootstrap")
+		cfg.Coordinator.Enabled = true
+		// Set default coordinator listen if not configured
+		if cfg.Coordinator.Listen == "" {
+			cfg.Coordinator.Listen = ":8443"
+		}
+	}
+}
+
 // runAsService runs the application as a system service.
 // This is called when the service manager starts the application with --service-run flag.
 func runAsService() {
@@ -375,17 +389,8 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 		Int("ssh_port", cfg.SSHPort).
 		Msg("config loaded")
 
-	// If no server URL provided, assume bootstrap coordinator
-	if len(cfg.Servers) == 0 {
-		if !cfg.Coordinator.Enabled {
-			log.Info().Msg("no server URL provided - enabling coordinator mode for bootstrap")
-			cfg.Coordinator.Enabled = true
-			// Set default coordinator listen if not configured
-			if cfg.Coordinator.Listen == "" {
-				cfg.Coordinator.Listen = ":8443"
-			}
-		}
-	}
+	// Enable coordinator mode for bootstrap if no server URL
+	ensureCoordinatorConfig(cfg)
 
 	if cfg.AuthToken == "" {
 		return fmt.Errorf("auth token required (pass via CLI: --token <token>)")
@@ -553,12 +558,22 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		joinServerURL = args[0]
 	}
 
-	// Normalize server URL: add https:// if no scheme provided
+	// Normalize server URL: add https:// if no scheme provided, add :8443 if no port
 	// Server URL is CLI-only, not a config option
 	if joinServerURL != "" {
+		// Add scheme if missing
 		if !strings.HasPrefix(joinServerURL, "http://") && !strings.HasPrefix(joinServerURL, "https://") {
 			joinServerURL = "https://" + joinServerURL
 		}
+
+		// Parse URL to check for port
+		parsedURL, err := url.Parse(joinServerURL)
+		if err == nil && parsedURL.Port() == "" {
+			// No port specified, add default :8443
+			parsedURL.Host += ":8443"
+			joinServerURL = parsedURL.String()
+		}
+
 		cfg.Servers = []string{joinServerURL}
 	}
 	if authToken != "" {
@@ -581,17 +596,8 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		cfg.AllowExitTraffic = true
 	}
 
-	// If no server URL provided, assume bootstrap coordinator
-	if len(cfg.Servers) == 0 {
-		if !cfg.Coordinator.Enabled {
-			log.Info().Msg("no server URL provided - enabling coordinator mode for bootstrap")
-			cfg.Coordinator.Enabled = true
-			// Set default coordinator listen if not configured
-			if cfg.Coordinator.Listen == "" {
-				cfg.Coordinator.Listen = ":8443"
-			}
-		}
-	}
+	// Enable coordinator mode for bootstrap if no server URL
+	ensureCoordinatorConfig(cfg)
 
 	if cfg.AuthToken == "" {
 		return fmt.Errorf("auth token required\nUsage: tunnelmesh join [server-url] --token <token>\nExample: tunnelmesh join coord.example.com:8443 --token my-secret-token")
@@ -693,17 +699,8 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Always use system hostname as node name
 	cfg.Name, _ = os.Hostname()
 
-	// If no server URL provided, assume bootstrap coordinator
-	if len(cfg.Servers) == 0 {
-		if !cfg.Coordinator.Enabled {
-			log.Info().Msg("no server URL provided - enabling coordinator mode for bootstrap")
-			cfg.Coordinator.Enabled = true
-			// Set default coordinator listen if not configured
-			if cfg.Coordinator.Listen == "" {
-				cfg.Coordinator.Listen = ":8443"
-			}
-		}
-	}
+	// Enable coordinator mode for bootstrap if no server URL
+	ensureCoordinatorConfig(cfg)
 
 	if cfg.AuthToken == "" {
 		return fmt.Errorf("auth token required (pass via CLI: --token <token>)")

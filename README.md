@@ -308,6 +308,123 @@ The tool searches for config files in the following order:
 
 `~/.tunnelmesh/config.yaml`, `tunnelmesh.yaml`, `peer.yaml`
 
+## Security Best Practices
+
+### Token Storage and Management
+
+TunnelMesh authentication tokens are passed via the `--token` CLI flag, not stored in config files. Follow these best
+practices for production deployments:
+
+#### Environment Variables
+
+Store tokens in environment variables instead of passing them directly:
+
+```bash
+# Set in shell session
+export TUNNELMESH_TOKEN="a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6"
+
+# Join using environment variable
+tunnelmesh join coord.example.com:8443 --token "$TUNNELMESH_TOKEN"
+```
+
+#### systemd Environment Files
+
+For services managed by systemd, use environment files with restricted permissions:
+
+```bash
+# Create environment file
+sudo mkdir -p /etc/tunnelmesh
+sudo tee /etc/tunnelmesh/env.conf > /dev/null <<EOF
+TUNNELMESH_TOKEN=a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6
+EOF
+sudo chmod 600 /etc/tunnelmesh/env.conf
+sudo chown root:root /etc/tunnelmesh/env.conf
+
+# Use in systemd service (automatically configured when using `tunnelmesh service install`)
+# The service will read the token from the environment file
+```
+
+The `tunnelmesh service install` command automatically configures the service to use environment files on systemd-based
+systems.
+
+#### Secret Management Systems
+
+For larger deployments, integrate with centralized secret management:
+
+**HashiCorp Vault:**
+
+```bash
+# Store token in Vault
+vault kv put secret/tunnelmesh token="a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6"
+
+# Retrieve and use
+export TUNNELMESH_TOKEN=$(vault kv get -field=token secret/tunnelmesh)
+tunnelmesh join coord.example.com:8443 --token "$TUNNELMESH_TOKEN"
+```
+
+**AWS Secrets Manager:**
+
+```bash
+# Store token
+aws secretsmanager create-secret \
+  --name tunnelmesh/auth-token \
+  --secret-string "a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6"
+
+# Retrieve and use
+export TUNNELMESH_TOKEN=$(aws secretsmanager get-secret-value \
+  --secret-id tunnelmesh/auth-token \
+  --query SecretString \
+  --output text)
+tunnelmesh join coord.example.com:8443 --token "$TUNNELMESH_TOKEN"
+```
+
+#### Token Rotation
+
+Rotate authentication tokens periodically to minimize exposure from compromised tokens:
+
+1. **Generate new token:**
+
+   ```bash
+   NEW_TOKEN=$(openssl rand -hex 32)
+   ```
+
+2. **Update coordinator** - Add new token alongside old token temporarily:
+
+   ```bash
+   # Coordinators can accept multiple tokens during rotation
+   tunnelmesh join --token "$OLD_TOKEN,$NEW_TOKEN"
+   ```
+
+3. **Update all peers** - Roll out new token to peers:
+
+   ```bash
+   # Update each peer's service or context with new token
+   tunnelmesh join coord.example.com:8443 --token "$NEW_TOKEN" --context prod
+   ```
+
+4. **Remove old token** - After all peers updated, remove old token from coordinator:
+
+   ```bash
+   tunnelmesh join --token "$NEW_TOKEN"
+   ```
+
+#### File Permissions
+
+Always protect config files and token files with restrictive permissions:
+
+```bash
+chmod 600 ~/.tunnelmesh/config.yaml
+chmod 600 ~/.tunnelmesh/mesh-token.txt
+```
+
+On multi-user systems, consider using system-level config directories with root ownership:
+
+```bash
+sudo mkdir -p /etc/tunnelmesh
+sudo chmod 755 /etc/tunnelmesh
+sudo chown root:root /etc/tunnelmesh
+```
+
 ## CLI Quick Reference
 
 ```bash

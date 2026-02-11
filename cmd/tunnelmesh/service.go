@@ -213,6 +213,8 @@ func getServiceConfig() (*svc.ServiceConfig, error) {
 		Mode:        mode,
 		ConfigPath:  configPath,
 		UserName:    serviceUser,
+		Server:      ctx.Server,
+		AuthToken:   ctx.AuthToken,
 	}, nil
 }
 
@@ -464,15 +466,15 @@ func generateConfigFromContext(ctx *context.Context) (string, error) {
 		dnsListen = "127.0.0.53:5353"
 	}
 
+	// Note: server URL and auth_token are passed via CLI arguments, not config file
 	configContent := fmt.Sprintf(`# Auto-generated from context %q
-server: %q
-auth_token: %q
+# Server URL and auth token are passed via service command-line arguments
 private_key: %q
 
 dns:
   enabled: true
   listen: %q
-`, ctx.Name, ctx.Server, ctx.AuthToken, filepath.Join(configDir, "id_ed25519"), dnsListen)
+`, ctx.Name, filepath.Join(configDir, "id_ed25519"), dnsListen)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
 		return "", fmt.Errorf("write config file: %w", err)

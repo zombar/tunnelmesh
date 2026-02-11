@@ -82,6 +82,8 @@ type ServiceConfig struct {
 	Mode        string // "serve" or "join"
 	ConfigPath  string // Path to configuration file
 	UserName    string // User to run service as (Linux/macOS only)
+	Server      string // Coordinator server URL (join mode only, passed as positional arg)
+	AuthToken   string // Authentication token (passed via --token flag)
 }
 
 // DefaultServiceName returns the default service name based on mode.
@@ -127,15 +129,32 @@ func DefaultConfigPath(mode string) string {
 
 // NewServiceConfig creates service.Config from our ServiceConfig.
 func NewServiceConfig(cfg *ServiceConfig, execPath string) *service.Config {
+	// Build arguments: start with base flags
+	args := []string{
+		"--service-run",
+		"--service-mode", cfg.Mode,
+	}
+
+	// Add server URL as positional argument if present (join mode)
+	if cfg.Server != "" {
+		args = append(args, "join", cfg.Server)
+	} else {
+		args = append(args, "join")
+	}
+
+	// Add token if present
+	if cfg.AuthToken != "" {
+		args = append(args, "--token", cfg.AuthToken)
+	}
+
+	// Add config path
+	args = append(args, "--config", cfg.ConfigPath)
+
 	svcCfg := &service.Config{
 		Name:        cfg.Name,
 		DisplayName: cfg.DisplayName,
 		Description: cfg.Description,
-		Arguments: []string{
-			"--service-run",
-			"--service-mode", cfg.Mode,
-			"--config", cfg.ConfigPath,
-		},
+		Arguments:   args,
 	}
 
 	// Platform-specific options
