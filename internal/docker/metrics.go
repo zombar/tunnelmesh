@@ -37,59 +37,64 @@ type dockerMetrics struct {
 }
 
 // initMetrics initializes Docker Prometheus metrics (singleton).
-func initMetrics(peerName string) *dockerMetrics {
+// Pass nil for registry to use the default Prometheus registry.
+func initMetrics(registry prometheus.Registerer) *dockerMetrics {
+	if registry == nil {
+		registry = prometheus.DefaultRegisterer
+	}
+
 	once.Do(func() {
 		metricsRegistry = &dockerMetrics{
-			cpuPercent: promauto.NewGaugeVec(
+			cpuPercent: promauto.With(registry).NewGaugeVec(
 				prometheus.GaugeOpts{
 					Name: "docker_container_cpu_percent",
 					Help: "CPU usage percentage for Docker container (0-100+ for multi-core)",
 				},
 				[]string{"peer", "container_id", "container_name", "image"},
 			),
-			memoryBytes: promauto.NewGaugeVec(
+			memoryBytes: promauto.With(registry).NewGaugeVec(
 				prometheus.GaugeOpts{
 					Name: "docker_container_memory_bytes",
 					Help: "Current memory usage in bytes for Docker container",
 				},
 				[]string{"peer", "container_id", "container_name", "image"},
 			),
-			memoryLimit: promauto.NewGaugeVec(
+			memoryLimit: promauto.With(registry).NewGaugeVec(
 				prometheus.GaugeOpts{
 					Name: "docker_container_memory_limit_bytes",
 					Help: "Memory limit in bytes for Docker container",
 				},
 				[]string{"peer", "container_id", "container_name", "image"},
 			),
-			memoryPercent: promauto.NewGaugeVec(
+			memoryPercent: promauto.With(registry).NewGaugeVec(
 				prometheus.GaugeOpts{
 					Name: "docker_container_memory_percent",
 					Help: "Memory usage percentage for Docker container",
 				},
 				[]string{"peer", "container_id", "container_name", "image"},
 			),
-			diskBytes: promauto.NewGaugeVec(
+			diskBytes: promauto.With(registry).NewGaugeVec(
 				prometheus.GaugeOpts{
 					Name: "docker_container_disk_bytes",
 					Help: "Disk space used by Docker container in bytes",
 				},
 				[]string{"peer", "container_id", "container_name", "image"},
 			),
-			pids: promauto.NewGaugeVec(
+			pids: promauto.With(registry).NewGaugeVec(
 				prometheus.GaugeOpts{
 					Name: "docker_container_pids",
 					Help: "Number of processes in Docker container",
 				},
 				[]string{"peer", "container_id", "container_name", "image"},
 			),
-			containerInfo: promauto.NewGaugeVec(
+			containerInfo: promauto.With(registry).NewGaugeVec(
 				prometheus.GaugeOpts{
 					Name: "docker_container_info",
 					Help: "Docker container information (always 1)",
 				},
 				[]string{"peer", "container_id", "container_name", "image", "status", "network_mode"},
 			),
-			containerStatus: promauto.NewGaugeVec(
+			containerStatus: promauto.With(registry).NewGaugeVec(
 				prometheus.GaugeOpts{
 					Name: "docker_container_status",
 					Help: "Docker container status (1=running, 0=stopped)",
@@ -98,21 +103,21 @@ func initMetrics(peerName string) *dockerMetrics {
 			),
 
 			// Stats collection metrics
-			statsCollectionTotal: promauto.NewCounterVec(
+			statsCollectionTotal: promauto.With(registry).NewCounterVec(
 				prometheus.CounterOpts{
 					Name: "tunnelmesh_docker_stats_collection_total",
 					Help: "Total successful Docker stats collections",
 				},
 				[]string{"peer"},
 			),
-			statsCollectionErrors: promauto.NewCounterVec(
+			statsCollectionErrors: promauto.With(registry).NewCounterVec(
 				prometheus.CounterOpts{
 					Name: "tunnelmesh_docker_stats_collection_errors_total",
 					Help: "Total Docker stats collection errors",
 				},
 				[]string{"peer", "error_type"},
 			),
-			statsCollectionDuration: promauto.NewHistogramVec(
+			statsCollectionDuration: promauto.With(registry).NewHistogramVec(
 				prometheus.HistogramOpts{
 					Name:    "tunnelmesh_docker_stats_collection_duration_seconds",
 					Help:    "Docker stats collection latency in seconds",
@@ -120,28 +125,28 @@ func initMetrics(peerName string) *dockerMetrics {
 				},
 				[]string{"peer"},
 			),
-			statsCollectionTimestamp: promauto.NewGaugeVec(
+			statsCollectionTimestamp: promauto.With(registry).NewGaugeVec(
 				prometheus.GaugeOpts{
 					Name: "tunnelmesh_docker_stats_last_collection_timestamp",
 					Help: "Unix timestamp of last successful Docker stats collection",
 				},
 				[]string{"peer"},
 			),
-			statsPersistenceTotal: promauto.NewCounterVec(
+			statsPersistenceTotal: promauto.With(registry).NewCounterVec(
 				prometheus.CounterOpts{
 					Name: "tunnelmesh_docker_stats_persistence_total",
 					Help: "Total successful Docker stats S3 saves",
 				},
 				[]string{"peer"},
 			),
-			statsPersistenceErrors: promauto.NewCounterVec(
+			statsPersistenceErrors: promauto.With(registry).NewCounterVec(
 				prometheus.CounterOpts{
 					Name: "tunnelmesh_docker_stats_persistence_errors_total",
 					Help: "Total Docker stats S3 save errors",
 				},
 				[]string{"peer", "error_type"},
 			),
-			statsPersistenceDuration: promauto.NewHistogramVec(
+			statsPersistenceDuration: promauto.With(registry).NewHistogramVec(
 				prometheus.HistogramOpts{
 					Name:    "tunnelmesh_docker_stats_persistence_duration_seconds",
 					Help:    "Docker stats S3 save latency in seconds",
@@ -149,21 +154,21 @@ func initMetrics(peerName string) *dockerMetrics {
 				},
 				[]string{"peer"},
 			),
-			statsContainersCollected: promauto.NewGaugeVec(
+			statsContainersCollected: promauto.With(registry).NewGaugeVec(
 				prometheus.GaugeOpts{
 					Name: "tunnelmesh_docker_stats_containers_collected",
 					Help: "Number of containers in last stats collection",
 				},
 				[]string{"peer"},
 			),
-			statsCollectionEnabled: promauto.NewGaugeVec(
+			statsCollectionEnabled: promauto.With(registry).NewGaugeVec(
 				prometheus.GaugeOpts{
 					Name: "tunnelmesh_docker_stats_collection_enabled",
 					Help: "Whether Docker stats collection is enabled (1) or not (0)",
 				},
 				[]string{"peer"},
 			),
-			statsS3Available: promauto.NewGaugeVec(
+			statsS3Available: promauto.With(registry).NewGaugeVec(
 				prometheus.GaugeOpts{
 					Name: "tunnelmesh_docker_stats_s3_available",
 					Help: "Whether S3 is available for stats persistence (1) or not (0)",

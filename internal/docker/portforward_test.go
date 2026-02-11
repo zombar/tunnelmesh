@@ -26,7 +26,7 @@ func TestSyncPortForwards_Bridge(t *testing.T) {
 	}
 
 	filter := &mockFilter{}
-	mgr := NewManager(cfg, "test-peer", filter, nil)
+	mgr := NewManager(cfg, "test-peer", filter, nil, nil)
 
 	// Mock container with bridge network and ports
 	now := time.Now()
@@ -84,7 +84,7 @@ func TestSyncPortForwards_HostNetwork(t *testing.T) {
 	}
 
 	filter := &mockFilter{}
-	mgr := NewManager(cfg, "test-peer", filter, nil)
+	mgr := NewManager(cfg, "test-peer", filter, nil, nil)
 
 	// Mock container with host network (should NOT create rules)
 	now := time.Now()
@@ -122,7 +122,7 @@ func TestSyncPortForwards_NoHostPort(t *testing.T) {
 	}
 
 	filter := &mockFilter{}
-	mgr := NewManager(cfg, "test-peer", filter, nil)
+	mgr := NewManager(cfg, "test-peer", filter, nil, nil)
 
 	// Mock container with ports but no host binding
 	now := time.Now()
@@ -158,7 +158,7 @@ func TestSyncPortForwards_Disabled(t *testing.T) {
 	}
 
 	filter := &mockFilter{}
-	mgr := NewManager(cfg, "test-peer", filter, nil)
+	mgr := NewManager(cfg, "test-peer", filter, nil, nil)
 
 	// Mock container
 	now := time.Now()

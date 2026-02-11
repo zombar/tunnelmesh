@@ -77,3 +77,4 @@ terraform/*_override.tf.json
 /tunnelmesh-benchmarker
 internal/coord/web/coverage/
 tunnelmesh_icon.png
+.tunnelmesh-token

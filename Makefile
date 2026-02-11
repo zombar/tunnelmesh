@@ -192,17 +192,18 @@ docker-build:
 	@docker system prune -f --filter "until=1h" >/dev/null 2>&1 || true
 
 docker-up: docker-build
-	$(DOCKER_COMPOSE) up -d
-	@echo "TunnelMesh Docker environment started"
-	@echo "Use 'make docker-logs' to follow logs"
-	@echo ""
-	@echo "=== Join from this machine ==="
-	@read -p "Run 'sudo tunnelmesh join --context docker'? [Y/n] " answer; \
+	@TUNNELMESH_TOKEN=$$(openssl rand -hex 32); \
+	echo "Generated auth token: $${TUNNELMESH_TOKEN:0:16}... (truncated)"; \
+	TUNNELMESH_TOKEN=$$TUNNELMESH_TOKEN $(DOCKER_COMPOSE) up -d; \
+	echo "TunnelMesh Docker environment started"; \
+	echo "Use 'make docker-logs' to follow logs"; \
+	echo ""; \
+	echo "=== Join from this machine ==="; \
+	read -p "Run 'sudo tunnelmesh join --context docker'? [Y/n] " answer; \
 	if [ "$$answer" != "n" ] && [ "$$answer" != "N" ]; then \
 		sudo tunnelmesh context rm docker 2>/dev/null || true; \
-		export TUNNELMESH_TOKEN=docker-test-token-123; \
 		echo "Joining mesh with coordinator at http://localhost:8081..."; \
-		sudo -E tunnelmesh join http://localhost:8081 --context docker; \
+		TUNNELMESH_TOKEN=$$TUNNELMESH_TOKEN sudo -E tunnelmesh join http://localhost:8081 --context docker; \
 		echo ""; \
 		echo "Admin interface should open at https://this.tm"; \
 	fi

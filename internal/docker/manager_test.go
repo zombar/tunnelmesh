@@ -109,7 +109,7 @@ func TestNewManager(t *testing.T) {
 		AutoPortForward: &autoForward,
 	}
 
-	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr := NewManager(cfg, "test-peer", nil, nil, nil)
 	if mgr == nil {
 		t.Fatal("NewManager returned nil")
 	}
@@ -161,7 +161,7 @@ func TestListContainers(t *testing.T) {
 
 	mock := &mockDockerClient{containers: mockContainers}
 	cfg := &config.DockerConfig{Socket: "unix:///var/run/docker.sock"}
-	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr := NewManager(cfg, "test-peer", nil, nil, nil)
 	mgr.client = mock
 
 	ctx := context.Background()
@@ -189,7 +189,7 @@ func TestListContainersEmpty(t *testing.T) {
 
 	mock := &mockDockerClient{containers: []ContainerInfo{}}
 	cfg := &config.DockerConfig{Socket: "unix:///var/run/docker.sock"}
-	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr := NewManager(cfg, "test-peer", nil, nil, nil)
 	mgr.client = mock
 
 	ctx := context.Background()
@@ -223,7 +223,7 @@ func TestInspectContainer(t *testing.T) {
 
 	mock := &mockDockerClient{containers: []ContainerInfo{mockContainer}}
 	cfg := &config.DockerConfig{Socket: "unix:///var/run/docker.sock"}
-	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr := NewManager(cfg, "test-peer", nil, nil, nil)
 	mgr.client = mock
 
 	ctx := context.Background()
@@ -256,7 +256,7 @@ func TestInspectContainer(t *testing.T) {
 func TestInspectContainerNotFound(t *testing.T) {
 	mock := &mockDockerClient{containers: []ContainerInfo{}}
 	cfg := &config.DockerConfig{Socket: "unix:///var/run/docker.sock"}
-	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr := NewManager(cfg, "test-peer", nil, nil, nil)
 	mgr.client = mock
 
 	ctx := context.Background()
@@ -419,7 +419,7 @@ func TestGetComposeService(t *testing.T) {
 }
 
 func TestSetFilter(t *testing.T) {
-	mgr := NewManager(&config.DockerConfig{}, "test-peer", nil, nil)
+	mgr := NewManager(&config.DockerConfig{}, "test-peer", nil, nil, nil)
 
 	filter := &mockFilter{}
 	mgr.SetFilter(filter)
@@ -432,7 +432,7 @@ func TestSetFilter(t *testing.T) {
 func TestStart_NoDocker(t *testing.T) {
 	mgr := NewManager(&config.DockerConfig{
 		Socket: "unix:///nonexistent/docker.sock",
-	}, "test-peer", nil, nil)
+	}, "test-peer", nil, nil, nil)
 
 	err := mgr.Start(context.Background())
 	if err != nil {
@@ -445,7 +445,7 @@ func TestStart_NoDocker(t *testing.T) {
 }
 
 func TestStop_NilClient(t *testing.T) {
-	mgr := NewManager(&config.DockerConfig{}, "test-peer", nil, nil)
+	mgr := NewManager(&config.DockerConfig{}, "test-peer", nil, nil, nil)
 
 	err := mgr.Stop()
 	if err != nil {
@@ -635,7 +635,7 @@ func TestSyncAllPortForwards(t *testing.T) {
 		AutoPortForward: &autoForward,
 	}
 
-	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr := NewManager(cfg, "test-peer", nil, nil, nil)
 	mgr.client = mock
 	mgr.filter = filter
 
@@ -680,7 +680,7 @@ func TestSyncAllPortForwards_NoRunningContainers(t *testing.T) {
 		AutoPortForward: &autoForward,
 	}
 
-	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr := NewManager(cfg, "test-peer", nil, nil, nil)
 	mgr.client = mock
 	mgr.filter = filter
 
@@ -702,7 +702,7 @@ func TestSyncAllPortForwards_ListError(t *testing.T) {
 	}
 
 	cfg := &config.DockerConfig{Socket: "unix:///var/run/docker.sock"}
-	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr := NewManager(cfg, "test-peer", nil, nil, nil)
 	mgr.client = mock
 
 	ctx := context.Background()

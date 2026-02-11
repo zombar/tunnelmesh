@@ -16,7 +16,7 @@ func TestInitMetrics(t *testing.T) {
 	metricsTestMutex.Lock()
 	defer metricsTestMutex.Unlock()
 
-	metrics := initMetrics("test-peer")
+	metrics := initMetrics(nil)
 	if metrics == nil {
 		t.Fatal("initMetrics returned nil")
 	}
@@ -51,10 +51,10 @@ func TestRecordStats(t *testing.T) {
 	metricsTestMutex.Lock()
 	defer metricsTestMutex.Unlock()
 
-	initMetrics("test-peer")
+	initMetrics(nil)
 
 	cfg := &config.DockerConfig{Socket: "unix:///var/run/docker.sock"}
-	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr := NewManager(cfg, "test-peer", nil, nil, nil)
 
 	stats := ContainerStats{
 		ContainerID:   "abc123",
@@ -82,10 +82,10 @@ func TestRecordContainerInfo(t *testing.T) {
 	metricsTestMutex.Lock()
 	defer metricsTestMutex.Unlock()
 
-	initMetrics("test-peer")
+	initMetrics(nil)
 
 	cfg := &config.DockerConfig{Socket: "unix:///var/run/docker.sock"}
-	mgr := NewManager(cfg, "test-peer", nil, nil)
+	mgr := NewManager(cfg, "test-peer", nil, nil, nil)
 
 	container := &ContainerInfo{
 		ID:          "abc123",

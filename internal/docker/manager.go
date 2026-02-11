@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
@@ -47,7 +48,11 @@ type Manager struct {
 // NewManager creates a new Docker manager.
 // If filter is nil, port forwarding will be disabled until SetFilter is called.
 // If systemStore is nil, port forward mappings will not be persisted.
-func NewManager(cfg *config.DockerConfig, peerName string, filter packetFilter, systemStore *s3.SystemStore) *Manager {
+// Pass a Prometheus registry to register Docker metrics, or nil for default registry.
+func NewManager(cfg *config.DockerConfig, peerName string, filter packetFilter, systemStore *s3.SystemStore, registry prometheus.Registerer) *Manager {
+	// Initialize Docker metrics (singleton, safe to call multiple times)
+	initMetrics(registry)
+
 	return &Manager{
 		cfg:         cfg,
 		peerName:    peerName,

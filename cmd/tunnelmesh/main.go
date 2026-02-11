@@ -1081,7 +1081,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 
 		// Start Docker manager for coordinator
 		if cfg.Docker.Socket != "" {
-			dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, srv.GetSystemStore())
+			dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, srv.GetSystemStore(), metrics.Registry)
 			if err := dockerMgr.Start(ctx); err != nil {
 				log.Warn().Err(err).Msg("failed to start Docker manager")
 			} else {
@@ -1113,7 +1113,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			}
 		}
 		if cfg.Docker.Socket != "" {
-			dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, nil)
+			dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, nil, metrics.Registry)
 			if err := dockerMgr.Start(ctx); err != nil {
 				log.Warn().Err(err).Msg("failed to start Docker manager")
 			} else {

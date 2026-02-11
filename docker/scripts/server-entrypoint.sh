@@ -10,8 +10,20 @@ if [ ! -f "$KEY_PATH" ]; then
     tunnelmesh init
 fi
 
-# Set auth token via environment variable (required for security - not CLI arg)
-export TUNNELMESH_TOKEN="${TUNNELMESH_TOKEN:-docker-test-token-123}"
+# Validate auth token is set (required for security - passed via environment variable)
+if [ -z "$TUNNELMESH_TOKEN" ]; then
+    echo "ERROR: TUNNELMESH_TOKEN environment variable is not set"
+    echo "Generate a token with: openssl rand -hex 32"
+    exit 1
+fi
+
+# Validate token format (must be 64 hex characters)
+if ! echo "$TUNNELMESH_TOKEN" | grep -qE '^[0-9a-fA-F]{64}$'; then
+    echo "ERROR: TUNNELMESH_TOKEN must be exactly 64 hexadecimal characters"
+    echo "Current token length: ${#TUNNELMESH_TOKEN}"
+    echo "Generate a valid token with: openssl rand -hex 32"
+    exit 1
+fi
 
 # Build command
 CMD="tunnelmesh join --config /etc/tunnelmesh/server.yaml"
