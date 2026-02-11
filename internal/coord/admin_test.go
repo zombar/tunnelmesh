@@ -2,6 +2,7 @@ package coord
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -98,7 +99,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 	cfg.Coordinator.Enabled = true
 	cfg.Coordinator.Locations = true // Enable location tracking for this test
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
@@ -144,7 +145,7 @@ func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
@@ -201,7 +202,7 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
@@ -259,7 +260,7 @@ func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
@@ -344,7 +345,7 @@ func newTestServerWithS3AndBucket(t *testing.T) *Server {
 	cfg.Coordinator.Enabled = true
 	cfg.Coordinator.DataDir = t.TempDir()
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 

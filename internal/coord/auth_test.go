@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ func TestServer_GenerateAndValidateToken(t *testing.T) {
 	cfg.Coordinator.Enabled = true
 	cfg.Coordinator.Listen = ":8080"
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 	defer func() { _ = srv.Shutdown() }()
@@ -39,7 +40,7 @@ func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
 	cfg1.Coordinator.Enabled = true
 	cfg1.Coordinator.Listen = ":8080"
 
-	srv1, err := NewServer(cfg1)
+	srv1, err := NewServer(context.Background(), cfg1)
 	require.NoError(t, err)
 	defer func() { _ = srv1.Shutdown() }()
 
@@ -49,7 +50,7 @@ func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
 	cfg2.Coordinator.Enabled = true
 	cfg2.Coordinator.Listen = ":8080"
 
-	srv2, err := NewServer(cfg2)
+	srv2, err := NewServer(context.Background(), cfg2)
 	require.NoError(t, err)
 	defer func() { _ = srv2.Shutdown() }()
 
@@ -68,7 +69,7 @@ func TestServer_ValidateToken_InvalidToken(t *testing.T) {
 	cfg.Coordinator.Enabled = true
 	cfg.Coordinator.Listen = ":8080"
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 	defer func() { _ = srv.Shutdown() }()

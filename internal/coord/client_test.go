@@ -18,7 +18,7 @@ func TestClient_Register(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -43,7 +43,7 @@ func TestClient_RegisterWithLocation(t *testing.T) {
 	cfg.Coordinator.Enabled = true
 	cfg.Coordinator.Locations = true // Enable location tracking for this test
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -78,7 +78,7 @@ func TestClient_ListPeers(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -107,7 +107,7 @@ func TestClient_Deregister(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -137,7 +137,7 @@ func TestClient_GetDNSRecords(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -163,7 +163,7 @@ func TestClient_RegisterWithRetry_SuccessOnFirstTry(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -330,7 +330,7 @@ func TestServer_GeolocationOnlyOnNewOrChangedIP(t *testing.T) {
 	cfg.Coordinator.Enabled = true
 	cfg.Coordinator.Locations = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -382,7 +382,7 @@ func TestServer_ManualLocationPreservedOnIPChange(t *testing.T) {
 	cfg.Coordinator.Enabled = true
 	cfg.Coordinator.Locations = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 

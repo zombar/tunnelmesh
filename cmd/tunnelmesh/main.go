@@ -680,7 +680,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 
 		// Create coordinator server
 		var err error
-		srv, err = coord.NewServer(cfg)
+		srv, err = coord.NewServer(ctx, cfg)
 		if err != nil {
 			return fmt.Errorf("create coordinator: %w", err)
 		}

@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"net/http"
@@ -48,7 +49,7 @@ func TestRelayManager_HandleHeartbeat(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -110,7 +111,7 @@ func TestRelayManager_NotifyRelayRequest(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -151,7 +152,7 @@ func TestRelayManager_NotifyHolePunch(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -189,7 +190,7 @@ func TestRelayManager_NotifyPeerNotConnected(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -203,7 +204,7 @@ func TestRelayManager_HeartbeatUpdatesStats(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -306,7 +307,7 @@ func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -357,7 +358,7 @@ func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -403,7 +404,7 @@ func TestRelayManager_QueryFilterRules(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -482,7 +483,7 @@ func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -507,7 +508,7 @@ func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -521,7 +522,7 @@ func TestRelayManager_StoresReportedLatency(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 

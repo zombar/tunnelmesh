@@ -105,7 +105,7 @@ func TestHandleSSE(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestNotifyHeartbeat_NoClients(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestSSEEventFormat(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}

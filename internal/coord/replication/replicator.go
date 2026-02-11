@@ -51,6 +51,13 @@ type Replicator struct {
 	logger               zerolog.Logger
 	maxPendingOperations int // Maximum pending ACKs (0 = unlimited)
 
+	// Timeouts
+	ackTimeout          time.Duration
+	applyTimeout        time.Duration
+	ackSendTimeout      time.Duration
+	syncRequestTimeout  time.Duration
+	syncResponseTimeout time.Duration
+
 	// Peer coordinators
 	mu    sync.RWMutex
 	peers map[string]bool // map[coordMeshIP]true
@@ -91,11 +98,15 @@ type Config struct {
 	Transport            Transport
 	S3Store              S3Store
 	Logger               zerolog.Logger
-	AckTimeout           time.Duration   // How long to wait for ACK before retrying
-	RetryInterval        time.Duration   // How long to wait before retrying failed replication
-	MaxPendingOperations int             // Maximum number of pending ACKs to track (0 = unlimited)
+	AckTimeout           time.Duration   // How long to wait for ACK before retrying (default: 10s)
+	RetryInterval        time.Duration   // How long to wait before retrying failed replication (default: 30s)
+	MaxPendingOperations int             // Maximum number of pending ACKs to track (0 = unlimited, default: 10k)
 	RateLimit            int             // Maximum incoming messages per second (0 = unlimited, default: 1000)
 	RateBurst            int             // Maximum burst size for rate limiter (default: 100)
+	ApplyTimeout         time.Duration   // Timeout for applying replication to S3 (default: 30s)
+	AckSendTimeout       time.Duration   // Timeout for sending ACK messages (default: 5s)
+	SyncRequestTimeout   time.Duration   // Timeout for handling sync requests (default: 5min)
+	SyncResponseTimeout  time.Duration   // Timeout for handling sync responses (default: 10min)
 	Context              context.Context // SECURITY FIX #3: Parent context for proper cancellation propagation
 }
 
@@ -116,6 +127,18 @@ func NewReplicator(config Config) *Replicator {
 	if config.RateBurst == 0 {
 		config.RateBurst = 100 // Default: burst of 100 messages
 	}
+	if config.ApplyTimeout == 0 {
+		config.ApplyTimeout = 30 * time.Second
+	}
+	if config.AckSendTimeout == 0 {
+		config.AckSendTimeout = 5 * time.Second
+	}
+	if config.SyncRequestTimeout == 0 {
+		config.SyncRequestTimeout = 5 * time.Minute
+	}
+	if config.SyncResponseTimeout == 0 {
+		config.SyncResponseTimeout = 10 * time.Minute
+	}
 
 	// SECURITY FIX #3: Use provided context or create a new one
 	// This allows proper context propagation and cancellation from parent
@@ -132,6 +155,11 @@ func NewReplicator(config Config) *Replicator {
 		state:                NewState(config.NodeID),
 		logger:               config.Logger.With().Str("component", "replicator").Logger(),
 		maxPendingOperations: config.MaxPendingOperations,
+		ackTimeout:           config.AckTimeout,
+		applyTimeout:         config.ApplyTimeout,
+		ackSendTimeout:       config.AckSendTimeout,
+		syncRequestTimeout:   config.SyncRequestTimeout,
+		syncResponseTimeout:  config.SyncResponseTimeout,
 		rateLimiter:          rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst),
 		peers:                make(map[string]bool),
 		pending:              make(map[string]*pendingReplication),
@@ -288,18 +316,35 @@ func (r *Replicator) ReplicateOperation(ctx context.Context, bucket, key string,
 		Metadata:      metadata,
 	}
 
-	// Send to all peers (fire and forget for now, ACKs handled asynchronously)
+	// Send to all peers in parallel to avoid one slow peer blocking others
+	// Use semaphore to limit concurrency to 10 concurrent sends
+	semaphore := make(chan struct{}, 10)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	var lastErr error
+
 	for _, peer := range peers {
-		if err := r.sendReplicateMessage(ctx, peer, payload); err != nil {
-			r.logger.Error().Err(err).Str("peer", peer).Msg("Failed to send replicate message")
-			lastErr = err
-			r.incrementErrorCount()
-		} else {
-			r.incrementSentCount()
-		}
+		wg.Add(1)
+		go func(p string) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			if err := r.sendReplicateMessage(ctx, p, payload); err != nil {
+				r.logger.Error().Err(err).Str("peer", p).Msg("Failed to send replicate message")
+				mu.Lock()
+				lastErr = err
+				mu.Unlock()
+				r.incrementErrorCount()
+			} else {
+				r.incrementSentCount()
+			}
+		}(peer)
 	}
 
+	wg.Wait()
 	return lastErr
 }
 
@@ -332,18 +377,35 @@ func (r *Replicator) ReplicateDelete(ctx context.Context, bucket, key string) er
 		Metadata:      map[string]string{"_deleted": "true"}, // Tombstone marker
 	}
 
-	// Send to all peers
+	// Send to all peers in parallel to avoid one slow peer blocking others
+	// Use semaphore to limit concurrency to 10 concurrent sends
+	semaphore := make(chan struct{}, 10)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	var lastErr error
+
 	for _, peer := range peers {
-		if err := r.sendReplicateMessage(ctx, peer, payload); err != nil {
-			r.logger.Error().Err(err).Str("peer", peer).Msg("Failed to send delete replicate message")
-			lastErr = err
-			r.incrementErrorCount()
-		} else {
-			r.incrementSentCount()
-		}
+		wg.Add(1)
+		go func(p string) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			if err := r.sendReplicateMessage(ctx, p, payload); err != nil {
+				r.logger.Error().Err(err).Str("peer", p).Msg("Failed to send delete replicate message")
+				mu.Lock()
+				lastErr = err
+				mu.Unlock()
+				r.incrementErrorCount()
+			} else {
+				r.incrementSentCount()
+			}
+		}(peer)
 	}
 
+	wg.Wait()
 	return lastErr
 }
 
@@ -475,7 +537,7 @@ func (r *Replicator) handleReplicate(msg *Message) error {
 
 // applyReplication applies a replication operation to local S3.
 func (r *Replicator) applyReplication(payload *ReplicatePayload) error {
-	ctx, cancel := context.WithTimeout(r.ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.ctx, r.applyTimeout)
 	defer cancel()
 
 	// Check if this is a delete operation (nil data or tombstone marker)
@@ -536,7 +598,7 @@ func (r *Replicator) sendAck(replicateID, to string, success bool, errorMsg stri
 		return fmt.Errorf("marshal ack: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(r.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.ctx, r.ackSendTimeout)
 	defer cancel()
 
 	if err := r.transport.SendToCoordinator(ctx, to, data); err != nil {
@@ -607,7 +669,7 @@ func (r *Replicator) handleSyncRequest(msg *Message) error {
 	}
 
 	// SECURITY FIX #3: Use replicator's context for proper cancellation
-	ctx, cancel := context.WithTimeout(r.ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(r.ctx, r.syncRequestTimeout)
 	defer cancel()
 
 	// Get state snapshot
@@ -713,7 +775,7 @@ func (r *Replicator) handleSyncResponse(msg *Message) error {
 	}
 
 	// SECURITY FIX #3: Use replicator's context for proper cancellation
-	ctx, cancel := context.WithTimeout(r.ctx, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(r.ctx, r.syncResponseTimeout)
 	defer cancel()
 
 	// Decode state snapshot to get version vectors, but don't overwrite our nodeID
@@ -824,7 +886,7 @@ func (r *Replicator) trackPendingACK(msgID, bucket, key string) bool {
 		key:     key,
 		sentAt:  time.Now(),
 		ackChan: make(chan *AckPayload, 1),
-		timeout: time.AfterFunc(10*time.Second, func() {
+		timeout: time.AfterFunc(r.ackTimeout, func() {
 			r.removePendingACK(msgID)
 		}),
 	}

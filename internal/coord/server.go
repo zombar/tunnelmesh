@@ -72,6 +72,7 @@ type Server struct {
 	adminMux     *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
 	adminServer  *http.Server   // HTTPS server for adminMux, bound to mesh IP only
 	peers        map[string]*peerInfo
+	coordinators map[string]*peerInfo // Subset of peers that are coordinators, for O(1) lookups
 	peersMu      sync.RWMutex
 	ipAlloc      *ipAllocator
 	dnsCache     map[string]string // hostname -> mesh IP
@@ -98,9 +99,9 @@ type Server struct {
 	// NFS server
 	nfsServer *nfs.Server // NFS server for file shares
 	// Packet filter
-	filter            *routing.PacketFilter // Global packet filter
-	filterSavePending atomic.Bool           // Debounce flag for async filter saves
-	filterSaveMu      sync.Mutex            // Protects SaveFilterRules from concurrent calls
+	filter       *routing.PacketFilter // Global packet filter
+	filterSaveMu sync.Mutex            // Protects SaveFilterRules from concurrent calls
+	filterTimer  *time.Timer           // Timer for debouncing filter saves
 	// Docker orchestration (when coordinator joins mesh)
 	dockerMgr *docker.Manager // Docker manager (nil if Docker not enabled)
 	// Peer name cache for owner display (cached to avoid LoadPeers() on every request)
@@ -282,7 +283,7 @@ func (a *ipAllocator) saveToS3Async(data s3.IPAllocationsData) {
 }
 
 // NewServer creates a new coordination server.
-func NewServer(cfg *config.PeerConfig) (*Server, error) {
+func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	// Determine coordinator name for stats organization
 	coordinatorName := cfg.Name
 	if coordinatorName == "" {
@@ -293,6 +294,7 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 		cfg:          cfg,
 		mux:          http.NewServeMux(),
 		peers:        make(map[string]*peerInfo),
+		coordinators: make(map[string]*peerInfo),
 		dnsCache:     make(map[string]string),
 		aliasOwner:   make(map[string]string),
 		statsHistory: NewStatsHistory(coordinatorName),
@@ -402,6 +404,7 @@ func NewServer(cfg *config.PeerConfig) (*Server, error) {
 			Transport:            srv.meshTransport,
 			S3Store:              s3Adapter,
 			Logger:               log.Logger,
+			Context:              ctx, // Pass server context for proper cancellation
 			AckTimeout:           10 * time.Second,
 			RetryInterval:        30 * time.Second,
 			MaxPendingOperations: 10000,
@@ -603,25 +606,22 @@ func (s *Server) SaveFilterRules() error {
 }
 
 // saveFilterRulesAsync saves filter rules asynchronously with debouncing.
-// Uses an atomic flag to prevent concurrent saves from racing.
+// Uses a timer that resets on each call to coalesce rapid changes.
 func (s *Server) saveFilterRulesAsync() {
-	// Skip if a save is already pending (debounce)
-	if !s.filterSavePending.CompareAndSwap(false, true) {
-		return
+	s.filterSaveMu.Lock()
+	defer s.filterSaveMu.Unlock()
+
+	// Stop existing timer if it exists
+	if s.filterTimer != nil {
+		s.filterTimer.Stop()
 	}
 
-	go func() {
-		// Small delay to coalesce rapid changes
-		time.Sleep(100 * time.Millisecond)
-
-		// Save before resetting flag to prevent losing changes
+	// Create new timer that saves after 100ms of inactivity
+	s.filterTimer = time.AfterFunc(100*time.Millisecond, func() {
 		if err := s.SaveFilterRules(); err != nil {
 			log.Error().Err(err).Msg("failed to save filter rules")
 		}
-
-		// Reset flag after save completes
-		s.filterSavePending.Store(false)
-	}()
+	})
 }
 
 // Shutdown gracefully shuts down the server, persisting state.
@@ -641,13 +641,15 @@ func (s *Server) Shutdown() error {
 	// This ensures final state is persisted even if async saves are in-flight
 	s.saveDNSData()
 
-	// Wait for any pending async filter saves to complete (debounce is 100ms)
-	if s.filterSavePending.Load() {
-		log.Debug().Msg("waiting for pending filter save to complete")
-		time.Sleep(200 * time.Millisecond)
+	// Stop filter save timer and ensure final save happens
+	s.filterSaveMu.Lock()
+	if s.filterTimer != nil {
+		s.filterTimer.Stop()
+		s.filterTimer = nil
 	}
+	s.filterSaveMu.Unlock()
 
-	// Save filter rules
+	// Save filter rules (final save after stopping timer)
 	if err := s.SaveFilterRules(); err != nil {
 		log.Error().Err(err).Msg("failed to save filter rules")
 		errs = append(errs, fmt.Errorf("save filter rules: %w", err))
@@ -772,17 +774,16 @@ func (s *Server) StartReplicator() error {
 	}
 
 	// Discover existing coordinator peers and add them to replication targets
+	// Use coordinators map for O(1) lookups instead of iterating all peers
 	s.peersMu.RLock()
-	for name, info := range s.peers {
-		if info.peer.IsCoordinator {
-			// Don't add self to replication targets
-			if name != s.cfg.Name {
-				s.replicator.AddPeer(info.peer.MeshIP)
-				log.Debug().
-					Str("peer", name).
-					Str("mesh_ip", info.peer.MeshIP).
-					Msg("discovered existing coordinator for replication")
-			}
+	for name, info := range s.coordinators {
+		// Don't add self to replication targets
+		if name != s.cfg.Name {
+			s.replicator.AddPeer(info.peer.MeshIP)
+			log.Debug().
+				Str("peer", name).
+				Str("mesh_ip", info.peer.MeshIP).
+				Msg("discovered existing coordinator for replication")
 		}
 	}
 	s.peersMu.RUnlock()
@@ -1525,13 +1526,19 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.peers[req.Name] = &peerInfo{
+	info := &peerInfo{
 		peer:         peer,
 		registeredAt: registeredAt,
 		aliases:      req.Aliases,
 		peerID:       peerID,
 	}
+	s.peers[req.Name] = info
 	s.dnsCache[req.Name] = meshIP
+
+	// Add to coordinators index for O(1) lookups
+	if peer.IsCoordinator {
+		s.coordinators[req.Name] = info
+	}
 
 	// Persist DNS data to S3 (async to avoid blocking registration)
 	go s.saveDNSData()
@@ -1727,6 +1734,11 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 			}
 			delete(s.peers, name)
 			delete(s.dnsCache, name)
+
+			// Remove from coordinators index
+			if info.peer.IsCoordinator {
+				delete(s.coordinators, name)
+			}
 
 			// Remove from replicator if this was a coordinator
 			if info.peer.IsCoordinator && s.replicator != nil {

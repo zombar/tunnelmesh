@@ -2,6 +2,7 @@ package coord
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -43,7 +44,7 @@ func newTestConfig(t *testing.T) *config.PeerConfig {
 func newTestServer(t *testing.T) *Server {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -566,7 +567,7 @@ func newTestServerWithWireGuard(t *testing.T) *Server {
 		Endpoint: "wg.example.com:51820",
 	}
 
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -1016,7 +1017,7 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 	}
 
 	// Create first server instance
-	srv1, err := NewServer(cfg)
+	srv1, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 
 	// Simulate user registration by directly adding to stores
@@ -1053,7 +1054,7 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create second server instance (simulating restart)
-	srv2, err := NewServer(cfg)
+	srv2, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 
 	// Verify peer credentials were recovered
@@ -1090,7 +1091,7 @@ func newTestServerWithS3(t *testing.T) *Server {
 			Filter: config.FilterConfig{}, // Initialize Filter field
 		},
 	}
-	srv, err := NewServer(cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
@@ -1310,7 +1311,7 @@ func TestServer_FilterRulesRecoveryFiltersExpired(t *testing.T) {
 	}
 
 	// Create first server
-	srv1, err := NewServer(cfg)
+	srv1, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	require.NotNil(t, srv1.filter)
 	require.NotNil(t, srv1.s3SystemStore)
@@ -1346,7 +1347,7 @@ func TestServer_FilterRulesRecoveryFiltersExpired(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create second server (simulating restart)
-	srv2, err := NewServer(cfg)
+	srv2, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
 	require.NotNil(t, srv2.filter)
 
