@@ -55,7 +55,7 @@ a system service, see the **[Getting Started Guide](docs/GETTING_STARTED.md)**.
 ```
 ┌─────────────────┐                      ┌─────────────────┐
 │   Peer Node A   │                      │   Peer Node B   │
-│   (10.42.0.1)    │                      │   (10.42.0.2)    │
+│   (10.42.0.1)   │                      │   (10.42.0.2)   │
 │                 │  Encrypted Tunnel    │                 │
 │  ┌───────────┐  │◄────────────────────►│  ┌───────────┐  │
 │  │ TUN Device│  │  (SSH/UDP/Relay)     │  │ TUN Device│  │
@@ -231,7 +231,7 @@ Route internet traffic through a designated peer while keeping mesh-to-mesh traf
 ```
 ┌─────────────────┐                      ┌─────────────────┐
 │   Client Peer   │                      │   Exit Peer     │
-│   (10.42.0.1)    │                      │   (10.42.0.2)    │
+│   (10.42.0.1)   │                      │   (10.42.0.2)   │
 │                 │                      │                 │
 │  Internet ──────┼──── Tunnel ─────────►│──► Internet     │
 │  traffic        │  (encrypted)         │   (NAT)         │
