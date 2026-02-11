@@ -121,6 +121,28 @@ func NewStore(dataDir string, quota *QuotaManager) (*Store, error) {
 	return store, nil
 }
 
+// syncedWriteFile writes data to a file and calls fsync to ensure durability.
+// This prevents data loss in case of sudden power loss or system crash.
+// Use this instead of os.WriteFile for critical metadata.
+func syncedWriteFile(path string, data []byte, perm os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+
+	// Ensure data is flushed to disk before returning
+	if err := f.Sync(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // NewStoreWithCAS creates a new S3 store with CAS (Content-Addressable Storage) enabled.
 // This enables CDC chunking, encryption, compression, and version history.
 func NewStoreWithCAS(dataDir string, quota *QuotaManager, masterKey [32]byte) (*Store, error) {
@@ -291,7 +313,7 @@ func (s *Store) CreateBucket(ctx context.Context, bucket, owner string) error {
 		return fmt.Errorf("marshal bucket meta: %w", err)
 	}
 
-	if err := os.WriteFile(metaPath, data, 0644); err != nil {
+	if err := syncedWriteFile(metaPath, data, 0644); err != nil {
 		return fmt.Errorf("write bucket meta: %w", err)
 	}
 
@@ -376,7 +398,7 @@ func (s *Store) writeBucketMeta(bucket string, meta *BucketMeta) error {
 	if err != nil {
 		return fmt.Errorf("marshal bucket meta: %w", err)
 	}
-	if err := os.WriteFile(metaPath, data, 0644); err != nil {
+	if err := syncedWriteFile(metaPath, data, 0644); err != nil {
 		return fmt.Errorf("write bucket meta: %w", err)
 	}
 	return nil
@@ -639,7 +661,7 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		return nil, fmt.Errorf("marshal object meta: %w", err)
 	}
 
-	if err := os.WriteFile(metaPath, metaData, 0644); err != nil {
+	if err := syncedWriteFile(metaPath, metaData, 0644); err != nil {
 		// Rollback quota on failure
 		if quotaUpdated {
 			if oldSize > 0 {
@@ -805,7 +827,7 @@ func (s *Store) TombstoneObject(ctx context.Context, bucket, key string) error {
 		return fmt.Errorf("marshal object meta: %w", err)
 	}
 
-	if err := os.WriteFile(metaPath, metaData, 0644); err != nil {
+	if err := syncedWriteFile(metaPath, metaData, 0644); err != nil {
 		return fmt.Errorf("write object meta: %w", err)
 	}
 
@@ -843,7 +865,7 @@ func (s *Store) UntombstoneObject(ctx context.Context, bucket, key string) error
 		return fmt.Errorf("marshal object meta: %w", err)
 	}
 
-	if err := os.WriteFile(metaPath, metaData, 0644); err != nil {
+	if err := syncedWriteFile(metaPath, metaData, 0644); err != nil {
 		return fmt.Errorf("write object meta: %w", err)
 	}
 
@@ -1184,7 +1206,7 @@ func (s *Store) archiveCurrentVersion(bucket, key string) error {
 		return fmt.Errorf("marshal version meta: %w", err)
 	}
 
-	if err := os.WriteFile(versionPath, data, 0644); err != nil {
+	if err := syncedWriteFile(versionPath, data, 0644); err != nil {
 		return fmt.Errorf("write version meta: %w", err)
 	}
 
@@ -2008,7 +2030,7 @@ func (s *Store) RestoreVersion(ctx context.Context, bucket, key, versionID strin
 		return nil, fmt.Errorf("marshal object meta: %w", err)
 	}
 
-	if err := os.WriteFile(metaPath, metaData, 0644); err != nil {
+	if err := syncedWriteFile(metaPath, metaData, 0644); err != nil {
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
 
@@ -2062,37 +2084,18 @@ func (s *Store) deleteAllVersions(ctx context.Context, bucket, key string) {
 	}
 }
 
-// Close ensures all pending filesystem operations are flushed to disk.
-// This should be called during shutdown to prevent "directory not empty" errors
-// when temp directories are cleaned up in tests.
+// Close flushes any pending operations and syncs the data directory.
+// Since all writes use syncedWriteFile (which calls fsync), this just ensures
+// directory metadata is flushed for durability.
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Sync all directories to ensure directory entries are flushed.
-	// This is more reliable than trying to sync individual files.
-	bucketsDir := filepath.Join(s.dataDir, "buckets")
-	_ = filepath.Walk(bucketsDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // Skip errors, continue walking
-		}
-		if info.IsDir() {
-			if f, err := os.Open(path); err == nil {
-				_ = f.Sync()
-				_ = f.Close()
-			}
-		}
-		return nil
-	})
-
-	// Sync the root data directory
+	// Sync the data directory to ensure directory entries are durable
 	if f, err := os.Open(s.dataDir); err == nil {
 		_ = f.Sync()
 		_ = f.Close()
 	}
-
-	// Small grace period for kernel to complete pending operations
-	time.Sleep(10 * time.Millisecond)
 
 	return nil
 }
