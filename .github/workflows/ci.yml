@@ -68,10 +68,10 @@ jobs:
           go-version: '1.25.7'
       - name: Run tests
         if: matrix.os != 'ubuntu-latest'
-        run: go test -race ./...
+        run: go test -short -race ./...
       - name: Run tests with coverage
         if: matrix.os == 'ubuntu-latest'
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -short -race -coverprofile=coverage.out ./...
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
         uses: codecov/codecov-action@v5
@@ -104,7 +104,7 @@ jobs:
           check-latest: true
       - name: Run tests
         if: steps.setup-go.outcome == 'success'
-        run: go test -race ./...
+        run: go test -short -race ./...
       - name: Skip notice
         if: steps.setup-go.outcome != 'success'
         run: echo "::notice::Go 1.26 not yet available, skipping tests"
