@@ -342,6 +342,8 @@ func (s *Server) setupAdminRoutes() {
 
 	// Expose metrics on admin interface for Prometheus scraping via mesh IP
 	s.adminMux.Handle("/metrics", promhttp.Handler())
+	// Expose debug trace endpoint on admin interface only (mesh-only access)
+	s.adminMux.HandleFunc("/debug/trace", s.handleTrace)
 
 	s.adminMux.Handle("/", fileServer)
 }

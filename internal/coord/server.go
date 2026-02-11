@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/config"
@@ -812,9 +811,7 @@ func (s *Server) SetVersion(version string) {
 
 func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/health", s.handleHealth)
-	s.mux.HandleFunc("/debug/trace", s.handleTrace)
 	s.mux.HandleFunc("/ca.crt", s.handleCACert) // CA cert for mesh TLS (no auth)
-	s.mux.Handle("/metrics", promhttp.Handler())
 	s.mux.HandleFunc("/api/v1/register", s.withAuth(s.handleRegister))
 	s.mux.HandleFunc("/api/v1/peers", s.withAuth(s.handlePeers))
 	s.mux.HandleFunc("/api/v1/peers/", s.withAuth(s.handlePeerByName))
