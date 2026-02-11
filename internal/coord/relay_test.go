@@ -423,7 +423,7 @@ func TestRelayManager_QueryFilterRules(t *testing.T) {
 	responseChan := make(chan []byte)
 	errChan := make(chan error)
 	go func() {
-		rules, err := srv.relay.QueryFilterRules(peerName, 5*time.Second)
+		rules, err := srv.relay.QueryFilterRules(context.Background(), peerName, 5*time.Second)
 		if err != nil {
 			errChan <- err
 			return
@@ -499,9 +499,9 @@ func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Query filter rules with short timeout - don't respond
-	_, err = srv.relay.QueryFilterRules(peerName, 100*time.Millisecond)
+	_, err = srv.relay.QueryFilterRules(context.Background(), peerName, 100*time.Millisecond)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "timeout")
+	assert.Contains(t, err.Error(), "deadline exceeded")
 }
 
 func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
@@ -513,7 +513,7 @@ func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Shutdown() })
 
 	// Query filter rules for non-existent peer
-	_, err = srv.relay.QueryFilterRules("nonexistent-peer", 1*time.Second)
+	_, err = srv.relay.QueryFilterRules(context.Background(), "nonexistent-peer", 1*time.Second)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
 }

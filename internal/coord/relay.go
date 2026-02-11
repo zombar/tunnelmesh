@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -181,7 +182,7 @@ func (r *relayManager) ClearWGConcentrator(peerName string) {
 
 // SendAPIRequest sends an API request to the WireGuard concentrator and waits for response.
 // Returns the response body or error if timeout/no concentrator.
-func (r *relayManager) SendAPIRequest(method string, body []byte, timeout time.Duration) ([]byte, error) {
+func (r *relayManager) SendAPIRequest(ctx context.Context, method string, body []byte, timeout time.Duration) ([]byte, error) {
 	r.mu.Lock()
 	concentrator := r.wgConcentrator
 	pc, ok := r.persistent[concentrator]
@@ -224,12 +225,16 @@ func (r *relayManager) SendAPIRequest(method string, body []byte, timeout time.D
 		return nil, fmt.Errorf("send API request: write channel full")
 	}
 
+	// Combine parent context with timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	// Wait for response
 	select {
 	case resp := <-respChan:
 		return resp, nil
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("API request timeout")
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -260,7 +265,7 @@ func (r *relayManager) handleAPIResponse(data []byte) {
 
 // QueryFilterRules sends a filter rules query to a peer and waits for response.
 // Returns the JSON-encoded filter rules or error if timeout/peer not connected.
-func (r *relayManager) QueryFilterRules(peerName string, timeout time.Duration) ([]byte, error) {
+func (r *relayManager) QueryFilterRules(ctx context.Context, peerName string, timeout time.Duration) ([]byte, error) {
 	r.mu.Lock()
 	pc, ok := r.persistent[peerName]
 	r.mu.Unlock()
@@ -299,12 +304,16 @@ func (r *relayManager) QueryFilterRules(peerName string, timeout time.Duration) 
 		return nil, fmt.Errorf("query filter rules: write channel full")
 	}
 
+	// Combine parent context with timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	// Wait for response
 	select {
 	case resp := <-respChan:
 		return resp, nil
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("filter rules query timeout")
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 

@@ -372,9 +372,9 @@ func (s *Server) handleWGClients(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleWGClientsList returns all WireGuard clients by proxying to the concentrator.
-func (s *Server) handleWGClientsList(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleWGClientsList(w http.ResponseWriter, r *http.Request) {
 	// Proxy to concentrator via relay
-	respBody, err := s.relay.SendAPIRequest("GET /clients", nil, 10*time.Second)
+	respBody, err := s.relay.SendAPIRequest(r.Context(), "GET /clients", nil, 10*time.Second)
 	if err != nil {
 		s.jsonError(w, "concentrator not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -407,7 +407,7 @@ func (s *Server) handleWGClientCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Proxy to concentrator via relay
-	respBody, err := s.relay.SendAPIRequest("POST /clients", body, 10*time.Second)
+	respBody, err := s.relay.SendAPIRequest(r.Context(), "POST /clients", body, 10*time.Second)
 	if err != nil {
 		s.jsonError(w, "concentrator not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -477,7 +477,7 @@ func (s *Server) handleWGClientByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Proxy to concentrator via relay
-	respBody, err := s.relay.SendAPIRequest(method, body, 10*time.Second)
+	respBody, err := s.relay.SendAPIRequest(r.Context(), method, body, 10*time.Second)
 	if err != nil {
 		s.jsonError(w, "concentrator not available: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -631,7 +631,7 @@ func (s *Server) handleFilterRulesList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query the peer for their current filter rules
-	rulesJSON, err := s.relay.QueryFilterRules(peerName, 10*time.Second)
+	rulesJSON, err := s.relay.QueryFilterRules(r.Context(), peerName, 10*time.Second)
 	if err != nil {
 		// Peer not connected or timeout - return empty rules with error message
 		log.Debug().Err(err).Str("peer", peerName).Msg("failed to query peer filter rules")
