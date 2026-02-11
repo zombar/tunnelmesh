@@ -162,7 +162,8 @@ chmod 600 ~/.tunnelmesh/mesh-token.txt
 When you run `tunnelmesh join` without a server URL, it automatically bootstraps as a coordinator:
 
 ```bash
-tunnelmesh join --token $TOKEN
+export TUNNELMESH_TOKEN=$(openssl rand -hex 32)
+tunnelmesh join
 ```
 
 This creates a new mesh with default coordinator settings (admin panel on :443, S3 on :9000, relay auto-enabled).
@@ -186,7 +187,8 @@ coordinator:
 
 **Join existing mesh (use same token as coordinator):**
 ```bash
-tunnelmesh join coord.example.com:8443 --token a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6 --config peer.yaml
+export TUNNELMESH_TOKEN="a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6"
+tunnelmesh join coord.example.com:8443 --config peer.yaml
 ```
 
 ```yaml
@@ -309,8 +311,8 @@ The tool searches for config files in the following order:
 
 ### Token Storage and Management
 
-TunnelMesh authentication tokens are passed via the `--token` CLI flag, not stored in config files. Follow these best
-practices for production deployments:
+TunnelMesh authentication tokens are passed via the `TUNNELMESH_TOKEN` environment variable, never via CLI flags
+or config files (for security). Follow these best practices for production deployments:
 
 #### Environment Variables
 
@@ -321,7 +323,7 @@ Store tokens in environment variables instead of passing them directly:
 export TUNNELMESH_TOKEN="a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6"
 
 # Join using environment variable
-tunnelmesh join coord.example.com:8443 --token "$TUNNELMESH_TOKEN"
+tunnelmesh join coord.example.com:8443
 ```
 
 #### systemd Environment Files
@@ -356,7 +358,7 @@ vault kv put secret/tunnelmesh token="a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2
 
 # Retrieve and use
 export TUNNELMESH_TOKEN=$(vault kv get -field=token secret/tunnelmesh)
-tunnelmesh join coord.example.com:8443 --token "$TUNNELMESH_TOKEN"
+tunnelmesh join coord.example.com:8443
 ```
 
 **AWS Secrets Manager:**
@@ -372,12 +374,17 @@ export TUNNELMESH_TOKEN=$(aws secretsmanager get-secret-value \
   --secret-id tunnelmesh/auth-token \
   --query SecretString \
   --output text)
-tunnelmesh join coord.example.com:8443 --token "$TUNNELMESH_TOKEN"
+tunnelmesh join coord.example.com:8443
 ```
 
 #### Token Rotation
 
-Rotate authentication tokens periodically to minimize exposure from compromised tokens:
+Rotate authentication tokens periodically to minimize exposure from compromised tokens.
+
+**Note:** Token rotation currently requires brief downtime to update all nodes simultaneously. Multi-token
+support for graceful rotation is planned (see issue tracker for roadmap).
+
+**Rotation process:**
 
 1. **Generate new token:**
 
@@ -385,24 +392,11 @@ Rotate authentication tokens periodically to minimize exposure from compromised 
    NEW_TOKEN=$(openssl rand -hex 32)
    ```
 
-2. **Update coordinator** - Add new token alongside old token temporarily:
+2. **Update all nodes** - During maintenance window, update coordinator and all peers with new token:
 
    ```bash
-   # Coordinators can accept multiple tokens during rotation
-   tunnelmesh join --token "$OLD_TOKEN,$NEW_TOKEN"
-   ```
-
-3. **Update all peers** - Roll out new token to peers:
-
-   ```bash
-   # Update each peer's service or context with new token
-   tunnelmesh join coord.example.com:8443 --token "$NEW_TOKEN" --context prod
-   ```
-
-4. **Remove old token** - After all peers updated, remove old token from coordinator:
-
-   ```bash
-   tunnelmesh join --token "$NEW_TOKEN"
+   export TUNNELMESH_TOKEN="$NEW_TOKEN"
+   # Restart coordinator and all peer services
    ```
 
 #### File Permissions
@@ -431,7 +425,8 @@ tunnelmesh join                     # Start as coordinator + peer
 # First admin peer to join gets full admin permissions automatically
 
 # Peer setup (joining existing mesh)
-tunnelmesh join --server coord.example.com --token <token> --context work
+export TUNNELMESH_TOKEN="your-token"
+tunnelmesh join coord.example.com:8443 --context work
 # User identity derived from SSH key - no separate registration needed
 
 # Manage contexts

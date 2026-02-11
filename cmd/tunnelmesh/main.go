@@ -83,9 +83,8 @@ func setupGCTuning() {
 }
 
 var (
-	cfgFile   string
-	logLevel  string
-	authToken string
+	cfgFile  string
+	logLevel string
 
 	// WireGuard concentrator flag
 	wireguardEnabled bool
@@ -126,19 +125,20 @@ func main() {
 QUICK START - Bootstrap coordinator (first node):
 
   # Generate a secure token (save this securely - you'll need it for peers):
-  TOKEN=$(openssl rand -hex 32)
+  export TUNNELMESH_TOKEN=$(openssl rand -hex 32)
 
   # Start coordinator (no server URL = auto-coordinator mode):
-  tunnelmesh join --token $TOKEN
+  tunnelmesh join
 
   # Save token to secure file for later use:
-  echo "$TOKEN" > ~/.tunnelmesh/mesh-token.txt
+  echo "$TUNNELMESH_TOKEN" > ~/.tunnelmesh/mesh-token.txt
   chmod 600 ~/.tunnelmesh/mesh-token.txt
 
 QUICK START - Join an existing mesh:
 
-  # Join using coordinator URL and token:
-  tunnelmesh join coord.example.com:8443 --token <token> --context work
+  # Set token and join using coordinator URL:
+  export TUNNELMESH_TOKEN="your-token"
+  tunnelmesh join coord.example.com:8443 --context work
 
   # Identity is automatic - derived from your SSH key
   # First user to join becomes admin
@@ -172,19 +172,20 @@ For more help on any command, use: tunnelmesh <command> --help`,
 
 Examples:
   # Bootstrap a new mesh (first coordinator - no server URL)
-  TOKEN=$(openssl rand -hex 32)
-  tunnelmesh join --token $TOKEN
-  # Save token securely: echo "$TOKEN" > ~/.tunnelmesh/mesh-token.txt && chmod 600 $_
+  export TUNNELMESH_TOKEN=$(openssl rand -hex 32)
+  tunnelmesh join
+  # Save token securely: echo "$TUNNELMESH_TOKEN" > ~/.tunnelmesh/mesh-token.txt && chmod 600 $_
 
   # Join an existing mesh (regular peer)
-  tunnelmesh join coord.example.com:8443 --token $TOKEN
+  export TUNNELMESH_TOKEN="your-token"
+  tunnelmesh join coord.example.com:8443
 
 When no server URL is provided, automatically bootstraps as coordinator.
-Server URLs automatically use HTTPS. Omit scheme in the URL.`,
+Server URLs automatically use HTTPS. Omit scheme in the URL.
+Auth token must be set via TUNNELMESH_TOKEN environment variable.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runJoin,
 	}
-	joinCmd.Flags().StringVarP(&authToken, "token", "t", "", "authentication token")
 	joinCmd.Flags().BoolVar(&wireguardEnabled, "wireguard", false, "enable WireGuard concentrator mode")
 	joinCmd.Flags().Float64Var(&latitude, "latitude", 0, "manual geolocation latitude (-90 to 90)")
 	joinCmd.Flags().Float64Var(&longitude, "longitude", 0, "manual geolocation longitude (-180 to 180)")
@@ -384,6 +385,16 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 		log.Info().Str("level", cfg.LogLevel).Msg("log level configured")
 	}
 
+	// When running as service, read server URL and token from environment
+	if envServer := os.Getenv("TUNNELMESH_SERVER"); envServer != "" {
+		cfg.Servers = []string{envServer}
+		log.Info().Str("server", envServer).Msg("loaded server from TUNNELMESH_SERVER env var")
+	}
+	if envToken := os.Getenv("TUNNELMESH_TOKEN"); envToken != "" {
+		cfg.AuthToken = envToken
+		log.Info().Msg("loaded auth token from TUNNELMESH_TOKEN env var")
+	}
+
 	log.Info().
 		Str("servers", strings.Join(cfg.Servers, ", ")).
 		Int("ssh_port", cfg.SSHPort).
@@ -393,7 +404,7 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 	ensureCoordinatorConfig(cfg)
 
 	if cfg.AuthToken == "" {
-		return fmt.Errorf("auth token required (pass via CLI: --token <token>)")
+		return fmt.Errorf("auth token required: set TUNNELMESH_TOKEN environment variable")
 	}
 
 	// Log network interface information for debugging
@@ -523,12 +534,14 @@ func writePeerConfig(path, authToken string) error {
 
 	config := fmt.Sprintf(`# TunnelMesh Peer - see peer.yaml.example for all options
 name: "%s"
-server: "https://coord.example.com:8443"
-auth_token: "%s"
+
+# Server URL passed as positional arg, auth token via environment variable:
+# export TUNNELMESH_TOKEN="your-token"
+# tunnelmesh join coord.example.com:8443 --config peer.yaml
 
 dns:
   enabled: true
-`, hostname, authToken)
+`, hostname)
 
 	return os.WriteFile(path, []byte(config), 0600)
 }
@@ -568,7 +581,10 @@ func runJoin(cmd *cobra.Command, args []string) error {
 
 		// Parse URL to check for port
 		parsedURL, err := url.Parse(joinServerURL)
-		if err == nil && parsedURL.Port() == "" {
+		if err != nil {
+			return fmt.Errorf("invalid server URL %q: %w", joinServerURL, err)
+		}
+		if parsedURL.Port() == "" {
 			// No port specified, add default :8443
 			parsedURL.Host += ":8443"
 			joinServerURL = parsedURL.String()
@@ -576,9 +592,12 @@ func runJoin(cmd *cobra.Command, args []string) error {
 
 		cfg.Servers = []string{joinServerURL}
 	}
-	if authToken != "" {
-		cfg.AuthToken = authToken
+
+	// Read auth token from environment variable (never from CLI for security)
+	if envToken := os.Getenv("TUNNELMESH_TOKEN"); envToken != "" {
+		cfg.AuthToken = envToken
 	}
+
 	if wireguardEnabled {
 		cfg.WireGuard.Enabled = true
 	}
@@ -600,7 +619,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	ensureCoordinatorConfig(cfg)
 
 	if cfg.AuthToken == "" {
-		return fmt.Errorf("auth token required\nUsage: tunnelmesh join [server-url] --token <token>\nExample: tunnelmesh join coord.example.com:8443 --token my-secret-token")
+		return fmt.Errorf("auth token required: set TUNNELMESH_TOKEN environment variable\nExample: export TUNNELMESH_TOKEN=\"your-token\" && tunnelmesh join coord.example.com:8443")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -703,7 +722,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	ensureCoordinatorConfig(cfg)
 
 	if cfg.AuthToken == "" {
-		return fmt.Errorf("auth token required (pass via CLI: --token <token>)")
+		return fmt.Errorf("auth token required: set TUNNELMESH_TOKEN environment variable")
 	}
 
 	// Apply configured log level from config file

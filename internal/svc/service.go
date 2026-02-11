@@ -133,28 +133,26 @@ func NewServiceConfig(cfg *ServiceConfig, execPath string) *service.Config {
 	args := []string{
 		"--service-run",
 		"--service-mode", cfg.Mode,
+		"join", // Always join subcommand
+		"--config", cfg.ConfigPath,
 	}
 
-	// Add server URL as positional argument if present (join mode)
+	// Build environment variables for server URL and token
+	// These are NOT visible in process listings like CLI args are
+	env := make(map[string]string)
 	if cfg.Server != "" {
-		args = append(args, "join", cfg.Server)
-	} else {
-		args = append(args, "join")
+		env["TUNNELMESH_SERVER"] = cfg.Server
 	}
-
-	// Add token if present
 	if cfg.AuthToken != "" {
-		args = append(args, "--token", cfg.AuthToken)
+		env["TUNNELMESH_TOKEN"] = cfg.AuthToken
 	}
-
-	// Add config path
-	args = append(args, "--config", cfg.ConfigPath)
 
 	svcCfg := &service.Config{
 		Name:        cfg.Name,
 		DisplayName: cfg.DisplayName,
 		Description: cfg.Description,
 		Arguments:   args,
+		EnvVars:     env,
 	}
 
 	// Platform-specific options

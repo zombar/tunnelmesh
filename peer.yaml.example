@@ -8,10 +8,10 @@
 # Your node's unique name
 name: "mynode"
 
-# Authentication token and coordinator URL are CLI-only (not in config):
-#   Bootstrap coordinator: tunnelmesh join --token my-secret-token
-#   Join existing mesh: tunnelmesh join coord.example.com:8443 --token my-secret-token
-auth_token: "your-secure-token-here"
+# Auth token is set via TUNNELMESH_TOKEN environment variable (not in config file):
+#   export TUNNELMESH_TOKEN="your-secure-token"
+#   Bootstrap coordinator: tunnelmesh join
+#   Join existing mesh: tunnelmesh join coord.example.com:8443
 
 # SSH server port for peer-to-peer connections
 ssh_port: 2222
