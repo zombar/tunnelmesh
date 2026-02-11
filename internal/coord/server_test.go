@@ -41,17 +41,21 @@ func newTestConfig(t *testing.T) *config.PeerConfig {
 	}
 }
 
+// cleanupServer properly shuts down a server with timeout to prevent
+// "directory not empty" errors during temp directory cleanup.
+func cleanupServer(t *testing.T, srv *Server) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
+}
+
 func newTestServer(t *testing.T) *Server {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
-
-	// Automatically shutdown server when test completes to prevent resource leaks
-	t.Cleanup(func() {
-		_ = srv.Shutdown(context.Background())
-	})
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	return srv
 }
@@ -569,11 +573,7 @@ func newTestServerWithWireGuard(t *testing.T) *Server {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
-
-	t.Cleanup(func() {
-		_ = srv.Shutdown(context.Background())
-	})
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	return srv
 }
@@ -1093,11 +1093,7 @@ func newTestServerWithS3(t *testing.T) *Server {
 	}
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
-
-	t.Cleanup(func() {
-		_ = srv.Shutdown(context.Background())
-	})
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	return srv
 }

@@ -101,7 +101,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
 	ts := httptest.NewServer(srv)
@@ -207,7 +207,7 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
 	ts := httptest.NewServer(srv)
@@ -265,7 +265,7 @@ func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
 
 	// Start mock Prometheus and Grafana servers
@@ -350,7 +350,7 @@ func newTestServerWithS3AndBucket(t *testing.T) *Server {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	// Create a test bucket
 	err = srv.s3Store.CreateBucket(context.Background(), "test-bucket", "admin")

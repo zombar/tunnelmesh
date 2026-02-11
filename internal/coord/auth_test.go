@@ -17,8 +17,7 @@ func TestServer_GenerateAndValidateToken(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
-	defer func() { _ = srv.Shutdown(context.Background()) }()
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	// Generate token
 	token, err := srv.GenerateToken("peer1", "172.30.0.1")
@@ -71,8 +70,7 @@ func TestServer_ValidateToken_InvalidToken(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
-	defer func() { _ = srv.Shutdown(context.Background()) }()
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	// Test with invalid token
 	_, err = srv.ValidateToken("invalid-token")

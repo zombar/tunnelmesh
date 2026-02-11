@@ -51,7 +51,7 @@ func TestRelayManager_HandleHeartbeat(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	// Start test server
 	ts := httptest.NewServer(srv)
@@ -120,7 +120,7 @@ func TestRelayManager_NotifyRelayRequest(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -168,7 +168,7 @@ func TestRelayManager_NotifyHolePunch(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -214,7 +214,7 @@ func TestRelayManager_NotifyPeerNotConnected(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	// Notify a peer that's not connected - should not panic
 	srv.relay.NotifyRelayRequest("nonexistent-peer", []string{"peer2"})
@@ -228,7 +228,7 @@ func TestRelayManager_HeartbeatUpdatesStats(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -339,7 +339,7 @@ func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -398,7 +398,7 @@ func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -452,7 +452,7 @@ func TestRelayManager_QueryFilterRules(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -539,7 +539,7 @@ func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -572,7 +572,7 @@ func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	// Query filter rules for non-existent peer
 	_, err = srv.relay.QueryFilterRules(context.Background(), "nonexistent-peer", 1*time.Second)
@@ -586,7 +586,7 @@ func TestRelayManager_StoresReportedLatency(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -652,7 +652,7 @@ func TestRelay_ContextCancellationPrecedence(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()

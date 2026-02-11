@@ -20,7 +20,7 @@ func TestClient_Register(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -45,7 +45,7 @@ func TestClient_RegisterWithLocation(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -80,7 +80,7 @@ func TestClient_ListPeers(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -109,7 +109,7 @@ func TestClient_Deregister(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -139,7 +139,7 @@ func TestClient_GetDNSRecords(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -165,7 +165,7 @@ func TestClient_RegisterWithRetry_SuccessOnFirstTry(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -332,7 +332,7 @@ func TestServer_GeolocationOnlyOnNewOrChangedIP(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	// Replace the geolocation cache with one pointing to our mock server
 	srv.ipGeoCache = NewIPGeoCache(geoServer.URL + "/json/")
@@ -384,7 +384,7 @@ func TestServer_ManualLocationPreservedOnIPChange(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
