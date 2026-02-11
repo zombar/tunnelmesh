@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -23,6 +24,13 @@ var (
 	logsFollow        bool
 	logsLines         int
 )
+
+// isValidAuthToken checks if the token is 64 hex characters (32 bytes).
+func isValidAuthToken(token string) bool {
+	// Must be exactly 64 hex characters
+	matched, _ := regexp.MatchString("^[0-9a-fA-F]{64}$", token)
+	return matched
+}
 
 func newServiceCmd() *cobra.Command {
 	serviceCmd := &cobra.Command{
@@ -185,6 +193,11 @@ func getServiceConfig() (*svc.ServiceConfig, error) {
 	ctx := store.Get(ctxName)
 	if ctx == nil {
 		return nil, fmt.Errorf("context %q not found", ctxName)
+	}
+
+	// Validate token format if present (must be 64 hex characters = 32 bytes)
+	if ctx.AuthToken != "" && !isValidAuthToken(ctx.AuthToken) {
+		return nil, fmt.Errorf("invalid auth token in context %q: must be 64 hex characters (generate with: openssl rand -hex 32)", ctxName)
 	}
 
 	// If explicit config path provided, use it

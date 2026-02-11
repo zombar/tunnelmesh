@@ -83,9 +83,12 @@ type WireGuardPeerConfig struct {
 
 // PeerConfig holds configuration for a peer node.
 type PeerConfig struct {
-	Name              string              `yaml:"name"`
-	Servers           []string            `yaml:"-"` // CLI-only: passed via positional argument to 'join' command
-	AuthToken         string              `yaml:"-"` // CLI-only: passed via --token flag
+	Name    string   `yaml:"name"`
+	Servers []string `yaml:"-"` // CLI-only: passed via positional argument to 'join' command
+	// AuthToken is the authentication credential for joining the mesh.
+	// Must be 64 hex characters (32 bytes). Generate with: openssl rand -hex 32
+	// CLI-only: loaded from TUNNELMESH_TOKEN env var (never CLI arg to prevent ps exposure)
+	AuthToken         string              `yaml:"-"`
 	SSHPort           int                 `yaml:"ssh_port"`
 	PrivateKey        string              `yaml:"private_key"`
 	ControlSocket     string              `yaml:"control_socket"`     // Unix socket path for CLI commands (default: /var/run/tunnelmesh.sock)

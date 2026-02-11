@@ -363,6 +363,32 @@ func runAsService() {
 	}
 }
 
+// normalizeServerURL adds https:// scheme and :8443 port if missing.
+func normalizeServerURL(serverURL string) (string, error) {
+	if serverURL == "" {
+		return "", nil
+	}
+
+	// Add scheme if missing
+	if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
+		serverURL = "https://" + serverURL
+	}
+
+	// Parse URL to check for port
+	parsedURL, err := url.Parse(serverURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid server URL %q: %w", serverURL, err)
+	}
+
+	// Add default port :8443 if no port specified
+	if parsedURL.Port() == "" {
+		parsedURL.Host += ":8443"
+		serverURL = parsedURL.String()
+	}
+
+	return serverURL, nil
+}
+
 // runServeFromService runs the server mode from within a service.
 // runJoinFromService runs the peer mode from within a service.
 func runJoinFromService(ctx context.Context, configPath string) error {
@@ -387,8 +413,13 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 
 	// When running as service, read server URL and token from environment
 	if envServer := os.Getenv("TUNNELMESH_SERVER"); envServer != "" {
-		cfg.Servers = []string{envServer}
-		log.Info().Str("server", envServer).Msg("loaded server from TUNNELMESH_SERVER env var")
+		// Normalize server URL: add https:// and :8443 if missing
+		normalized, err := normalizeServerURL(envServer)
+		if err != nil {
+			return fmt.Errorf("normalize TUNNELMESH_SERVER env var: %w", err)
+		}
+		cfg.Servers = []string{normalized}
+		log.Info().Str("server", normalized).Msg("loaded server from TUNNELMESH_SERVER env var")
 	}
 	if envToken := os.Getenv("TUNNELMESH_TOKEN"); envToken != "" {
 		cfg.AuthToken = envToken
@@ -574,23 +605,11 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	// Normalize server URL: add https:// if no scheme provided, add :8443 if no port
 	// Server URL is CLI-only, not a config option
 	if joinServerURL != "" {
-		// Add scheme if missing
-		if !strings.HasPrefix(joinServerURL, "http://") && !strings.HasPrefix(joinServerURL, "https://") {
-			joinServerURL = "https://" + joinServerURL
-		}
-
-		// Parse URL to check for port
-		parsedURL, err := url.Parse(joinServerURL)
+		normalized, err := normalizeServerURL(joinServerURL)
 		if err != nil {
-			return fmt.Errorf("invalid server URL %q: %w", joinServerURL, err)
+			return err
 		}
-		if parsedURL.Port() == "" {
-			// No port specified, add default :8443
-			parsedURL.Host += ":8443"
-			joinServerURL = parsedURL.String()
-		}
-
-		cfg.Servers = []string{joinServerURL}
+		cfg.Servers = []string{normalized}
 	}
 
 	// Read auth token from environment variable (never from CLI for security)

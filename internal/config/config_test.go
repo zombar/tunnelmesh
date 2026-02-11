@@ -1015,3 +1015,69 @@ func TestFilterRule_ProtocolNumber(t *testing.T) {
 		})
 	}
 }
+
+// CLI-only Parameter Tests
+
+func TestAuthTokenNotLoadedFromYAML(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config file with auth_token field - should be ignored due to yaml:"-" tag
+	content := `
+name: "testnode"
+auth_token: "should-be-ignored-0123456789abcdef0123456789abcdef0123456789abcdef"
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	// AuthToken should be empty because of yaml:"-" tag
+	assert.Empty(t, cfg.AuthToken, "AuthToken should not be loaded from YAML (CLI-only parameter)")
+}
+
+func TestServersNotLoadedFromYAML(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config file with servers field - should be ignored due to yaml:"-" tag
+	content := `
+name: "testnode"
+servers:
+  - "https://coord1.example.com:8443"
+  - "https://coord2.example.com:8443"
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	// Servers should be empty because of yaml:"-" tag
+	assert.Empty(t, cfg.Servers, "Servers should not be loaded from YAML (CLI-only parameter)")
+}
+
+func TestCLIOnlyFieldsRemainEmpty(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	// Config with both CLI-only fields - both should be ignored
+	content := `
+name: "testnode"
+servers:
+  - "https://coord.example.com:8443"
+auth_token: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+ssh_port: 2222
+`
+	configPath := testutil.TempFile(t, dir, "peer.yaml", content)
+
+	cfg, err := LoadPeerConfig(configPath)
+	require.NoError(t, err)
+
+	// CLI-only fields should be empty
+	assert.Empty(t, cfg.Servers, "Servers should not be loaded from YAML")
+	assert.Empty(t, cfg.AuthToken, "AuthToken should not be loaded from YAML")
+
+	// Regular fields should load normally
+	assert.Equal(t, "testnode", cfg.Name)
+	assert.Equal(t, 2222, cfg.SSHPort)
+}
