@@ -224,7 +224,6 @@ function setupSSE() {
 
     state.eventSource.addEventListener('heartbeat', (e) => {
         // Refresh dashboard when a heartbeat is received
-        console.log('[DEBUG] Heartbeat received');
         fetchData(false);
     });
 
@@ -896,10 +895,8 @@ function updateChartsWithNewData(peers) {
 
     // No new data
     if (newPoints.length === 0) {
-        console.log('[DEBUG] No new data points to add');
         return;
     }
-    console.log('[DEBUG] Adding', newPoints.length, 'new data points');
 
     // Group new points by quantized timestamp (10-second intervals)
     const groups = new Map();
@@ -923,7 +920,6 @@ function updateChartsWithNewData(peers) {
             const currentLen = state.charts.chartData.labels.length;
             state.charts.chartData.throughput[peer.name] = new Array(currentLen).fill(null);
             state.charts.chartData.packets[peer.name] = new Array(currentLen).fill(null);
-            console.log('[DEBUG] New peer detected and initialized:', peer.name);
         }
     });
 
@@ -970,7 +966,6 @@ function updateChartsWithNewData(peers) {
 
             // Initialize arrays if needed (fill with nulls for timestamps before they existed)
             if (isNewPeer) {
-                console.log('[DEBUG] New peer detected (fallback):', peerName);
                 const chartLen = state.charts.chartData.labels.length - 1; // -1 because we just added the new timestamp
                 state.charts.chartData.throughput[peerName] = new Array(chartLen).fill(null);
                 state.charts.chartData.packets[peerName] = new Array(chartLen).fill(null);
@@ -1373,18 +1368,15 @@ function formatLogJson(obj) {
 }
 
 async function fetchAlerts() {
-    console.log('[DEBUG] fetchAlerts called, alertsEnabled:', state.alertsEnabled);
     if (!state.alertsEnabled) return;
 
     try {
         const resp = await fetch('/prometheus/api/v1/alerts');
         if (!resp.ok) {
-            console.log('[DEBUG] fetchAlerts failed, status:', resp.status);
             return;
         }
 
         const data = await resp.json();
-        console.log('[DEBUG] fetchAlerts got', data.data?.alerts?.length, 'alerts');
         processAlertData(data);
     } catch (err) {
         console.error('Failed to fetch alerts:', err);
