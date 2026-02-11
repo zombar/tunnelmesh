@@ -5,6 +5,11 @@ import (
 	"fmt"
 )
 
+// ProtocolVersion is the current replication protocol version.
+// Version history:
+//   - v1: Initial implementation with version vectors and conflict resolution
+const ProtocolVersion = 1
+
 // MessageType identifies the type of replication message.
 type MessageType string
 
@@ -24,6 +29,7 @@ const (
 
 // Message is the envelope for all replication protocol messages.
 type Message struct {
+	Version int             `json:"version"` // Protocol version for compatibility checking
 	Type    MessageType     `json:"type"`
 	ID      string          `json:"id"`      // Unique message ID for tracking ACKs
 	From    string          `json:"from"`    // Sender's coordinator address
@@ -77,6 +83,7 @@ func NewReplicateMessage(id, from string, payload ReplicatePayload) (*Message, e
 	}
 
 	return &Message{
+		Version: ProtocolVersion,
 		Type:    MessageTypeReplicate,
 		ID:      id,
 		From:    from,
@@ -92,6 +99,7 @@ func NewAckMessage(id, from string, payload AckPayload) (*Message, error) {
 	}
 
 	return &Message{
+		Version: ProtocolVersion,
 		Type:    MessageTypeAck,
 		ID:      id,
 		From:    from,
@@ -107,6 +115,7 @@ func NewSyncRequestMessage(id, from string, payload SyncRequestPayload) (*Messag
 	}
 
 	return &Message{
+		Version: ProtocolVersion,
 		Type:    MessageTypeSyncRequest,
 		ID:      id,
 		From:    from,
@@ -122,6 +131,7 @@ func NewSyncResponseMessage(id, from string, payload SyncResponsePayload) (*Mess
 	}
 
 	return &Message{
+		Version: ProtocolVersion,
 		Type:    MessageTypeSyncResponse,
 		ID:      id,
 		From:    from,
@@ -200,5 +210,17 @@ func UnmarshalMessage(data []byte) (*Message, error) {
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil, fmt.Errorf("unmarshal message: %w", err)
 	}
+
+	// Version 0 is treated as version 1 for backward compatibility during rollout
+	// Once all coordinators are upgraded, this fallback can be removed
+	if msg.Version == 0 {
+		msg.Version = 1
+	}
+
+	// Check protocol version compatibility
+	if msg.Version != ProtocolVersion {
+		return nil, fmt.Errorf("incompatible protocol version: got %d, expected %d", msg.Version, ProtocolVersion)
+	}
+
 	return &msg, nil
 }

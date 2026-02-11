@@ -1918,7 +1918,7 @@ func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, 
 	case http.MethodPut:
 		s.handleS3PutObject(w, r, bucket, key)
 	case http.MethodDelete:
-		s.handleS3DeleteObject(w, bucket, key)
+		s.handleS3DeleteObject(w, r, bucket, key)
 	case http.MethodHead:
 		s.handleS3HeadObject(w, bucket, key)
 	default:
@@ -2025,7 +2025,8 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// Replicate to other coordinators asynchronously
 	if s.replicator != nil {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			// Use request context with timeout for proper cancellation propagation
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 			defer cancel()
 			if err := s.replicator.ReplicateOperation(ctx, bucket, key, body, contentType, nil); err != nil {
 				log.Error().Err(err).
@@ -2041,7 +2042,7 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 }
 
 // handleS3DeleteObject deletes an object.
-func (s *Server) handleS3DeleteObject(w http.ResponseWriter, bucket, key string) {
+func (s *Server) handleS3DeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	// Check bucket write permission (could be extended to full RBAC)
 	if bucket == auth.SystemBucket {
 		s.jsonError(w, "bucket is read-only", http.StatusForbidden)
@@ -2066,7 +2067,8 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, bucket, key string)
 	// Replicate delete to other coordinators asynchronously
 	if s.replicator != nil {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			// Use request context with timeout for proper cancellation propagation
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 			defer cancel()
 			if err := s.replicator.ReplicateDelete(ctx, bucket, key); err != nil {
 				log.Error().Err(err).

@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
+	"golang.org/x/time/rate"
 )
 
 // Transport defines the interface for sending replication messages.
@@ -58,6 +59,9 @@ type Replicator struct {
 	pendingMu sync.RWMutex
 	pending   map[string]*pendingReplication // map[messageID]*pendingReplication
 
+	// Rate limiting
+	rateLimiter *rate.Limiter // Limits incoming replication messages per second
+
 	// Metrics
 	metricsMu     sync.RWMutex
 	sentCount     uint64
@@ -65,6 +69,7 @@ type Replicator struct {
 	conflictCount uint64
 	errorCount    uint64
 	droppedCount  uint64 // Operations dropped due to pending limit
+	rateLimited   uint64 // Messages dropped due to rate limiting
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -89,6 +94,8 @@ type Config struct {
 	AckTimeout           time.Duration   // How long to wait for ACK before retrying
 	RetryInterval        time.Duration   // How long to wait before retrying failed replication
 	MaxPendingOperations int             // Maximum number of pending ACKs to track (0 = unlimited)
+	RateLimit            int             // Maximum incoming messages per second (0 = unlimited, default: 1000)
+	RateBurst            int             // Maximum burst size for rate limiter (default: 100)
 	Context              context.Context // SECURITY FIX #3: Parent context for proper cancellation propagation
 }
 
@@ -102,6 +109,12 @@ func NewReplicator(config Config) *Replicator {
 	}
 	if config.MaxPendingOperations == 0 {
 		config.MaxPendingOperations = 10000 // Default: 10k pending operations
+	}
+	if config.RateLimit == 0 {
+		config.RateLimit = 1000 // Default: 1000 messages/second
+	}
+	if config.RateBurst == 0 {
+		config.RateBurst = 100 // Default: burst of 100 messages
 	}
 
 	// SECURITY FIX #3: Use provided context or create a new one
@@ -119,6 +132,7 @@ func NewReplicator(config Config) *Replicator {
 		state:                NewState(config.NodeID),
 		logger:               config.Logger.With().Str("component", "replicator").Logger(),
 		maxPendingOperations: config.MaxPendingOperations,
+		rateLimiter:          rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst),
 		peers:                make(map[string]bool),
 		pending:              make(map[string]*pendingReplication),
 		ctx:                  ctx,
@@ -363,6 +377,15 @@ func (r *Replicator) sendReplicateMessage(ctx context.Context, peer string, payl
 
 // handleIncomingMessage processes incoming replication messages.
 func (r *Replicator) handleIncomingMessage(from string, data []byte) error {
+	// Apply rate limiting to prevent abuse
+	if !r.rateLimiter.Allow() {
+		r.incrementRateLimitedCount()
+		r.logger.Warn().
+			Str("from", from).
+			Msg("Rate limit exceeded, dropping replication message")
+		return fmt.Errorf("rate limit exceeded")
+	}
+
 	msg, err := UnmarshalMessage(data)
 	if err != nil {
 		r.logger.Error().Err(err).Msg("Failed to unmarshal message")
@@ -844,6 +867,7 @@ type Stats struct {
 	ConflictCount uint64 `json:"conflict_count"`
 	ErrorCount    uint64 `json:"error_count"`
 	DroppedCount  uint64 `json:"dropped_count"`
+	RateLimited   uint64 `json:"rate_limited"` // Messages dropped due to rate limiting
 	PeerCount     int    `json:"peer_count"`
 	PendingACKs   int    `json:"pending_acks"`
 }
@@ -866,6 +890,7 @@ func (r *Replicator) GetStats() Stats {
 		ConflictCount: r.conflictCount,
 		ErrorCount:    r.errorCount,
 		DroppedCount:  r.droppedCount,
+		RateLimited:   r.rateLimited,
 		PeerCount:     peerCount,
 		PendingACKs:   pendingCount,
 	}
@@ -898,6 +923,12 @@ func (r *Replicator) incrementErrorCount() {
 func (r *Replicator) incrementDroppedCount() {
 	r.metricsMu.Lock()
 	r.droppedCount++
+	r.metricsMu.Unlock()
+}
+
+func (r *Replicator) incrementRateLimitedCount() {
+	r.metricsMu.Lock()
+	r.rateLimited++
 	r.metricsMu.Unlock()
 }
 

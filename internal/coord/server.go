@@ -771,7 +771,25 @@ func (s *Server) StartReplicator() error {
 		return fmt.Errorf("start replicator: %w", err)
 	}
 
-	log.Info().Msg("replicator started")
+	// Discover existing coordinator peers and add them to replication targets
+	s.peersMu.RLock()
+	for name, info := range s.peers {
+		if info.peer.IsCoordinator {
+			// Don't add self to replication targets
+			if name != s.cfg.Name {
+				s.replicator.AddPeer(info.peer.MeshIP)
+				log.Debug().
+					Str("peer", name).
+					Str("mesh_ip", info.peer.MeshIP).
+					Msg("discovered existing coordinator for replication")
+			}
+		}
+	}
+	s.peersMu.RUnlock()
+
+	log.Info().
+		Int("coordinator_count", len(s.replicator.GetPeers())).
+		Msg("replicator started with discovered coordinators")
 	return nil
 }
 
