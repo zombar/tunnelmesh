@@ -23,6 +23,11 @@ import (
 // Run with: go test ./internal/s3bench/simulator -run=TestStressAlienInvasion -v -timeout=10m
 // Skip with: go test -short (stress test will be skipped)
 func TestStressAlienInvasion(t *testing.T) {
+	// Skip on Windows in CI - stress test is too slow on Windows runners
+	if runtime.GOOS == "windows" && os.Getenv("CI") != "" {
+		t.Skip("Skipping stress test on Windows CI (too slow)")
+	}
+
 	ctx := context.Background()
 
 	// Configure test based on short mode
