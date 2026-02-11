@@ -637,6 +637,10 @@ func (s *Server) Shutdown() error {
 		errs = append(errs, fmt.Errorf("save stats history: %w", err))
 	}
 
+	// Save DNS data (cache and aliases)
+	// This ensures final state is persisted even if async saves are in-flight
+	s.saveDNSData()
+
 	// Wait for any pending async filter saves to complete (debounce is 100ms)
 	if s.filterSavePending.Load() {
 		log.Debug().Msg("waiting for pending filter save to complete")

@@ -686,12 +686,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		}
 		srv.SetVersion(Version)
 
-		// Ensure coordinator is properly shut down on exit
-		defer func() {
-			if err := srv.Shutdown(); err != nil {
-				log.Error().Err(err).Msg("error during coordinator shutdown")
-			}
-		}()
+		// Note: Cleanup handled by signal handler in production, t.Cleanup() in tests
 
 		// Start periodic background tasks
 		srv.StartPeriodicSave(ctx)
