@@ -2,6 +2,7 @@ package nfs
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -23,7 +24,7 @@ func newTestStore(t *testing.T) *s3.Store {
 
 func TestS3Filesystem_NormalizePath(t *testing.T) {
 	store := newTestStore(t)
-	_ = store.CreateBucket("test-bucket", "")
+	_ = store.CreateBucket(context.Background(), "test-bucket", "")
 
 	tests := []struct {
 		name     string
@@ -54,7 +55,7 @@ func TestS3Filesystem_NormalizePath(t *testing.T) {
 
 func TestS3Filesystem_CreateAndRead(t *testing.T) {
 	store := newTestStore(t)
-	_ = store.CreateBucket("test-bucket", "")
+	_ = store.CreateBucket(context.Background(), "test-bucket", "")
 	fs := NewS3Filesystem(store, "test-bucket", "", false)
 
 	// Create a file
@@ -96,7 +97,7 @@ func TestS3Filesystem_CreateAndRead(t *testing.T) {
 
 func TestS3Filesystem_ReadOnly(t *testing.T) {
 	store := newTestStore(t)
-	_ = store.CreateBucket("test-bucket", "")
+	_ = store.CreateBucket(context.Background(), "test-bucket", "")
 	fs := NewS3Filesystem(store, "test-bucket", "", true)
 
 	// Try to create - should fail
@@ -126,12 +127,12 @@ func TestS3Filesystem_ReadOnly(t *testing.T) {
 
 func TestS3Filesystem_Stat(t *testing.T) {
 	store := newTestStore(t)
-	_ = store.CreateBucket("test-bucket", "")
+	_ = store.CreateBucket(context.Background(), "test-bucket", "")
 	fs := NewS3Filesystem(store, "test-bucket", "", false)
 
 	// Create a file
 	content := []byte("test content")
-	_, _ = store.PutObject("test-bucket", "myfile.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	_, _ = store.PutObject(context.Background(), "test-bucket", "myfile.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 
 	// Stat the file
 	info, err := fs.Stat("myfile.txt")
@@ -158,13 +159,13 @@ func TestS3Filesystem_Stat(t *testing.T) {
 
 func TestS3Filesystem_ReadDir(t *testing.T) {
 	store := newTestStore(t)
-	_ = store.CreateBucket("test-bucket", "")
+	_ = store.CreateBucket(context.Background(), "test-bucket", "")
 	fs := NewS3Filesystem(store, "test-bucket", "", false)
 
 	// Create some files
-	_, _ = store.PutObject("test-bucket", "file1.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
-	_, _ = store.PutObject("test-bucket", "file2.txt", bytes.NewReader([]byte("bb")), 2, "text/plain", nil)
-	_, _ = store.PutObject("test-bucket", "subdir/file3.txt", bytes.NewReader([]byte("ccc")), 3, "text/plain", nil)
+	_, _ = store.PutObject(context.Background(), "test-bucket", "file1.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
+	_, _ = store.PutObject(context.Background(), "test-bucket", "file2.txt", bytes.NewReader([]byte("bb")), 2, "text/plain", nil)
+	_, _ = store.PutObject(context.Background(), "test-bucket", "subdir/file3.txt", bytes.NewReader([]byte("ccc")), 3, "text/plain", nil)
 
 	// Read root dir
 	entries, err := fs.ReadDir("")
@@ -193,10 +194,10 @@ func TestS3Filesystem_ReadDir(t *testing.T) {
 
 func TestS3Filesystem_Chroot(t *testing.T) {
 	store := newTestStore(t)
-	_ = store.CreateBucket("test-bucket", "")
+	_ = store.CreateBucket(context.Background(), "test-bucket", "")
 
 	// Create a file in subdir
-	_, _ = store.PutObject("test-bucket", "subdir/file.txt", bytes.NewReader([]byte("test")), 4, "text/plain", nil)
+	_, _ = store.PutObject(context.Background(), "test-bucket", "subdir/file.txt", bytes.NewReader([]byte("test")), 4, "text/plain", nil)
 
 	fs := NewS3Filesystem(store, "test-bucket", "", false)
 
@@ -218,7 +219,7 @@ func TestS3Filesystem_Chroot(t *testing.T) {
 
 func TestS3Filesystem_MkdirAll(t *testing.T) {
 	store := newTestStore(t)
-	_ = store.CreateBucket("test-bucket", "")
+	_ = store.CreateBucket(context.Background(), "test-bucket", "")
 	fs := NewS3Filesystem(store, "test-bucket", "", false)
 
 	// MkdirAll should be a no-op (S3 doesn't have real directories)
@@ -230,7 +231,7 @@ func TestS3Filesystem_MkdirAll(t *testing.T) {
 
 func TestS3Filesystem_SymlinkNotSupported(t *testing.T) {
 	store := newTestStore(t)
-	_ = store.CreateBucket("test-bucket", "")
+	_ = store.CreateBucket(context.Background(), "test-bucket", "")
 	fs := NewS3Filesystem(store, "test-bucket", "", false)
 
 	err := fs.Symlink("target", "link")
@@ -265,12 +266,12 @@ func TestS3Filesystem_Root(t *testing.T) {
 
 func TestS3File_Seek(t *testing.T) {
 	store := newTestStore(t)
-	_ = store.CreateBucket("test-bucket", "")
+	_ = store.CreateBucket(context.Background(), "test-bucket", "")
 	fs := NewS3Filesystem(store, "test-bucket", "", false)
 
 	// Create a file
 	content := []byte("0123456789")
-	_, _ = store.PutObject("test-bucket", "seek.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	_, _ = store.PutObject(context.Background(), "test-bucket", "seek.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 
 	f, err := fs.Open("seek.txt")
 	if err != nil {
@@ -300,12 +301,12 @@ func TestS3File_Seek(t *testing.T) {
 
 func TestS3File_Truncate(t *testing.T) {
 	store := newTestStore(t)
-	_ = store.CreateBucket("test-bucket", "")
+	_ = store.CreateBucket(context.Background(), "test-bucket", "")
 	fs := NewS3Filesystem(store, "test-bucket", "", false)
 
 	// Create a file
 	content := []byte("hello world")
-	_, _ = store.PutObject("test-bucket", "trunc.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	_, _ = store.PutObject(context.Background(), "test-bucket", "trunc.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 
 	f, err := fs.OpenFile("trunc.txt", os.O_RDWR, 0644)
 	if err != nil {
@@ -321,7 +322,7 @@ func TestS3File_Truncate(t *testing.T) {
 
 	// Read back
 	_ = f.Close()
-	reader, meta, err := store.GetObject("test-bucket", "trunc.txt")
+	reader, meta, err := store.GetObject(context.Background(), "test-bucket", "trunc.txt")
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}

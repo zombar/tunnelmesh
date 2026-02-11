@@ -168,7 +168,7 @@ func (m *Manager) collectAndPersistStats(ctx context.Context, s3Store *s3.System
 	// Save to S3 as stats/{peer_name}.docker.json
 	saveStart := time.Now()
 	path := "stats/" + m.peerName + ".docker.json"
-	if err := s3Store.SaveJSON(path, snapshot); err != nil {
+	if err := s3Store.SaveJSON(ctx, path, snapshot); err != nil {
 		if metricsRegistry != nil {
 			metricsRegistry.statsPersistenceErrors.WithLabelValues(m.peerName, "s3_write").Inc()
 		}

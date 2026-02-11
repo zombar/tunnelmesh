@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -96,7 +97,11 @@ var upgrader = websocket.Upgrader{
 }
 
 // newRelayManager creates a new relay manager.
-func newRelayManager() *relayManager {
+// ctx is the server lifecycle context used for background operations.
+func newRelayManager(ctx context.Context) *relayManager {
+	// Note: ctx parameter kept for future use (e.g., initializing background workers)
+	// but not stored in struct per Go best practices
+	_ = ctx
 	return &relayManager{
 		pending:     make(map[string]*relayConn),
 		persistent:  make(map[string]*persistentConn),
@@ -128,7 +133,8 @@ func (r *relayManager) SetWGConcentrator(peerName string) {
 	// Persist to S3 if enabled (async to avoid blocking)
 	if s3Store != nil {
 		go func() {
-			if err := s3Store.SaveWGConcentrator(peerName); err != nil {
+			// Use Background context for persistence - should complete even during shutdown
+			if err := s3Store.SaveWGConcentrator(context.Background(), peerName); err != nil {
 				log.Warn().Err(err).Msg("failed to persist WG concentrator")
 			} else {
 				log.Debug().Str("peer", peerName).Msg("persisted WG concentrator to S3")
@@ -169,7 +175,8 @@ func (r *relayManager) ClearWGConcentrator(peerName string) {
 		// Clear from S3 if enabled
 		if s3Store != nil {
 			go func() {
-				if err := s3Store.ClearWGConcentrator(); err != nil {
+				// Use Background context for persistence - should complete even during shutdown
+				if err := s3Store.ClearWGConcentrator(context.Background()); err != nil {
 					log.Debug().Err(err).Msg("failed to clear WG concentrator from S3")
 				} else {
 					log.Debug().Msg("cleared WG concentrator from S3")
@@ -181,7 +188,7 @@ func (r *relayManager) ClearWGConcentrator(peerName string) {
 
 // SendAPIRequest sends an API request to the WireGuard concentrator and waits for response.
 // Returns the response body or error if timeout/no concentrator.
-func (r *relayManager) SendAPIRequest(method string, body []byte, timeout time.Duration) ([]byte, error) {
+func (r *relayManager) SendAPIRequest(ctx context.Context, method string, body []byte, timeout time.Duration) ([]byte, error) {
 	r.mu.Lock()
 	concentrator := r.wgConcentrator
 	pc, ok := r.persistent[concentrator]
@@ -224,12 +231,16 @@ func (r *relayManager) SendAPIRequest(method string, body []byte, timeout time.D
 		return nil, fmt.Errorf("send API request: write channel full")
 	}
 
+	// Combine parent context with timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	// Wait for response
 	select {
 	case resp := <-respChan:
 		return resp, nil
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("API request timeout")
+	case <-ctx.Done():
+		return nil, fmt.Errorf("API request to WireGuard concentrator: %w", ctx.Err())
 	}
 }
 
@@ -260,7 +271,7 @@ func (r *relayManager) handleAPIResponse(data []byte) {
 
 // QueryFilterRules sends a filter rules query to a peer and waits for response.
 // Returns the JSON-encoded filter rules or error if timeout/peer not connected.
-func (r *relayManager) QueryFilterRules(peerName string, timeout time.Duration) ([]byte, error) {
+func (r *relayManager) QueryFilterRules(ctx context.Context, peerName string, timeout time.Duration) ([]byte, error) {
 	r.mu.Lock()
 	pc, ok := r.persistent[peerName]
 	r.mu.Unlock()
@@ -299,12 +310,16 @@ func (r *relayManager) QueryFilterRules(peerName string, timeout time.Duration) 
 		return nil, fmt.Errorf("query filter rules: write channel full")
 	}
 
+	// Combine parent context with timeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	// Wait for response
 	select {
 	case resp := <-respChan:
 		return resp, nil
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("filter rules query timeout")
+	case <-ctx.Done():
+		return nil, fmt.Errorf("query filter rules from %s: %w", peerName, ctx.Err())
 	}
 }
 
@@ -800,9 +815,9 @@ func (r *relayManager) PushServicePorts(peerName string, ports []uint16) {
 // These endpoints are also registered on adminMux (in setupAdminRoutes) for mesh-only access.
 // Public mux: Used for initial connections and peers without mesh access.
 // Admin mux: Preferred by peers with mesh connectivity for better security.
-func (s *Server) setupRelayRoutes() {
+func (s *Server) setupRelayRoutes(ctx context.Context) {
 	if s.relay == nil {
-		s.relay = newRelayManager()
+		s.relay = newRelayManager(ctx)
 		// Set S3 store (always available for WG concentrator persistence)
 		s.relay.SetS3Store(s.s3SystemStore)
 	}

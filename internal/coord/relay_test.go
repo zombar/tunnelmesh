@@ -51,7 +51,7 @@ func TestRelayManager_HandleHeartbeat(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	// Start test server
 	ts := httptest.NewServer(srv)
@@ -65,8 +65,15 @@ func TestRelayManager_HandleHeartbeat(t *testing.T) {
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
 	defer func() { _ = conn.Close() }()
 
-	// Give server time to register the connection
-	time.Sleep(50 * time.Millisecond)
+	// Wait for server to register the connection
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err = waitFor(ctx, 10*time.Millisecond, func() bool {
+		srv.relay.mu.Lock()
+		defer srv.relay.mu.Unlock()
+		return srv.relay.persistent[peerName] != nil
+	})
+	require.NoError(t, err, "connection not registered")
 
 	// Send heartbeat with stats
 	stats := &proto.PeerStats{
@@ -113,7 +120,7 @@ func TestRelayManager_NotifyRelayRequest(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -126,8 +133,15 @@ func TestRelayManager_NotifyRelayRequest(t *testing.T) {
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
 	defer func() { _ = conn.Close() }()
 
-	// Give server time to register the connection
-	time.Sleep(50 * time.Millisecond)
+	// Wait for server to register the connection
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err = waitFor(ctx, 10*time.Millisecond, func() bool {
+		srv.relay.mu.Lock()
+		defer srv.relay.mu.Unlock()
+		return srv.relay.persistent[peerName] != nil
+	})
+	require.NoError(t, err, "connection not registered")
 
 	// Call NotifyRelayRequest on the server
 	waitingPeers := []string{"peer2", "peer3"}
@@ -154,7 +168,7 @@ func TestRelayManager_NotifyHolePunch(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -167,7 +181,15 @@ func TestRelayManager_NotifyHolePunch(t *testing.T) {
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
 	defer func() { _ = conn.Close() }()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for server to register the connection
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err = waitFor(ctx, 10*time.Millisecond, func() bool {
+		srv.relay.mu.Lock()
+		defer srv.relay.mu.Unlock()
+		return srv.relay.persistent[peerName] != nil
+	})
+	require.NoError(t, err, "connection not registered")
 
 	// Call NotifyHolePunch
 	requestingPeers := []string{"peer4"}
@@ -192,7 +214,7 @@ func TestRelayManager_NotifyPeerNotConnected(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	// Notify a peer that's not connected - should not panic
 	srv.relay.NotifyRelayRequest("nonexistent-peer", []string{"peer2"})
@@ -206,7 +228,7 @@ func TestRelayManager_HeartbeatUpdatesStats(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -217,7 +239,15 @@ func TestRelayManager_HeartbeatUpdatesStats(t *testing.T) {
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
 	defer func() { _ = conn.Close() }()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for server to register the connection
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err = waitFor(ctx, 10*time.Millisecond, func() bool {
+		srv.relay.mu.Lock()
+		defer srv.relay.mu.Unlock()
+		return srv.relay.persistent[peerName] != nil
+	})
+	require.NoError(t, err, "connection not registered")
 
 	// Send multiple heartbeats with different stats
 	for i := 1; i <= 3; i++ {
@@ -309,7 +339,7 @@ func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -320,7 +350,15 @@ func TestRelayManager_HeartbeatAckEchoesTimestamp(t *testing.T) {
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
 	defer func() { _ = conn.Close() }()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for server to register the connection
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err = waitFor(ctx, 10*time.Millisecond, func() bool {
+		srv.relay.mu.Lock()
+		defer srv.relay.mu.Unlock()
+		return srv.relay.persistent[peerName] != nil
+	})
+	require.NoError(t, err, "connection not registered")
 
 	// Send heartbeat with HeartbeatSentAt timestamp
 	sentAt := time.Now().UnixNano()
@@ -360,7 +398,7 @@ func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -371,7 +409,15 @@ func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
 	defer func() { _ = conn.Close() }()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for server to register the connection
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err = waitFor(ctx, 10*time.Millisecond, func() bool {
+		srv.relay.mu.Lock()
+		defer srv.relay.mu.Unlock()
+		return srv.relay.persistent[peerName] != nil
+	})
+	require.NoError(t, err, "connection not registered")
 
 	// Send heartbeat WITHOUT HeartbeatSentAt (simulating old client)
 	stats := &proto.PeerStats{
@@ -406,7 +452,7 @@ func TestRelayManager_QueryFilterRules(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -417,13 +463,21 @@ func TestRelayManager_QueryFilterRules(t *testing.T) {
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
 	defer func() { _ = conn.Close() }()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for server to register the connection
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err = waitFor(ctx, 10*time.Millisecond, func() bool {
+		srv.relay.mu.Lock()
+		defer srv.relay.mu.Unlock()
+		return srv.relay.persistent[peerName] != nil
+	})
+	require.NoError(t, err, "connection not registered")
 
 	// Query filter rules in a goroutine (it blocks waiting for response)
 	responseChan := make(chan []byte)
 	errChan := make(chan error)
 	go func() {
-		rules, err := srv.relay.QueryFilterRules(peerName, 5*time.Second)
+		rules, err := srv.relay.QueryFilterRules(context.Background(), peerName, 5*time.Second)
 		if err != nil {
 			errChan <- err
 			return
@@ -485,7 +539,7 @@ func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -496,12 +550,20 @@ func TestRelayManager_QueryFilterRules_Timeout(t *testing.T) {
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
 	defer func() { _ = conn.Close() }()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for server to register the connection
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err = waitFor(ctx, 10*time.Millisecond, func() bool {
+		srv.relay.mu.Lock()
+		defer srv.relay.mu.Unlock()
+		return srv.relay.persistent[peerName] != nil
+	})
+	require.NoError(t, err, "connection not registered")
 
 	// Query filter rules with short timeout - don't respond
-	_, err = srv.relay.QueryFilterRules(peerName, 100*time.Millisecond)
+	_, err = srv.relay.QueryFilterRules(context.Background(), peerName, 100*time.Millisecond)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "timeout")
+	assert.Contains(t, err.Error(), "deadline exceeded")
 }
 
 func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
@@ -510,10 +572,10 @@ func TestRelayManager_QueryFilterRules_PeerNotConnected(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	// Query filter rules for non-existent peer
-	_, err = srv.relay.QueryFilterRules("nonexistent-peer", 1*time.Second)
+	_, err = srv.relay.QueryFilterRules(context.Background(), "nonexistent-peer", 1*time.Second)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
 }
@@ -524,7 +586,7 @@ func TestRelayManager_StoresReportedLatency(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -535,7 +597,15 @@ func TestRelayManager_StoresReportedLatency(t *testing.T) {
 	conn := connectRelay(t, ts.URL, peerName, jwtToken)
 	defer func() { _ = conn.Close() }()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for server to register the connection
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err = waitFor(ctx, 10*time.Millisecond, func() bool {
+		srv.relay.mu.Lock()
+		defer srv.relay.mu.Unlock()
+		return srv.relay.persistent[peerName] != nil
+	})
+	require.NoError(t, err, "connection not registered")
 
 	// Send heartbeat with RTT and peer latencies
 	stats := &proto.PeerStats{
@@ -574,4 +644,91 @@ func TestRelayManager_StoresReportedLatency(t *testing.T) {
 	require.NotNil(t, peer.peerLatencies, "peer latencies should be stored")
 	assert.Equal(t, int64(15), peer.peerLatencies["peer-a"])
 	assert.Equal(t, int64(28), peer.peerLatencies["peer-b"])
+}
+
+func TestRelay_ContextCancellationPrecedence(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	// Register a peer that will act as WireGuard concentrator
+	peerName := "wg-concentrator"
+	jwtToken := registerPeerAndGetToken(t, ts.URL, peerName, cfg.AuthToken)
+
+	// Connect to persistent relay
+	conn := connectRelay(t, ts.URL, peerName, jwtToken)
+	defer func() { _ = conn.Close() }()
+
+	// Wait for connection to be registered
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err = waitFor(ctx, 10*time.Millisecond, func() bool {
+		srv.relay.mu.Lock()
+		defer srv.relay.mu.Unlock()
+		return srv.relay.persistent[peerName] != nil
+	})
+	require.NoError(t, err, "connection not registered")
+
+	// Announce as WireGuard concentrator
+	announceMsg := []byte{MsgTypeWGAnnounce}
+	err = conn.WriteMessage(websocket.BinaryMessage, announceMsg)
+	require.NoError(t, err)
+
+	// Give server time to process announcement
+	time.Sleep(50 * time.Millisecond)
+
+	// Test 1: Parent context cancelled before timeout → should return context.Canceled
+	t.Run("parent_cancellation_before_timeout", func(t *testing.T) {
+		parentCtx, parentCancel := context.WithCancel(context.Background())
+
+		// Start API request in goroutine
+		done := make(chan error, 1)
+		go func() {
+			// Use a long timeout (10 seconds) but cancel parent immediately
+			_, err := srv.relay.SendAPIRequest(parentCtx, "GET /test", nil, 10*time.Second)
+			done <- err
+		}()
+
+		// Cancel parent context immediately
+		time.Sleep(10 * time.Millisecond)
+		parentCancel()
+
+		// Wait for error
+		select {
+		case err := <-done:
+			// Should get context.Canceled from parent cancellation
+			assert.ErrorIs(t, err, context.Canceled, "should return context.Canceled when parent is cancelled")
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for API request to return")
+		}
+	})
+
+	// Test 2: Timeout occurs before parent cancel → should return context.DeadlineExceeded
+	t.Run("timeout_before_parent_cancellation", func(t *testing.T) {
+		parentCtx, parentCancel := context.WithCancel(context.Background())
+		defer parentCancel() // Clean up
+
+		// Start API request with very short timeout
+		done := make(chan error, 1)
+		go func() {
+			// Use a short timeout (10ms) with parent that won't be cancelled
+			_, err := srv.relay.SendAPIRequest(parentCtx, "GET /test", nil, 10*time.Millisecond)
+			done <- err
+		}()
+
+		// Wait for timeout (don't cancel parent)
+		select {
+		case err := <-done:
+			// Should get context.DeadlineExceeded from timeout
+			assert.ErrorIs(t, err, context.DeadlineExceeded, "should return context.DeadlineExceeded when timeout occurs")
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for API request to return")
+		}
+	})
 }

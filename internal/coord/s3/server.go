@@ -162,7 +162,7 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	buckets, err := s.store.ListBuckets()
+	buckets, err := s.store.ListBuckets(r.Context())
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
 		return
@@ -232,7 +232,7 @@ func (s *Server) createBucket(w http.ResponseWriter, r *http.Request, bucket str
 		return
 	}
 
-	if err := s.store.CreateBucket(bucket, userID); err != nil {
+	if err := s.store.CreateBucket(r.Context(), bucket, userID); err != nil {
 		if errors.Is(err, ErrBucketExists) {
 			s.writeError(w, http.StatusConflict, "BucketAlreadyExists", "Bucket already exists")
 			return
@@ -252,7 +252,7 @@ func (s *Server) deleteBucket(w http.ResponseWriter, r *http.Request, bucket str
 		return
 	}
 
-	if err := s.store.DeleteBucket(bucket); err != nil {
+	if err := s.store.DeleteBucket(r.Context(), bucket); err != nil {
 		switch {
 		case errors.Is(err, ErrBucketNotFound):
 			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
@@ -275,7 +275,7 @@ func (s *Server) headBucket(w http.ResponseWriter, r *http.Request, bucket strin
 		return
 	}
 
-	if _, err := s.store.HeadBucket(bucket); err != nil {
+	if _, err := s.store.HeadBucket(r.Context(), bucket); err != nil {
 		if errors.Is(err, ErrBucketNotFound) {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -304,7 +304,7 @@ func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket stri
 		}
 	}
 
-	objects, isTruncated, nextMarker, err := s.store.ListObjects(bucket, prefix, marker, maxKeys)
+	objects, isTruncated, nextMarker, err := s.store.ListObjects(r.Context(), bucket, prefix, marker, maxKeys)
 	if err != nil {
 		if errors.Is(err, ErrBucketNotFound) {
 			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
@@ -369,7 +369,7 @@ func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket st
 		marker = continuationToken
 	}
 
-	objects, isTruncated, nextMarker, err := s.store.ListObjects(bucket, prefix, marker, maxKeys)
+	objects, isTruncated, nextMarker, err := s.store.ListObjects(r.Context(), bucket, prefix, marker, maxKeys)
 	if err != nil {
 		if errors.Is(err, ErrBucketNotFound) {
 			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
@@ -431,7 +431,7 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key s
 		return
 	}
 
-	reader, meta, err := s.store.GetObject(bucket, key)
+	reader, meta, err := s.store.GetObject(r.Context(), bucket, key)
 	if err != nil {
 		storeErr = err // Capture for metrics
 		switch {
@@ -498,7 +498,7 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 		}
 	}
 
-	meta, err := s.store.PutObject(bucket, key, r.Body, r.ContentLength, contentType, metadata)
+	meta, err := s.store.PutObject(r.Context(), bucket, key, r.Body, r.ContentLength, contentType, metadata)
 	if err != nil {
 		storeErr = err // Capture for metrics
 		switch {
@@ -528,7 +528,7 @@ func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request, bucket, ke
 		return
 	}
 
-	if err := s.store.DeleteObject(bucket, key); err != nil {
+	if err := s.store.DeleteObject(r.Context(), bucket, key); err != nil {
 		switch {
 		case errors.Is(err, ErrBucketNotFound):
 			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
@@ -552,7 +552,7 @@ func (s *Server) headObject(w http.ResponseWriter, r *http.Request, bucket, key 
 		return
 	}
 
-	meta, err := s.store.HeadObject(bucket, key)
+	meta, err := s.store.HeadObject(r.Context(), bucket, key)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrBucketNotFound):

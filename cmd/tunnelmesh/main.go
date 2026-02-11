@@ -1765,7 +1765,7 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Shutdown coordinator server if running
 	if srv != nil {
 		log.Info().Msg("shutting down coordinator server")
-		if err := srv.Shutdown(); err != nil {
+		if err := srv.Shutdown(context.Background()); err != nil {
 			log.Warn().Err(err).Msg("failed to shutdown coordinator server")
 		}
 	}

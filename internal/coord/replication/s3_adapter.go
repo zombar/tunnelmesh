@@ -21,7 +21,7 @@ func NewS3StoreAdapter(store *s3.Store) *S3StoreAdapter {
 
 // Get retrieves an object from S3.
 func (a *S3StoreAdapter) Get(ctx context.Context, bucket, key string) ([]byte, map[string]string, error) {
-	reader, meta, err := a.store.GetObject(bucket, key)
+	reader, meta, err := a.store.GetObject(ctx, bucket, key)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get object: %w", err)
 	}
@@ -49,7 +49,7 @@ func (a *S3StoreAdapter) Put(ctx context.Context, bucket, key string, data []byt
 	reader := bytes.NewReader(data)
 	size := int64(len(data))
 
-	_, err := a.store.PutObject(bucket, key, reader, size, contentType, metadata)
+	_, err := a.store.PutObject(ctx, bucket, key, reader, size, contentType, metadata)
 	if err != nil {
 		return fmt.Errorf("put object: %w", err)
 	}
@@ -65,7 +65,7 @@ func (a *S3StoreAdapter) List(ctx context.Context, bucket string) ([]string, err
 
 	// Paginate through all objects
 	for {
-		objects, _, nextMarker, err := a.store.ListObjects(bucket, "", marker, maxKeys)
+		objects, _, nextMarker, err := a.store.ListObjects(ctx, bucket, "", marker, maxKeys)
 		if err != nil {
 			return nil, fmt.Errorf("list objects: %w", err)
 		}
@@ -84,7 +84,7 @@ func (a *S3StoreAdapter) List(ctx context.Context, bucket string) ([]string, err
 		// Check context cancellation between pages
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, fmt.Errorf("list objects in bucket %s cancelled: %w", bucket, ctx.Err())
 		default:
 		}
 	}
@@ -94,7 +94,7 @@ func (a *S3StoreAdapter) List(ctx context.Context, bucket string) ([]string, err
 
 // Delete removes an object from S3.
 func (a *S3StoreAdapter) Delete(ctx context.Context, bucket, key string) error {
-	err := a.store.DeleteObject(bucket, key)
+	err := a.store.DeleteObject(ctx, bucket, key)
 	if err != nil {
 		return fmt.Errorf("delete object: %w", err)
 	}
@@ -104,7 +104,7 @@ func (a *S3StoreAdapter) Delete(ctx context.Context, bucket, key string) error {
 
 // ListBuckets lists all buckets.
 func (a *S3StoreAdapter) ListBuckets(ctx context.Context) ([]string, error) {
-	buckets, err := a.store.ListBuckets()
+	buckets, err := a.store.ListBuckets(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list buckets: %w", err)
 	}

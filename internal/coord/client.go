@@ -129,7 +129,7 @@ func (c *Client) RegisterWithRetry(ctx context.Context, name, publicKey string, 
 
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, fmt.Errorf("registration cancelled after %d attempts: %w", attempt, ctx.Err())
 		case <-time.After(backoff):
 		}
 

@@ -101,7 +101,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
 	ts := httptest.NewServer(srv)
@@ -154,7 +154,7 @@ func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
-	defer func() { _ = srv.Shutdown() }()
+	defer func() { _ = srv.Shutdown(context.Background()) }()
 
 	// Register an exit node
 	client := NewClient(ts.URL, "test-token")
@@ -207,7 +207,7 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
 	ts := httptest.NewServer(srv)
@@ -265,7 +265,7 @@ func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
 
 	// Start mock Prometheus and Grafana servers
@@ -350,10 +350,10 @@ func newTestServerWithS3AndBucket(t *testing.T) *Server {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	// Create a test bucket
-	err = srv.s3Store.CreateBucket("test-bucket", "admin")
+	err = srv.s3Store.CreateBucket(context.Background(), "test-bucket", "admin")
 	require.NoError(t, err)
 
 	return srv
@@ -419,9 +419,9 @@ func TestS3Proxy_ListObjects(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 
 	// Add some objects
-	_, err := srv.s3Store.PutObject("test-bucket", "file1.txt", bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "file1.txt", bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
 	require.NoError(t, err)
-	_, err = srv.s3Store.PutObject("test-bucket", "folder/file2.txt", bytes.NewReader([]byte("world")), 5, "text/plain", nil)
+	_, err = srv.s3Store.PutObject(context.Background(), "test-bucket", "folder/file2.txt", bytes.NewReader([]byte("world")), 5, "text/plain", nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects", nil)
@@ -440,9 +440,9 @@ func TestS3Proxy_ListObjects_WithDelimiter(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 
 	// Add objects in a folder structure
-	_, err := srv.s3Store.PutObject("test-bucket", "file1.txt", bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "file1.txt", bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
 	require.NoError(t, err)
-	_, err = srv.s3Store.PutObject("test-bucket", "folder/file2.txt", bytes.NewReader([]byte("world")), 5, "text/plain", nil)
+	_, err = srv.s3Store.PutObject(context.Background(), "test-bucket", "folder/file2.txt", bytes.NewReader([]byte("world")), 5, "text/plain", nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects?delimiter=/", nil)
@@ -473,7 +473,7 @@ func TestS3Proxy_GetObject(t *testing.T) {
 
 	// Add an object
 	content := []byte("hello world")
-	_, err := srv.s3Store.PutObject("test-bucket", "test.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "test.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects/test.txt", nil)
@@ -510,7 +510,7 @@ func TestS3Proxy_PutObject(t *testing.T) {
 	assert.NotEmpty(t, rec.Header().Get("ETag"))
 
 	// Verify object was created
-	reader, _, err := srv.s3Store.GetObject("test-bucket", "new.txt")
+	reader, _, err := srv.s3Store.GetObject(context.Background(), "test-bucket", "new.txt")
 	require.NoError(t, err)
 	defer func() { _ = reader.Close() }()
 
@@ -535,7 +535,7 @@ func TestS3Proxy_DeleteObject(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 
 	// Add an object
-	_, err := srv.s3Store.PutObject("test-bucket", "to-delete.txt", bytes.NewReader([]byte("bye")), 3, "text/plain", nil)
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "to-delete.txt", bytes.NewReader([]byte("bye")), 3, "text/plain", nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/s3/buckets/test-bucket/objects/to-delete.txt", nil)
@@ -545,7 +545,7 @@ func TestS3Proxy_DeleteObject(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 
 	// Verify object is tombstoned (soft-deleted), not removed
-	meta, err := srv.s3Store.HeadObject("test-bucket", "to-delete.txt")
+	meta, err := srv.s3Store.HeadObject(context.Background(), "test-bucket", "to-delete.txt")
 	require.NoError(t, err)
 	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
 }
@@ -554,7 +554,7 @@ func TestS3Proxy_DeleteObject_SystemBucketForbidden(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 
 	// System bucket is created automatically, add an object to it
-	_, err := srv.s3Store.PutObject(auth.SystemBucket, "protected.txt", bytes.NewReader([]byte("secret")), 6, "text/plain", nil)
+	_, err := srv.s3Store.PutObject(context.Background(), auth.SystemBucket, "protected.txt", bytes.NewReader([]byte("secret")), 6, "text/plain", nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/s3/buckets/"+auth.SystemBucket+"/objects/protected.txt", nil)
@@ -569,7 +569,7 @@ func TestS3Proxy_HeadObject(t *testing.T) {
 
 	// Add an object
 	content := []byte("hello world")
-	_, err := srv.s3Store.PutObject("test-bucket", "test.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "test.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodHead, "/api/s3/buckets/test-bucket/objects/test.txt", nil)
@@ -636,7 +636,7 @@ func TestS3Proxy_URLEncodedKey(t *testing.T) {
 
 	// Create object with special chars in name
 	content := []byte("hello world")
-	_, err := srv.s3Store.PutObject("test-bucket", "file with spaces.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "file with spaces.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
 	// Access with URL-encoded key

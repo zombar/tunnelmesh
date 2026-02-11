@@ -66,6 +66,7 @@ type serverStats struct {
 // This separation ensures the admin interface (dashboards, monitoring, config) is never
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
+	cancel          context.CancelFunc // Cancel function for server lifecycle (stops background operations)
 	cfg             *config.PeerConfig
 	mux             *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
 	adminMux        *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
@@ -229,7 +230,7 @@ func (a *ipAllocator) release(ip string) {
 // loadFromS3 loads IP allocations from S3 storage.
 // Called during initialization. Errors are logged but not fatal.
 func (a *ipAllocator) loadFromS3() error {
-	data, err := a.systemStore.LoadIPAllocations()
+	data, err := a.systemStore.LoadIPAllocations(context.Background())
 	if err != nil {
 		return fmt.Errorf("load IP allocations: %w", err)
 	}
@@ -277,7 +278,7 @@ func (a *ipAllocator) copyDataLocked() s3.IPAllocationsData {
 // Called after each allocation/release. Errors are logged but don't fail the operation.
 // Takes a copy of the data to avoid holding locks during I/O.
 func (a *ipAllocator) saveToS3Async(data s3.IPAllocationsData) {
-	if err := a.systemStore.SaveIPAllocations(data); err != nil {
+	if err := a.systemStore.SaveIPAllocations(context.Background(), data); err != nil {
 		log.Error().Err(err).Msg("Failed to save IP allocations to S3")
 	}
 }
@@ -290,7 +291,12 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 		coordinatorName = "coordinator"
 	}
 
+	// Create a cancellable context for server lifecycle
+	// This allows us to stop all background operations on shutdown
+	ctx, cancel := context.WithCancel(ctx)
+
 	srv := &Server{
+		cancel:       cancel,
 		cfg:          cfg,
 		mux:          http.NewServeMux(),
 		peers:        make(map[string]*peerInfo),
@@ -323,7 +329,7 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	}
 
 	// Initialize S3 storage (always enabled, must be before IP allocator)
-	if err := srv.initS3Storage(cfg); err != nil {
+	if err := srv.initS3Storage(ctx, cfg); err != nil {
 		return nil, fmt.Errorf("initialize S3 storage: %w", err)
 	}
 
@@ -373,7 +379,7 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	srv.filter.SetServiceRules(serviceRules)
 
 	// Load persisted filter rules (temporary and service overrides)
-	if err := srv.recoverFilterRules(); err != nil {
+	if err := srv.recoverFilterRules(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to load filter rules, starting fresh")
 	}
 
@@ -409,7 +415,7 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 			Msg("replication engine initialized - coordinators will discover each other via peer list")
 	}
 
-	srv.setupRoutes()
+	srv.setupRoutes(ctx)
 	return srv, nil
 }
 
@@ -474,7 +480,7 @@ func (s *Server) SaveStatsHistory() error {
 // refreshPeerNameCache reloads the peer ID -> name mapping from storage.
 // This is called during server startup and when peers are added/updated.
 func (s *Server) refreshPeerNameCache() error {
-	peers, err := s.s3SystemStore.LoadPeers()
+	peers, err := s.s3SystemStore.LoadPeers(context.Background())
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to load peers for name cache")
 		return fmt.Errorf("load peers: %w", err)
@@ -528,13 +534,13 @@ func (s *Server) saveDNSData() {
 	s.peersMu.RUnlock()
 
 	// Perform S3 operations without holding lock
-	if err := s.s3SystemStore.SaveDNSCache(dnsCache); err != nil {
+	if err := s.s3SystemStore.SaveDNSCache(context.Background(), dnsCache); err != nil {
 		log.Warn().Err(err).Msg("failed to persist DNS cache")
 	} else {
 		log.Debug().Int("entries", len(dnsCache)).Msg("persisted DNS cache to S3")
 	}
 
-	if err := s.s3SystemStore.SaveDNSAliases(aliasOwner, peerAliases); err != nil {
+	if err := s.s3SystemStore.SaveDNSAliases(context.Background(), aliasOwner, peerAliases); err != nil {
 		log.Warn().Err(err).Msg("failed to persist DNS aliases")
 	} else {
 		log.Debug().Int("aliases", len(aliasOwner)).Msg("persisted DNS aliases to S3")
@@ -542,8 +548,8 @@ func (s *Server) saveDNSData() {
 }
 
 // recoverFilterRules loads filter rules from S3.
-func (s *Server) recoverFilterRules() error {
-	data, err := s.s3SystemStore.LoadFilterRules()
+func (s *Server) recoverFilterRules(ctx context.Context) error {
+	data, err := s.s3SystemStore.LoadFilterRules(ctx)
 	if err != nil {
 		return err
 	}
@@ -579,7 +585,7 @@ func (s *Server) recoverFilterRules() error {
 
 // SaveFilterRules persists filter rules to S3 or does nothing if S3 is disabled.
 // Filters out expired rules before saving to prevent storage bloat.
-func (s *Server) SaveFilterRules() error {
+func (s *Server) SaveFilterRules(ctx context.Context) error {
 	// Mutex prevents concurrent saves from racing
 	s.filterSaveMu.Lock()
 	defer s.filterSaveMu.Unlock()
@@ -613,7 +619,7 @@ func (s *Server) SaveFilterRules() error {
 		}
 	}
 
-	if err := s.s3SystemStore.SaveFilterRules(data); err != nil {
+	if err := s.s3SystemStore.SaveFilterRules(ctx, data); err != nil {
 		return err
 	}
 
@@ -635,7 +641,7 @@ func (s *Server) saveFilterRulesAsync() {
 
 	// Create new timer that saves after 100ms of inactivity
 	s.filterTimer = time.AfterFunc(100*time.Millisecond, func() {
-		if err := s.SaveFilterRules(); err != nil {
+		if err := s.SaveFilterRules(context.Background()); err != nil {
 			log.Error().Err(err).Msg("failed to save filter rules")
 		}
 	})
@@ -643,7 +649,12 @@ func (s *Server) saveFilterRulesAsync() {
 
 // Shutdown gracefully shuts down the server, persisting state.
 // Returns an error if any persistence operations fail.
-func (s *Server) Shutdown() error {
+func (s *Server) Shutdown(ctx context.Context) error {
+	// Cancel server lifecycle context to stop all background operations
+	if s.cancel != nil {
+		s.cancel()
+	}
+
 	log.Info().Msg("saving data before shutdown")
 
 	var errs []error
@@ -678,7 +689,7 @@ func (s *Server) Shutdown() error {
 	s.filterSaveMu.Unlock()
 
 	// Save filter rules (final save after stopping timer)
-	if err := s.SaveFilterRules(); err != nil {
+	if err := s.SaveFilterRules(ctx); err != nil {
 		log.Error().Err(err).Msg("failed to save filter rules")
 		errs = append(errs, fmt.Errorf("save filter rules: %w", err))
 	}
@@ -721,7 +732,7 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 				if err := s.SaveStatsHistory(); err != nil {
 					log.Warn().Err(err).Msg("failed to save stats history")
 				}
-				if err := s.SaveFilterRules(); err != nil {
+				if err := s.SaveFilterRules(ctx); err != nil {
 					log.Warn().Err(err).Msg("failed to save filter rules")
 				}
 			}
@@ -754,20 +765,20 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 				return
 			case <-ticker.C:
 				// Purge tombstoned objects past retention period
-				if purged := s.s3Store.PurgeTombstonedObjects(); purged > 0 {
+				if purged := s.s3Store.PurgeTombstonedObjects(ctx); purged > 0 {
 					log.Info().Int("count", purged).Msg("purged tombstoned S3 objects")
 				}
 
 				// Tombstone content in expired file shares
 				if s.fileShareMgr != nil {
-					if tombstoned := s.fileShareMgr.TombstoneExpiredShareContents(); tombstoned > 0 {
+					if tombstoned := s.fileShareMgr.TombstoneExpiredShareContents(ctx); tombstoned > 0 {
 						log.Info().Int("count", tombstoned).Msg("tombstoned expired file share content")
 					}
 				}
 
 				// Run garbage collection on versions and orphaned chunks
 				gcStart := time.Now()
-				gcStats := s.s3Store.RunGarbageCollection()
+				gcStats := s.s3Store.RunGarbageCollection(ctx)
 				gcDuration := time.Since(gcStart).Seconds()
 
 				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 {
@@ -844,7 +855,7 @@ func (s *Server) SetVersion(version string) {
 	s.version = version
 }
 
-func (s *Server) setupRoutes() {
+func (s *Server) setupRoutes(ctx context.Context) {
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/ca.crt", s.handleCACert) // CA cert for mesh TLS (no auth)
 	s.mux.HandleFunc("/api/v1/register", s.withAuth(s.handleRegister))
@@ -855,7 +866,7 @@ func (s *Server) setupRoutes() {
 
 	// Setup relay routes (JWT auth handled internally)
 	// Always setup relay routes (relay always enabled for coordinators)
-	s.setupRelayRoutes()
+	s.setupRelayRoutes(ctx)
 
 	// Always setup admin routes (admin always enabled for coordinators)
 	s.setupAdminRoutes()
@@ -940,7 +951,7 @@ func (s *Server) loadOrCreateCASKey(dataDir string) ([32]byte, error) {
 }
 
 // initS3Storage initializes the S3 storage subsystem.
-func (s *Server) initS3Storage(cfg *config.PeerConfig) error {
+func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) error {
 	// Require max_size to be configured for quota enforcement
 	if cfg.Coordinator.S3.MaxSize.Bytes() <= 0 {
 		return fmt.Errorf("s3.max_size must be configured (e.g., 10Gi) for quota enforcement")
@@ -999,7 +1010,7 @@ func (s *Server) initS3Storage(cfg *config.PeerConfig) error {
 	s.s3SystemStore = systemStore
 
 	// Recover peers and credentials from previous runs
-	if peers, err := systemStore.LoadPeers(); err == nil && len(peers) > 0 {
+	if peers, err := systemStore.LoadPeers(ctx); err == nil && len(peers) > 0 {
 		log.Info().Int("count", len(peers)).Msg("recovering registered peers")
 		for _, peer := range peers {
 			if _, _, err := s.s3Credentials.RegisterUser(peer.ID, peer.PublicKey); err != nil {
@@ -1014,7 +1025,7 @@ func (s *Server) initS3Storage(cfg *config.PeerConfig) error {
 	}
 
 	// Recover role bindings
-	if bindings, err := systemStore.LoadBindings(); err == nil && len(bindings) > 0 {
+	if bindings, err := systemStore.LoadBindings(ctx); err == nil && len(bindings) > 0 {
 		log.Info().Int("count", len(bindings)).Msg("recovering role bindings")
 		for _, binding := range bindings {
 			s.s3Authorizer.Bindings.Add(binding)
@@ -1022,19 +1033,19 @@ func (s *Server) initS3Storage(cfg *config.PeerConfig) error {
 	}
 
 	// Recover groups
-	if groups, err := systemStore.LoadGroups(); err == nil && len(groups) > 0 {
+	if groups, err := systemStore.LoadGroups(ctx); err == nil && len(groups) > 0 {
 		log.Info().Int("count", len(groups)).Msg("recovering groups")
 		s.s3Authorizer.Groups.LoadGroups(groups)
 	}
 
 	// Recover group bindings
-	if groupBindings, err := systemStore.LoadGroupBindings(); err == nil && len(groupBindings) > 0 {
+	if groupBindings, err := systemStore.LoadGroupBindings(ctx); err == nil && len(groupBindings) > 0 {
 		log.Info().Int("count", len(groupBindings)).Msg("recovering group bindings")
 		s.s3Authorizer.GroupBindings.LoadBindings(groupBindings)
 	}
 
 	// Recover external panels
-	if panels, err := systemStore.LoadPanels(); err == nil && len(panels) > 0 {
+	if panels, err := systemStore.LoadPanels(ctx); err == nil && len(panels) > 0 {
 		log.Info().Int("count", len(panels)).Msg("recovering external panels")
 		for _, panel := range panels {
 			if err := s.s3Authorizer.PanelRegistry.Register(*panel); err != nil {
@@ -1051,7 +1062,7 @@ func (s *Server) initS3Storage(cfg *config.PeerConfig) error {
 	log.Info().Int("shares", len(s.fileShareMgr.List())).Msg("file share manager initialized")
 
 	// Recover coordinator state from S3
-	s.recoverCoordinatorState(cfg, systemStore)
+	s.recoverCoordinatorState(ctx, cfg, systemStore)
 
 	// Register service peer credentials (derived from a fixed key for now)
 	// In production, this would be derived from the CA private key
@@ -1070,10 +1081,10 @@ func (s *Server) initS3Storage(cfg *config.PeerConfig) error {
 
 // recoverCoordinatorState recovers ephemeral coordinator state from S3.
 // This includes stats history, WG concentrator assignment, and DNS cache/aliases.
-func (s *Server) recoverCoordinatorState(cfg *config.PeerConfig, systemStore *s3.SystemStore) {
+func (s *Server) recoverCoordinatorState(ctx context.Context, cfg *config.PeerConfig, systemStore *s3.SystemStore) {
 	// Migrate stats history from file to S3 if needed
 	statsHistoryFile := filepath.Join(cfg.Coordinator.DataDir, "stats_history.json")
-	if migrated, err := systemStore.MigrateFromFile(statsHistoryFile, s3.StatsHistoryPath); err != nil {
+	if migrated, err := systemStore.MigrateFromFile(ctx, statsHistoryFile, s3.StatsHistoryPath); err != nil {
 		log.Warn().Err(err).Msg("failed to migrate stats history to S3")
 	} else if migrated {
 		log.Info().Msg("migrated stats history from file to S3")
@@ -1084,14 +1095,14 @@ func (s *Server) recoverCoordinatorState(cfg *config.PeerConfig, systemStore *s3
 	}
 
 	// Recover WireGuard concentrator assignment
-	if concentrator, err := systemStore.LoadWGConcentrator(); err == nil && concentrator != "" {
+	if concentrator, err := systemStore.LoadWGConcentrator(ctx); err == nil && concentrator != "" {
 		log.Info().Str("peer", concentrator).Msg("recovering WireGuard concentrator assignment")
 		// Store in relay manager - will be validated when peer reconnects
 		s.relay.RecoverWGConcentrator(concentrator)
 	}
 
 	// Recover DNS cache if available
-	if dnsCache, err := systemStore.LoadDNSCache(); err == nil && len(dnsCache) > 0 {
+	if dnsCache, err := systemStore.LoadDNSCache(ctx); err == nil && len(dnsCache) > 0 {
 		log.Info().Int("entries", len(dnsCache)).Msg("recovering DNS cache")
 		s.peersMu.Lock()
 		for hostname, meshIP := range dnsCache {
@@ -1101,7 +1112,7 @@ func (s *Server) recoverCoordinatorState(cfg *config.PeerConfig, systemStore *s3
 	}
 
 	// Recover DNS aliases if available
-	if _, aliasOwner, err := systemStore.LoadDNSAliases(); err == nil && len(aliasOwner) > 0 {
+	if _, aliasOwner, err := systemStore.LoadDNSAliases(ctx); err == nil && len(aliasOwner) > 0 {
 		log.Info().Int("aliases", len(aliasOwner)).Msg("recovering DNS aliases")
 		s.peersMu.Lock()
 		for alias, owner := range aliasOwner {
@@ -1182,7 +1193,7 @@ func (s *Server) ensureBuiltinGroupBindings() {
 
 		// Persist if we added any bindings
 		if modified {
-			if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
+			if err := s.s3SystemStore.SaveGroupBindings(context.Background(), s.s3Authorizer.GroupBindings.List()); err != nil {
 				log.Warn().Err(err).Msg("failed to persist builtin group bindings")
 			}
 		}
@@ -1384,7 +1395,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Load persisted peers once at the start to avoid race conditions and improve performance
 	// Previously: LoadPeers() was called 3 times (lines 1393, 1420, and during group checks)
 	// This cache prevents race conditions where two peers register simultaneously
-	persistedPeers, _ := s.s3SystemStore.LoadPeers()
+	persistedPeers, _ := s.s3SystemStore.LoadPeers(context.Background())
 
 	// Check for hostname collision with different public key
 	// Important: Check both active peers AND persisted peers to prevent admin spoofing
@@ -1629,7 +1640,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 			// Save groups once after all modifications (prevents redundant S3 writes)
 			if groupsModified {
-				if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+				if err := s.s3SystemStore.SaveGroups(context.Background(), s.s3Authorizer.Groups.List()); err != nil {
 					log.Error().Err(err).Msg("failed to persist groups after peer registration")
 				} else {
 					log.Debug().Str("peer", req.Name).Msg("persisted group changes to S3")
@@ -1901,7 +1912,7 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 // updatePeerRecord creates or updates a peer record in the peer store.
 // This is called during peer registration to ensure the peer exists in the peer list.
 func (s *Server) updatePeerRecord(peerID, peerName, publicKey string, isNewPeer bool) {
-	peers, err := s.s3SystemStore.LoadPeers()
+	peers, err := s.s3SystemStore.LoadPeers(context.Background())
 	if err != nil {
 		log.Warn().Err(err).Str("peer_id", peerID).Msg("failed to load peers for update")
 		peers = []*auth.Peer{}
@@ -1934,7 +1945,7 @@ func (s *Server) updatePeerRecord(peerID, peerName, publicKey string, isNewPeer 
 		log.Debug().Str("peer_id", peerID).Str("name", peerName).Msg("created peer record")
 	}
 
-	if err := s.s3SystemStore.SavePeers(peers); err != nil {
+	if err := s.s3SystemStore.SavePeers(context.Background(), peers); err != nil {
 		log.Warn().Err(err).Str("peer_id", peerID).Msg("failed to save peers")
 	} else {
 		// Refresh peer name cache after adding new peer

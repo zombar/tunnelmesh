@@ -2,6 +2,7 @@
 package s3
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -82,7 +83,7 @@ func NewCAS(chunksDir string, masterKey [32]byte) (*CAS, error) {
 // WriteChunk stores a chunk and returns its content hash.
 // If the chunk already exists (same content), it returns immediately (dedup).
 // Pipeline: plaintext -> compress -> encrypt -> store
-func (c *CAS) WriteChunk(data []byte) (string, error) {
+func (c *CAS) WriteChunk(ctx context.Context, data []byte) (string, error) {
 	// Compute hash on plaintext for content addressing
 	hash := c.contentHash(data)
 	chunkPath := c.chunkPath(hash)
@@ -132,7 +133,7 @@ func (c *CAS) WriteChunk(data []byte) (string, error) {
 
 // ReadChunk retrieves and decrypts a chunk by its hash.
 // Pipeline: read -> decrypt -> decompress -> verify hash -> return plaintext
-func (c *CAS) ReadChunk(hash string) ([]byte, error) {
+func (c *CAS) ReadChunk(ctx context.Context, hash string) ([]byte, error) {
 	chunkPath := c.chunkPath(hash)
 
 	c.mu.RLock()
@@ -168,7 +169,7 @@ func (c *CAS) ReadChunk(hash string) ([]byte, error) {
 }
 
 // DeleteChunk removes a chunk from storage.
-func (c *CAS) DeleteChunk(hash string) error {
+func (c *CAS) DeleteChunk(ctx context.Context, hash string) error {
 	chunkPath := c.chunkPath(hash)
 
 	c.mu.Lock()
@@ -188,7 +189,7 @@ func (c *CAS) ChunkExists(hash string) bool {
 }
 
 // ChunkSize returns the size of a chunk on disk (encrypted size).
-func (c *CAS) ChunkSize(hash string) (int64, error) {
+func (c *CAS) ChunkSize(ctx context.Context, hash string) (int64, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -200,7 +201,7 @@ func (c *CAS) ChunkSize(hash string) (int64, error) {
 }
 
 // TotalSize returns the total size of all chunks in storage.
-func (c *CAS) TotalSize() (int64, error) {
+func (c *CAS) TotalSize(ctx context.Context) (int64, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 

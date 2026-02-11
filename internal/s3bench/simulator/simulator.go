@@ -516,7 +516,7 @@ func (s *Simulator) executeUpload(ctx context.Context, store *s3.Store, session 
 
 	// Upload to S3 (direct store access - bypasses HTTP/auth)
 	reader := bytes.NewReader(task.Content)
-	_, err := store.PutObject(bucket, task.Filename, reader, int64(len(task.Content)), task.ContentType, metadata)
+	_, err := store.PutObject(context.Background(), bucket, task.Filename, reader, int64(len(task.Content)), task.ContentType, metadata)
 	if err != nil {
 		return fmt.Errorf("putting object %s/%s: %w", bucket, task.Filename, err)
 	}
@@ -578,7 +578,7 @@ func (s *Simulator) executeDelete(ctx context.Context, store *s3.Store, session 
 	}
 
 	// Delete object (creates deletion marker/tombstone)
-	err := store.DeleteObject(bucket, task.Filename)
+	err := store.DeleteObject(context.Background(), bucket, task.Filename)
 	if err != nil {
 		return fmt.Errorf("deleting object %s/%s: %w", bucket, task.Filename, err)
 	}
@@ -627,7 +627,7 @@ func (s *Simulator) executeDownload(ctx context.Context, store *s3.Store, sessio
 	}
 
 	// Get object
-	reader, _, err := store.GetObject(bucket, task.Filename)
+	reader, _, err := store.GetObject(context.Background(), bucket, task.Filename)
 	if err != nil {
 		return nil, fmt.Errorf("getting object %s/%s: %w", bucket, task.Filename, err)
 	}
@@ -818,25 +818,25 @@ func (s *Simulator) executeWorkflowDeletion(ctx context.Context, store *s3.Store
 
 	// 1. Upload test document
 	reader := bytes.NewReader(content)
-	_, err := store.PutObject(bucket, docName, reader, int64(len(content)), "text/plain", nil)
+	_, err := store.PutObject(context.Background(), bucket, docName, reader, int64(len(content)), "text/plain", nil)
 	if err != nil {
 		return false, fmt.Errorf("upload failed: %w", err)
 	}
 
 	// 2. Verify it exists
-	_, _, err = store.GetObject(bucket, docName)
+	_, _, err = store.GetObject(context.Background(), bucket, docName)
 	if err != nil {
 		return false, fmt.Errorf("document not found after upload: %w", err)
 	}
 
 	// 3. Delete document
-	err = store.DeleteObject(bucket, docName)
+	err = store.DeleteObject(context.Background(), bucket, docName)
 	if err != nil {
 		return false, fmt.Errorf("deletion failed: %w", err)
 	}
 
 	// 4. Verify access is denied (tombstone) - should return ObjectNotFound or similar error
-	_, _, err = store.GetObject(bucket, docName)
+	_, _, err = store.GetObject(context.Background(), bucket, docName)
 	if err == nil {
 		// Document might still be accessible if it's just a deletion marker
 		// Check if it's the latest version or a deletion marker
@@ -903,14 +903,14 @@ func (s *Simulator) executeWorkflowRetention(ctx context.Context, store *s3.Stor
 	for i := 0; i < 3; i++ {
 		content := []byte(fmt.Sprintf("Version %d content", i+1))
 		reader := bytes.NewReader(content)
-		_, err := store.PutObject(bucket, docName, reader, int64(len(content)), "text/plain", nil)
+		_, err := store.PutObject(context.Background(), bucket, docName, reader, int64(len(content)), "text/plain", nil)
 		if err != nil {
 			return false, fmt.Errorf("version %d upload failed: %w", i+1, err)
 		}
 	}
 
 	// Verify we can list versions (basic check)
-	versions, err := store.ListVersions(bucket, docName)
+	versions, err := store.ListVersions(context.Background(), bucket, docName)
 	if err != nil {
 		return false, fmt.Errorf("list versions failed: %w", err)
 	}

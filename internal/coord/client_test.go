@@ -20,7 +20,7 @@ func TestClient_Register(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -45,7 +45,7 @@ func TestClient_RegisterWithLocation(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -80,7 +80,7 @@ func TestClient_ListPeers(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -109,7 +109,7 @@ func TestClient_Deregister(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -139,7 +139,7 @@ func TestClient_GetDNSRecords(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -165,7 +165,7 @@ func TestClient_RegisterWithRetry_SuccessOnFirstTry(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
@@ -281,7 +281,7 @@ func TestClient_RegisterWithRetry_ContextCancelled(t *testing.T) {
 	_, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", []string{}, []string{}, 2222, 2223, false, "v1.0.0", nil, "", false, []string{}, false, retryCfg)
 	require.Error(t, err)
 
-	assert.Equal(t, context.Canceled, err)
+	assert.ErrorIs(t, err, context.Canceled, "error should wrap context.Canceled")
 	assert.LessOrEqual(t, attempts.Load(), int32(2), "should stop early due to cancellation")
 }
 
@@ -332,7 +332,7 @@ func TestServer_GeolocationOnlyOnNewOrChangedIP(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	// Replace the geolocation cache with one pointing to our mock server
 	srv.ipGeoCache = NewIPGeoCache(geoServer.URL + "/json/")
@@ -384,7 +384,7 @@ func TestServer_ManualLocationPreservedOnIPChange(t *testing.T) {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()

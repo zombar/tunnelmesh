@@ -46,11 +46,11 @@ func newTestServer(t *testing.T) *Server {
 	cfg.Coordinator.Enabled = true
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	// Automatically shutdown server when test completes to prevent resource leaks
 	t.Cleanup(func() {
-		_ = srv.Shutdown()
+		_ = srv.Shutdown(context.Background())
 	})
 
 	return srv
@@ -569,10 +569,10 @@ func newTestServerWithWireGuard(t *testing.T) *Server {
 
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	t.Cleanup(func() {
-		_ = srv.Shutdown()
+		_ = srv.Shutdown(context.Background())
 	})
 
 	return srv
@@ -1039,7 +1039,7 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 
 	// Persist to system store
 	users := []*auth.Peer{{ID: testPeerID, PublicKey: testPubKey, Name: "Test User"}}
-	err = srv1.s3SystemStore.SavePeers(users)
+	err = srv1.s3SystemStore.SavePeers(context.Background(), users)
 	require.NoError(t, err)
 
 	bindings := srv1.s3Authorizer.Bindings.List()
@@ -1050,7 +1050,7 @@ func TestServer_S3UserRecoveryOnRestart(t *testing.T) {
 			peerBindings = append(peerBindings, b)
 		}
 	}
-	err = srv1.s3SystemStore.SaveBindings(peerBindings)
+	err = srv1.s3SystemStore.SaveBindings(context.Background(), peerBindings)
 	require.NoError(t, err)
 
 	// Create second server instance (simulating restart)
@@ -1093,10 +1093,10 @@ func newTestServerWithS3(t *testing.T) *Server {
 	}
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	t.Cleanup(func() {
-		_ = srv.Shutdown()
+		_ = srv.Shutdown(context.Background())
 	})
 
 	return srv
@@ -1280,14 +1280,14 @@ func TestServer_FilterRulesPersistence(t *testing.T) {
 	})
 
 	// Save filter rules
-	err := srv.SaveFilterRules()
+	err := srv.SaveFilterRules(context.Background())
 	require.NoError(t, err)
 
 	// Verify rules were saved
-	assert.True(t, srv.s3SystemStore.Exists(s3.FilterRulesPath))
+	assert.True(t, srv.s3SystemStore.Exists(context.Background(), s3.FilterRulesPath))
 
 	// Load and verify
-	loaded, err := srv.s3SystemStore.LoadFilterRules()
+	loaded, err := srv.s3SystemStore.LoadFilterRules(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, loaded.Temporary, 2)
 }
@@ -1343,7 +1343,7 @@ func TestServer_FilterRulesRecoveryFiltersExpired(t *testing.T) {
 	})
 
 	// Save rules
-	err = srv1.SaveFilterRules()
+	err = srv1.SaveFilterRules(context.Background())
 	require.NoError(t, err)
 
 	// Create second server (simulating restart)
@@ -1408,11 +1408,11 @@ func TestServer_SaveFilterRulesFiltersExpired(t *testing.T) {
 	})
 
 	// Save - should filter out expired rule
-	err := srv.SaveFilterRules()
+	err := srv.SaveFilterRules(context.Background())
 	require.NoError(t, err)
 
 	// Load and verify expired rule was not persisted
-	loaded, err := srv.s3SystemStore.LoadFilterRules()
+	loaded, err := srv.s3SystemStore.LoadFilterRules(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, loaded.Temporary, 1, "expired rule should not be saved")
 	assert.Equal(t, uint16(80), loaded.Temporary[0].Port)

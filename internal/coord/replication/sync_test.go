@@ -53,10 +53,15 @@ func TestSyncRequest_EmptyStore(t *testing.T) {
 		t.Fatalf("Failed to handle sync request: %v", err)
 	}
 
-	// Verify response was sent
-	time.Sleep(100 * time.Millisecond)
-	responseData := transport.getLastSent("coord2")
-	if responseData == nil {
+	// Wait for response to be sent
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	var responseData []byte
+	err = waitFor(ctx, 10*time.Millisecond, func() bool {
+		responseData = transport.getLastSent("coord2")
+		return responseData != nil
+	})
+	if err != nil {
 		t.Fatal("Expected sync response to be sent")
 	}
 
@@ -134,10 +139,15 @@ func TestSyncRequest_WithData(t *testing.T) {
 		t.Fatalf("Failed to handle sync request: %v", err)
 	}
 
-	// Verify response was sent
-	time.Sleep(100 * time.Millisecond)
-	responseData := transport.getLastSent("coord2")
-	if responseData == nil {
+	// Wait for response to be sent
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	var responseData []byte
+	err = waitFor(ctx, 10*time.Millisecond, func() bool {
+		responseData = transport.getLastSent("coord2")
+		return responseData != nil
+	})
+	if err != nil {
 		t.Fatal("Expected sync response to be sent")
 	}
 
@@ -233,7 +243,6 @@ func TestSyncRequest_SpecificBuckets(t *testing.T) {
 		t.Fatalf("Failed to handle sync request: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
 	responseData := transport.getLastSent("coord2")
 	responseMsg, _ := UnmarshalMessage(responseData)
 	responsePayload, _ := responseMsg.DecodeSyncResponsePayload()
@@ -318,7 +327,6 @@ func TestSyncResponse_ApplyState(t *testing.T) {
 	}
 
 	// Verify objects were added to S3
-	time.Sleep(100 * time.Millisecond)
 	if countObjects(s3) != 2 {
 		t.Fatalf("Expected 2 objects in S3, got %d", countObjects(s3))
 	}
@@ -409,7 +417,6 @@ func TestSyncResponse_SkipOlderObjects(t *testing.T) {
 	}
 
 	// Verify local data was NOT overwritten (local is newer)
-	time.Sleep(100 * time.Millisecond)
 	data, _, err := s3.Get(ctx, "bucket1", "key1")
 	if err != nil {
 		t.Fatalf("Failed to get key1: %v", err)
@@ -456,7 +463,6 @@ func TestRequestSync(t *testing.T) {
 	}
 
 	// Verify message was sent
-	time.Sleep(50 * time.Millisecond)
 	msgData := transport.getLastSent("10.42.0.2")
 	if msgData == nil {
 		t.Fatal("Expected sync request to be sent")
@@ -516,7 +522,6 @@ func TestRequestSyncFromAll(t *testing.T) {
 	}
 
 	// Verify messages were sent to all peers
-	time.Sleep(100 * time.Millisecond)
 	msg2 := transport.getLastSent("10.42.0.2")
 	msg3 := transport.getLastSent("10.42.0.3")
 
@@ -606,7 +611,6 @@ func TestFullSyncRoundtrip(t *testing.T) {
 	}
 
 	// Wait for coord1 to process and send response
-	time.Sleep(100 * time.Millisecond)
 
 	// Deliver sync response from transport1 back to coord2
 	syncResponse := transport1.getLastSent("coord2")
@@ -618,7 +622,6 @@ func TestFullSyncRoundtrip(t *testing.T) {
 	}
 
 	// Wait for coord2 to process the response
-	time.Sleep(100 * time.Millisecond)
 
 	// Verify coord2 now has the data
 	if countObjects(s3_2) != 2 {

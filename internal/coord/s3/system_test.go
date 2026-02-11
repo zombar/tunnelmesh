@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ func TestNewSystemStore(t *testing.T) {
 	require.NoError(t, err)
 
 	// System bucket should exist
-	meta, err := store.HeadBucket(SystemBucket)
+	meta, err := store.HeadBucket(context.Background(), SystemBucket)
 	require.NoError(t, err)
 	assert.Equal(t, SystemBucket, meta.Name)
 	assert.Equal(t, "svc:coordinator", meta.Owner)
@@ -29,7 +30,7 @@ func TestNewSystemStoreExistingBucket(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 
 	// Pre-create the system bucket
-	require.NoError(t, store.CreateBucket(SystemBucket, "svc:coordinator"))
+	require.NoError(t, store.CreateBucket(context.Background(), SystemBucket, "svc:coordinator"))
 
 	// Should not error when bucket exists
 	ss, err := NewSystemStore(store, "svc:coordinator")
@@ -47,10 +48,10 @@ func TestSystemStoreSaveLoadPeers(t *testing.T) {
 		{ID: "bob", Name: "Bob", PublicKey: "pk2", CreatedAt: time.Now().UTC()},
 	}
 
-	err = ss.SavePeers(peers)
+	err = ss.SavePeers(context.Background(), peers)
 	require.NoError(t, err)
 
-	loaded, err := ss.LoadPeers()
+	loaded, err := ss.LoadPeers(context.Background())
 	require.NoError(t, err)
 	require.Len(t, loaded, 2)
 	assert.Equal(t, "alice", loaded[0].ID)
@@ -63,7 +64,7 @@ func TestSystemStoreLoadPeersNotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should return nil (not error) when not found
-	loaded, err := ss.LoadPeers()
+	loaded, err := ss.LoadPeers(context.Background())
 	require.NoError(t, err)
 	assert.Nil(t, loaded)
 }
@@ -77,10 +78,10 @@ func TestSystemStoreSaveLoadRoles(t *testing.T) {
 		{Name: "custom-role", Rules: []auth.Rule{{Verbs: []string{"get"}, Resources: []string{"buckets"}}}},
 	}
 
-	err = ss.SaveRoles(roles)
+	err = ss.SaveRoles(context.Background(), roles)
 	require.NoError(t, err)
 
-	loaded, err := ss.LoadRoles()
+	loaded, err := ss.LoadRoles(context.Background())
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
 	assert.Equal(t, "custom-role", loaded[0].Name)
@@ -96,10 +97,10 @@ func TestSystemStoreSaveLoadBindings(t *testing.T) {
 		{Name: "b2", PeerID: "bob", RoleName: "bucket-read", BucketScope: "my-bucket"},
 	}
 
-	err = ss.SaveBindings(bindings)
+	err = ss.SaveBindings(context.Background(), bindings)
 	require.NoError(t, err)
 
-	loaded, err := ss.LoadBindings()
+	loaded, err := ss.LoadBindings(context.Background())
 	require.NoError(t, err)
 	require.Len(t, loaded, 2)
 	assert.Equal(t, "alice", loaded[0].PeerID)
@@ -120,11 +121,11 @@ func TestSystemStoreSaveLoadStatsHistory(t *testing.T) {
 		},
 	}
 
-	err = ss.SaveStatsHistory(stats)
+	err = ss.SaveStatsHistory(context.Background(), stats)
 	require.NoError(t, err)
 
 	var loaded map[string][]map[string]interface{}
-	err = ss.LoadStatsHistory(&loaded)
+	err = ss.LoadStatsHistory(context.Background(), &loaded)
 	require.NoError(t, err)
 	require.Contains(t, loaded, "peer1")
 	assert.Len(t, loaded["peer1"], 2)
@@ -140,11 +141,11 @@ func TestSystemStoreSaveLoadWireGuardClients(t *testing.T) {
 		{"id": "client2", "name": "phone", "ip": "172.30.100.2"},
 	}
 
-	err = ss.SaveWireGuardClients(clients)
+	err = ss.SaveWireGuardClients(context.Background(), clients)
 	require.NoError(t, err)
 
 	var loaded []map[string]interface{}
-	err = ss.LoadWireGuardClients(&loaded)
+	err = ss.LoadWireGuardClients(context.Background(), &loaded)
 	require.NoError(t, err)
 	require.Len(t, loaded, 2)
 }
@@ -155,14 +156,14 @@ func TestSystemStoreExists(t *testing.T) {
 	require.NoError(t, err)
 
 	// Initially doesn't exist
-	assert.False(t, ss.Exists(PeersPath))
+	assert.False(t, ss.Exists(context.Background(), PeersPath))
 
 	// Save users
-	err = ss.SavePeers([]*auth.Peer{{ID: "test", Name: "Test"}})
+	err = ss.SavePeers(context.Background(), []*auth.Peer{{ID: "test", Name: "Test"}})
 	require.NoError(t, err)
 
 	// Now exists
-	assert.True(t, ss.Exists(PeersPath))
+	assert.True(t, ss.Exists(context.Background(), PeersPath))
 }
 
 func TestSystemStoreDelete(t *testing.T) {
@@ -171,13 +172,13 @@ func TestSystemStoreDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Save and then delete
-	err = ss.SavePeers([]*auth.Peer{{ID: "test", Name: "Test"}})
+	err = ss.SavePeers(context.Background(), []*auth.Peer{{ID: "test", Name: "Test"}})
 	require.NoError(t, err)
-	assert.True(t, ss.Exists(PeersPath))
+	assert.True(t, ss.Exists(context.Background(), PeersPath))
 
-	err = ss.Delete(PeersPath)
+	err = ss.Delete(context.Background(), PeersPath)
 	require.NoError(t, err)
-	assert.False(t, ss.Exists(PeersPath))
+	assert.False(t, ss.Exists(context.Background(), PeersPath))
 }
 
 func TestSystemStoreDeleteNotFound(t *testing.T) {
@@ -185,7 +186,7 @@ func TestSystemStoreDeleteNotFound(t *testing.T) {
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
-	err = ss.Delete("nonexistent.json")
+	err = ss.Delete(context.Background(), "nonexistent.json")
 	assert.ErrorIs(t, err, ErrObjectNotFound)
 }
 
@@ -203,10 +204,10 @@ func TestSystemStoreSaveLoadFilterRules(t *testing.T) {
 		},
 	}
 
-	err = ss.SaveFilterRules(rules)
+	err = ss.SaveFilterRules(context.Background(), rules)
 	require.NoError(t, err)
 
-	loaded, err := ss.LoadFilterRules()
+	loaded, err := ss.LoadFilterRules(context.Background())
 	require.NoError(t, err)
 	require.Len(t, loaded.Temporary, 3)
 	assert.Equal(t, uint16(22), loaded.Temporary[0].Port)
@@ -224,7 +225,7 @@ func TestSystemStoreLoadFilterRulesNotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should return empty struct (not error) when not found
-	loaded, err := ss.LoadFilterRules()
+	loaded, err := ss.LoadFilterRules(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 	assert.Nil(t, loaded.Temporary)
@@ -243,11 +244,11 @@ func TestSystemStoreFilterRulesWithExpiry(t *testing.T) {
 		},
 	}
 
-	err = ss.SaveFilterRules(rules)
+	err = ss.SaveFilterRules(context.Background(), rules)
 	require.NoError(t, err)
 
 	// Verify expired rules are still in storage (filtering happens in server.go recoverFilterRules)
-	loaded, err := ss.LoadFilterRules()
+	loaded, err := ss.LoadFilterRules(context.Background())
 	require.NoError(t, err)
 	require.Len(t, loaded.Temporary, 1)
 	assert.Equal(t, pastTime, loaded.Temporary[0].Expires)
@@ -263,10 +264,10 @@ func TestSystemStoreFilterRulesEmptyArray(t *testing.T) {
 		Temporary: []FilterRulePersisted{},
 	}
 
-	err = ss.SaveFilterRules(rules)
+	err = ss.SaveFilterRules(context.Background(), rules)
 	require.NoError(t, err)
 
-	loaded, err := ss.LoadFilterRules()
+	loaded, err := ss.LoadFilterRules(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, loaded.Temporary)
 	assert.Len(t, loaded.Temporary, 0)
@@ -291,10 +292,10 @@ func TestSystemStoreSaveLoadGroups(t *testing.T) {
 		},
 	}
 
-	err = ss.SaveGroups(groups)
+	err = ss.SaveGroups(context.Background(), groups)
 	require.NoError(t, err)
 
-	loaded, err := ss.LoadGroups()
+	loaded, err := ss.LoadGroups(context.Background())
 	require.NoError(t, err)
 	require.Len(t, loaded, 2)
 	assert.Equal(t, "admins", loaded[0].Name)
@@ -312,7 +313,7 @@ func TestSystemStoreLoadGroupsNotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should return nil (not error) when not found
-	loaded, err := ss.LoadGroups()
+	loaded, err := ss.LoadGroups(context.Background())
 	require.NoError(t, err)
 	assert.Nil(t, loaded)
 }
@@ -331,10 +332,10 @@ func TestSystemStoreSaveGroupsEmpty(t *testing.T) {
 		},
 	}
 
-	err = ss.SaveGroups(groups)
+	err = ss.SaveGroups(context.Background(), groups)
 	require.NoError(t, err)
 
-	loaded, err := ss.LoadGroups()
+	loaded, err := ss.LoadGroups(context.Background())
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
 	assert.Equal(t, "empty-group", loaded[0].Name)
@@ -355,16 +356,16 @@ func TestSystemStoreSaveGroupsPersistence(t *testing.T) {
 		},
 	}
 
-	err = ss.SaveGroups(groups)
+	err = ss.SaveGroups(context.Background(), groups)
 	require.NoError(t, err)
 
 	// Add another member
 	groups[0].Members = append(groups[0].Members, "user2")
-	err = ss.SaveGroups(groups)
+	err = ss.SaveGroups(context.Background(), groups)
 	require.NoError(t, err)
 
 	// Verify both members persisted
-	loaded, err := ss.LoadGroups()
+	loaded, err := ss.LoadGroups(context.Background())
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
 	assert.Len(t, loaded[0].Members, 2)
@@ -383,10 +384,10 @@ func TestSystemStoreSaveLoadGroupBindings(t *testing.T) {
 		{Name: "gb3", GroupName: "testers", RoleName: "bucket-read", BucketScope: "test-bucket", ObjectPrefix: "data/"},
 	}
 
-	err = ss.SaveGroupBindings(bindings)
+	err = ss.SaveGroupBindings(context.Background(), bindings)
 	require.NoError(t, err)
 
-	loaded, err := ss.LoadGroupBindings()
+	loaded, err := ss.LoadGroupBindings(context.Background())
 	require.NoError(t, err)
 	require.Len(t, loaded, 3)
 	assert.Equal(t, "admins", loaded[0].GroupName)
@@ -403,7 +404,7 @@ func TestSystemStoreLoadGroupBindingsNotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should return nil (not error) when not found
-	loaded, err := ss.LoadGroupBindings()
+	loaded, err := ss.LoadGroupBindings(context.Background())
 	require.NoError(t, err)
 	assert.Nil(t, loaded)
 }
@@ -414,10 +415,10 @@ func TestSystemStoreSaveGroupBindingsEmpty(t *testing.T) {
 	require.NoError(t, err)
 
 	// Save empty array
-	err = ss.SaveGroupBindings([]*auth.GroupBinding{})
+	err = ss.SaveGroupBindings(context.Background(), []*auth.GroupBinding{})
 	require.NoError(t, err)
 
-	loaded, err := ss.LoadGroupBindings()
+	loaded, err := ss.LoadGroupBindings(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 	assert.Len(t, loaded, 0)
@@ -443,11 +444,11 @@ func TestSystemStoreSaveLoadIPAllocations(t *testing.T) {
 	}
 
 	// Save
-	err = ss.SaveIPAllocations(data)
+	err = ss.SaveIPAllocations(context.Background(), data)
 	require.NoError(t, err)
 
 	// Load
-	loaded, err := ss.LoadIPAllocations()
+	loaded, err := ss.LoadIPAllocations(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 
@@ -463,7 +464,7 @@ func TestSystemStoreLoadIPAllocationsNotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should return nil (not error) when not found
-	loaded, err := ss.LoadIPAllocations()
+	loaded, err := ss.LoadIPAllocations(context.Background())
 	require.NoError(t, err)
 	assert.NotNil(t, loaded) // Returns empty struct with initialized maps
 	assert.NotNil(t, loaded.Used)
@@ -484,10 +485,10 @@ func TestSystemStoreSaveIPAllocationsEmpty(t *testing.T) {
 		Next:     1,
 	}
 
-	err = ss.SaveIPAllocations(data)
+	err = ss.SaveIPAllocations(context.Background(), data)
 	require.NoError(t, err)
 
-	loaded, err := ss.LoadIPAllocations()
+	loaded, err := ss.LoadIPAllocations(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 	assert.Len(t, loaded.Used, 0)
