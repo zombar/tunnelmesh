@@ -624,6 +624,17 @@ func (s *Server) Shutdown() error {
 
 	var errs []error
 
+	// Stop admin server if running
+	if s.adminServer != nil {
+		log.Info().Msg("stopping admin server")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.adminServer.Shutdown(ctx); err != nil {
+			log.Error().Err(err).Msg("failed to stop admin server")
+			errs = append(errs, fmt.Errorf("stop admin server: %w", err))
+		}
+	}
+
 	// Save stats history
 	if err := s.SaveStatsHistory(); err != nil {
 		log.Error().Err(err).Msg("failed to save stats history")
