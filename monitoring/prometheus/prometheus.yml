@@ -19,3 +19,13 @@ scrape_configs:
       - files:
           - '/targets/peers.json'
         refresh_interval: 30s
+
+  # Coordinator metrics (S3, relay, stats)
+  - job_name: 'tunnelmesh-coordinator'
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    static_configs:
+      - targets: ['10.85.0.1:443']  # Coordinator mesh IP
+    metrics_path: '/metrics'
+    scrape_interval: 15s

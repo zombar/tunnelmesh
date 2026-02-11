@@ -29,6 +29,16 @@ type CoordMetrics struct {
 
 	// Heartbeat stats
 	TotalHeartbeats prometheus.Counter
+
+	// Network stats persistence metrics
+	networkStatsSaveTotal    prometheus.Counter
+	networkStatsSaveErrors   *prometheus.CounterVec
+	networkStatsSaveDuration prometheus.Histogram
+	networkStatsLastSave     *prometheus.GaugeVec
+	statsHistorySaveTotal    prometheus.Counter
+	statsHistorySaveErrors   *prometheus.CounterVec
+	statsHistorySaveDuration prometheus.Histogram
+	statsCorruptionDetected  *prometheus.CounterVec
 }
 
 // InitCoordMetrics initializes all coordinator metrics.
@@ -60,6 +70,44 @@ func InitCoordMetrics(registry prometheus.Registerer) *CoordMetrics {
 				Name: "tunnelmesh_coordinator_heartbeats_total",
 				Help: "Total heartbeats received by coordinator",
 			}),
+
+			// Network stats persistence metrics (per-peer granularity)
+			networkStatsSaveTotal: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_network_stats_save_total",
+				Help: "Total successful network stats saves",
+			}),
+			networkStatsSaveErrors: promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
+				Name: "tunnelmesh_network_stats_save_errors_total",
+				Help: "Total network stats save errors",
+			}, []string{"peer", "error_type"}),
+			networkStatsSaveDuration: promauto.With(registry).NewHistogram(prometheus.HistogramOpts{
+				Name:    "tunnelmesh_network_stats_save_duration_seconds",
+				Help:    "Network stats save latency in seconds",
+				Buckets: prometheus.DefBuckets,
+			}),
+			networkStatsLastSave: promauto.With(registry).NewGaugeVec(prometheus.GaugeOpts{
+				Name: "tunnelmesh_network_stats_last_save_timestamp",
+				Help: "Unix timestamp of last network stats save per peer",
+			}, []string{"peer"}),
+
+			// Coordinator aggregate stats operations (across all peers)
+			statsHistorySaveTotal: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_coordinator_stats_history_save_total",
+				Help: "Total successful stats history saves",
+			}),
+			statsHistorySaveErrors: promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
+				Name: "tunnelmesh_coordinator_stats_history_save_errors_total",
+				Help: "Total stats history save errors",
+			}, []string{"error_type"}),
+			statsHistorySaveDuration: promauto.With(registry).NewHistogram(prometheus.HistogramOpts{
+				Name:    "tunnelmesh_coordinator_stats_history_save_duration_seconds",
+				Help:    "Stats history save latency in seconds",
+				Buckets: prometheus.DefBuckets,
+			}),
+			statsCorruptionDetected: promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
+				Name: "tunnelmesh_coordinator_stats_corruption_detected_total",
+				Help: "Total stats corruption events detected",
+			}, []string{"stats_type"}),
 		}
 	})
 

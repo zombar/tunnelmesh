@@ -179,7 +179,7 @@ func TestStatsHistory_SaveLoad(t *testing.T) {
 	})
 
 	// Save
-	if err := sh1.Save(path, nil); err != nil {
+	if _, err := sh1.Save(path, nil); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
@@ -244,7 +244,7 @@ func TestStatsHistory_LoadExpiredData(t *testing.T) {
 		BytesSentRate: 200,
 	})
 
-	if err := sh1.Save(path, nil); err != nil {
+	if _, err := sh1.Save(path, nil); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
@@ -290,7 +290,7 @@ func TestStatsHistory_FileSizeLimit(t *testing.T) {
 	}
 
 	// Save and check file size
-	if err := sh.Save(path, nil); err != nil {
+	if _, err := sh.Save(path, nil); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
@@ -372,7 +372,7 @@ func TestStatsHistory_SaveLoadRoundTrip(t *testing.T) {
 	}
 
 	// Save
-	if err := sh1.Save(path, nil); err != nil {
+	if _, err := sh1.Save(path, nil); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
@@ -427,7 +427,7 @@ func TestStatsHistory_MultipleSaveLoadCycles(t *testing.T) {
 		}
 
 		// Save
-		if err := sh.Save(path, nil); err != nil {
+		if _, err := sh.Save(path, nil); err != nil {
 			t.Fatalf("cycle %d: save failed: %v", cycle, err)
 		}
 	}
@@ -507,7 +507,7 @@ func TestStatsHistory_SaveOverwritesExisting(t *testing.T) {
 		Timestamp:     now,
 		BytesSentRate: 100,
 	})
-	if err := sh1.Save(path, nil); err != nil {
+	if _, err := sh1.Save(path, nil); err != nil {
 		t.Fatalf("first save failed: %v", err)
 	}
 
@@ -517,7 +517,7 @@ func TestStatsHistory_SaveOverwritesExisting(t *testing.T) {
 		Timestamp:     now,
 		BytesSentRate: 200,
 	})
-	if err := sh2.Save(path, nil); err != nil {
+	if _, err := sh2.Save(path, nil); err != nil {
 		t.Fatalf("second save failed: %v", err)
 	}
 
@@ -568,7 +568,7 @@ func TestStatsHistory_ConcurrentRecordAndSave(t *testing.T) {
 	wg.Wait()
 
 	// Save after all concurrent writes complete
-	if err := sh.Save(path, nil); err != nil {
+	if _, err := sh.Save(path, nil); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
@@ -611,7 +611,7 @@ func TestStatsHistory_PeerWithAllExpiredData(t *testing.T) {
 		BytesSentRate: 200,
 	})
 
-	if err := sh1.Save(path, nil); err != nil {
+	if _, err := sh1.Save(path, nil); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 

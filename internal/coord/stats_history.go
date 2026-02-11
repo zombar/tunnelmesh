@@ -161,11 +161,23 @@ type persistedHistory struct {
 }
 
 // Save persists the stats history to S3 or a JSON file.
+// SaveResult contains per-peer save results for metrics tracking.
+type SaveResult struct {
+	SavedPeers []string
+	ErrorPeers []string
+}
+
 // If s3Store is provided, saves each peer to stats/{coordinator}/{peer_name}.network.json.
 // Otherwise saves aggregated data to local file (fallback for non-S3 setups).
-func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) error {
+// Returns a SaveResult with peer names that were successfully saved and failed (for metrics tracking).
+func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) (*SaveResult, error) {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
+
+	result := &SaveResult{
+		SavedPeers: []string{},
+		ErrorPeers: []string{},
+	}
 
 	// Save to S3 - one file per peer as stats/{coordinator}/{peer_name}.network.json
 	if s3Store != nil {
@@ -184,11 +196,13 @@ func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) error {
 			peerPath := "stats/" + sh.coordinatorName + "/" + peerName + ".network.json"
 			if err := s3Store.SaveJSON(peerPath, peerHistory); err != nil {
 				log.Warn().Err(err).Str("peer", peerName).Msg("failed to save peer network stats to S3")
+				result.ErrorPeers = append(result.ErrorPeers, peerName)
 			} else {
 				log.Debug().Str("peer", peerName).Str("path", peerPath).Int("points", len(points)).Msg("saved peer network stats to S3")
+				result.SavedPeers = append(result.SavedPeers, peerName)
 			}
 		}
-		return nil
+		return result, nil
 	}
 
 	// Fallback to file-based persistence (aggregated)
@@ -205,15 +219,19 @@ func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) error {
 
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := os.WriteFile(path, jsonData, 0600); err != nil {
-		return err
+		return nil, err
 	}
 
 	log.Debug().Str("path", path).Msg("saved stats history to file")
-	return nil
+	// For file-based persistence, return all peers that had data
+	for peerName := range data.Peers {
+		result.SavedPeers = append(result.SavedPeers, peerName)
+	}
+	return result, nil
 }
 
 // Load restores stats history from S3 or a JSON file.

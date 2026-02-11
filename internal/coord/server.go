@@ -66,27 +66,28 @@ type serverStats struct {
 // This separation ensures the admin interface (dashboards, monitoring, config) is never
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
-	cfg          *config.PeerConfig
-	mux          *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
-	adminMux     *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
-	adminServer  *http.Server   // HTTPS server for adminMux, bound to mesh IP only
-	peers        map[string]*peerInfo
-	coordinators map[string]*peerInfo // Subset of peers that are coordinators, for O(1) lookups
-	peersMu      sync.RWMutex
-	ipAlloc      *ipAllocator
-	dnsCache     map[string]string // hostname -> mesh IP
-	aliasOwner   map[string]string // alias -> peer name (reverse lookup for ownership)
-	serverStats  serverStats
-	statsHistory *StatsHistory // Per-peer stats time series
-	relay        *relayManager
-	holePunch    *holePunchManager
-	wgStore      *wireguard.Store      // WireGuard client storage
-	ca           *CertificateAuthority // Internal CA for mesh TLS certs
-	version      string                // Server version for admin display
-	sseHub       *sseHub               // SSE hub for real-time dashboard updates
-	ipGeoCache   *IPGeoCache           // IP geolocation cache for location fallback
-	coordMeshIP  atomic.Value          // Coordinator's mesh IP (string) for "this.tunnelmesh" resolution
-	coordMetrics *CoordMetrics         // Prometheus metrics for coordinator
+	cfg             *config.PeerConfig
+	mux             *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
+	adminMux        *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
+	adminServer     *http.Server   // HTTPS server for adminMux, bound to mesh IP only
+	peers           map[string]*peerInfo
+	coordinators    map[string]*peerInfo // Subset of peers that are coordinators, for O(1) lookups
+	peersMu         sync.RWMutex
+	ipAlloc         *ipAllocator
+	dnsCache        map[string]string // hostname -> mesh IP
+	aliasOwner      map[string]string // alias -> peer name (reverse lookup for ownership)
+	serverStats     serverStats
+	statsHistory    *StatsHistory // Per-peer stats time series
+	relay           *relayManager
+	holePunch       *holePunchManager
+	wgStore         *wireguard.Store      // WireGuard client storage
+	ca              *CertificateAuthority // Internal CA for mesh TLS certs
+	version         string                // Server version for admin display
+	sseHub          *sseHub               // SSE hub for real-time dashboard updates
+	ipGeoCache      *IPGeoCache           // IP geolocation cache for location fallback
+	coordMeshIP     atomic.Value          // Coordinator's mesh IP (string) for "this.tunnelmesh" resolution
+	coordMetrics    *CoordMetrics         // Prometheus metrics for coordinator
+	metricsRegistry prometheus.Registerer // Prometheus registry for metrics (shared with peer metrics)
 	// S3 storage
 	s3Store             *s3.Store            // S3 file-based storage
 	s3Server            *s3.Server           // S3 HTTP server
@@ -438,9 +439,33 @@ func (s *Server) LoadStatsHistory() error {
 
 // SaveStatsHistory persists stats history to S3 or disk.
 func (s *Server) SaveStatsHistory() error {
+	startTime := time.Now()
 	path := s.statsHistoryPath()
-	if err := s.statsHistory.Save(path, s.s3SystemStore); err != nil {
+	result, err := s.statsHistory.Save(path, s.s3SystemStore)
+	if err != nil {
+		if s.coordMetrics != nil {
+			s.coordMetrics.statsHistorySaveErrors.WithLabelValues("save_failed").Inc()
+		}
 		return fmt.Errorf("save stats history: %w", err)
+	}
+
+	// Record successful save
+	if s.coordMetrics != nil {
+		s.coordMetrics.statsHistorySaveTotal.Inc()
+		s.coordMetrics.statsHistorySaveDuration.Observe(time.Since(startTime).Seconds())
+		s.coordMetrics.networkStatsSaveTotal.Inc()
+		s.coordMetrics.networkStatsSaveDuration.Observe(time.Since(startTime).Seconds())
+
+		// Update per-peer last save timestamp for successful saves
+		now := float64(time.Now().Unix())
+		for _, peerName := range result.SavedPeers {
+			s.coordMetrics.networkStatsLastSave.WithLabelValues(peerName).Set(now)
+		}
+
+		// Track per-peer save errors
+		for _, peerName := range result.ErrorPeers {
+			s.coordMetrics.networkStatsSaveErrors.WithLabelValues(peerName, "s3_write").Inc()
+		}
 	}
 
 	log.Debug().Str("destination", "S3").Msg("saved stats history")
@@ -947,8 +972,9 @@ func (s *Server) initS3Storage(cfg *config.PeerConfig) error {
 	// Create RBAC authorizer for S3
 	rbacAuth := s3.NewRBACAuthorizer(s.s3Credentials, s.s3Authorizer)
 
-	// Initialize S3 metrics
-	s3Metrics := s3.InitS3Metrics(nil)
+	// Initialize S3 metrics with the same registry as coordinator metrics
+	// Will use default registry if metricsRegistry is nil (standalone coordinator)
+	s3Metrics := s3.InitS3Metrics(s.metricsRegistry)
 
 	// Create S3 server
 	s.s3Server = s3.NewServer(store, rbacAuth, s3Metrics)
@@ -1966,6 +1992,7 @@ func (s *Server) SetCoordMeshIP(ip string) {
 // metrics to be exposed on a specific registry (e.g., metrics.Registry for
 // the peer /metrics endpoint).
 func (s *Server) SetMetricsRegistry(registry prometheus.Registerer) {
+	s.metricsRegistry = registry
 	s.coordMetrics = InitCoordMetrics(registry)
 	log.Debug().Msg("coordinator metrics initialized")
 }

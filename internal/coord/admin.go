@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
@@ -341,7 +342,17 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("/api/v1/relay-status", s.handleRelayStatus)
 
 	// Expose metrics on admin interface for Prometheus scraping via mesh IP
-	s.adminMux.Handle("/metrics", promhttp.Handler())
+	// Use stored registry if available (when joined to mesh), otherwise use default handler
+	if s.metricsRegistry != nil {
+		// Type-assert to Gatherer since promhttp.HandlerFor needs both Registerer and Gatherer
+		if gatherer, ok := s.metricsRegistry.(prometheus.Gatherer); ok {
+			s.adminMux.Handle("/metrics", promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{}))
+		} else {
+			s.adminMux.Handle("/metrics", promhttp.Handler())
+		}
+	} else {
+		s.adminMux.Handle("/metrics", promhttp.Handler())
+	}
 	// Expose debug trace endpoint on admin interface only (mesh-only access)
 	s.adminMux.HandleFunc("/debug/trace", s.handleTrace)
 

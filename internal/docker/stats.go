@@ -64,8 +64,29 @@ func (m *Manager) StartPeriodicStatsCollection(ctx context.Context, s3Store *s3.
 
 // collectAndPersistStats collects comprehensive Docker stats and saves to S3.
 func (m *Manager) collectAndPersistStats(ctx context.Context, s3Store *s3.SystemStore) error {
+	startTime := time.Now()
+
 	if m.client == nil {
+		// Docker not available - mark collection as disabled
+		if metricsRegistry != nil {
+			metricsRegistry.statsCollectionEnabled.WithLabelValues(m.peerName).Set(0)
+		}
 		return nil // Docker not available
+	}
+
+	if s3Store == nil {
+		// S3 not available - mark as unavailable
+		if metricsRegistry != nil {
+			metricsRegistry.statsCollectionEnabled.WithLabelValues(m.peerName).Set(1)
+			metricsRegistry.statsS3Available.WithLabelValues(m.peerName).Set(0)
+		}
+		return nil
+	}
+
+	// Mark collection and S3 as enabled
+	if metricsRegistry != nil {
+		metricsRegistry.statsCollectionEnabled.WithLabelValues(m.peerName).Set(1)
+		metricsRegistry.statsS3Available.WithLabelValues(m.peerName).Set(1)
 	}
 
 	snapshot := DockerStatsSnapshot{
@@ -80,6 +101,9 @@ func (m *Manager) collectAndPersistStats(ctx context.Context, s3Store *s3.System
 	containers, err := m.ListContainers(listCtx)
 	cancel()
 	if err != nil {
+		if metricsRegistry != nil {
+			metricsRegistry.statsCollectionErrors.WithLabelValues(m.peerName, "list_containers").Inc()
+		}
 		return err
 	}
 
@@ -89,6 +113,9 @@ func (m *Manager) collectAndPersistStats(ctx context.Context, s3Store *s3.System
 		fullInfo, err := m.InspectContainer(inspectCtx, container.ID)
 		cancel()
 		if err != nil {
+			if metricsRegistry != nil {
+				metricsRegistry.statsCollectionErrors.WithLabelValues(m.peerName, "inspect_container").Inc()
+			}
 			log.Warn().Err(err).Str("container", container.Name).Msg("Failed to inspect container")
 			continue
 		}
@@ -108,6 +135,9 @@ func (m *Manager) collectAndPersistStats(ctx context.Context, s3Store *s3.System
 			stats, err := m.client.GetContainerStats(statsCtx, container.ID)
 			cancel()
 			if err != nil {
+				if metricsRegistry != nil {
+					metricsRegistry.statsCollectionErrors.WithLabelValues(m.peerName, "get_stats").Inc()
+				}
 				log.Warn().Err(err).Str("container", container.Name).Msg("Failed to get container stats")
 			} else if stats != nil {
 				containerSnapshot.CPUPercent = stats.CPUPercent
@@ -127,21 +157,42 @@ func (m *Manager) collectAndPersistStats(ctx context.Context, s3Store *s3.System
 	networks, err := m.client.ListNetworks(networksCtx)
 	cancel()
 	if err != nil {
+		if metricsRegistry != nil {
+			metricsRegistry.statsCollectionErrors.WithLabelValues(m.peerName, "get_networks").Inc()
+		}
 		log.Warn().Err(err).Msg("Failed to list Docker networks")
 	} else {
 		snapshot.Networks = networks
 	}
 
 	// Save to S3 as stats/{peer_name}.docker.json
+	saveStart := time.Now()
 	path := "stats/" + m.peerName + ".docker.json"
 	if err := s3Store.SaveJSON(path, snapshot); err != nil {
+		if metricsRegistry != nil {
+			metricsRegistry.statsPersistenceErrors.WithLabelValues(m.peerName, "s3_write").Inc()
+		}
 		return err
+	}
+
+	// Record successful persistence
+	if metricsRegistry != nil {
+		metricsRegistry.statsPersistenceTotal.WithLabelValues(m.peerName).Inc()
+		metricsRegistry.statsPersistenceDuration.WithLabelValues(m.peerName).Observe(time.Since(saveStart).Seconds())
+		metricsRegistry.statsContainersCollected.WithLabelValues(m.peerName).Set(float64(len(snapshot.Containers)))
+		metricsRegistry.statsCollectionTimestamp.WithLabelValues(m.peerName).Set(float64(time.Now().Unix()))
 	}
 
 	log.Debug().
 		Str("peer", m.peerName).
 		Int("containers", len(snapshot.Containers)).
 		Msg("Saved Docker stats to S3")
+
+	// Record successful collection
+	if metricsRegistry != nil {
+		metricsRegistry.statsCollectionTotal.WithLabelValues(m.peerName).Inc()
+		metricsRegistry.statsCollectionDuration.WithLabelValues(m.peerName).Observe(time.Since(startTime).Seconds())
+	}
 
 	return nil
 }

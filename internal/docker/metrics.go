@@ -22,6 +22,18 @@ type dockerMetrics struct {
 	pids            *prometheus.GaugeVec
 	containerInfo   *prometheus.GaugeVec
 	containerStatus *prometheus.GaugeVec
+
+	// Stats collection metrics
+	statsCollectionTotal     *prometheus.CounterVec
+	statsCollectionErrors    *prometheus.CounterVec
+	statsCollectionDuration  *prometheus.HistogramVec
+	statsCollectionTimestamp *prometheus.GaugeVec
+	statsPersistenceTotal    *prometheus.CounterVec
+	statsPersistenceErrors   *prometheus.CounterVec
+	statsPersistenceDuration *prometheus.HistogramVec
+	statsContainersCollected *prometheus.GaugeVec
+	statsCollectionEnabled   *prometheus.GaugeVec
+	statsS3Available         *prometheus.GaugeVec
 }
 
 // initMetrics initializes Docker Prometheus metrics (singleton).
@@ -83,6 +95,80 @@ func initMetrics(peerName string) *dockerMetrics {
 					Help: "Docker container status (1=running, 0=stopped)",
 				},
 				[]string{"peer", "container_id", "container_name", "image"},
+			),
+
+			// Stats collection metrics
+			statsCollectionTotal: promauto.NewCounterVec(
+				prometheus.CounterOpts{
+					Name: "tunnelmesh_docker_stats_collection_total",
+					Help: "Total successful Docker stats collections",
+				},
+				[]string{"peer"},
+			),
+			statsCollectionErrors: promauto.NewCounterVec(
+				prometheus.CounterOpts{
+					Name: "tunnelmesh_docker_stats_collection_errors_total",
+					Help: "Total Docker stats collection errors",
+				},
+				[]string{"peer", "error_type"},
+			),
+			statsCollectionDuration: promauto.NewHistogramVec(
+				prometheus.HistogramOpts{
+					Name:    "tunnelmesh_docker_stats_collection_duration_seconds",
+					Help:    "Docker stats collection latency in seconds",
+					Buckets: prometheus.DefBuckets,
+				},
+				[]string{"peer"},
+			),
+			statsCollectionTimestamp: promauto.NewGaugeVec(
+				prometheus.GaugeOpts{
+					Name: "tunnelmesh_docker_stats_last_collection_timestamp",
+					Help: "Unix timestamp of last successful Docker stats collection",
+				},
+				[]string{"peer"},
+			),
+			statsPersistenceTotal: promauto.NewCounterVec(
+				prometheus.CounterOpts{
+					Name: "tunnelmesh_docker_stats_persistence_total",
+					Help: "Total successful Docker stats S3 saves",
+				},
+				[]string{"peer"},
+			),
+			statsPersistenceErrors: promauto.NewCounterVec(
+				prometheus.CounterOpts{
+					Name: "tunnelmesh_docker_stats_persistence_errors_total",
+					Help: "Total Docker stats S3 save errors",
+				},
+				[]string{"peer", "error_type"},
+			),
+			statsPersistenceDuration: promauto.NewHistogramVec(
+				prometheus.HistogramOpts{
+					Name:    "tunnelmesh_docker_stats_persistence_duration_seconds",
+					Help:    "Docker stats S3 save latency in seconds",
+					Buckets: prometheus.DefBuckets,
+				},
+				[]string{"peer"},
+			),
+			statsContainersCollected: promauto.NewGaugeVec(
+				prometheus.GaugeOpts{
+					Name: "tunnelmesh_docker_stats_containers_collected",
+					Help: "Number of containers in last stats collection",
+				},
+				[]string{"peer"},
+			),
+			statsCollectionEnabled: promauto.NewGaugeVec(
+				prometheus.GaugeOpts{
+					Name: "tunnelmesh_docker_stats_collection_enabled",
+					Help: "Whether Docker stats collection is enabled (1) or not (0)",
+				},
+				[]string{"peer"},
+			),
+			statsS3Available: promauto.NewGaugeVec(
+				prometheus.GaugeOpts{
+					Name: "tunnelmesh_docker_stats_s3_available",
+					Help: "Whether S3 is available for stats persistence (1) or not (0)",
+				},
+				[]string{"peer"},
 			),
 		}
 	})
