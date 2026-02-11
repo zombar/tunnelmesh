@@ -1160,17 +1160,6 @@ async function checkPrometheusAvailable() {
         const resp = await fetch('/prometheus/api/v1/alerts');
         if (resp.ok) {
             state.alertsEnabled = true;
-            // Backwards compatibility: Show alerts section if not controlled by panel system
-            // (Remove this once all servers have alerts panel registered)
-            const alertsSection = document.getElementById('alerts-section');
-            if (alertsSection && alertsSection.style.display === 'none') {
-                // Check if we have permission via panel system
-                const hasPermission = state.accessiblePanels?.includes?.('alerts');
-                if (!hasPermission) {
-                    // Fallback: Show manually (old behavior for backwards compat)
-                    alertsSection.style.display = 'block';
-                }
-            }
             // Process the initial response
             const data = await resp.json();
             processAlertData(data);

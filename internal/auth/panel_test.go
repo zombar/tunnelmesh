@@ -46,7 +46,7 @@ func TestPanelRegistry_ListByTab(t *testing.T) {
 	assert.Len(t, dataPanels, 4)
 
 	// Mesh tab should have: visualizer, map, charts, alerts, peers, logs, wireguard, filter
-	assert.Len(t, meshPanels, 7)
+	assert.Len(t, meshPanels, 8)
 }
 
 func TestPanelRegistry_RegisterExternal(t *testing.T) {
@@ -222,7 +222,7 @@ func TestAuthorizer_GetAccessiblePanels_Admin(t *testing.T) {
 	auth.Bindings.Add(NewRoleBinding("alice", RoleAdmin, ""))
 
 	panels := auth.GetAccessiblePanels("alice")
-	assert.Len(t, panels, 14) // All built-in panels
+	assert.Len(t, panels, 15) // All built-in panels
 }
 
 func TestAuthorizer_GetAccessiblePanels_DirectBindings(t *testing.T) {
@@ -285,7 +285,7 @@ func TestAuthorizer_GetAccessiblePanels_AdminViaGroup(t *testing.T) {
 
 	// admins should get all panels via IsAdmin check
 	panels := auth.GetAccessiblePanels("alice")
-	assert.Len(t, panels, 14) // All panels
+	assert.Len(t, panels, 15) // All panels
 }
 
 // --- Default panel tests ---
