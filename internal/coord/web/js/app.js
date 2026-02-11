@@ -222,8 +222,9 @@ function setupSSE() {
         sseRetryCount = 0; // Reset retry count on successful connection
     });
 
-    state.eventSource.addEventListener('heartbeat', () => {
+    state.eventSource.addEventListener('heartbeat', (e) => {
         // Refresh dashboard when a heartbeat is received
+        console.log('[SSE] Heartbeat received:', e.data);
         fetchData(false);
     });
 
@@ -322,7 +323,10 @@ function updateDashboard(data, loadHistory = false) {
 
     // Update charts with new data during polling (not on initial history load)
     if (!loadHistory && state.charts.throughput) {
+        console.log('[Charts] Updating charts with new data, peer count:', data.peers?.length);
         updateChartsWithNewData(data.peers);
+    } else {
+        console.log('[Charts] Skipping chart update - loadHistory:', loadHistory, ', hasThroughputChart:', !!state.charts.throughput);
     }
 
     // Update history for each peer
@@ -849,7 +853,11 @@ function fitChartsToData() {
 }
 
 function updateChartsWithNewData(peers) {
-    if (!state.charts.throughput || !state.charts.packets) return;
+    if (!state.charts.throughput || !state.charts.packets) {
+        console.log('[Charts] updateChartsWithNewData called but charts not initialized');
+        return;
+    }
+    console.log('[Charts] updateChartsWithNewData processing', peers?.length, 'peers');
 
     // Track last seen times to detect new heartbeats
     if (!state.charts.lastSeenTimes) {
@@ -882,8 +890,10 @@ function updateChartsWithNewData(peers) {
 
     // No new data
     if (newPoints.length === 0) {
+        console.log('[Charts] No new data points to add');
         return;
     }
+    console.log('[Charts] Adding', newPoints.length, 'new data points');
 
     // Group new points by quantized timestamp (10-second intervals)
     const groups = new Map();
