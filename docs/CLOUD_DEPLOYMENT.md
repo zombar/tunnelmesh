@@ -27,7 +27,7 @@ openssl rand -hex 32  # For auth_token
 # Deploy
 terraform init
 terraform apply
-```text
+```
 
 ---
 
@@ -61,7 +61,7 @@ concentrator. Perfect for personal use, small teams, or testing.
       │ iPhone  │                │  Laptop   │              │  Home PC    │
       │ (WG)    │                │  (native) │              │  (native)   │
       └─────────┘                └───────────┘              └─────────────┘
-```text
+```
 
 **Use cases:**
 
@@ -81,7 +81,7 @@ nodes = {
     allow_exit_traffic = true
   }
 }
-```text
+```
 
 **Cost:** ~$4/month
 
@@ -110,7 +110,7 @@ devices. Better isolation and the ability to place the WireGuard endpoint closer
                                          │   📱   │ │  📱   │ │  💻   │
                                          │ Phone  │ │ Tablet│ │Laptop │
                                          └────────┘ └───────┘ └───────┘
-```text
+```
 
 **Use cases:**
 
@@ -132,7 +132,7 @@ nodes = {
     region    = "nyc3"  # Closer to US users
   }
 }
-```text
+```
 
 **Cost:** ~$8/month (2 droplets)
 
@@ -161,7 +161,7 @@ requirements.
 │   Other Peer     │
 │   Amsterdam      │
 └──────────────────┘
-```text
+```
 
 **Use cases:**
 
@@ -192,13 +192,13 @@ nodes = {
     }
   }
 }
-```text
+```
 
 On your local machine:
 
 ```bash
 sudo tunnelmesh join --config peer.yaml --exit-node tm-exit-sgp --context work
-```text
+```
 
 ---
 
@@ -230,7 +230,7 @@ connect to their nearest gateway and gain access to the entire mesh.
        │   US Team   │                 │   EU Team   │                 │   APAC Team  │
        │   📱💻💻    │                 │   📱📱💻    │                 │   💻📱       │
        └─────────────┘                 └─────────────┘                 └──────────────┘
-```text
+```
 
 **Use cases:**
 
@@ -260,7 +260,7 @@ nodes = {
     region    = "sgp1"
   }
 }
-```text
+```
 
 **Cost:** ~$12/month (3 droplets)
 
@@ -306,7 +306,7 @@ devices connect via WireGuard and can reach everything on your home LAN.
                │(coffee  │              │ (hotel)   │
                │ shop)   │              │           │
                └─────────┘              └───────────┘
-```text
+```
 
 **Use cases:**
 
@@ -326,7 +326,7 @@ nodes = {
     wireguard   = true
   }
 }
-```text
+```
 
 ```yaml
 # Home server peer config
@@ -374,7 +374,7 @@ share local development servers, and collaborate as if on the same LAN.
        │  alice$ ssh bob.tunnelmesh                                                    │
        │  alice$ curl http://eve.tunnelmesh:3000   # Access Eve's dev server           │
        │  eve$ psql -h alice.tunnelmesh            # Connect to Alice's local Postgres │
-```text
+```
 
 **Use cases:**
 
@@ -392,7 +392,7 @@ nodes = {
     coordinator = true
   }
 }
-```text
+```
 
 Each developer runs:
 
@@ -429,7 +429,7 @@ latency. Host game servers on any peer's machine.
 
                     ═════  UDP tunnel (game traffic, ~10-30ms between peers)
                     ─────  Control plane (HTTPS to coordinator)
-```text
+```
 
 **Use cases:**
 
@@ -446,7 +446,7 @@ nodes = {
     coordinator = true  # Just coordination, no game traffic
   }
 }
-```text
+```
 
 Players join from their gaming PCs:
 
@@ -519,7 +519,7 @@ Set your DigitalOcean API token via environment:
 
 ```bash
 export TF_VAR_do_token="dop_v1_xxx"
-```text
+```
 
 ### Default Settings
 
@@ -557,7 +557,7 @@ Enable observability with `monitoring_enabled = true`:
 monitoring_enabled        = true
 prometheus_retention_days = 7
 loki_retention_days       = 7
-```text
+```
 
 ### Included Services
 
@@ -579,7 +579,7 @@ Access Grafana from within the mesh:
 
 ```text
 https://tunnelmesh.example.com/grafana/
-```text
+```
 
 ---
 
@@ -609,7 +609,7 @@ nodes = {
     }
   }
 }
-```text
+```
 
 ---
 
@@ -619,7 +619,7 @@ After `terraform apply`:
 
 ```bash
 terraform output
-```text
+```
 
 | Output | Description |
 | -------- | ------------- |
@@ -637,19 +637,19 @@ terraform output
 ```bash
 vim terraform.tfvars
 terraform apply
-```text
+```
 
 ### View Logs
 
 ```bash
 ssh root@<node-ip> journalctl -u tunnelmesh -f
-```text
+```
 
 ### Destroy
 
 ```bash
 terraform destroy
-```text
+```
 
 ---
 
@@ -740,4 +740,4 @@ monitoring_enabled = true
 # Retention
 prometheus_retention_days = 14
 loki_retention_days       = 7
-```text
+```
