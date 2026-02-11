@@ -16,6 +16,7 @@ func TestServer_GenerateAndValidateToken(t *testing.T) {
 
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 	defer func() { _ = srv.Shutdown() }()
 
 	// Generate token
@@ -69,6 +70,7 @@ func TestServer_ValidateToken_InvalidToken(t *testing.T) {
 
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
 	defer func() { _ = srv.Shutdown() }()
 
 	// Test with invalid token

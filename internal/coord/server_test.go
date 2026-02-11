@@ -42,8 +42,16 @@ func newTestConfig(t *testing.T) *config.PeerConfig {
 
 func newTestServer(t *testing.T) *Server {
 	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
+
+	// Automatically shutdown server when test completes to prevent resource leaks
+	t.Cleanup(func() {
+		_ = srv.Shutdown()
+	})
+
 	return srv
 }
 
@@ -560,6 +568,12 @@ func newTestServerWithWireGuard(t *testing.T) *Server {
 
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
+
+	t.Cleanup(func() {
+		_ = srv.Shutdown()
+	})
+
 	return srv
 }
 
@@ -1067,7 +1081,8 @@ func newTestServerWithS3(t *testing.T) *Server {
 			MTU: 1400,
 		},
 		Coordinator: config.CoordinatorConfig{
-			Listen: ":0",
+			Enabled: true,
+			Listen:  ":0",
 			S3: config.S3Config{
 				DataDir: tempDir + "/s3",
 				MaxSize: 1 * 1024 * 1024 * 1024, // 1Gi - Required for quota enforcement
@@ -1077,6 +1092,12 @@ func newTestServerWithS3(t *testing.T) *Server {
 	}
 	srv, err := NewServer(cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = srv.Shutdown() })
+
+	t.Cleanup(func() {
+		_ = srv.Shutdown()
+	})
+
 	return srv
 }
 
