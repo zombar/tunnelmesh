@@ -5,7 +5,7 @@ phones, tablets, and laptops to connect to the mesh without running the full Tun
 
 ## How It Works
 
-```
+```text
                                    TunnelMesh Mesh Network
     ┌─────────────────────────────────────────────────────────────────────────┐
     │                                                                         │
@@ -49,8 +49,7 @@ phones, tablets, and laptops to connect to the mesh without running the full Tun
 Add `--wireguard` when joining:
 
 ```bash
-sudo tunnelmesh join \
-  --server https://tunnelmesh.example.com \
+sudo tunnelmesh join https://tunnelmesh.example.com \
   --token your-token \
   --name wg-gateway \
   --wireguard \
@@ -218,7 +217,7 @@ WireGuard clients receive IPs from a dedicated subnet within the mesh CIDR:
 
 WireGuard clients get mesh DNS names:
 
-```
+```text
 iphone.tunnelmesh    -> 172.30.100.2
 android.tunnelmesh   -> 172.30.100.3
 laptop.tunnelmesh    -> 172.30.100.4
@@ -255,7 +254,7 @@ sudo tunnelmesh serve --config server.yaml
 
 Separate the WireGuard concentrator from the coordinator:
 
-```
+```text
 ┌────────────────────┐          ┌────────────────────┐
 │    Coordinator     │          │   WireGuard Peer   │
 │   (no WireGuard)   │◄────────►│   (concentrator)   │
@@ -299,7 +298,7 @@ wireguard:
 
 WireGuard gateways in multiple regions for low-latency access:
 
-```
+```text
                          ┌─────────────────────┐
                          │     Coordinator     │
                          │      Amsterdam      │

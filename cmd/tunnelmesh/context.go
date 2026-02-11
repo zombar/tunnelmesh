@@ -172,7 +172,7 @@ func runContextList(cmd *cobra.Command, args []string) error {
 		fmt.Println("\nCreate one with:")
 		fmt.Println("  tunnelmesh context create <name> --config <path>")
 		fmt.Println("\nOr join a mesh with:")
-		fmt.Println("  tunnelmesh join --server <url> --token <token> --context <name>")
+		fmt.Println("  tunnelmesh join --peer <url> --token <token> --context <name>")
 		return nil
 	}
 

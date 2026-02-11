@@ -22,7 +22,7 @@ When you run `tunnelmesh join`, your identity is automatically created:
 
 ```bash
 # Join the mesh - identity is automatic
-tunnelmesh join --server coord.example.com --token <token> --context work
+tunnelmesh join coord.example.com --token <token> --context work
 
 # View your identity
 tunnelmesh status
@@ -37,7 +37,7 @@ To use the same identity on multiple devices, copy your SSH key:
 scp ~/.tunnelmesh/id_ed25519* user@new-device:~/.tunnelmesh/
 
 # On the new device, join with a different peer name
-tunnelmesh join --server coord.example.com --token <token> --context work --name laptop-2
+tunnelmesh join coord.example.com --token <token> --context work --name laptop-2
 ```
 
 Both devices will have:
@@ -73,7 +73,7 @@ TunnelMesh uses Kubernetes-style Role-Based Access Control.
 
 ### Role Permissions
 
-```
+```yaml
 admin:
   - *:*                           # All verbs on all resources
 
@@ -136,7 +136,7 @@ Service users authenticate to S3 like regular users but have their keypair deriv
 
 ### File Layout
 
-```
+```text
 ~/.tunnelmesh/
   id_ed25519                     # SSH private key (your identity)
   id_ed25519.pub                 # SSH public key
@@ -149,7 +149,7 @@ Service users authenticate to S3 like regular users but have their keypair deriv
 
 ### Key Derivation
 
-```
+```text
 SSH Key (id_ed25519)
  |
        v
@@ -164,7 +164,7 @@ User ID (16 characters)
 
 S3 credentials are derived from the public key:
 
-```
+```text
 Public Key -> HKDF("s3-access-key") -> Access Key (20 chars)
 Public Key -> HKDF("s3-secret-key") -> Secret Key (40 chars)
 ```

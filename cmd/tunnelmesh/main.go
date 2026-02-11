@@ -184,7 +184,7 @@ Server URLs automatically use HTTPS. Omit scheme in the URL.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runJoin,
 	}
-	joinCmd.Flags().StringVarP(&serverURL, "server", "s", "", "coordination server URL (deprecated: use positional argument)")
+	joinCmd.Flags().StringVarP(&serverURL, "peer", "p", "", "coordinator peer URL (deprecated: use positional argument)")
 	joinCmd.Flags().StringVarP(&authToken, "token", "t", "", "authentication token")
 	joinCmd.Flags().BoolVar(&wireguardEnabled, "wireguard", false, "enable WireGuard concentrator mode")
 	joinCmd.Flags().Float64Var(&latitude, "latitude", 0, "manual geolocation latitude (-90 to 90)")
@@ -1970,7 +1970,7 @@ func loadConfig() (*config.PeerConfig, error) {
 				}
 			}
 			// If context has server info but no config file, use context values
-			// This happens when joining with --server/--token flags instead of --config
+			// This happens when joining with --peer/--token flags instead of --config
 			if activeCtx.Server != "" {
 				return &config.PeerConfig{
 					Servers:    []string{activeCtx.Server},
