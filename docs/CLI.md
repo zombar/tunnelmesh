@@ -147,7 +147,6 @@ tunnelmesh join [server-url] [flags]
 
 |Flag|Short|Description|
 |-----|-----|-----------|
-|`--peer`|`-p`|Coordinator peer URL (deprecated: use positional argument)|
 |`--token`|`-t`|Authentication token|
 |`--name`|`-n`|Peer name (defaults to hostname)|
 |`--context`||Save/update as named context|

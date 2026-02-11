@@ -442,7 +442,7 @@ func runServiceLogs(cmd *cobra.Command, args []string) error {
 
 // generateConfigFromContext creates a config file from context values.
 // This is used when installing a service from a context that was created
-// with --peer/--token flags instead of a config file.
+// with positional URL and --token flag instead of a config file.
 func generateConfigFromContext(ctx *context.Context) (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {

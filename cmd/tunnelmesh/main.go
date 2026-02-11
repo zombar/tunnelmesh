@@ -84,7 +84,6 @@ func setupGCTuning() {
 var (
 	cfgFile   string
 	logLevel  string
-	serverURL string
 	authToken string
 
 	// WireGuard concentrator flag
@@ -184,7 +183,6 @@ Server URLs automatically use HTTPS. Omit scheme in the URL.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runJoin,
 	}
-	joinCmd.Flags().StringVarP(&serverURL, "peer", "p", "", "coordinator peer URL (deprecated: use positional argument)")
 	joinCmd.Flags().StringVarP(&authToken, "token", "t", "", "authentication token")
 	joinCmd.Flags().BoolVar(&wireguardEnabled, "wireguard", false, "enable WireGuard concentrator mode")
 	joinCmd.Flags().Float64Var(&latitude, "latitude", 0, "manual geolocation latitude (-90 to 90)")
@@ -549,12 +547,10 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Get server URL from positional argument or flag
+	// Get server URL from positional argument
 	var joinServerURL string
 	if len(args) > 0 {
 		joinServerURL = args[0]
-	} else if serverURL != "" {
-		joinServerURL = serverURL
 	}
 
 	// Normalize server URL: add https:// if no scheme provided
@@ -1970,7 +1966,7 @@ func loadConfig() (*config.PeerConfig, error) {
 				}
 			}
 			// If context has server info but no config file, use context values
-			// This happens when joining with --peer/--token flags instead of --config
+			// This happens when joining with positional URL and --token flag instead of --config
 			if activeCtx.Server != "" {
 				return &config.PeerConfig{
 					Servers:    []string{activeCtx.Server},
