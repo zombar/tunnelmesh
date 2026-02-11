@@ -1356,43 +1356,14 @@ async function fetchAlerts() {
 function processAlertData(data) {
     const alerts = data.data?.alerts || [];
 
-    // Get current active tab
-    const activeTab = document.querySelector('#main-tabs .tab.active');
-    const currentTab = activeTab ? activeTab.dataset.tab : 'mesh';
-
-    // Map tabs to their expected alert categories
-    const tabCategoryMap = {
-        mesh: 'mesh',
-        data: 'data',
-        app: 'app',
-    };
-
-    const expectedCategory = tabCategoryMap[currentTab];
-    if (!expectedCategory) {
-        console.warn(`Unknown tab '${currentTab}', defaulting to mesh category`);
-    }
-
     // Count alerts by severity
     const counts = { warning: 0, critical: 0, page: 0 };
     // Track alerts per peer
     const peerAlerts = {};
-    // Track unknown categories
-    const unknownCategories = new Set();
 
     for (const alert of alerts) {
         if (alert.state === 'firing') {
             const severity = alert.labels?.severity || 'warning';
-            const category = alert.labels?.category || 'mesh';
-
-            // Filter by category: show alerts matching current tab's category
-            const shouldShow = category === (expectedCategory || 'mesh');
-
-            // Track unknown categories for debugging
-            if (!Object.values(tabCategoryMap).includes(category)) {
-                unknownCategories.add(category);
-            }
-
-            if (!shouldShow) continue;
 
             // Count alert by severity
             if (Object.hasOwn(counts, severity)) {
@@ -1412,11 +1383,6 @@ function processAlertData(data) {
                 }
             }
         }
-    }
-
-    // Warn about unknown alert categories for debugging
-    if (unknownCategories.size > 0) {
-        console.warn(`Found alerts with unknown categories: ${Array.from(unknownCategories).join(', ')}`);
     }
 
     state.peerAlerts = peerAlerts;
@@ -2805,11 +2771,6 @@ function switchTab(tabName, options = {}) {
     // Update browser history (unless restoring from history)
     if (!options.skipHistory) {
         updateTabHistory(tabName);
-    }
-
-    // Re-filter alerts based on new tab category
-    if (state.alertsEnabled) {
-        fetchAlerts();
     }
 }
 window.switchTab = switchTab;
