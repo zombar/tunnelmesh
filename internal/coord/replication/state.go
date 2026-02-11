@@ -43,6 +43,16 @@ func (s *State) Get(bucket, key string) VersionVector {
 	return NewVersionVector()
 }
 
+// Set sets the version vector for a given S3 object.
+// This should be called when adopting a remote version vector after conflict resolution.
+func (s *State) Set(bucket, key string, vv VersionVector) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	k := makeKey(bucket, key)
+	s.vectors[k] = vv.Copy()
+}
+
 // Update updates the version vector for a given S3 object.
 // This should be called when an object is modified locally.
 // It increments the version for this coordinator.

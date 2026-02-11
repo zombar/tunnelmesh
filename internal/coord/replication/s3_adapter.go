@@ -57,20 +57,49 @@ func (a *S3StoreAdapter) Put(ctx context.Context, bucket, key string, data []byt
 	return nil
 }
 
-// List lists all objects in a bucket.
+// List lists all objects in a bucket with pagination support.
 func (a *S3StoreAdapter) List(ctx context.Context, bucket string) ([]string, error) {
-	// ListObjects uses pagination, we'll get up to 1000 objects
-	objects, _, _, err := a.store.ListObjects(bucket, "", "", 1000)
+	var allKeys []string
+	marker := ""
+	const maxKeys = 1000
+
+	// Paginate through all objects
+	for {
+		objects, _, nextMarker, err := a.store.ListObjects(bucket, "", marker, maxKeys)
+		if err != nil {
+			return nil, fmt.Errorf("list objects: %w", err)
+		}
+
+		// Collect keys from this page
+		for _, obj := range objects {
+			allKeys = append(allKeys, obj.Key)
+		}
+
+		// Check if there are more pages
+		if nextMarker == "" {
+			break
+		}
+		marker = nextMarker
+
+		// Check context cancellation between pages
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+	}
+
+	return allKeys, nil
+}
+
+// Delete removes an object from S3.
+func (a *S3StoreAdapter) Delete(ctx context.Context, bucket, key string) error {
+	err := a.store.DeleteObject(bucket, key)
 	if err != nil {
-		return nil, fmt.Errorf("list objects: %w", err)
+		return fmt.Errorf("delete object: %w", err)
 	}
 
-	keys := make([]string, 0, len(objects))
-	for _, obj := range objects {
-		keys = append(keys, obj.Key)
-	}
-
-	return keys, nil
+	return nil
 }
 
 // ListBuckets lists all buckets.

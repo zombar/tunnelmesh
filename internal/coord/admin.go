@@ -2,6 +2,7 @@ package coord
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2021,6 +2022,20 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 		return
 	}
 
+	// Replicate to other coordinators asynchronously
+	if s.replicator != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := s.replicator.ReplicateOperation(ctx, bucket, key, body, contentType, nil); err != nil {
+				log.Error().Err(err).
+					Str("bucket", bucket).
+					Str("key", key).
+					Msg("Failed to replicate S3 PUT operation")
+			}
+		}()
+	}
+
 	w.Header().Set("ETag", meta.ETag)
 	w.WriteHeader(http.StatusOK)
 }
@@ -2046,6 +2061,20 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, bucket, key string)
 			s.jsonError(w, "failed to delete object", http.StatusInternalServerError)
 		}
 		return
+	}
+
+	// Replicate delete to other coordinators asynchronously
+	if s.replicator != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := s.replicator.ReplicateDelete(ctx, bucket, key); err != nil {
+				log.Error().Err(err).
+					Str("bucket", bucket).
+					Str("key", key).
+					Msg("Failed to replicate S3 DELETE operation")
+			}
+		}()
 	}
 
 	w.WriteHeader(http.StatusNoContent)

@@ -1613,6 +1613,17 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Get coordinator mesh IP safely (uses atomic.Value)
 	coordIP, _ := s.coordMeshIP.Load().(string)
 
+	// If registering peer is a coordinator, include list of all known coordinators
+	// This enables immediate bidirectional replication without separate ListPeers() call
+	var coordinators []string
+	if peer.IsCoordinator {
+		for _, peerInfo := range s.peers {
+			if peerInfo.peer.IsCoordinator && peerInfo.peer.MeshIP != meshIP {
+				coordinators = append(coordinators, peerInfo.peer.MeshIP)
+			}
+		}
+	}
+
 	resp := proto.RegisterResponse{
 		MeshIP:        meshIP,
 		MeshCIDR:      mesh.CIDR,
@@ -1623,6 +1634,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		PeerName:      req.Name, // May differ from original request if renamed
 		PeerID:        peerID,
 		IsAdmin:       isAdmin,
+		Coordinators:  coordinators, // For immediate replication setup
 	}
 
 	// Generate TLS certificate for the peer

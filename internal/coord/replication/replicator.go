@@ -31,6 +31,9 @@ type S3Store interface {
 	// Put stores an object in S3
 	Put(ctx context.Context, bucket, key string, data []byte, contentType string, metadata map[string]string) error
 
+	// Delete removes an object from S3
+	Delete(ctx context.Context, bucket, key string) error
+
 	// List lists all objects in a bucket
 	List(ctx context.Context, bucket string) ([]string, error)
 
@@ -286,6 +289,50 @@ func (r *Replicator) ReplicateOperation(ctx context.Context, bucket, key string,
 	return lastErr
 }
 
+// ReplicateDelete replicates a delete operation to all coordinator peers.
+// Deletes are represented as tombstones (empty data with delete marker).
+func (r *Replicator) ReplicateDelete(ctx context.Context, bucket, key string) error {
+	// Update local version vector
+	vv := r.state.Update(bucket, key)
+
+	r.logger.Debug().
+		Str("bucket", bucket).
+		Str("key", key).
+		Str("version_vector", vv.String()).
+		Msg("Replicating delete operation")
+
+	// Get peers to replicate to
+	peers := r.GetPeers()
+	if len(peers) == 0 {
+		r.logger.Debug().Msg("No peers to replicate to")
+		return nil
+	}
+
+	// Create replicate payload with empty data to signal delete
+	payload := ReplicatePayload{
+		Bucket:        bucket,
+		Key:           key,
+		Data:          nil, // Empty data signals delete
+		VersionVector: vv,
+		ContentType:   "",
+		Metadata:      map[string]string{"_deleted": "true"}, // Tombstone marker
+	}
+
+	// Send to all peers
+	var lastErr error
+	for _, peer := range peers {
+		if err := r.sendReplicateMessage(ctx, peer, payload); err != nil {
+			r.logger.Error().Err(err).Str("peer", peer).Msg("Failed to send delete replicate message")
+			lastErr = err
+			r.incrementErrorCount()
+		} else {
+			r.incrementSentCount()
+		}
+	}
+
+	return lastErr
+}
+
 // sendReplicateMessage sends a replication message to a peer.
 func (r *Replicator) sendReplicateMessage(ctx context.Context, peer string, payload ReplicatePayload) error {
 	msgID := uuid.New().String()
@@ -381,7 +428,8 @@ func (r *Replicator) handleReplicate(msg *Message) error {
 				return r.sendAck(msg.ID, msg.From, false, err.Error(), localVV)
 			}
 		}
-		// If local won, just merge version vectors
+		// Merge version vectors (for both local and remote wins)
+		// This ensures both coordinators converge to the same VV after conflict
 		mergedVV, _ := r.state.Merge(payload.Bucket, payload.Key, payload.VersionVector)
 		return r.sendAck(msg.ID, msg.From, true, "", mergedVV)
 	}
@@ -407,19 +455,40 @@ func (r *Replicator) applyReplication(payload *ReplicatePayload) error {
 	ctx, cancel := context.WithTimeout(r.ctx, 30*time.Second)
 	defer cancel()
 
-	if err := r.s3.Put(ctx, payload.Bucket, payload.Key, payload.Data, payload.ContentType, payload.Metadata); err != nil {
-		r.logger.Error().Err(err).
+	// Check if this is a delete operation (nil data or tombstone marker)
+	isDelete := len(payload.Data) == 0 || (payload.Metadata != nil && payload.Metadata["_deleted"] == "true")
+
+	if isDelete {
+		// Apply delete operation
+		if err := r.s3.Delete(ctx, payload.Bucket, payload.Key); err != nil {
+			r.logger.Error().Err(err).
+				Str("bucket", payload.Bucket).
+				Str("key", payload.Key).
+				Msg("Failed to apply delete replication to S3")
+			r.incrementErrorCount()
+			return fmt.Errorf("delete from s3: %w", err)
+		}
+
+		r.logger.Info().
 			Str("bucket", payload.Bucket).
 			Str("key", payload.Key).
-			Msg("Failed to apply replication to S3")
-		r.incrementErrorCount()
-		return fmt.Errorf("put to s3: %w", err)
-	}
+			Msg("Successfully applied delete replication")
+	} else {
+		// Apply put operation
+		if err := r.s3.Put(ctx, payload.Bucket, payload.Key, payload.Data, payload.ContentType, payload.Metadata); err != nil {
+			r.logger.Error().Err(err).
+				Str("bucket", payload.Bucket).
+				Str("key", payload.Key).
+				Msg("Failed to apply replication to S3")
+			r.incrementErrorCount()
+			return fmt.Errorf("put to s3: %w", err)
+		}
 
-	r.logger.Info().
-		Str("bucket", payload.Bucket).
-		Str("key", payload.Key).
-		Msg("Successfully applied replication")
+		r.logger.Info().
+			Str("bucket", payload.Bucket).
+			Str("key", payload.Key).
+			Msg("Successfully applied replication")
+	}
 
 	return nil
 }
@@ -475,6 +544,17 @@ func (r *Replicator) handleAck(msg *Message) error {
 	r.pendingMu.RUnlock()
 
 	if exists {
+		// Merge the returned version vector to prevent divergence after conflicts
+		// The receiver may have merged version vectors during conflict resolution
+		if payload.Success && len(payload.VersionVector) > 0 {
+			r.state.Merge(pending.bucket, pending.key, payload.VersionVector)
+			r.logger.Debug().
+				Str("bucket", pending.bucket).
+				Str("key", pending.key).
+				Str("version_vector", payload.VersionVector.String()).
+				Msg("Merged version vector from ACK")
+		}
+
 		delivered := false
 		select {
 		case pending.ackChan <- payload:

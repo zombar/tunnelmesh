@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -685,6 +686,13 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		}
 		srv.SetVersion(Version)
 
+		// Ensure coordinator is properly shut down on exit
+		defer func() {
+			if err := srv.Shutdown(); err != nil {
+				log.Error().Err(err).Msg("error during coordinator shutdown")
+			}
+		}()
+
 		// Start periodic background tasks
 		srv.StartPeriodicSave(ctx)
 		srv.StartPeriodicCleanup(ctx)
@@ -697,16 +705,32 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		// Start coordinator HTTP server in background
 		go func() {
 			if err := srv.ListenAndServe(); err != nil {
-				log.Fatal().Err(err).Msg("coordinator server error")
+				log.Error().Err(err).Msg("coordinator server error - server stopped")
+				// Note: Process continues running but coordinator services unavailable
 			}
 		}()
 
-		// Give server a moment to start
-		time.Sleep(500 * time.Millisecond)
+		// Wait for coordinator server to be ready (up to 5 seconds)
+		localServerURL := "http://127.0.0.1" + cfg.Coordinator.Listen
+		healthURL := localServerURL + "/health"
+		ready := false
+		for i := 0; i < 50; i++ {
+			resp, err := http.Get(healthURL)
+			if err == nil {
+				_ = resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					ready = true
+					break
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if !ready {
+			return fmt.Errorf("coordinator server failed to become ready after 5 seconds")
+		}
 
 		// If no servers configured, use localhost coordinator
 		if len(cfg.Servers) == 0 {
-			localServerURL := "http://127.0.0.1" + cfg.Coordinator.Listen
 			cfg.Servers = []string{localServerURL}
 			log.Info().
 				Str("coordinator", localServerURL).
@@ -922,38 +946,28 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		srv.SetCoordMeshIP(resp.MeshIP)
 		srv.SetMetricsRegistry(metrics.Registry)
 
-		// Discover and add existing coordinators to replication targets
-		// This ensures new coordinators bidirectionally replicate with existing ones
-		if srv.GetReplicator() != nil {
-			peers, err := client.ListPeers()
-			if err != nil {
-				log.Warn().Err(err).Msg("failed to discover existing coordinators for replication")
-			} else {
-				discovered := 0
-				for _, peer := range peers {
-					// Add coordinator peers to replication targets (excluding self)
-					if peer.IsCoordinator && peer.MeshIP != resp.MeshIP {
-						srv.GetReplicator().AddPeer(peer.MeshIP)
-						discovered++
-						log.Debug().
-							Str("peer", peer.Name).
-							Str("mesh_ip", peer.MeshIP).
-							Msg("discovered existing coordinator for replication")
-					}
-				}
-				if discovered > 0 {
-					log.Info().
-						Int("coordinators", discovered).
-						Msg("discovered existing coordinators for replication")
-				}
+		// Add existing coordinators to replication targets from registration response
+		// This ensures immediate bidirectional replication without separate ListPeers() call
+		if srv.GetReplicator() != nil && len(resp.Coordinators) > 0 {
+			for _, coordIP := range resp.Coordinators {
+				srv.GetReplicator().AddPeer(coordIP)
+				log.Debug().
+					Str("mesh_ip", coordIP).
+					Msg("added existing coordinator to replication targets")
 			}
+			log.Info().
+				Int("coordinators", len(resp.Coordinators)).
+				Msg("discovered existing coordinators for replication")
 		}
 
 		// Load TLS certificate once for all services
+		// TLS is mandatory for coordinators (admin, S3, NFS all require HTTPS)
 		tlsCert, err := tls.LoadX509KeyPair(tlsMgr.CertPath(), tlsMgr.KeyPath())
 		if err != nil {
-			log.Error().Err(err).Msg("failed to load TLS certificate for coordinator services")
-		} else {
+			return fmt.Errorf("failed to load TLS certificate for coordinator services: %w", err)
+		}
+
+		{
 			// Start admin HTTPS server if enabled
 			// Admin always uses port 443 (standard HTTPS) on mesh IP for consistency
 			// This ensures coordinator replication works (port must be predictable)
@@ -1000,21 +1014,24 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		defer func() { _ = ctrlServer.Stop() }()
 	}
 
-	// Initialize Docker manager for automatic port forwarding
-	// Auto-detect Docker socket if not configured
-	if cfg.Docker.Socket == "" {
-		if _, err := os.Stat("/var/run/docker.sock"); err == nil {
-			cfg.Docker.Socket = "unix:///var/run/docker.sock"
-			log.Debug().Msg("Auto-detected Docker socket at /var/run/docker.sock")
+	// Initialize Docker manager for automatic port forwarding (regular peers only)
+	// Coordinators already initialized Docker manager above with system store
+	if srv == nil {
+		// Auto-detect Docker socket if not configured
+		if cfg.Docker.Socket == "" {
+			if _, err := os.Stat("/var/run/docker.sock"); err == nil {
+				cfg.Docker.Socket = "unix:///var/run/docker.sock"
+				log.Debug().Msg("Auto-detected Docker socket at /var/run/docker.sock")
+			}
 		}
-	}
-	if cfg.Docker.Socket != "" {
-		dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, nil)
-		if err := dockerMgr.Start(ctx); err != nil {
-			log.Warn().Err(err).Msg("failed to start Docker manager")
-		} else {
-			defer func() { _ = dockerMgr.Stop() }()
-			log.Info().Msg("Docker manager started")
+		if cfg.Docker.Socket != "" {
+			dockerMgr := docker.NewManager(&cfg.Docker, cfg.Name, filter, nil)
+			if err := dockerMgr.Start(ctx); err != nil {
+				log.Warn().Err(err).Msg("failed to start Docker manager")
+			} else {
+				defer func() { _ = dockerMgr.Stop() }()
+				log.Info().Msg("Docker manager started")
+			}
 		}
 	}
 

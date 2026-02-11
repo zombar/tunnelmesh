@@ -368,8 +368,10 @@ func (c *PeerConfig) Validate() error {
 	if c.Name == "" {
 		return fmt.Errorf("name is required")
 	}
-	if len(c.Servers) == 0 {
-		return fmt.Errorf("servers is required")
+	// Standalone coordinators (first in network) don't need servers
+	// Regular peers must have servers to connect to
+	if len(c.Servers) == 0 && !c.Coordinator.Enabled {
+		return fmt.Errorf("servers required for non-coordinator peers")
 	}
 	if c.SSHPort <= 0 || c.SSHPort > 65535 {
 		return fmt.Errorf("ssh_port must be between 1 and 65535")

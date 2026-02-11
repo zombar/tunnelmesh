@@ -118,6 +118,14 @@ func (m *mockS3Store) Put(ctx context.Context, bucket, key string, data []byte, 
 	return nil
 }
 
+func (m *mockS3Store) Delete(ctx context.Context, bucket, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.objects, m.makeKey(bucket, key))
+	return nil
+}
+
 func (m *mockS3Store) List(ctx context.Context, bucket string) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -153,7 +153,7 @@ func (vv VersionVector) Compare(other VersionVector) VectorRelationship {
 
 // ResolveConflict resolves a conflict between two concurrent version vectors
 // using a deterministic tie-breaker. This implementation uses lexicographic
-// comparison of the version vector's string representation.
+// comparison of canonical JSON representation (with sorted keys).
 //
 // Returns the version vector that should win the conflict resolution.
 func ResolveConflict(vv1, vv2 VersionVector) VersionVector {
@@ -165,8 +165,8 @@ func ResolveConflict(vv1, vv2 VersionVector) VersionVector {
 		return vv2
 	}
 
-	// They're concurrent - use lexicographic tie-breaker
-	// Convert to JSON for consistent comparison
+	// They're concurrent - use lexicographic tie-breaker with canonical JSON
+	// Go's json.Marshal already sorts map keys, making this deterministic
 	s1 := vv1.String()
 	s2 := vv2.String()
 
