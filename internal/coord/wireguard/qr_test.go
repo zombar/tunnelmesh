@@ -6,7 +6,7 @@ import (
 )
 
 func TestGenerateQRCode(t *testing.T) {
-	config := "[Interface]\nPrivateKey = xxx\nAddress = 172.30.100.1/32\n"
+	config := "[Interface]\nPrivateKey = xxx\nAddress = 10.42.100.1/32\n"
 
 	png, err := GenerateQRCode(config, 256)
 	if err != nil {
@@ -31,7 +31,7 @@ func TestGenerateQRCode(t *testing.T) {
 }
 
 func TestGenerateQRCodeDataURL(t *testing.T) {
-	config := "[Interface]\nPrivateKey = xxx\nAddress = 172.30.100.1/32\n"
+	config := "[Interface]\nPrivateKey = xxx\nAddress = 10.42.100.1/32\n"
 
 	dataURL, err := GenerateQRCodeDataURL(config, 256)
 	if err != nil {
@@ -58,7 +58,7 @@ func TestGenerateQRCodeEmptyConfig(t *testing.T) {
 }
 
 func TestGenerateQRCodeDifferentSizes(t *testing.T) {
-	config := "[Interface]\nPrivateKey = xxx\nAddress = 172.30.100.1/32\n"
+	config := "[Interface]\nPrivateKey = xxx\nAddress = 10.42.100.1/32\n"
 
 	sizes := []int{128, 256, 512}
 	var prevLen int

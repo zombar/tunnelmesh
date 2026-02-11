@@ -32,8 +32,8 @@ func TestClient_Register(t *testing.T) {
 	resp, err := client.Register("mynode", "SHA256:abc123", []string{"1.2.3.4"}, []string{"192.168.1.1"}, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
 	require.NoError(t, err)
 
-	assert.Contains(t, resp.MeshIP, "172.30.") // IP is hash-based, just check it's in mesh range
-	assert.Equal(t, "172.30.0.0/16", resp.MeshCIDR)
+	assert.Contains(t, resp.MeshIP, "10.42.") // IP is hash-based, just check it's in mesh range
+	assert.Equal(t, "10.42.0.0/16", resp.MeshCIDR)
 	assert.Equal(t, ".tunnelmesh", resp.Domain)
 }
 
@@ -62,7 +62,7 @@ func TestClient_RegisterWithLocation(t *testing.T) {
 	resp, err := client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, []string{"192.168.1.1"}, 2222, 0, false, "v1.0.0", location, "", false, nil, false)
 	require.NoError(t, err)
 
-	assert.Contains(t, resp.MeshIP, "172.30.")
+	assert.Contains(t, resp.MeshIP, "10.42.")
 
 	// Verify the peer has location stored
 	peers, err := client.ListPeers()
@@ -182,8 +182,8 @@ func TestClient_RegisterWithRetry_SuccessOnFirstTry(t *testing.T) {
 	resp, err := client.RegisterWithRetry(ctx, "mynode", "SHA256:abc123", []string{"1.2.3.4"}, []string{}, 2222, 2223, false, "v1.0.0", nil, "", false, []string{}, false, retryCfg)
 	require.NoError(t, err)
 
-	assert.Contains(t, resp.MeshIP, "172.30.")
-	assert.Equal(t, "172.30.0.0/16", resp.MeshCIDR)
+	assert.Contains(t, resp.MeshIP, "10.42.")
+	assert.Equal(t, "10.42.0.0/16", resp.MeshCIDR)
 }
 
 func TestClient_RegisterWithRetry_SuccessAfterFailures(t *testing.T) {
@@ -201,8 +201,8 @@ func TestClient_RegisterWithRetry_SuccessAfterFailures(t *testing.T) {
 		// Success on 3rd attempt
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"mesh_ip": "172.30.1.1",
-			"mesh_cidr": "172.30.0.0/16",
+			"mesh_ip": "10.42.1.1",
+			"mesh_cidr": "10.42.0.0/16",
 			"domain": ".tunnelmesh",
 			"token": "jwt-token"
 		}`))
@@ -222,7 +222,7 @@ func TestClient_RegisterWithRetry_SuccessAfterFailures(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, int32(3), attempts.Load(), "should have taken 3 attempts")
-	assert.Equal(t, "172.30.1.1", resp.MeshIP)
+	assert.Equal(t, "10.42.1.1", resp.MeshIP)
 }
 
 func TestClient_RegisterWithRetry_MaxRetriesExceeded(t *testing.T) {

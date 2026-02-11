@@ -35,7 +35,7 @@ func TestLogAuth(t *testing.T) {
 			method:    "aws_sigv4",
 			result:    "allowed",
 			details:   "valid signature",
-			sourceIP:  "172.30.0.5",
+			sourceIP:  "10.42.0.5",
 			wantLevel: "info",
 		},
 		{
@@ -44,7 +44,7 @@ func TestLogAuth(t *testing.T) {
 			method:    "basic",
 			result:    "denied",
 			details:   "invalid credentials",
-			sourceIP:  "172.30.0.6",
+			sourceIP:  "10.42.0.6",
 			wantLevel: "warn",
 		},
 	}
@@ -208,7 +208,7 @@ func TestLogS3Op(t *testing.T) {
 			objectKey: "file.pdf",
 			result:    "allowed",
 			details:   "",
-			sourceIP:  "172.30.0.7",
+			sourceIP:  "10.42.0.7",
 			wantLevel: "info",
 		},
 		{
@@ -219,7 +219,7 @@ func TestLogS3Op(t *testing.T) {
 			objectKey: "upload.dat",
 			result:    "denied",
 			details:   "quota exceeded",
-			sourceIP:  "172.30.0.8",
+			sourceIP:  "10.42.0.8",
 			wantLevel: "warn",
 		},
 	}
@@ -299,7 +299,7 @@ func TestLogNFSOp(t *testing.T) {
 			path:      "",
 			result:    "allowed",
 			details:   "readonly=false",
-			sourceIP:  "172.30.0.9",
+			sourceIP:  "10.42.0.9",
 			wantLevel: "info",
 		},
 		{
@@ -310,7 +310,7 @@ func TestLogNFSOp(t *testing.T) {
 			path:      "/sensitive.txt",
 			result:    "denied",
 			details:   "access denied",
-			sourceIP:  "172.30.0.10",
+			sourceIP:  "10.42.0.10",
 			wantLevel: "warn",
 		},
 	}

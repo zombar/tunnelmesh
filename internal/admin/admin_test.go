@@ -77,7 +77,7 @@ func TestAdminServer_MetricsEndpoint(t *testing.T) {
 	defer func() { metrics.Registry = oldRegistry }()
 
 	metrics.Registry.MustRegister(collectors.NewGoCollector())
-	m := metrics.InitMetrics("test-peer", "172.30.0.1", "1.0.0")
+	m := metrics.InitMetrics("test-peer", "10.42.0.1", "1.0.0")
 	m.ActiveTunnels.Set(3)
 
 	server := NewAdminServer()

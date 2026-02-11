@@ -20,7 +20,7 @@ func TestServer_GenerateAndValidateToken(t *testing.T) {
 	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	// Generate token
-	token, err := srv.GenerateToken("peer1", "172.30.0.1")
+	token, err := srv.GenerateToken("peer1", "10.42.0.1")
 	require.NoError(t, err)
 	assert.NotEmpty(t, token)
 
@@ -28,7 +28,7 @@ func TestServer_GenerateAndValidateToken(t *testing.T) {
 	claims, err := srv.ValidateToken(token)
 	require.NoError(t, err)
 	assert.Equal(t, "peer1", claims.PeerName)
-	assert.Equal(t, "172.30.0.1", claims.MeshIP)
+	assert.Equal(t, "10.42.0.1", claims.MeshIP)
 	assert.Equal(t, "tunnelmesh", claims.Issuer)
 }
 
@@ -54,7 +54,7 @@ func TestServer_ValidateToken_InvalidSignature(t *testing.T) {
 	defer func() { _ = srv2.Shutdown(context.Background()) }()
 
 	// Generate token with one server
-	token, err := srv1.GenerateToken("peer1", "172.30.0.1")
+	token, err := srv1.GenerateToken("peer1", "10.42.0.1")
 	require.NoError(t, err)
 
 	// Try to validate with different server (different signing key)

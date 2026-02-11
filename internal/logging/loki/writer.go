@@ -16,7 +16,7 @@ import (
 
 // Config holds configuration for the Loki writer.
 type Config struct {
-	URL           string            // Loki push URL (e.g., "http://172.30.0.1:3100")
+	URL           string            // Loki push URL (e.g., "http://10.42.0.1:3100")
 	Labels        map[string]string // Static labels to add to all log entries
 	BatchSize     int               // Max entries before flush (default: 100)
 	FlushInterval time.Duration     // Flush interval (default: 5s)

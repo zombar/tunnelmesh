@@ -8,11 +8,11 @@ import (
 func TestGenerateClientConfig(t *testing.T) {
 	params := ClientConfigParams{
 		ClientPrivateKey: "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
-		ClientMeshIP:     "172.30.100.1",
+		ClientMeshIP:     "10.42.100.1",
 		ServerPublicKey:  "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykI=",
 		ServerEndpoint:   "wg.example.com:51820",
-		DNSServer:        "172.30.0.1",
-		MeshCIDR:         "172.30.0.0/16",
+		DNSServer:        "10.42.0.1",
+		MeshCIDR:         "10.42.0.0/16",
 		MTU:              1420,
 	}
 
@@ -56,11 +56,11 @@ func TestGenerateClientConfig(t *testing.T) {
 func TestGenerateClientConfigNoDNS(t *testing.T) {
 	params := ClientConfigParams{
 		ClientPrivateKey: "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
-		ClientMeshIP:     "172.30.100.1",
+		ClientMeshIP:     "10.42.100.1",
 		ServerPublicKey:  "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykI=",
 		ServerEndpoint:   "wg.example.com:51820",
 		DNSServer:        "", // No DNS
-		MeshCIDR:         "172.30.0.0/16",
+		MeshCIDR:         "10.42.0.0/16",
 		MTU:              1420,
 	}
 
@@ -75,10 +75,10 @@ func TestGenerateClientConfigNoDNS(t *testing.T) {
 func TestGenerateClientConfigFormat(t *testing.T) {
 	params := ClientConfigParams{
 		ClientPrivateKey: "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
-		ClientMeshIP:     "172.30.100.1",
+		ClientMeshIP:     "10.42.100.1",
 		ServerPublicKey:  "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykI=",
 		ServerEndpoint:   "wg.example.com:51820",
-		MeshCIDR:         "172.30.0.0/16",
+		MeshCIDR:         "10.42.0.0/16",
 		MTU:              1420,
 	}
 
@@ -130,20 +130,20 @@ func TestClientConfigParamsValidation(t *testing.T) {
 			name: "valid params",
 			params: ClientConfigParams{
 				ClientPrivateKey: "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
-				ClientMeshIP:     "172.30.100.1",
+				ClientMeshIP:     "10.42.100.1",
 				ServerPublicKey:  "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykI=",
 				ServerEndpoint:   "wg.example.com:51820",
-				MeshCIDR:         "172.30.0.0/16",
+				MeshCIDR:         "10.42.0.0/16",
 			},
 			wantErr: false,
 		},
 		{
 			name: "missing private key",
 			params: ClientConfigParams{
-				ClientMeshIP:    "172.30.100.1",
+				ClientMeshIP:    "10.42.100.1",
 				ServerPublicKey: "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykI=",
 				ServerEndpoint:  "wg.example.com:51820",
-				MeshCIDR:        "172.30.0.0/16",
+				MeshCIDR:        "10.42.0.0/16",
 			},
 			wantErr: true,
 		},
@@ -153,7 +153,7 @@ func TestClientConfigParamsValidation(t *testing.T) {
 				ClientPrivateKey: "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
 				ServerPublicKey:  "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykI=",
 				ServerEndpoint:   "wg.example.com:51820",
-				MeshCIDR:         "172.30.0.0/16",
+				MeshCIDR:         "10.42.0.0/16",
 			},
 			wantErr: true,
 		},
@@ -161,9 +161,9 @@ func TestClientConfigParamsValidation(t *testing.T) {
 			name: "missing server public key",
 			params: ClientConfigParams{
 				ClientPrivateKey: "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
-				ClientMeshIP:     "172.30.100.1",
+				ClientMeshIP:     "10.42.100.1",
 				ServerEndpoint:   "wg.example.com:51820",
-				MeshCIDR:         "172.30.0.0/16",
+				MeshCIDR:         "10.42.0.0/16",
 			},
 			wantErr: true,
 		},
@@ -171,9 +171,9 @@ func TestClientConfigParamsValidation(t *testing.T) {
 			name: "missing endpoint",
 			params: ClientConfigParams{
 				ClientPrivateKey: "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
-				ClientMeshIP:     "172.30.100.1",
+				ClientMeshIP:     "10.42.100.1",
 				ServerPublicKey:  "HIgo9xNzJMWLKASShiTqIybxZ0U3wGLiUeJ1PKf8ykI=",
-				MeshCIDR:         "172.30.0.0/16",
+				MeshCIDR:         "10.42.0.0/16",
 			},
 			wantErr: true,
 		},

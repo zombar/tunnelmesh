@@ -6,12 +6,12 @@ import (
 )
 
 func TestAPIHandlerSetOnClientsChanged(t *testing.T) {
-	store, err := NewClientStore("172.30.0.0/16", t.TempDir())
+	store, err := NewClientStore("10.42.0.0/16", t.TempDir())
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 
-	handler := NewAPIHandler(store, "pubkey", "endpoint:51820", "172.30.0.0/16", "mesh.local")
+	handler := NewAPIHandler(store, "pubkey", "endpoint:51820", "10.42.0.0/16", "mesh.local")
 
 	var callbackClients []Client
 	var callbackCalled bool
@@ -45,12 +45,12 @@ func TestAPIHandlerSetOnClientsChanged(t *testing.T) {
 }
 
 func TestAPIHandlerCallbackOnUpdate(t *testing.T) {
-	store, err := NewClientStore("172.30.0.0/16", t.TempDir())
+	store, err := NewClientStore("10.42.0.0/16", t.TempDir())
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 
-	handler := NewAPIHandler(store, "pubkey", "endpoint:51820", "172.30.0.0/16", "mesh.local")
+	handler := NewAPIHandler(store, "pubkey", "endpoint:51820", "10.42.0.0/16", "mesh.local")
 
 	// Create a client first
 	reqBody, _ := json.Marshal(CreateClientRequest{Name: "TestClient"})
@@ -85,12 +85,12 @@ func TestAPIHandlerCallbackOnUpdate(t *testing.T) {
 }
 
 func TestAPIHandlerCallbackOnDelete(t *testing.T) {
-	store, err := NewClientStore("172.30.0.0/16", t.TempDir())
+	store, err := NewClientStore("10.42.0.0/16", t.TempDir())
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 
-	handler := NewAPIHandler(store, "pubkey", "endpoint:51820", "172.30.0.0/16", "mesh.local")
+	handler := NewAPIHandler(store, "pubkey", "endpoint:51820", "10.42.0.0/16", "mesh.local")
 
 	// Create a client first
 	reqBody, _ := json.Marshal(CreateClientRequest{Name: "TestClient"})
@@ -123,12 +123,12 @@ func TestAPIHandlerCallbackOnDelete(t *testing.T) {
 }
 
 func TestAPIHandlerNoCallbackOnReadOperations(t *testing.T) {
-	store, err := NewClientStore("172.30.0.0/16", t.TempDir())
+	store, err := NewClientStore("10.42.0.0/16", t.TempDir())
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 
-	handler := NewAPIHandler(store, "pubkey", "endpoint:51820", "172.30.0.0/16", "mesh.local")
+	handler := NewAPIHandler(store, "pubkey", "endpoint:51820", "10.42.0.0/16", "mesh.local")
 
 	// Create a client first (without callback)
 	reqBody, _ := json.Marshal(CreateClientRequest{Name: "TestClient"})
@@ -164,12 +164,12 @@ func TestAPIHandlerNoCallbackOnReadOperations(t *testing.T) {
 }
 
 func TestAPIHandlerNilCallback(t *testing.T) {
-	store, err := NewClientStore("172.30.0.0/16", t.TempDir())
+	store, err := NewClientStore("10.42.0.0/16", t.TempDir())
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
 
-	handler := NewAPIHandler(store, "pubkey", "endpoint:51820", "172.30.0.0/16", "mesh.local")
+	handler := NewAPIHandler(store, "pubkey", "endpoint:51820", "10.42.0.0/16", "mesh.local")
 	// Don't set callback - should not panic
 
 	// Create a client
@@ -189,10 +189,10 @@ func TestAPIHandlerNilCallback(t *testing.T) {
 func TestGenerateClientConfig(t *testing.T) {
 	params := ClientConfigParams{
 		ClientPrivateKey: "privatekey123",
-		ClientMeshIP:     "172.30.100.1",
+		ClientMeshIP:     "10.42.100.1",
 		ServerPublicKey:  "serverpubkey456",
 		ServerEndpoint:   "vpn.example.com:51820",
-		MeshCIDR:         "172.30.0.0/16",
+		MeshCIDR:         "10.42.0.0/16",
 	}
 
 	config := GenerateClientConfig(params)
@@ -201,7 +201,7 @@ func TestGenerateClientConfig(t *testing.T) {
 	if !containsString(config, "PrivateKey = privatekey123") {
 		t.Error("config should contain private key")
 	}
-	if !containsString(config, "Address = 172.30.100.1/32") {
+	if !containsString(config, "Address = 10.42.100.1/32") {
 		t.Error("config should contain address")
 	}
 	if !containsString(config, "PublicKey = serverpubkey456") {
@@ -210,7 +210,7 @@ func TestGenerateClientConfig(t *testing.T) {
 	if !containsString(config, "Endpoint = vpn.example.com:51820") {
 		t.Error("config should contain endpoint")
 	}
-	if !containsString(config, "AllowedIPs = 172.30.0.0/16") {
+	if !containsString(config, "AllowedIPs = 10.42.0.0/16") {
 		t.Error("config should contain allowed IPs")
 	}
 }
@@ -218,11 +218,11 @@ func TestGenerateClientConfig(t *testing.T) {
 func TestGenerateClientConfigNoDNS(t *testing.T) {
 	params := ClientConfigParams{
 		ClientPrivateKey: "privatekey123",
-		ClientMeshIP:     "172.30.100.1",
+		ClientMeshIP:     "10.42.100.1",
 		ServerPublicKey:  "serverpubkey456",
 		ServerEndpoint:   "vpn.example.com:51820",
 		DNSServer:        "", // No DNS
-		MeshCIDR:         "172.30.0.0/16",
+		MeshCIDR:         "10.42.0.0/16",
 	}
 
 	config := GenerateClientConfig(params)
@@ -236,16 +236,16 @@ func TestGenerateClientConfigNoDNS(t *testing.T) {
 func TestGenerateClientConfigWithDNS(t *testing.T) {
 	params := ClientConfigParams{
 		ClientPrivateKey: "privatekey123",
-		ClientMeshIP:     "172.30.100.1",
+		ClientMeshIP:     "10.42.100.1",
 		ServerPublicKey:  "serverpubkey456",
 		ServerEndpoint:   "vpn.example.com:51820",
-		DNSServer:        "172.30.0.1",
-		MeshCIDR:         "172.30.0.0/16",
+		DNSServer:        "10.42.0.1",
+		MeshCIDR:         "10.42.0.0/16",
 	}
 
 	config := GenerateClientConfig(params)
 
-	if !containsString(config, "DNS = 172.30.0.1") {
+	if !containsString(config, "DNS = 10.42.0.1") {
 		t.Error("config should contain DNS when specified")
 	}
 }

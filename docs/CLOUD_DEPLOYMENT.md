@@ -51,7 +51,7 @@ concentrator. Perfect for personal use, small teams, or testing.
                     │   │    + WireGuard Gateway      │   │
                     │   │    + Exit Peer              │   │
                     │   └─────────────────────────────┘   │
-                    │              172.30.0.1             │
+                    │              10.42.0.1              │
                     └──────────────────┬──────────────────┘
                                        │
            ┌───────────────────────────┼───────────────────────────┐
@@ -101,7 +101,7 @@ devices. Better isolation and the ability to place the WireGuard endpoint closer
 │   │    Coordinator      │◄──┼──────────┼──►│    WireGuard Peer   │   │
 │   │    (no peer)        │   │  tunnel  │   │                     │   │
 │   └─────────────────────┘   │          │   └─────────────────────┘   │
-│                             │          │          172.30.0.2         │
+│                             │          │          10.42.0.2          │
 └─────────────────────────────┘          └──────────────┬──────────────┘
                                                         │
                                               ┌─────────┼─────────┐
@@ -223,7 +223,7 @@ connect to their nearest gateway and gain access to the entire mesh.
     │   WireGuard Peer  │          │   WireGuard Peer    │          │   WireGuard Peer    │
     │   New York        │◄─────────►   Frankfurt         │◄─────────►   Singapore         │
     │                   │   mesh   │                     │   mesh   │                     │
-    │   172.30.0.2      │          │   172.30.0.3        │          │   172.30.0.4        │
+    │   10.42.0.2        │          │   10.42.0.3          │          │   10.42.0.4          │
     └─────────┬─────────┘          └──────────┬──────────┘          └──────────┬──────────┘
               │                               │                                │
        ┌──────┴──────┐                 ┌──────┴──────┐                 ┌───────┴──────┐
@@ -292,7 +292,7 @@ devices connect via WireGuard and can reach everything on your home LAN.
         │   │ Home Server │──────│  Home LAN         │   │
         │   │ (TunnelMesh │      │  • NAS            │   │
         │   │  Peer)      │      │  • Cameras        │   │
-        │   │ 172.30.0.2  │      │  • Smart Home     │   │
+        │   │ 10.42.0.2    │      │  • Smart Home     │   │
         │   └─────────────┘      │  • Printers       │   │
         │                        └───────────────────┘   │
         └─────────────────────────────────────────────────┘
@@ -368,7 +368,7 @@ share local development servers, and collaborate as if on the same LAN.
 │   alice     │◄───────►│    bob      │ │   charlie   │ │   david     │◄───────►│   eve       │
 │  (MacBook)  │  direct │  (Linux)    │ │  (Windows)  │ │  (MacBook)  │  direct │  (Linux)    │
 │             │  tunnel │             │ │             │ │             │  tunnel │             │
-│ 172.30.0.2  │         │ 172.30.0.3  │ │ 172.30.0.4  │ │ 172.30.0.5  │         │ 172.30.0.6  │
+│ 10.42.0.2    │         │ 10.42.0.3    │ │ 10.42.0.4    │ │ 10.42.0.5    │         │ 10.42.0.6    │
 └─────────────┘         └─────────────┘ └─────────────┘ └─────────────┘         └─────────────┘
        │                                                                               │
        │  alice$ ssh bob.tunnelmesh                                                    │
@@ -421,7 +421,7 @@ latency. Host game servers on any peer's machine.
 │   Player 1  │◄═══════════════════════►│  Player 2   │◄═══════════════════════►│  Player 3   │
 │  California │      UDP Tunnel         │   Texas     │      UDP Tunnel         │  Florida    │
 │             │      (low latency)      │             │      (low latency)      │             │
-│ 172.30.0.2  │                         │ 172.30.0.3  │                         │ 172.30.0.4  │
+│ 10.42.0.2    │                         │ 10.42.0.3    │                         │ 10.42.0.4    │
 │             │                         │             │                         │             │
 │ Game Server │◄════════════════════════│ ═══════════ │════════════════════════►│             │
 │ 192.168.x.x │      Direct Connect     │             │      Direct Connect     │             │

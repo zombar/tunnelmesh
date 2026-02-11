@@ -341,7 +341,7 @@ If no name is provided, shows the active context.
 Context: home
   Config:     /home/user/.tunnelmesh/home.yaml
   Server:     http://home-server:8080
-  Mesh IP:    172.30.0.5
+  Mesh IP:    10.42.0.5
   Domain:     .tunnelmesh
   DNS Listen: 127.0.0.53:5353
   Service:    tunnelmesh-home (running)
@@ -374,7 +374,7 @@ Server:
   Status:      connected
 
 Mesh:
-  Mesh IP:     172.30.0.5
+  Mesh IP:     10.42.0.5
   Last Seen:   2024-01-15 10:30:45
   Connectable: yes
   Total Peers: 5
@@ -405,10 +405,10 @@ tunnelmesh peers
 ```text
 NAME                 MESH IP         PUBLIC IP            LAST SEEN
 -------------------- --------------- -------------------- --------------------
-coordinator          172.30.0.1      203.0.113.10         2024-01-15 10:30:45
-my-laptop            172.30.0.5      198.51.100.20        2024-01-15 10:30:42
-server-eu            172.30.0.3      192.0.2.50           2024-01-15 10:30:40
-mobile-client        172.30.0.10     -                    2024-01-15 10:25:00
+coordinator          10.42.0.1      203.0.113.10         2024-01-15 10:30:45
+my-laptop            10.42.0.5      198.51.100.20        2024-01-15 10:30:42
+server-eu            10.42.0.3      192.0.2.50           2024-01-15 10:30:40
+mobile-client        10.42.0.10     -                    2024-01-15 10:25:00
 ```
 
 ---
@@ -426,15 +426,15 @@ tunnelmesh resolve <hostname>
 ```bash
 # Resolve a peer name
 tunnelmesh resolve coordinator
-# Output: coordinator -> 172.30.0.1
+# Output: coordinator -> 10.42.0.1
 
 # Resolve with domain suffix
 tunnelmesh resolve coordinator.tunnelmesh
-# Output: coordinator.tunnelmesh -> 172.30.0.1
+# Output: coordinator.tunnelmesh -> 10.42.0.1
 
 # Resolve a DNS alias
 tunnelmesh resolve nas
-# Output: nas -> 172.30.0.2
+# Output: nas -> 10.42.0.2
 ```
 
 ---
@@ -483,7 +483,7 @@ tunnelmesh benchmark server-peer
 **Example output:**
 
 ```text
-Benchmarking server-peer (172.30.0.1)...
+Benchmarking server-peer (10.42.0.1)...
   Direction:  upload
   Size:       10 MB
   Duration:   125 ms

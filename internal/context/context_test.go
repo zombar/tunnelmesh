@@ -62,7 +62,7 @@ func TestStore_AddAndGet(t *testing.T) {
 		ConfigPath: "/path/to/config.yaml",
 		Server:     "https://mesh.work.com",
 		Domain:     ".work.tunnelmesh",
-		MeshIP:     "172.30.0.5",
+		MeshIP:     "10.42.0.5",
 		DNSListen:  "127.0.0.53:5353",
 	}
 
@@ -199,7 +199,7 @@ func TestStore_SaveAndLoad(t *testing.T) {
 		ConfigPath: "/path/to/work.yaml",
 		Server:     "https://mesh.work.com",
 		Domain:     ".work.tunnelmesh",
-		MeshIP:     "172.30.0.5",
+		MeshIP:     "10.42.0.5",
 		DNSListen:  "127.0.0.53:5353",
 	})
 	store.Add(Context{
@@ -227,7 +227,7 @@ func TestStore_SaveAndLoad(t *testing.T) {
 	require.NotNil(t, work)
 	assert.Equal(t, "https://mesh.work.com", work.Server)
 	assert.Equal(t, ".work.tunnelmesh", work.Domain)
-	assert.Equal(t, "172.30.0.5", work.MeshIP)
+	assert.Equal(t, "10.42.0.5", work.MeshIP)
 }
 
 func TestStore_IsEmpty(t *testing.T) {
@@ -274,12 +274,12 @@ func TestStore_UpdateExisting(t *testing.T) {
 	store.Add(Context{Name: "work", Server: "https://old.server.com"})
 
 	// Update with new values
-	store.Add(Context{Name: "work", Server: "https://new.server.com", MeshIP: "172.30.0.10"})
+	store.Add(Context{Name: "work", Server: "https://new.server.com", MeshIP: "10.42.0.10"})
 
 	work := store.Get("work")
 	require.NotNil(t, work)
 	assert.Equal(t, "https://new.server.com", work.Server)
-	assert.Equal(t, "172.30.0.10", work.MeshIP)
+	assert.Equal(t, "10.42.0.10", work.MeshIP)
 	assert.Equal(t, 1, store.Count()) // Should still be just one context
 }
 

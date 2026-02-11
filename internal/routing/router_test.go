@@ -12,15 +12,15 @@ func TestRouter_AddRoute(t *testing.T) {
 	r := NewRouter()
 
 	// Add route for peer
-	r.AddRoute("172.30.0.2", "peer1")
-	r.AddRoute("172.30.0.3", "peer2")
+	r.AddRoute("10.42.0.2", "peer1")
+	r.AddRoute("10.42.0.3", "peer2")
 
 	// Lookup
-	peer, ok := r.Lookup(net.ParseIP("172.30.0.2"))
+	peer, ok := r.Lookup(net.ParseIP("10.42.0.2"))
 	assert.True(t, ok)
 	assert.Equal(t, "peer1", peer)
 
-	peer, ok = r.Lookup(net.ParseIP("172.30.0.3"))
+	peer, ok = r.Lookup(net.ParseIP("10.42.0.3"))
 	assert.True(t, ok)
 	assert.Equal(t, "peer2", peer)
 }
@@ -28,20 +28,20 @@ func TestRouter_AddRoute(t *testing.T) {
 func TestRouter_RemoveRoute(t *testing.T) {
 	r := NewRouter()
 
-	r.AddRoute("172.30.0.2", "peer1")
+	r.AddRoute("10.42.0.2", "peer1")
 	assert.Equal(t, 1, r.Count())
 
-	r.RemoveRoute("172.30.0.2")
+	r.RemoveRoute("10.42.0.2")
 	assert.Equal(t, 0, r.Count())
 
-	_, ok := r.Lookup(net.ParseIP("172.30.0.2"))
+	_, ok := r.Lookup(net.ParseIP("10.42.0.2"))
 	assert.False(t, ok)
 }
 
 func TestRouter_LookupNotFound(t *testing.T) {
 	r := NewRouter()
 
-	_, ok := r.Lookup(net.ParseIP("172.30.0.99"))
+	_, ok := r.Lookup(net.ParseIP("10.42.0.99"))
 	assert.False(t, ok)
 }
 
@@ -49,21 +49,21 @@ func TestRouter_UpdateRoutes(t *testing.T) {
 	r := NewRouter()
 
 	// Add initial routes
-	r.AddRoute("172.30.0.2", "peer1")
-	r.AddRoute("172.30.0.3", "peer2")
+	r.AddRoute("10.42.0.2", "peer1")
+	r.AddRoute("10.42.0.3", "peer2")
 
 	// Bulk update
 	r.UpdateRoutes(map[string]string{
-		"172.30.0.4": "peer3",
-		"172.30.0.5": "peer4",
+		"10.42.0.4": "peer3",
+		"10.42.0.5": "peer4",
 	})
 
 	// Old routes gone
-	_, ok := r.Lookup(net.ParseIP("172.30.0.2"))
+	_, ok := r.Lookup(net.ParseIP("10.42.0.2"))
 	assert.False(t, ok)
 
 	// New routes exist
-	peer, ok := r.Lookup(net.ParseIP("172.30.0.4"))
+	peer, ok := r.Lookup(net.ParseIP("10.42.0.4"))
 	assert.True(t, ok)
 	assert.Equal(t, "peer3", peer)
 }
@@ -71,18 +71,18 @@ func TestRouter_UpdateRoutes(t *testing.T) {
 func TestRouter_ListRoutes(t *testing.T) {
 	r := NewRouter()
 
-	r.AddRoute("172.30.0.2", "peer1")
-	r.AddRoute("172.30.0.3", "peer2")
+	r.AddRoute("10.42.0.2", "peer1")
+	r.AddRoute("10.42.0.3", "peer2")
 
 	routes := r.ListRoutes()
 	assert.Len(t, routes, 2)
-	assert.Equal(t, "peer1", routes["172.30.0.2"])
-	assert.Equal(t, "peer2", routes["172.30.0.3"])
+	assert.Equal(t, "peer1", routes["10.42.0.2"])
+	assert.Equal(t, "peer2", routes["10.42.0.3"])
 }
 
 func TestBuildIPv4Packet(t *testing.T) {
-	src := net.ParseIP("172.30.0.1").To4()
-	dst := net.ParseIP("172.30.0.2").To4()
+	src := net.ParseIP("10.42.0.1").To4()
+	dst := net.ParseIP("10.42.0.2").To4()
 	payload := []byte("hello")
 
 	packet := BuildIPv4Packet(src, dst, ProtoUDP, payload)
@@ -98,8 +98,8 @@ func TestBuildIPv4Packet(t *testing.T) {
 }
 
 func TestParseIPv4Packet(t *testing.T) {
-	src := net.ParseIP("172.30.0.1").To4()
-	dst := net.ParseIP("172.30.0.2").To4()
+	src := net.ParseIP("10.42.0.1").To4()
+	dst := net.ParseIP("10.42.0.2").To4()
 	payload := []byte("test data")
 
 	packet := BuildIPv4Packet(src, dst, ProtoTCP, payload)
@@ -185,7 +185,7 @@ func BenchmarkRouterLookup(b *testing.B) {
 		r.AddRoute(ip, "peer"+string(rune(i)))
 	}
 
-	lookupIP := net.ParseIP("172.30.0.50")
+	lookupIP := net.ParseIP("10.42.0.50")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -196,7 +196,7 @@ func BenchmarkRouterLookup(b *testing.B) {
 // BenchmarkForwardPacket benchmarks packet forwarding with buffer pooling.
 func BenchmarkForwardPacket(b *testing.B) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
@@ -204,8 +204,8 @@ func BenchmarkForwardPacket(b *testing.B) {
 
 	fwd := NewForwarder(router, tunnelMgr)
 
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	payload := make([]byte, 1000) // 1KB payload
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, payload)
 
@@ -220,7 +220,7 @@ func BenchmarkForwardPacket(b *testing.B) {
 // BenchmarkForwardPacketZeroCopy benchmarks zero-copy packet forwarding.
 func BenchmarkForwardPacketZeroCopy(b *testing.B) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
@@ -228,8 +228,8 @@ func BenchmarkForwardPacketZeroCopy(b *testing.B) {
 
 	fwd := NewForwarder(router, tunnelMgr)
 
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	payload := make([]byte, 1000) // 1KB payload
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, payload)
 

@@ -168,7 +168,7 @@ func (r *Router) GetWGClientRange() string {
 		return ""
 	}
 
-	// Return 172.30.100.0/17 which covers 100-127 and 172.30.128.0/18 for 128-191
+	// Return 10.42.100.0/17 which covers 100-127 and 10.42.128.0/18 for 128-191
 	// Simplified: return two /8 blocks that cover the range
 	return fmt.Sprintf("%d.%d.100.0/24", base[0], base[1])
 }

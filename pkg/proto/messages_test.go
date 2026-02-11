@@ -283,7 +283,7 @@ func TestGeoLocation_IsSet(t *testing.T) {
 func TestPeer_WithLocation(t *testing.T) {
 	peer := Peer{
 		Name:   "test-peer",
-		MeshIP: "172.30.0.1",
+		MeshIP: "10.42.0.1",
 		Location: &GeoLocation{
 			Latitude:  40.7128,
 			Longitude: -74.0060,
@@ -382,7 +382,7 @@ func TestPeerStats_ConnectionsOmitEmpty(t *testing.T) {
 func TestPeer_ExitPeerFields(t *testing.T) {
 	peer := Peer{
 		Name:              "exit-node-1",
-		MeshIP:            "172.30.0.5",
+		MeshIP:            "10.42.0.5",
 		AllowsExitTraffic: true,
 	}
 
@@ -402,7 +402,7 @@ func TestPeer_ExitPeerFields(t *testing.T) {
 func TestPeer_UsingExitPeer(t *testing.T) {
 	peer := Peer{
 		Name:     "client-1",
-		MeshIP:   "172.30.0.10",
+		MeshIP:   "10.42.0.10",
 		ExitPeer: "exit-node-1",
 	}
 
@@ -423,7 +423,7 @@ func TestPeer_ExitFieldsOmitEmpty(t *testing.T) {
 	// Exit fields should be omitted when false/empty
 	peer := Peer{
 		Name:   "regular-peer",
-		MeshIP: "172.30.0.1",
+		MeshIP: "10.42.0.1",
 	}
 
 	data, err := json.Marshal(peer)

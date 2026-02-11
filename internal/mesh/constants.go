@@ -10,7 +10,7 @@ const (
 	AliasMesh = ".mesh" // Alternative alias
 
 	// Network configuration
-	CIDR = "172.30.0.0/16" // Mesh network CIDR - all peers get IPs from this range
+	CIDR = "10.42.0.0/16" // Mesh network CIDR - all peers get IPs from this range
 )
 
 // AllSuffixes returns all supported domain suffixes (canonical first).

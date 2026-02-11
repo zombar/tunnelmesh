@@ -137,8 +137,8 @@ func TestSystemStoreSaveLoadWireGuardClients(t *testing.T) {
 	require.NoError(t, err)
 
 	clients := []map[string]interface{}{
-		{"id": "client1", "name": "laptop", "ip": "172.30.100.1"},
-		{"id": "client2", "name": "phone", "ip": "172.30.100.2"},
+		{"id": "client1", "name": "laptop", "ip": "10.42.100.1"},
+		{"id": "client2", "name": "phone", "ip": "10.42.100.2"},
 	}
 
 	err = ss.SaveWireGuardClients(context.Background(), clients)

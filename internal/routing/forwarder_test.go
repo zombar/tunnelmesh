@@ -116,7 +116,7 @@ func (m *mockTunnel) InjectData(data []byte) {
 
 func TestForwarder_ForwardPacket(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
@@ -125,8 +125,8 @@ func TestForwarder_ForwardPacket(t *testing.T) {
 	fwd := NewForwarder(router, tunnelMgr)
 
 	// Create a test packet
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	payload := []byte("test data")
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, payload)
 
@@ -150,8 +150,8 @@ func TestForwarder_ForwardPacket_NoRoute(t *testing.T) {
 	fwd := NewForwarder(router, tunnelMgr)
 
 	// Create a test packet to unknown destination
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.99").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.99").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
 
 	// Should fail - no route
@@ -162,15 +162,15 @@ func TestForwarder_ForwardPacket_NoRoute(t *testing.T) {
 
 func TestForwarder_ForwardPacket_NoTunnel(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	// No tunnel added for peer1
 
 	fwd := NewForwarder(router, tunnelMgr)
 
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
 
 	err := fwd.ForwardPacket(packet)
@@ -187,8 +187,8 @@ func TestForwarder_ReceivePacket(t *testing.T) {
 	fwd.SetTUN(mockTun)
 
 	// Create a test packet
-	srcIP := net.ParseIP("172.30.0.2").To4()
-	dstIP := net.ParseIP("172.30.0.1").To4()
+	srcIP := net.ParseIP("10.42.0.2").To4()
+	dstIP := net.ParseIP("10.42.0.1").To4()
 	payload := []byte("incoming data")
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, payload)
 
@@ -203,7 +203,7 @@ func TestForwarder_ReceivePacket(t *testing.T) {
 
 func TestForwarderStats(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
@@ -214,14 +214,14 @@ func TestForwarderStats(t *testing.T) {
 	fwd.SetTUN(mockTun)
 
 	// Forward a packet
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
 	_ = fwd.ForwardPacket(packet)
 
 	// Receive a packet
-	srcIP = net.ParseIP("172.30.0.2").To4()
-	dstIP = net.ParseIP("172.30.0.1").To4()
+	srcIP = net.ParseIP("10.42.0.2").To4()
+	dstIP = net.ParseIP("10.42.0.1").To4()
 	packet = BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
 	_ = fwd.ReceivePacket(packet)
 
@@ -265,7 +265,7 @@ func (m *MockTunnelManager) Remove(name string) {
 
 func TestForwarderLoop(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	mockTun := newMockTUN()
@@ -274,8 +274,8 @@ func TestForwarderLoop(t *testing.T) {
 	fwd.SetTUN(mockTun)
 
 	// Inject a packet into TUN to be forwarded
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
 
 	// Add tunnel after starting
@@ -342,7 +342,7 @@ func (m *mockRelay) SetConnected(connected bool) {
 
 func TestForwarder_RelayFallback_NoTunnel(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	// No direct tunnel for peer1
@@ -353,8 +353,8 @@ func TestForwarder_RelayFallback_NoTunnel(t *testing.T) {
 	fwd.SetRelay(relay)
 
 	// Create a test packet
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test via relay"))
 
 	// Forward the packet - should use relay since no direct tunnel
@@ -371,7 +371,7 @@ func TestForwarder_RelayFallback_NoTunnel(t *testing.T) {
 
 func TestForwarder_DirectTunnelPreferred(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
@@ -383,8 +383,8 @@ func TestForwarder_DirectTunnelPreferred(t *testing.T) {
 	fwd.SetRelay(relay)
 
 	// Create a test packet
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test via direct"))
 
 	// Forward the packet - should use direct tunnel
@@ -401,7 +401,7 @@ func TestForwarder_DirectTunnelPreferred(t *testing.T) {
 
 func TestForwarder_RelayDisconnected(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	// No direct tunnel
@@ -412,8 +412,8 @@ func TestForwarder_RelayDisconnected(t *testing.T) {
 	fwd := NewForwarder(router, tunnelMgr)
 	fwd.SetRelay(relay)
 
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
 
 	// Should fail - no tunnel and relay disconnected
@@ -431,8 +431,8 @@ func TestForwarder_HandleRelayPacket(t *testing.T) {
 	fwd.SetTUN(mockTun)
 
 	// Create a test IP packet
-	srcIP := net.ParseIP("172.30.0.2").To4()
-	dstIP := net.ParseIP("172.30.0.1").To4()
+	srcIP := net.ParseIP("10.42.0.2").To4()
+	dstIP := net.ParseIP("10.42.0.1").To4()
 	payload := []byte("relay packet data")
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, payload)
 
@@ -454,7 +454,7 @@ func TestForwarder_HandleRelayPacket(t *testing.T) {
 
 func TestForwarder_DeadTunnelFallbackToRelay(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
@@ -477,8 +477,8 @@ func TestForwarder_DeadTunnelFallbackToRelay(t *testing.T) {
 	})
 
 	// Create a test packet
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test via relay fallback"))
 
 	// Forward the packet - should fail on tunnel, fall back to relay
@@ -504,7 +504,7 @@ func TestForwarder_DeadTunnelFallbackToRelay(t *testing.T) {
 
 func TestForwarder_DeadTunnelNoRelay(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
@@ -523,8 +523,8 @@ func TestForwarder_DeadTunnelNoRelay(t *testing.T) {
 	})
 
 	// Create a test packet
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test no relay"))
 
 	// Forward the packet - should fail on tunnel and have no relay fallback
@@ -545,7 +545,7 @@ func TestForwarder_DeadTunnelNoRelay(t *testing.T) {
 
 func TestForwarder_DeadTunnelCallbackDebounced(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
@@ -567,8 +567,8 @@ func TestForwarder_DeadTunnelCallbackDebounced(t *testing.T) {
 	})
 
 	// Create a test packet
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test debounce"))
 
 	// Send 10 packets rapidly - all will fail and trigger dead tunnel callback
@@ -646,14 +646,14 @@ func TestForwarder_WGHandler_RouteToWGClient(t *testing.T) {
 
 	tunnelMgr := NewMockTunnelManager()
 	wgHandler := newMockWGHandler()
-	wgHandler.AddWGClientIP("172.30.100.1") // This is a WG client
+	wgHandler.AddWGClientIP("10.42.100.1") // This is a WG client
 
 	fwd := NewForwarder(router, tunnelMgr)
 	fwd.SetWGHandler(wgHandler)
 
 	// Create a packet to WG client
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.100.1").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.100.1").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("to WG client"))
 
 	err := fwd.ForwardPacket(packet)
@@ -667,21 +667,21 @@ func TestForwarder_WGHandler_RouteToWGClient(t *testing.T) {
 
 func TestForwarder_WGHandler_NotWGClient(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
 	tunnelMgr.Add("peer1", tunnel)
 
 	wgHandler := newMockWGHandler()
-	// Don't add 172.30.0.2 as WG client - it should go via normal tunnel
+	// Don't add 10.42.0.2 as WG client - it should go via normal tunnel
 
 	fwd := NewForwarder(router, tunnelMgr)
 	fwd.SetWGHandler(wgHandler)
 
 	// Create a packet to mesh peer (not WG client)
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("to mesh peer"))
 
 	err := fwd.ForwardPacket(packet)
@@ -701,15 +701,15 @@ func TestForwarder_WGHandler_SendError(t *testing.T) {
 	tunnelMgr := NewMockTunnelManager()
 
 	wgHandler := newMockWGHandler()
-	wgHandler.AddWGClientIP("172.30.100.1")
+	wgHandler.AddWGClientIP("10.42.100.1")
 	wgHandler.SetSendError(io.ErrClosedPipe)
 
 	fwd := NewForwarder(router, tunnelMgr)
 	fwd.SetWGHandler(wgHandler)
 
 	// Create a packet to WG client
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.100.1").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.100.1").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("to WG client"))
 
 	err := fwd.ForwardPacket(packet)
@@ -719,7 +719,7 @@ func TestForwarder_WGHandler_SendError(t *testing.T) {
 
 func TestForwarder_WGHandler_NilHandler(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
@@ -729,8 +729,8 @@ func TestForwarder_WGHandler_NilHandler(t *testing.T) {
 	// Don't set WG handler - should fall through to normal routing
 
 	// Create a packet
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
 
 	err := fwd.ForwardPacket(packet)
@@ -764,7 +764,7 @@ func TestForwarder_IsExternalTraffic(t *testing.T) {
 	fwd := NewForwarder(router, tunnelMgr)
 
 	// Set mesh CIDR for split-tunnel detection
-	_, meshNet, _ := net.ParseCIDR("172.30.0.0/16")
+	_, meshNet, _ := net.ParseCIDR("10.42.0.0/16")
 	fwd.SetMeshCIDR(meshNet)
 
 	tests := []struct {
@@ -772,8 +772,8 @@ func TestForwarder_IsExternalTraffic(t *testing.T) {
 		ip       string
 		external bool
 	}{
-		{"mesh IP", "172.30.0.1", false},
-		{"mesh IP 2", "172.30.255.255", false},
+		{"mesh IP", "10.42.0.1", false},
+		{"mesh IP 2", "10.42.255.255", false},
 		{"external IP google DNS", "8.8.8.8", true},
 		{"external IP cloudflare", "1.1.1.1", true},
 		{"external IP private 192.168", "192.168.1.1", true}, // Not in mesh, so external
@@ -818,7 +818,7 @@ func TestForwarder_SetExitPeer(t *testing.T) {
 func TestForwarder_ExitPeer_ForwardExternalTraffic(t *testing.T) {
 	router := NewRouter()
 	// Only add route for exit node, not for 8.8.8.8
-	router.AddRoute("172.30.0.5", "exit-server")
+	router.AddRoute("10.42.0.5", "exit-server")
 
 	tunnelMgr := NewMockTunnelManager()
 	exitTunnel := newMockTunnel()
@@ -827,12 +827,12 @@ func TestForwarder_ExitPeer_ForwardExternalTraffic(t *testing.T) {
 	fwd := NewForwarder(router, tunnelMgr)
 
 	// Configure for exit node routing
-	_, meshNet, _ := net.ParseCIDR("172.30.0.0/16")
+	_, meshNet, _ := net.ParseCIDR("10.42.0.0/16")
 	fwd.SetMeshCIDR(meshNet)
 	fwd.SetExitPeer("exit-server")
 
 	// Create a packet to external IP (8.8.8.8)
-	srcIP := net.ParseIP("172.30.0.1").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
 	dstIP := net.ParseIP("8.8.8.8").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("to google DNS"))
 
@@ -847,8 +847,8 @@ func TestForwarder_ExitPeer_ForwardExternalTraffic(t *testing.T) {
 
 func TestForwarder_ExitPeer_MeshTrafficStaysDirect(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
-	router.AddRoute("172.30.0.5", "exit-server")
+	router.AddRoute("10.42.0.2", "peer1")
+	router.AddRoute("10.42.0.5", "exit-server")
 
 	tunnelMgr := NewMockTunnelManager()
 	peerTunnel := newMockTunnel()
@@ -859,13 +859,13 @@ func TestForwarder_ExitPeer_MeshTrafficStaysDirect(t *testing.T) {
 	fwd := NewForwarder(router, tunnelMgr)
 
 	// Configure for exit node routing
-	_, meshNet, _ := net.ParseCIDR("172.30.0.0/16")
+	_, meshNet, _ := net.ParseCIDR("10.42.0.0/16")
 	fwd.SetMeshCIDR(meshNet)
 	fwd.SetExitPeer("exit-server")
 
-	// Create a packet to mesh peer (172.30.0.2)
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	// Create a packet to mesh peer (10.42.0.2)
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("to mesh peer"))
 
 	// Forward the packet - should go to peer1, not exit node
@@ -887,12 +887,12 @@ func TestForwarder_ExitPeer_NoExitPeerConfigured(t *testing.T) {
 	fwd := NewForwarder(router, tunnelMgr)
 
 	// Set mesh CIDR but no exit node
-	_, meshNet, _ := net.ParseCIDR("172.30.0.0/16")
+	_, meshNet, _ := net.ParseCIDR("10.42.0.0/16")
 	fwd.SetMeshCIDR(meshNet)
 	// No exit node configured
 
 	// Create a packet to external IP
-	srcIP := net.ParseIP("172.30.0.1").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
 	dstIP := net.ParseIP("8.8.8.8").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("to external"))
 
@@ -914,12 +914,12 @@ func TestForwarder_ExitPeer_FallbackToRelay(t *testing.T) {
 	fwd.SetRelay(relay)
 
 	// Configure for exit node routing
-	_, meshNet, _ := net.ParseCIDR("172.30.0.0/16")
+	_, meshNet, _ := net.ParseCIDR("10.42.0.0/16")
 	fwd.SetMeshCIDR(meshNet)
 	fwd.SetExitPeer("exit-server")
 
 	// Create a packet to external IP
-	srcIP := net.ParseIP("172.30.0.1").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
 	dstIP := net.ParseIP("8.8.8.8").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("to external via relay"))
 
@@ -937,7 +937,7 @@ func TestForwarder_ExitPeer_FallbackToRelay(t *testing.T) {
 
 func TestForwarderStats_EnabledByDefault(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
@@ -951,8 +951,8 @@ func TestForwarderStats_EnabledByDefault(t *testing.T) {
 	assert.True(t, fwd.StatsEnabled(), "stats should be enabled by default")
 
 	// Forward a packet
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
 	_ = fwd.ForwardPacket(packet)
 
@@ -962,7 +962,7 @@ func TestForwarderStats_EnabledByDefault(t *testing.T) {
 
 func TestForwarderStats_Disabled(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
@@ -976,16 +976,16 @@ func TestForwarderStats_Disabled(t *testing.T) {
 	assert.False(t, fwd.StatsEnabled(), "stats should be disabled after SetStatsEnabled(false)")
 
 	// Forward multiple packets
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	for i := 0; i < 100; i++ {
 		packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
 		_ = fwd.ForwardPacket(packet)
 	}
 
 	// Receive a packet
-	srcIP = net.ParseIP("172.30.0.2").To4()
-	dstIP = net.ParseIP("172.30.0.1").To4()
+	srcIP = net.ParseIP("10.42.0.2").To4()
+	dstIP = net.ParseIP("10.42.0.1").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
 	_ = fwd.ReceivePacket(packet)
 
@@ -1005,8 +1005,8 @@ func TestForwarderStats_DisabledNoRoute(t *testing.T) {
 	fwd.SetStatsEnabled(false)
 
 	// Try to forward packet with no route
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.99").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.99").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
 	_ = fwd.ForwardPacket(packet) // Will fail, but should not record stats
 
@@ -1016,7 +1016,7 @@ func TestForwarderStats_DisabledNoRoute(t *testing.T) {
 
 func TestForwarderStats_ReEnable(t *testing.T) {
 	router := NewRouter()
-	router.AddRoute("172.30.0.2", "peer1")
+	router.AddRoute("10.42.0.2", "peer1")
 
 	tunnelMgr := NewMockTunnelManager()
 	tunnel := newMockTunnel()
@@ -1026,8 +1026,8 @@ func TestForwarderStats_ReEnable(t *testing.T) {
 	fwd.SetStatsEnabled(false)
 
 	// Forward while disabled
-	srcIP := net.ParseIP("172.30.0.1").To4()
-	dstIP := net.ParseIP("172.30.0.2").To4()
+	srcIP := net.ParseIP("10.42.0.1").To4()
+	dstIP := net.ParseIP("10.42.0.2").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoUDP, []byte("test"))
 	_ = fwd.ForwardPacket(packet)
 
@@ -1057,8 +1057,8 @@ func TestForwarder_PacketFilter_DropsByDefault(t *testing.T) {
 	fwd.SetFilter(filter)
 
 	// Create incoming TCP packet to port 22
-	srcIP := net.ParseIP("172.30.0.2").To4()
-	dstIP := net.ParseIP("172.30.0.1").To4()
+	srcIP := net.ParseIP("10.42.0.2").To4()
+	dstIP := net.ParseIP("10.42.0.1").To4()
 	packet := buildTCPPacket(srcIP, dstIP, 22)
 
 	// Receive the packet - should be dropped (no allow rule for port 22)
@@ -1091,8 +1091,8 @@ func TestForwarder_PacketFilter_AllowsWithRule(t *testing.T) {
 	fwd.SetFilter(filter)
 
 	// Create incoming TCP packet to port 22
-	srcIP := net.ParseIP("172.30.0.2").To4()
-	dstIP := net.ParseIP("172.30.0.1").To4()
+	srcIP := net.ParseIP("10.42.0.2").To4()
+	dstIP := net.ParseIP("10.42.0.1").To4()
 	packet := buildTCPPacket(srcIP, dstIP, 22)
 
 	// Receive the packet - should be allowed
@@ -1122,8 +1122,8 @@ func TestForwarder_PacketFilter_ICMP_NotFiltered(t *testing.T) {
 	fwd.SetFilter(filter)
 
 	// Create incoming ICMP packet
-	srcIP := net.ParseIP("172.30.0.2").To4()
-	dstIP := net.ParseIP("172.30.0.1").To4()
+	srcIP := net.ParseIP("10.42.0.2").To4()
+	dstIP := net.ParseIP("10.42.0.1").To4()
 	packet := BuildIPv4Packet(srcIP, dstIP, ProtoICMP, []byte("ping"))
 
 	// Receive the packet - ICMP should pass (not filtered)
@@ -1145,8 +1145,8 @@ func TestForwarder_PacketFilter_Nil(t *testing.T) {
 	// No filter set - nil
 
 	// Create incoming TCP packet
-	srcIP := net.ParseIP("172.30.0.2").To4()
-	dstIP := net.ParseIP("172.30.0.1").To4()
+	srcIP := net.ParseIP("10.42.0.2").To4()
+	dstIP := net.ParseIP("10.42.0.1").To4()
 	packet := buildTCPPacket(srcIP, dstIP, 22)
 
 	// Receive the packet - should pass (no filter)
@@ -1191,8 +1191,8 @@ func TestForwarder_PacketFilter_PeerSpecific(t *testing.T) {
 	})
 
 	// Create incoming TCP packet to port 22
-	srcIP := net.ParseIP("172.30.0.2").To4()
-	dstIP := net.ParseIP("172.30.0.1").To4()
+	srcIP := net.ParseIP("10.42.0.2").To4()
+	dstIP := net.ParseIP("10.42.0.1").To4()
 	packet := buildTCPPacket(srcIP, dstIP, 22)
 
 	t.Run("trusted peer allowed", func(t *testing.T) {

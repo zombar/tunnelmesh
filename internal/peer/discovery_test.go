@@ -32,7 +32,7 @@ func TestMeshNode_buildTransportPeerInfo(t *testing.T) {
 		PrivateIPs:       []string{"192.168.1.10"},
 		SSHPort:          2222,
 		UDPPort:          51820,
-		MeshIP:           "172.30.0.5",
+		MeshIP:           "10.42.0.5",
 		Connectable:      true,
 		ExternalEndpoint: "1.2.3.4:51820",
 	}

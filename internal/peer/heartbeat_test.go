@@ -15,7 +15,7 @@ func TestMeshNode_RunHeartbeat_FastPhase(t *testing.T) {
 	// We can't easily test timing, but we can verify the loop exits on context cancel
 	identity := &PeerIdentity{
 		Name:     "test-node",
-		MeshCIDR: "172.30.0.0/16",
+		MeshCIDR: "10.42.0.0/16",
 		Config: &config.PeerConfig{
 			Name: "test-node",
 		},
@@ -46,7 +46,7 @@ func TestMeshNode_PerformHeartbeat_FirstRun(t *testing.T) {
 		Name:          "test-node",
 		PubKeyEncoded: "test-key",
 		SSHPort:       2222,
-		MeshCIDR:      "172.30.0.0/16",
+		MeshCIDR:      "10.42.0.0/16",
 		Config: &config.PeerConfig{
 			Name:    "test-node",
 			SSHPort: 2222,
@@ -73,7 +73,7 @@ func TestMeshNode_HandleIPChange(t *testing.T) {
 		Name:          "test-node",
 		PubKeyEncoded: "test-key",
 		SSHPort:       2222,
-		MeshCIDR:      "172.30.0.0/16",
+		MeshCIDR:      "10.42.0.0/16",
 		Config: &config.PeerConfig{
 			Name:    "test-node",
 			SSHPort: 2222,

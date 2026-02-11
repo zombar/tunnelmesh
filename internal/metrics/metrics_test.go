@@ -17,7 +17,7 @@ func TestInitMetrics(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "10.42.0.1", "1.0.0")
 	if m == nil {
 		t.Fatal("InitMetrics returned nil")
 	}
@@ -70,7 +70,7 @@ func TestMetricsCounterIncrement(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "10.42.0.1", "1.0.0")
 
 	// Test counter increments
 	m.PacketsSent.Add(100)
@@ -110,7 +110,7 @@ func TestMetricsGaugeSet(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "10.42.0.1", "1.0.0")
 
 	// Test gauge sets
 	m.ActiveTunnels.Set(5)
@@ -145,7 +145,7 @@ func TestMetricsLabels(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	m := InitMetrics("test-peer", "172.30.0.1", "1.0.0")
+	m := InitMetrics("test-peer", "10.42.0.1", "1.0.0")
 
 	// Test labeled metrics
 	m.ConnectionState.WithLabelValues("peer-a", "ssh").Set(2)
@@ -197,7 +197,7 @@ func TestPeerInfoMetric(t *testing.T) {
 	Registry.MustRegister(collectors.NewGoCollector())
 	Registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
-	_ = InitMetrics("my-node", "172.30.1.5", "2.0.0")
+	_ = InitMetrics("my-node", "10.42.1.5", "2.0.0")
 
 	mfs, err := Registry.Gather()
 	if err != nil {
@@ -224,8 +224,8 @@ func TestPeerInfoMetric(t *testing.T) {
 			if labels["peer"] != "my-node" {
 				t.Errorf("Expected peer=my-node, got %s", labels["peer"])
 			}
-			if labels["mesh_ip"] != "172.30.1.5" {
-				t.Errorf("Expected mesh_ip=172.30.1.5, got %s", labels["mesh_ip"])
+			if labels["mesh_ip"] != "10.42.1.5" {
+				t.Errorf("Expected mesh_ip=10.42.1.5, got %s", labels["mesh_ip"])
 			}
 			if labels["version"] != "2.0.0" {
 				t.Errorf("Expected version=2.0.0, got %s", labels["version"])

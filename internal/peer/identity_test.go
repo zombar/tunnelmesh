@@ -16,8 +16,8 @@ func TestNewPeerIdentity(t *testing.T) {
 	}
 	pubKeyEncoded := "ssh-ed25519 AAAAC3..."
 	resp := &proto.RegisterResponse{
-		MeshIP:   "172.30.0.1",
-		MeshCIDR: "172.30.0.0/16",
+		MeshIP:   "10.42.0.1",
+		MeshCIDR: "10.42.0.0/16",
 		Domain:   ".tunnelmesh",
 	}
 
@@ -28,8 +28,8 @@ func TestNewPeerIdentity(t *testing.T) {
 	assert.Equal(t, pubKeyEncoded, identity.PubKeyEncoded)
 	assert.Equal(t, 2222, identity.SSHPort)
 	assert.Equal(t, 2223, identity.UDPPort)
-	assert.Equal(t, "172.30.0.1", identity.MeshIP)
-	assert.Equal(t, "172.30.0.0/16", identity.MeshCIDR)
+	assert.Equal(t, "10.42.0.1", identity.MeshIP)
+	assert.Equal(t, "10.42.0.0/16", identity.MeshCIDR)
 	assert.Equal(t, ".tunnelmesh", identity.Domain)
 	assert.Equal(t, "v1.0.0", identity.Version)
 	assert.Same(t, cfg, identity.Config)
@@ -37,7 +37,7 @@ func TestNewPeerIdentity(t *testing.T) {
 
 func TestPeerIdentity_GetLocalIPs(t *testing.T) {
 	identity := &PeerIdentity{
-		MeshCIDR: "172.30.0.0/16",
+		MeshCIDR: "10.42.0.0/16",
 	}
 
 	publicIPs, privateIPs, behindNAT := identity.GetLocalIPs()
@@ -53,12 +53,12 @@ func TestPeerIdentity_GetLocalIPs(t *testing.T) {
 func TestPeerIdentity_GetLocalIPs_ExcludesMeshNetwork(t *testing.T) {
 	// This test verifies that mesh IPs are excluded
 	identity := &PeerIdentity{
-		MeshCIDR: "172.30.0.0/16",
+		MeshCIDR: "10.42.0.0/16",
 	}
 
 	_, privateIPs, _ := identity.GetLocalIPs()
 
-	// Verify no 172.30.x.x IPs are returned
+	// Verify no 10.42.x.x IPs are returned
 	for _, ip := range privateIPs {
 		assert.NotRegexp(t, `^10\.99\.`, ip, "mesh network IPs should be excluded")
 	}
