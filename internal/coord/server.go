@@ -66,7 +66,7 @@ type serverStats struct {
 // This separation ensures the admin interface (dashboards, monitoring, config) is never
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
-	ctx             context.Context // Server lifecycle context for background operations
+	cancel          context.CancelFunc // Cancel function for server lifecycle (stops background operations)
 	cfg             *config.PeerConfig
 	mux             *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
 	adminMux        *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
@@ -291,8 +291,12 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 		coordinatorName = "coordinator"
 	}
 
+	// Create a cancellable context for server lifecycle
+	// This allows us to stop all background operations on shutdown
+	ctx, cancel := context.WithCancel(ctx)
+
 	srv := &Server{
-		ctx:          ctx,
+		cancel:       cancel,
 		cfg:          cfg,
 		mux:          http.NewServeMux(),
 		peers:        make(map[string]*peerInfo),
@@ -411,7 +415,7 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 			Msg("replication engine initialized - coordinators will discover each other via peer list")
 	}
 
-	srv.setupRoutes()
+	srv.setupRoutes(ctx)
 	return srv, nil
 }
 
@@ -646,6 +650,11 @@ func (s *Server) saveFilterRulesAsync() {
 // Shutdown gracefully shuts down the server, persisting state.
 // Returns an error if any persistence operations fail.
 func (s *Server) Shutdown(ctx context.Context) error {
+	// Cancel server lifecycle context to stop all background operations
+	if s.cancel != nil {
+		s.cancel()
+	}
+
 	log.Info().Msg("saving data before shutdown")
 
 	var errs []error
@@ -846,7 +855,7 @@ func (s *Server) SetVersion(version string) {
 	s.version = version
 }
 
-func (s *Server) setupRoutes() {
+func (s *Server) setupRoutes(ctx context.Context) {
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/ca.crt", s.handleCACert) // CA cert for mesh TLS (no auth)
 	s.mux.HandleFunc("/api/v1/register", s.withAuth(s.handleRegister))
@@ -857,7 +866,7 @@ func (s *Server) setupRoutes() {
 
 	// Setup relay routes (JWT auth handled internally)
 	// Always setup relay routes (relay always enabled for coordinators)
-	s.setupRelayRoutes()
+	s.setupRelayRoutes(ctx)
 
 	// Always setup admin routes (admin always enabled for coordinators)
 	s.setupAdminRoutes()

@@ -358,17 +358,29 @@ func TestHeadObjectNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-func TestListObjects(t *testing.T) {
+// listObjectsTestCase represents a test case for list objects operations
+type listObjectsTestCase struct {
+	name           string
+	objectKeys     []string
+	requestURL     string
+	expectedCount  int
+	expectedPrefix string
+	expectedName   string
+}
+
+// runListObjectsTest executes a list objects test case
+func runListObjectsTest(t *testing.T, tc listObjectsTestCase) {
+	t.Helper()
 	server, store := newTestServer(t)
 	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice"))
 
-	// Add some objects
-	for _, key := range []string{"a.txt", "b.txt", "c.txt"} {
+	// Add test objects
+	for _, key := range tc.objectKeys {
 		_, err := store.PutObject(context.Background(), "my-bucket", key, bytes.NewReader([]byte("data")), 4, "text/plain", nil)
 		require.NoError(t, err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/my-bucket", nil)
+	req := httptest.NewRequest(http.MethodGet, tc.requestURL, nil)
 	w := httptest.NewRecorder()
 
 	server.Handler().ServeHTTP(w, req)
@@ -377,31 +389,30 @@ func TestListObjects(t *testing.T) {
 
 	var resp ListBucketResult
 	require.NoError(t, xml.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "my-bucket", resp.Name)
-	assert.Len(t, resp.Contents, 3)
+	assert.Equal(t, tc.expectedName, resp.Name)
+	assert.Equal(t, tc.expectedPrefix, resp.Prefix)
+	assert.Len(t, resp.Contents, tc.expectedCount)
+}
+
+func TestListObjects(t *testing.T) {
+	runListObjectsTest(t, listObjectsTestCase{
+		name:          "list all objects",
+		objectKeys:    []string{"a.txt", "b.txt", "c.txt"},
+		requestURL:    "/my-bucket",
+		expectedCount: 3,
+		expectedName:  "my-bucket",
+	})
 }
 
 func TestListObjectsWithPrefix(t *testing.T) {
-	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice"))
-
-	// Add objects with different prefixes
-	for _, key := range []string{"docs/a.txt", "docs/b.txt", "images/c.png"} {
-		_, err := store.PutObject(context.Background(), "my-bucket", key, bytes.NewReader([]byte("data")), 4, "text/plain", nil)
-		require.NoError(t, err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/my-bucket?prefix=docs/", nil)
-	w := httptest.NewRecorder()
-
-	server.Handler().ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var resp ListBucketResult
-	require.NoError(t, xml.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "docs/", resp.Prefix)
-	assert.Len(t, resp.Contents, 2)
+	runListObjectsTest(t, listObjectsTestCase{
+		name:           "list objects with prefix",
+		objectKeys:     []string{"docs/a.txt", "docs/b.txt", "images/c.png"},
+		requestURL:     "/my-bucket?prefix=docs/",
+		expectedCount:  2,
+		expectedPrefix: "docs/",
+		expectedName:   "my-bucket",
+	})
 }
 
 func TestListObjectsV2(t *testing.T) {
