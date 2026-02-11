@@ -713,10 +713,21 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	// Wait for all background goroutines to finish
+	// Wait for all background goroutines to finish (with timeout)
 	log.Info().Msg("waiting for background goroutines to complete")
-	s.wg.Wait()
-	log.Info().Msg("all background goroutines completed")
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Info().Msg("all background goroutines completed")
+	case <-time.After(10 * time.Second):
+		log.Warn().Msg("timeout waiting for background goroutines to complete")
+		errs = append(errs, fmt.Errorf("shutdown timeout: goroutines did not complete within 10s"))
+	}
 
 	// Flush S3 store to ensure all filesystem operations complete
 	if s.s3Store != nil {

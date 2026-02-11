@@ -368,12 +368,17 @@ func runAsService() {
 func isLocalhostURL(u *url.URL) bool {
 	host := u.Hostname() // strips port if present
 
+	// Empty hostname is not localhost (reject malformed URLs like "http://:8443")
+	if host == "" {
+		return false
+	}
+
 	// Check common localhost names
-	if host == "localhost" || host == "" {
+	if host == "localhost" {
 		return true
 	}
 
-	// Check IPv4 loopback (127.0.0.0/8)
+	// Check IPv4/IPv6 loopback (127.0.0.0/8, ::1)
 	if ip := net.ParseIP(host); ip != nil {
 		if ip.IsLoopback() {
 			return true

@@ -2069,7 +2069,27 @@ func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Sync the data directory to ensure all writes are flushed
+	// Walk through all buckets and sync metadata files
+	bucketsDir := filepath.Join(s.dataDir, "buckets")
+	err := filepath.Walk(bucketsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		// Only sync regular files (not directories)
+		if !info.IsDir() {
+			if f, err := os.OpenFile(path, os.O_RDONLY, 0); err == nil {
+				_ = f.Sync()
+				_ = f.Close()
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("sync bucket files: %w", err)
+	}
+
+	// Sync the data directory itself
 	f, err := os.Open(s.dataDir)
 	if err != nil {
 		return fmt.Errorf("open data dir: %w", err)

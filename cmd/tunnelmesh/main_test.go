@@ -149,6 +149,12 @@ func TestNormalizeServerURL(t *testing.T) {
 			errorMsg:    "must use HTTPS for remote servers",
 		},
 		{
+			name:        "HTTP with empty hostname (malformed URL)",
+			input:       "http://:8443",
+			expectError: true,
+			errorMsg:    "must use HTTPS for remote servers",
+		},
+		{
 			name:        "URL with path (gets HTTPS prefix added)",
 			input:       "ht!tp://invalid",
 			expectError: true,
