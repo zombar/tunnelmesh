@@ -10,8 +10,15 @@ coordinator:
   enabled: true
   listen: ":8080"
   admin_peers: ["server", "mynode"]  # These peers are admins
-  service_ports: [9443]    # Allow metrics access
+  service_ports: [9443, 3100]    # Allow metrics and Loki access
   locations: true          # Enable map panel and location tracking
   monitoring:
     prometheus_url: "http://localhost:9090"
     grafana_url: "http://localhost:3000"
+
+# Log shipping to Loki
+loki:
+  enabled: true
+  url: "http://127.0.0.1:3100"  # Loki push URL (IPv4, use mesh IP from other peers)
+  batch_size: 100
+  flush_interval: "5s"

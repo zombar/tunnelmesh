@@ -58,7 +58,7 @@
     <!-- All panel sections in one container - tab visibility controlled by data-tab attribute -->
     <main>
         <!-- Alert tiles - visible in mesh and data tabs -->
-        <section id="alerts-section" data-tab="mesh data" style="display: none;">
+        <section id="alerts-section" data-tab="mesh" style="display: none;">
             <div class="alert-tiles">
                 <a class="alert-tile warning clickable-card" id="alert-tile-warning" href="/prometheus/alerts">
                     <div class="alert-content">
@@ -581,7 +581,7 @@
         </section>
 
         <!-- Logs section - shown in both mesh and data tabs, at bottom -->
-        <section id="logs-section" data-tab="mesh data" class="logs-card" style="display: none;">
+        <section id="logs-section" data-tab="mesh" class="logs-card" style="display: none;">
             <h2 class="section-toggle" onclick="toggleSection(this)">Logs</h2>
             <div class="collapsible-content">
                 <a id="logs-link" class="logs-container clickable-card" href="/grafana/explore">
