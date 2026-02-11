@@ -124,6 +124,11 @@ func NewStore(dataDir string, quota *QuotaManager) (*Store, error) {
 // syncedWriteFile writes data to a file and calls fsync to ensure durability.
 // This prevents data loss in case of sudden power loss or system crash.
 // Use this instead of os.WriteFile for critical metadata.
+//
+// During tests, fsync is skipped (detected via TUNNELMESH_TEST=1 env var) since:
+// - Tests use temp directories that are discarded anyway
+// - fsync is very slow on Windows (100-500ms per call)
+// - 179 S3 tests × fsync = 7+ minutes on Windows CI
 func syncedWriteFile(path string, data []byte, perm os.FileMode) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
@@ -135,9 +140,12 @@ func syncedWriteFile(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 
-	// Ensure data is flushed to disk before returning
-	if err := f.Sync(); err != nil {
-		return err
+	// Skip fsync during tests to avoid 7+ minute test times on Windows
+	// Production code always fsyncs for durability
+	if os.Getenv("TUNNELMESH_TEST") == "" {
+		if err := f.Sync(); err != nil {
+			return err
+		}
 	}
 
 	return nil
