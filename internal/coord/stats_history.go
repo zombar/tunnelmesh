@@ -163,8 +163,8 @@ type persistedHistory struct {
 // Save persists the stats history to S3 or a JSON file.
 // SaveResult contains per-peer save results for metrics tracking.
 type SaveResult struct {
-	SavedPeers []string
-	ErrorPeers []string
+	SuccessfulPeers []string
+	FailedPeers     []string
 }
 
 // If s3Store is provided, saves each peer to stats/{coordinator}/{peer_name}.network.json.
@@ -175,8 +175,8 @@ func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) (*SaveResult,
 	defer sh.mu.RUnlock()
 
 	result := &SaveResult{
-		SavedPeers: []string{},
-		ErrorPeers: []string{},
+		SuccessfulPeers: []string{},
+		FailedPeers:     []string{},
 	}
 
 	// Save to S3 - one file per peer as stats/{coordinator}/{peer_name}.network.json
@@ -196,10 +196,10 @@ func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) (*SaveResult,
 			peerPath := "stats/" + sh.coordinatorName + "/" + peerName + ".network.json"
 			if err := s3Store.SaveJSON(peerPath, peerHistory); err != nil {
 				log.Warn().Err(err).Str("peer", peerName).Msg("failed to save peer network stats to S3")
-				result.ErrorPeers = append(result.ErrorPeers, peerName)
+				result.FailedPeers = append(result.FailedPeers, peerName)
 			} else {
 				log.Debug().Str("peer", peerName).Str("path", peerPath).Int("points", len(points)).Msg("saved peer network stats to S3")
-				result.SavedPeers = append(result.SavedPeers, peerName)
+				result.SuccessfulPeers = append(result.SuccessfulPeers, peerName)
 			}
 		}
 		return result, nil
@@ -229,7 +229,7 @@ func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) (*SaveResult,
 	log.Debug().Str("path", path).Msg("saved stats history to file")
 	// For file-based persistence, return all peers that had data
 	for peerName := range data.Peers {
-		result.SavedPeers = append(result.SavedPeers, peerName)
+		result.SuccessfulPeers = append(result.SuccessfulPeers, peerName)
 	}
 	return result, nil
 }

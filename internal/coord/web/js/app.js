@@ -1359,19 +1359,37 @@ function processAlertData(data) {
     const activeTab = document.querySelector('#main-tabs .tab.active');
     const currentTab = activeTab ? activeTab.dataset.tab : 'mesh';
 
+    // Map tabs to their expected alert categories
+    const tabCategoryMap = {
+        mesh: 'mesh',
+        data: 'data',
+        app: 'app',
+    };
+
+    const expectedCategory = tabCategoryMap[currentTab];
+    if (!expectedCategory) {
+        console.warn(`Unknown tab '${currentTab}', defaulting to mesh category`);
+    }
+
     // Count alerts by severity
     const counts = { warning: 0, critical: 0, page: 0 };
     // Track alerts per peer
     const peerAlerts = {};
+    // Track unknown categories
+    const unknownCategories = new Set();
 
     for (const alert of alerts) {
         if (alert.state === 'firing') {
             const severity = alert.labels?.severity || 'warning';
             const category = alert.labels?.category || 'mesh';
 
-            // Filter by category: mesh tab shows mesh alerts, data tab shows data alerts
-            const shouldShow =
-                (currentTab === 'mesh' && category === 'mesh') || (currentTab === 'data' && category === 'data');
+            // Filter by category: show alerts matching current tab's category
+            const shouldShow = category === (expectedCategory || 'mesh');
+
+            // Track unknown categories for debugging
+            if (!Object.values(tabCategoryMap).includes(category)) {
+                unknownCategories.add(category);
+            }
 
             if (!shouldShow) continue;
 
@@ -1393,6 +1411,11 @@ function processAlertData(data) {
                 }
             }
         }
+    }
+
+    // Warn about unknown alert categories for debugging
+    if (unknownCategories.size > 0) {
+        console.warn(`Found alerts with unknown categories: ${Array.from(unknownCategories).join(', ')}`);
     }
 
     state.peerAlerts = peerAlerts;

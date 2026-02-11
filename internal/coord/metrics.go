@@ -30,10 +30,8 @@ type CoordMetrics struct {
 	// Heartbeat stats
 	TotalHeartbeats prometheus.Counter
 
-	// Network stats persistence metrics
-	networkStatsSaveTotal    prometheus.Counter
+	// Network stats persistence metrics (per-peer granularity)
 	networkStatsSaveErrors   *prometheus.CounterVec
-	networkStatsSaveDuration prometheus.Histogram
 	networkStatsLastSave     *prometheus.GaugeVec
 	statsHistorySaveTotal    prometheus.Counter
 	statsHistorySaveErrors   *prometheus.CounterVec
@@ -72,19 +70,10 @@ func InitCoordMetrics(registry prometheus.Registerer) *CoordMetrics {
 			}),
 
 			// Network stats persistence metrics (per-peer granularity)
-			networkStatsSaveTotal: promauto.With(registry).NewCounter(prometheus.CounterOpts{
-				Name: "tunnelmesh_network_stats_save_total",
-				Help: "Total successful network stats saves",
-			}),
 			networkStatsSaveErrors: promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
 				Name: "tunnelmesh_network_stats_save_errors_total",
 				Help: "Total network stats save errors",
 			}, []string{"peer", "error_type"}),
-			networkStatsSaveDuration: promauto.With(registry).NewHistogram(prometheus.HistogramOpts{
-				Name:    "tunnelmesh_network_stats_save_duration_seconds",
-				Help:    "Network stats save latency in seconds",
-				Buckets: prometheus.DefBuckets,
-			}),
 			networkStatsLastSave: promauto.With(registry).NewGaugeVec(prometheus.GaugeOpts{
 				Name: "tunnelmesh_network_stats_last_save_timestamp",
 				Help: "Unix timestamp of last network stats save per peer",

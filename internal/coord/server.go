@@ -451,19 +451,18 @@ func (s *Server) SaveStatsHistory() error {
 
 	// Record successful save
 	if s.coordMetrics != nil {
+		// Record aggregate stats history save metrics
 		s.coordMetrics.statsHistorySaveTotal.Inc()
 		s.coordMetrics.statsHistorySaveDuration.Observe(time.Since(startTime).Seconds())
-		s.coordMetrics.networkStatsSaveTotal.Inc()
-		s.coordMetrics.networkStatsSaveDuration.Observe(time.Since(startTime).Seconds())
 
 		// Update per-peer last save timestamp for successful saves
 		now := float64(time.Now().Unix())
-		for _, peerName := range result.SavedPeers {
+		for _, peerName := range result.SuccessfulPeers {
 			s.coordMetrics.networkStatsLastSave.WithLabelValues(peerName).Set(now)
 		}
 
 		// Track per-peer save errors
-		for _, peerName := range result.ErrorPeers {
+		for _, peerName := range result.FailedPeers {
 			s.coordMetrics.networkStatsSaveErrors.WithLabelValues(peerName, "s3_write").Inc()
 		}
 	}
