@@ -1370,10 +1370,8 @@ function processAlertData(data) {
             const category = alert.labels?.category || 'mesh';
 
             // Filter by category: mesh tab shows mesh alerts, data tab shows data alerts
-            const shouldShow = (
-                (currentTab === 'mesh' && category === 'mesh') ||
-                (currentTab === 'data' && category === 'data')
-            );
+            const shouldShow =
+                (currentTab === 'mesh' && category === 'mesh') || (currentTab === 'data' && category === 'data');
 
             if (!shouldShow) continue;
 
