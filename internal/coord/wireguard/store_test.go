@@ -248,7 +248,7 @@ func isInWGClientRange(ip string) bool {
 	if n != 4 {
 		return false
 	}
-	return a == 172 && b == 30 && c >= 100 && c <= 199
+	return a == 10 && b == 42 && c >= 100 && c <= 199
 }
 
 func parseIP(ip string, a, b, c, d *int) (int, error) {
