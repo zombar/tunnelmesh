@@ -87,7 +87,7 @@ type PeerConfig struct {
 	Servers []string `yaml:"-"` // CLI-only: passed via positional argument to 'join' command
 	// AuthToken is the authentication credential for joining the mesh.
 	// Must be 64 hex characters (32 bytes). Generate with: openssl rand -hex 32
-	// CLI-only: loaded from TUNNELMESH_TOKEN env var (never CLI arg to prevent ps exposure)
+	// CLI-only: loaded from TUNNELMESH_TOKEN env var
 	AuthToken         string              `yaml:"-"`
 	SSHPort           int                 `yaml:"ssh_port"`
 	PrivateKey        string              `yaml:"private_key"`
