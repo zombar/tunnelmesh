@@ -1,0 +1,17 @@
+# TunnelMesh Unified Configuration (Bootstrap Coordinator)
+# This peer runs coordinator services and bootstraps the mesh network.
+# Usage: tunnelmesh join --token docker-test-token-123
+
+name: "server"
+private_key: "/root/.tunnelmesh/id_ed25519"
+
+# Coordinator services configuration
+coordinator:
+  enabled: true
+  listen: ":8080"
+  admin_peers: ["server", "mynode"]  # These peers are admins
+  service_ports: [9443]    # Allow metrics access
+  locations: true          # Enable map panel and location tracking
+  monitoring:
+    prometheus_url: "http://localhost:9090"
+    grafana_url: "http://localhost:3000"
