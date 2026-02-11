@@ -718,6 +718,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.wg.Wait()
 	log.Info().Msg("all background goroutines completed")
 
+	// Flush S3 store to ensure all filesystem operations complete
+	if s.s3Store != nil {
+		log.Info().Msg("flushing S3 store")
+		if err := s.s3Store.Close(); err != nil {
+			log.Error().Err(err).Msg("failed to close S3 store")
+			errs = append(errs, fmt.Errorf("close S3 store: %w", err))
+		}
+	}
+
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}

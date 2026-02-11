@@ -2061,3 +2061,24 @@ func (s *Store) deleteAllVersions(ctx context.Context, bucket, key string) {
 		}
 	}
 }
+
+// Close ensures all pending filesystem operations are flushed to disk.
+// This should be called during shutdown to prevent "directory not empty" errors
+// when temp directories are cleaned up in tests.
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Sync the data directory to ensure all writes are flushed
+	f, err := os.Open(s.dataDir)
+	if err != nil {
+		return fmt.Errorf("open data dir: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync data dir: %w", err)
+	}
+
+	return nil
+}
