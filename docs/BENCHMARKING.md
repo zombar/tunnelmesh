@@ -5,15 +5,16 @@ network conditions.
 
 ## Overview
 
-The benchmark system consists of two components:
+The benchmark system consists of three tools:
 
-| Component | Purpose | Chaos Support |
-| ----------- | --------- | --------------- |
-| `tunnelmesh benchmark` | CLI command for on-demand tests | Full control |
-| `tunnelmesh-benchmarker` | Docker service for automated periodic tests | Configurable via env vars |
+| Tool | Purpose | Use Case |
+| ------ | --------- | ---------- |
+| `tunnelmesh benchmark` | Network throughput and latency testing | Test tunnel performance between peers |
+| `tunnelmesh-benchmarker` | Automated periodic benchmarking service | Continuous performance monitoring in Docker |
+| `tunnelmesh-s3bench` | S3 storage stress testing with narratives | Test S3, deduplication, versioning, RBAC, shares |
 
-Benchmark traffic flows through the **actual mesh tunnel** (TUN device → encrypted tunnel → peer), giving you realistic
-performance metrics for file transfers and real-time applications.
+Network benchmark traffic flows through the **actual mesh tunnel** (TUN device → encrypted tunnel → peer), giving you
+realistic performance metrics for file transfers and real-time applications.
 
 ## Quick Start
 
@@ -47,9 +48,9 @@ docker compose logs -f benchmarker
 docker compose exec server ls /results/
 ```
 
-## CLI Reference
+## Network Benchmark CLI Reference
 
-```
+```text
 tunnelmesh benchmark <peer-name> [flags]
 
 Flags:
@@ -248,7 +249,7 @@ docker cp tunnelmesh-server:/results ./benchmark-results/
 
 ### Benchmark Fails to Connect
 
-```
+```text
 Error: cannot resolve peer "peer-1": is the mesh daemon running?
 ```
 
@@ -277,3 +278,146 @@ Error: cannot resolve peer "peer-1": is the mesh daemon running?
 4. **Size Matters**: Use larger transfers (100MB+) for accurate throughput measurement
 5. **Monitor Both Ends**: Check CPU/memory on both peers during stress tests
 6. **Save Results**: Always use `--output` for reproducible comparisons
+
+---
+
+## S3 Storage Benchmarking
+
+The `tunnelmesh-s3bench` tool provides narrative-driven stress testing for S3 storage, deduplication, versioning, RBAC,
+and file shares. Unlike traditional benchmarks that generate random traffic, it simulates realistic scenarios with
+characters, departments, and workflows.
+
+### S3 Benchmark Quick Start
+
+```bash
+# List available story scenarios
+tunnelmesh-s3bench list
+
+# Show scenario details
+tunnelmesh-s3bench describe alien_invasion
+
+# Run a scenario (accelerated 100x for testing)
+tunnelmesh-s3bench run alien_invasion --time-scale 100 --output results.json
+
+# Run with all features enabled
+tunnelmesh-s3bench run alien_invasion \
+  --time-scale 100 \
+  --enable-mesh \
+  --enable-adversary \
+  --enable-workflows \
+  --test-deletion \
+  --test-expiration \
+  --test-permissions
+```
+
+### Story Scenarios
+
+Stories are narrative-driven workloads that test multiple S3 features simultaneously:
+
+**alien_invasion** - 72 hours of first contact, invasion, and human resistance
+
+- 3 characters (military commander, scientist, adversary)
+- 4 departments with file shares (command, science, public, classified)
+- Tests deduplication, versioning, RBAC, quotas, and expiration
+
+Each story includes:
+
+- **Characters**: Users with different roles and clearance levels
+- **Departments**: File shares with quotas and access control
+- **Workflows**: Realistic document creation, editing, collaboration
+- **Adversaries**: Users who attempt unauthorized access or data exfiltration
+
+### What It Tests
+
+| Feature | Description |
+| --------- | ------------- |
+| **Deduplication** | Multiple users uploading identical files |
+| **Versioning** | Document editing with version history |
+| **RBAC** | Role-based access control across departments |
+| **File Shares** | Department shares with quotas and permissions |
+| **Mesh Dynamics** | Users joining/leaving mesh network |
+| **Quota Limits** | Storage limits and over-quota handling |
+| **Expiration** | Automatic cleanup of old objects |
+| **Permissions** | Authorization enforcement for all operations |
+
+### Flags
+
+```text
+--time-scale float         Time acceleration (default: 1.0)
+                           100 = 72 hours compressed to 43 minutes
+                           1000 = 72 hours compressed to 4.3 minutes
+
+--concurrency int          Concurrent workers per character (default: 5)
+
+--enable-mesh              Simulate users joining/leaving mesh
+--enable-adversary         Enable adversarial behavior
+--enable-workflows         Enable realistic document workflows
+--test-deletion            Test soft/hard deletion
+--test-expiration          Test object expiration
+--test-permissions         Test permission boundaries
+--test-quota               Test quota enforcement
+--test-retention           Test version retention policies
+
+--quota-override MB        Override department quotas
+--expiry-override duration Override expiration times
+
+--output-json string       Save results to JSON file
+--endpoint string          S3 endpoint (default: http://localhost:8080)
+```
+
+### Example Output
+
+```json
+{
+  "story": "alien_invasion",
+  "duration_seconds": 2592.5,
+  "time_scale": 100,
+  "statistics": {
+    "total_operations": 1247,
+    "successful_operations": 1215,
+    "failed_operations": 32,
+    "bytes_uploaded": 524288000,
+    "bytes_downloaded": 262144000,
+    "dedupe_savings_bytes": 104857600,
+    "versions_created": 156,
+    "objects_expired": 23,
+    "permission_denials": 32
+  },
+  "characters": {
+    "General Sarah Chen": {
+      "operations": 487,
+      "bytes_transferred": 209715200,
+      "permission_denials": 0
+    },
+    "Dr. James Wright": {
+      "operations": 512,
+      "bytes_transferred": 314572800,
+      "permission_denials": 0
+    },
+    "Eve Martinez": {
+      "operations": 248,
+      "bytes_transferred": 262144000,
+      "permission_denials": 32
+    }
+  }
+}
+```
+
+### S3 Benchmark Use Cases
+
+| Scenario | Command |
+| ---------- | --------- |
+| Quick validation | `--time-scale 1000` (72h → 4.3 min) |
+| Realistic load test | `--time-scale 10` (72h → 7.2h) |
+| Full stress test | `--enable-all --time-scale 100` |
+| Adversary testing | `--enable-adversary --test-permissions` |
+| Quota testing | `--quota-override 100 --test-quota` |
+
+### S3 Benchmark Best Practices
+
+1. **Start Fast**: Use `--time-scale 1000` for quick validation
+2. **Enable Gradually**: Add features one at a time to isolate issues
+3. **Save Results**: Always use `--output-json` for analysis
+4. **Watch Logs**: Monitor S3 server logs during execution
+5. **Check Quotas**: Ensure sufficient storage for test scenario
+6. **Verify Cleanup**: Check object expiration and deletion after test
