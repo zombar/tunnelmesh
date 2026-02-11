@@ -259,11 +259,24 @@ main > section {
     margin-bottom: 1.5rem;
 }
 
+/* Charts container - side by side layout */
+#charts-section {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
 /* Chart cards - individual floating panels like alerts */
 .chart-card {
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border-primary);
     padding: 1rem;
+}
+
+@media (max-width: 768px) {
+    #charts-section {
+        grid-template-columns: 1fr;
+    }
 }
 
 .chart-title {
