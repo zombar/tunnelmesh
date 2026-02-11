@@ -137,10 +137,9 @@ func TestNormalizeServerURL(t *testing.T) {
 			expected: "http://127.0.0.50:8081",
 		},
 		{
-			name:        "HTTP private IP (should fail)",
-			input:       "http://192.168.1.10:8081",
-			expectError: true,
-			errorMsg:    "must use HTTPS for remote servers",
+			name:     "HTTP private IP (allowed for internal networks)",
+			input:    "http://192.168.1.10:8081",
+			expected: "http://192.168.1.10:8081",
 		},
 		{
 			name:        "HTTP public IP (should fail)",

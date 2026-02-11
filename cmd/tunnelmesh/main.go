@@ -383,6 +383,11 @@ func isLocalhostURL(u *url.URL) bool {
 		if ip.IsLoopback() {
 			return true
 		}
+		// Allow private network ranges (for Docker, internal networks)
+		// 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+		if ip.IsPrivate() {
+			return true
+		}
 	}
 
 	return false
