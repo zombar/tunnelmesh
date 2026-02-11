@@ -1,9 +1,9 @@
 # Getting Started with TunnelMesh
 
-This guide walks you through setting up a TunnelMesh network from scratch. You'll need:
+This guide walks you through setting up a TunnelMesh network from scratch. You'll create:
 
-1. **One coordinator peer** - Admin peer that manages peer discovery and IP allocation
-2. **One or more regular peers** - Peers that connect to form the mesh network
+1. **A coordinator peer** - Admin peer that manages peer discovery and IP allocation
+2. **Regular peers** - Peers that connect to form the mesh network
 
 ## Part 1: Setting Up the Coordinator Peer
 
