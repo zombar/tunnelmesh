@@ -2099,6 +2099,36 @@ func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Sync all bucket directories and their subdirectories to ensure
+	// all filesystem operations are complete before cleanup
+	bucketsDir := filepath.Join(s.dataDir, "buckets")
+	if buckets, err := os.ReadDir(bucketsDir); err == nil {
+		for _, bucket := range buckets {
+			if !bucket.IsDir() {
+				continue
+			}
+			bucketPath := filepath.Join(bucketsDir, bucket.Name())
+
+			// Sync meta directory
+			if f, err := os.Open(filepath.Join(bucketPath, "meta")); err == nil {
+				_ = f.Sync()
+				_ = f.Close()
+			}
+
+			// Sync bucket directory
+			if f, err := os.Open(bucketPath); err == nil {
+				_ = f.Sync()
+				_ = f.Close()
+			}
+		}
+
+		// Sync buckets directory
+		if f, err := os.Open(bucketsDir); err == nil {
+			_ = f.Sync()
+			_ = f.Close()
+		}
+	}
+
 	// Sync the data directory to ensure directory entries are durable
 	if f, err := os.Open(s.dataDir); err == nil {
 		_ = f.Sync()

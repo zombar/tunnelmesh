@@ -656,7 +656,6 @@ function renderDnsTable() {
 // Chart functions
 
 function initCharts() {
-    console.log('[DEBUG] initCharts called');
     const baseChartOptions = {
         responsive: true,
         maintainAspectRatio: false,
@@ -708,7 +707,6 @@ function initCharts() {
             data: { datasets: [] },
             options: throughputOptions,
         });
-        console.log('[DEBUG] Throughput chart created, canvas size:', dom.throughputChart.width, 'x', dom.throughputChart.height);
     }
 
     // Packets chart
@@ -863,9 +861,7 @@ function fitChartsToData() {
 }
 
 function updateChartsWithNewData(peers) {
-    console.log('[DEBUG] updateChartsWithNewData called, peers:', peers?.length);
     if (!state.charts.throughput || !state.charts.packets) {
-        console.log('[DEBUG] Charts not initialized, skipping update');
         return;
     }
 
@@ -1122,7 +1118,6 @@ function rebuildChartDatasets() {
     const throughputDatasets = Object.entries(state.charts.chartData.throughput).map(([peerName, values]) => {
         return buildDataset(peerName, values, throughputColors[peerName] || GREEN_GRADIENT[2]);
     });
-    console.log('[DEBUG] rebuildChartDatasets: peer names:', Object.keys(state.charts.chartData.throughput));
 
     // Build packets datasets
     const packetsDatasets = Object.entries(state.charts.chartData.packets).map(([peerName, values]) => {
@@ -1133,14 +1128,12 @@ function rebuildChartDatasets() {
         state.charts.throughput.data.labels = labels;
         state.charts.throughput.data.datasets = throughputDatasets;
         state.charts.throughput.update();
-        console.log('[DEBUG] Throughput chart updated, labels:', labels.length, 'datasets:', throughputDatasets.length);
     }
 
     if (state.charts.packets) {
         state.charts.packets.data.labels = labels;
         state.charts.packets.data.datasets = packetsDatasets;
         state.charts.packets.update();
-        console.log('[DEBUG] Packets chart updated, labels:', labels.length, 'datasets:', packetsDatasets.length);
     }
 }
 
@@ -1383,7 +1376,7 @@ async function fetchAlerts() {
     console.log('[DEBUG] fetchAlerts called, alertsEnabled:', state.alertsEnabled);
     if (!state.alertsEnabled) return;
 
-    try{
+    try {
         const resp = await fetch('/prometheus/api/v1/alerts');
         if (!resp.ok) {
             console.log('[DEBUG] fetchAlerts failed, status:', resp.status);
@@ -2035,14 +2028,11 @@ function registerBuiltinPanels() {
             sortOrder: 30,
             onShow: () => {
                 // When panel becomes visible after permission load, resize charts once
-                console.log('[DEBUG] Charts onShow callback, throughput exists:', !!state.charts.throughput, ', packets exists:', !!state.charts.packets);
                 if (state.charts.throughput) {
                     state.charts.throughput.resize();
-                    console.log('[DEBUG] Throughput chart resized to:', state.charts.throughput.width, 'x', state.charts.throughput.height);
                 }
                 if (state.charts.packets) {
                     state.charts.packets.resize();
-                    console.log('[DEBUG] Packets chart resized to:', state.charts.packets.width, 'x', state.charts.packets.height);
                 }
             },
         },
