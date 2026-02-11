@@ -1105,15 +1105,17 @@ function rebuildChartDatasets() {
     if (state.charts.throughput) {
         console.log('[Charts] Updating throughput chart, datasets:', throughputDatasets.length);
         state.charts.throughput.data.datasets = throughputDatasets;
+        state.charts.throughput.resize(); // Recalculate dimensions before update
         state.charts.throughput.update();
-        console.log('[Charts] Throughput chart update() called');
+        console.log('[Charts] Throughput chart resize() + update() called');
     }
 
     if (state.charts.packets) {
         console.log('[Charts] Updating packets chart, datasets:', packetsDatasets.length);
         state.charts.packets.data.datasets = packetsDatasets;
+        state.charts.packets.resize(); // Recalculate dimensions before update
         state.charts.packets.update();
-        console.log('[Charts] Packets chart update() called');
+        console.log('[Charts] Packets chart resize() + update() called');
     }
 }
 
