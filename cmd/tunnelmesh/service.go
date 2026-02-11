@@ -23,13 +23,14 @@ var (
 	forceInstall      bool
 	logsFollow        bool
 	logsLines         int
+
+	// authTokenRegex validates that tokens are exactly 64 hex characters (32 bytes)
+	authTokenRegex = regexp.MustCompile("^[0-9a-fA-F]{64}$")
 )
 
 // isValidAuthToken checks if the token is 64 hex characters (32 bytes).
 func isValidAuthToken(token string) bool {
-	// Must be exactly 64 hex characters
-	matched, _ := regexp.MatchString("^[0-9a-fA-F]{64}$", token)
-	return matched
+	return authTokenRegex.MatchString(token)
 }
 
 func newServiceCmd() *cobra.Command {
@@ -198,7 +199,7 @@ func getServiceConfig() (*svc.ServiceConfig, error) {
 	// Auth token must be provided via TUNNELMESH_TOKEN environment variable (not stored in context)
 	authToken := os.Getenv("TUNNELMESH_TOKEN")
 	if authToken == "" {
-		return nil, fmt.Errorf("TUNNELMESH_TOKEN environment variable not set; auth token required for service installation")
+		return nil, fmt.Errorf("TUNNELMESH_TOKEN environment variable not set; auth token required for service installation (use 'sudo -E' to preserve environment variables)")
 	}
 
 	// Validate token format (must be 64 hex characters = 32 bytes)
