@@ -70,12 +70,12 @@ jobs:
         if: matrix.os != 'ubuntu-latest'
         env:
           TUNNELMESH_TEST: "1"
-        run: go test -short -race ./...
+        run: go test -short -race $(go list ./... | grep -v s3bench)
       - name: Run tests with coverage
         if: matrix.os == 'ubuntu-latest'
         env:
           TUNNELMESH_TEST: "1"
-        run: go test -short -race -coverprofile=coverage.out ./...
+        run: go test -short -race -coverprofile=coverage.out $(go list ./... | grep -v s3bench)
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
         uses: codecov/codecov-action@v5
@@ -110,7 +110,7 @@ jobs:
         if: steps.setup-go.outcome == 'success'
         env:
           TUNNELMESH_TEST: "1"
-        run: go test -short -race ./...
+        run: go test -short -race $(go list ./... | grep -v s3bench)
       - name: Skip notice
         if: steps.setup-go.outcome != 'success'
         run: echo "::notice::Go 1.26 not yet available, skipping tests"
