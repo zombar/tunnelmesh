@@ -14,7 +14,7 @@ func TestPanelRegistry_BuiltinPanels(t *testing.T) {
 
 	// Should have all built-in panels
 	panels := registry.List()
-	assert.Len(t, panels, 14) // visualizer, map, charts, peers, logs, wireguard, filter, dns, s3, shares, users, groups, bindings, docker
+	assert.Len(t, panels, 15) // visualizer, map, charts, alerts, peers, logs, wireguard, filter, dns, s3, shares, users, groups, bindings, docker
 
 	// Check specific panels exist
 	assert.NotNil(t, registry.Get(PanelVisualizer))
@@ -45,7 +45,7 @@ func TestPanelRegistry_ListByTab(t *testing.T) {
 	// Data tab should have: peer-mgmt, groups, bindings, dns
 	assert.Len(t, dataPanels, 4)
 
-	// Mesh tab should have: visualizer, map, charts, peers, logs, wireguard, filter
+	// Mesh tab should have: visualizer, map, charts, alerts, peers, logs, wireguard, filter
 	assert.Len(t, meshPanels, 7)
 }
 

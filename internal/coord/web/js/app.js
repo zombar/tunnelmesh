@@ -1160,7 +1160,6 @@ async function checkPrometheusAvailable() {
         const resp = await fetch('/prometheus/api/v1/alerts');
         if (resp.ok) {
             state.alertsEnabled = true;
-            document.getElementById('alerts-section').style.display = 'block';
             // Process the initial response
             const data = await resp.json();
             processAlertData(data);
@@ -1171,7 +1170,7 @@ async function checkPrometheusAvailable() {
         }
     } catch (err) {
         // Prometheus not available
-        console.debug('Prometheus not available:', err.message);
+        console.error('Prometheus not available:', err.message);
         state.alertsEnabled = false;
     }
 }
