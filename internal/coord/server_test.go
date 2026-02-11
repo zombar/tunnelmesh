@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,11 @@ func cleanupServer(t *testing.T, srv *Server) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)
+
+	// Force garbage collection and give Windows time to close file handles.
+	// Windows can keep file handles open briefly even after Close() returns.
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
 }
 
 func newTestServer(t *testing.T) *Server {
