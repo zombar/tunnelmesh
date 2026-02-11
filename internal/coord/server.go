@@ -377,12 +377,6 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 		log.Warn().Err(err).Msg("failed to load filter rules, starting fresh")
 	}
 
-	// Build coordinator identity (cluster name) for replication
-	coordAddr := cfg.Coordinator.Listen
-	if coordAddr == "" {
-		coordAddr = ":8080"
-	}
-
 	// Initialize S3 replication for multi-coordinator deployments
 	// Coordinators discover each other through the peer list using is_coordinator flag
 	if srv.s3Store != nil {
