@@ -363,6 +363,26 @@ func runAsService() {
 	}
 }
 
+// isLocalhostURL returns true if the URL points to localhost/loopback addresses.
+// These are considered safe for HTTP since traffic never leaves the machine.
+func isLocalhostURL(u *url.URL) bool {
+	host := u.Hostname() // strips port if present
+
+	// Check common localhost names
+	if host == "localhost" || host == "" {
+		return true
+	}
+
+	// Check IPv4 loopback (127.0.0.0/8)
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() {
+			return true
+		}
+	}
+
+	return false
+}
+
 // normalizeServerURL adds https:// scheme and :8443 port if missing.
 func normalizeServerURL(serverURL string) (string, error) {
 	if serverURL == "" {
@@ -380,9 +400,9 @@ func normalizeServerURL(serverURL string) (string, error) {
 		return "", fmt.Errorf("invalid server URL %q: %w", serverURL, err)
 	}
 
-	// Validate scheme (only HTTPS for security)
-	if parsedURL.Scheme == "http" {
-		return "", fmt.Errorf("server URL must use HTTPS, not HTTP: %q", serverURL)
+	// Validate scheme (require HTTPS except for localhost)
+	if parsedURL.Scheme == "http" && !isLocalhostURL(parsedURL) {
+		return "", fmt.Errorf("server URL must use HTTPS for remote servers (HTTP is only allowed for localhost): %q", serverURL)
 	}
 
 	// Validate that path is empty or just "/"

@@ -90,16 +90,63 @@ func TestNormalizeServerURL(t *testing.T) {
 			errorMsg:    "should not include query parameters",
 		},
 		{
-			name:        "HTTP scheme (insecure)",
+			name:        "HTTP scheme for remote server (insecure)",
 			input:       "http://coord.example.com",
 			expectError: true,
-			errorMsg:    "must use HTTPS, not HTTP",
+			errorMsg:    "must use HTTPS for remote servers",
 		},
 		{
-			name:        "HTTP with port",
+			name:        "HTTP with port for remote server",
 			input:       "http://coord.example.com:8080",
 			expectError: true,
-			errorMsg:    "must use HTTPS, not HTTP",
+			errorMsg:    "must use HTTPS for remote servers",
+		},
+		{
+			name:     "HTTP localhost without port",
+			input:    "http://localhost",
+			expected: "http://localhost:8443",
+		},
+		{
+			name:     "HTTP localhost with port",
+			input:    "http://localhost:8081",
+			expected: "http://localhost:8081",
+		},
+		{
+			name:     "HTTP 127.0.0.1 without port",
+			input:    "http://127.0.0.1",
+			expected: "http://127.0.0.1:8443",
+		},
+		{
+			name:     "HTTP 127.0.0.1 with port",
+			input:    "http://127.0.0.1:8081",
+			expected: "http://127.0.0.1:8081",
+		},
+		{
+			name:     "HTTP IPv6 localhost without port",
+			input:    "http://[::1]",
+			expected: "http://[::1]:8443",
+		},
+		{
+			name:     "HTTP IPv6 localhost with port",
+			input:    "http://[::1]:8081",
+			expected: "http://[::1]:8081",
+		},
+		{
+			name:     "HTTP 127.0.0.50 (loopback range)",
+			input:    "http://127.0.0.50:8081",
+			expected: "http://127.0.0.50:8081",
+		},
+		{
+			name:        "HTTP private IP (should fail)",
+			input:       "http://192.168.1.10:8081",
+			expectError: true,
+			errorMsg:    "must use HTTPS for remote servers",
+		},
+		{
+			name:        "HTTP public IP (should fail)",
+			input:       "http://8.8.8.8:8081",
+			expectError: true,
+			errorMsg:    "must use HTTPS for remote servers",
 		},
 		{
 			name:        "URL with path (gets HTTPS prefix added)",
