@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -30,7 +31,7 @@ func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *aut
 
 	// Load existing shares
 	if systemStore != nil {
-		shares, _ := systemStore.LoadFileShares()
+		shares, _ := systemStore.LoadFileShares(context.Background())
 		mgr.shares = shares
 	}
 
@@ -48,7 +49,7 @@ type FileShareOptions struct {
 // It creates the underlying bucket, sets up default permissions, and persists the share metadata.
 // If a bucket already exists (from a previously deleted share), it restores the tombstoned objects.
 // quotaBytes of 0 means unlimited (within global quota).
-func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes int64, opts *FileShareOptions) (*FileShare, error) {
+func (m *FileShareManager) Create(ctx context.Context, name, description, ownerID string, quotaBytes int64, opts *FileShareOptions) (*FileShare, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -63,13 +64,13 @@ func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes 
 
 	// Check if bucket already exists (from a previously deleted share)
 	bucketExists := false
-	if _, err := m.store.HeadBucket(bucketName); err == nil {
+	if _, err := m.store.HeadBucket(ctx, bucketName); err == nil {
 		bucketExists = true
 		// Restore the bucket (O(1) - clears bucket tombstone flag)
-		_ = m.store.UntombstoneBucket(bucketName)
+		_ = m.store.UntombstoneBucket(ctx, bucketName)
 	} else {
 		// Create new bucket
-		if err := m.store.CreateBucket(bucketName, ownerID); err != nil {
+		if err := m.store.CreateBucket(ctx, bucketName, ownerID); err != nil {
 			return nil, fmt.Errorf("create bucket: %w", err)
 		}
 	}
@@ -126,7 +127,7 @@ func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes 
 	// A full rollback would require deleting the bucket and bindings, which could
 	// leave the system in an inconsistent state if those operations also fail.
 	if m.systemStore != nil {
-		if err := m.systemStore.SaveFileShares(m.shares); err != nil {
+		if err := m.systemStore.SaveFileShares(ctx, m.shares); err != nil {
 			log.Warn().Err(err).Str("share", name).Msg("failed to persist file share metadata")
 			return share, fmt.Errorf("persist share (share created but not persisted): %w", err)
 		}
@@ -142,7 +143,7 @@ func (m *FileShareManager) Create(name, description, ownerID string, quotaBytes 
 
 // Delete removes a file share.
 // It deletes the underlying bucket, removes permissions, and updates metadata.
-func (m *FileShareManager) Delete(name string) error {
+func (m *FileShareManager) Delete(ctx context.Context, name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -162,7 +163,7 @@ func (m *FileShareManager) Delete(name string) error {
 
 	// Tombstone the bucket (soft delete - allows restore on recreate)
 	// This is O(1) - all objects in a tombstoned bucket are treated as tombstoned
-	_ = m.store.TombstoneBucket(bucketName)
+	_ = m.store.TombstoneBucket(ctx, bucketName)
 
 	// Remove group bindings for this bucket
 	for _, b := range m.authorizer.GroupBindings.List() {
@@ -183,7 +184,7 @@ func (m *FileShareManager) Delete(name string) error {
 
 	// Persist
 	if m.systemStore != nil {
-		if err := m.systemStore.SaveFileShares(m.shares); err != nil {
+		if err := m.systemStore.SaveFileShares(ctx, m.shares); err != nil {
 			return fmt.Errorf("persist shares: %w", err)
 		}
 	}
@@ -260,7 +261,7 @@ func (m *FileShareManager) IsProtectedGroupBinding(binding *auth.GroupBinding) b
 
 // TombstoneExpiredShareContents tombstones all objects in expired file shares.
 // Returns the number of objects tombstoned.
-func (m *FileShareManager) TombstoneExpiredShareContents() int {
+func (m *FileShareManager) TombstoneExpiredShareContents(ctx context.Context) int {
 	m.mu.RLock()
 	expiredShares := make([]*FileShare, 0)
 	for _, s := range m.shares {
@@ -277,7 +278,7 @@ func (m *FileShareManager) TombstoneExpiredShareContents() int {
 		// Paginate through all objects in the bucket
 		marker := ""
 		for {
-			objects, isTruncated, nextMarker, err := m.store.ListObjects(bucketName, "", marker, 1000)
+			objects, isTruncated, nextMarker, err := m.store.ListObjects(ctx, bucketName, "", marker, 1000)
 			if err != nil {
 				break
 			}
@@ -287,7 +288,7 @@ func (m *FileShareManager) TombstoneExpiredShareContents() int {
 				if obj.IsTombstoned() {
 					continue
 				}
-				if err := m.store.TombstoneObject(bucketName, obj.Key); err == nil {
+				if err := m.store.TombstoneObject(ctx, bucketName, obj.Key); err == nil {
 					tombstonedCount++
 				}
 			}

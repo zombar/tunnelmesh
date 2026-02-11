@@ -3,6 +3,7 @@ package s3
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -36,8 +37,8 @@ func NewSystemStore(store *Store, serviceUserID string) (*SystemStore, error) {
 	}
 
 	// Create system bucket if it doesn't exist
-	if _, err := store.HeadBucket(SystemBucket); errors.Is(err, ErrBucketNotFound) {
-		if err := store.CreateBucket(SystemBucket, serviceUserID); err != nil {
+	if _, err := store.HeadBucket(context.Background(), SystemBucket); errors.Is(err, ErrBucketNotFound) {
+		if err := store.CreateBucket(context.Background(), SystemBucket, serviceUserID); err != nil {
 			return nil, fmt.Errorf("create system bucket: %w", err)
 		}
 	}
@@ -108,14 +109,14 @@ type IPAllocationsData struct {
 // --- Peers ---
 
 // SavePeers saves the peer list to S3 with checksum validation.
-func (ss *SystemStore) SavePeers(peers []*auth.Peer) error {
-	return ss.saveJSONWithChecksum(PeersPath, peers)
+func (ss *SystemStore) SavePeers(ctx context.Context, peers []*auth.Peer) error {
+	return ss.saveJSONWithChecksum(ctx, PeersPath, peers)
 }
 
 // LoadPeers loads the peer list from S3 with automatic rollback on corruption.
-func (ss *SystemStore) LoadPeers() ([]*auth.Peer, error) {
+func (ss *SystemStore) LoadPeers(ctx context.Context) ([]*auth.Peer, error) {
 	var peers []*auth.Peer
-	if err := ss.loadJSONWithChecksum(PeersPath, &peers, 3); err != nil {
+	if err := ss.loadJSONWithChecksum(ctx, PeersPath, &peers, 3); err != nil {
 		return nil, err
 	}
 	return peers, nil
@@ -124,14 +125,14 @@ func (ss *SystemStore) LoadPeers() ([]*auth.Peer, error) {
 // --- Roles ---
 
 // SaveRoles saves custom roles to S3 with checksum validation.
-func (ss *SystemStore) SaveRoles(roles []auth.Role) error {
-	return ss.saveJSONWithChecksum(RolesPath, roles)
+func (ss *SystemStore) SaveRoles(ctx context.Context, roles []auth.Role) error {
+	return ss.saveJSONWithChecksum(ctx, RolesPath, roles)
 }
 
 // LoadRoles loads custom roles from S3 with automatic rollback on corruption.
-func (ss *SystemStore) LoadRoles() ([]auth.Role, error) {
+func (ss *SystemStore) LoadRoles(ctx context.Context) ([]auth.Role, error) {
 	var roles []auth.Role
-	if err := ss.loadJSONWithChecksum(RolesPath, &roles, 3); err != nil {
+	if err := ss.loadJSONWithChecksum(ctx, RolesPath, &roles, 3); err != nil {
 		return nil, err
 	}
 	return roles, nil
@@ -140,14 +141,14 @@ func (ss *SystemStore) LoadRoles() ([]auth.Role, error) {
 // --- Role Bindings ---
 
 // SaveBindings saves role bindings to S3 with checksum validation.
-func (ss *SystemStore) SaveBindings(bindings []*auth.RoleBinding) error {
-	return ss.saveJSONWithChecksum(BindingsPath, bindings)
+func (ss *SystemStore) SaveBindings(ctx context.Context, bindings []*auth.RoleBinding) error {
+	return ss.saveJSONWithChecksum(ctx, BindingsPath, bindings)
 }
 
 // LoadBindings loads role bindings from S3 with automatic rollback on corruption.
-func (ss *SystemStore) LoadBindings() ([]*auth.RoleBinding, error) {
+func (ss *SystemStore) LoadBindings(ctx context.Context) ([]*auth.RoleBinding, error) {
 	var bindings []*auth.RoleBinding
-	if err := ss.loadJSONWithChecksum(BindingsPath, &bindings, 3); err != nil {
+	if err := ss.loadJSONWithChecksum(ctx, BindingsPath, &bindings, 3); err != nil {
 		return nil, err
 	}
 	return bindings, nil
@@ -156,14 +157,14 @@ func (ss *SystemStore) LoadBindings() ([]*auth.RoleBinding, error) {
 // --- Groups ---
 
 // SaveGroups saves groups to S3 with checksum validation.
-func (ss *SystemStore) SaveGroups(groups []*auth.Group) error {
-	return ss.saveJSONWithChecksum(GroupsPath, groups)
+func (ss *SystemStore) SaveGroups(ctx context.Context, groups []*auth.Group) error {
+	return ss.saveJSONWithChecksum(ctx, GroupsPath, groups)
 }
 
 // LoadGroups loads groups from S3 with automatic rollback on corruption.
-func (ss *SystemStore) LoadGroups() ([]*auth.Group, error) {
+func (ss *SystemStore) LoadGroups(ctx context.Context) ([]*auth.Group, error) {
 	var groups []*auth.Group
-	if err := ss.loadJSONWithChecksum(GroupsPath, &groups, 3); err != nil {
+	if err := ss.loadJSONWithChecksum(ctx, GroupsPath, &groups, 3); err != nil {
 		return nil, err
 	}
 	return groups, nil
@@ -172,14 +173,14 @@ func (ss *SystemStore) LoadGroups() ([]*auth.Group, error) {
 // --- Group Bindings ---
 
 // SaveGroupBindings saves group bindings to S3 with checksum validation.
-func (ss *SystemStore) SaveGroupBindings(bindings []*auth.GroupBinding) error {
-	return ss.saveJSONWithChecksum(GroupBindingsPath, bindings)
+func (ss *SystemStore) SaveGroupBindings(ctx context.Context, bindings []*auth.GroupBinding) error {
+	return ss.saveJSONWithChecksum(ctx, GroupBindingsPath, bindings)
 }
 
 // LoadGroupBindings loads group bindings from S3 with automatic rollback on corruption.
-func (ss *SystemStore) LoadGroupBindings() ([]*auth.GroupBinding, error) {
+func (ss *SystemStore) LoadGroupBindings(ctx context.Context) ([]*auth.GroupBinding, error) {
 	var bindings []*auth.GroupBinding
-	if err := ss.loadJSONWithChecksum(GroupBindingsPath, &bindings, 3); err != nil {
+	if err := ss.loadJSONWithChecksum(ctx, GroupBindingsPath, &bindings, 3); err != nil {
 		return nil, err
 	}
 	return bindings, nil
@@ -189,14 +190,14 @@ func (ss *SystemStore) LoadGroupBindings() ([]*auth.GroupBinding, error) {
 
 // SavePanels saves external panel definitions to S3 with checksum validation.
 // Only external (non-builtin) panels are persisted.
-func (ss *SystemStore) SavePanels(panels []*auth.PanelDefinition) error {
-	return ss.saveJSONWithChecksum(PanelsPath, panels)
+func (ss *SystemStore) SavePanels(ctx context.Context, panels []*auth.PanelDefinition) error {
+	return ss.saveJSONWithChecksum(ctx, PanelsPath, panels)
 }
 
 // LoadPanels loads external panel definitions from S3 with automatic rollback on corruption.
-func (ss *SystemStore) LoadPanels() ([]*auth.PanelDefinition, error) {
+func (ss *SystemStore) LoadPanels(ctx context.Context) ([]*auth.PanelDefinition, error) {
 	var panels []*auth.PanelDefinition
-	if err := ss.loadJSONWithChecksum(PanelsPath, &panels, 3); err != nil {
+	if err := ss.loadJSONWithChecksum(ctx, PanelsPath, &panels, 3); err != nil {
 		return nil, err
 	}
 	return panels, nil
@@ -227,14 +228,14 @@ func (s *FileShare) IsExpired() bool {
 const FileShareBucketPrefix = "fs+"
 
 // SaveFileShares saves file shares to S3 with checksum validation.
-func (ss *SystemStore) SaveFileShares(shares []*FileShare) error {
-	return ss.saveJSONWithChecksum(FileSharesPath, shares)
+func (ss *SystemStore) SaveFileShares(ctx context.Context, shares []*FileShare) error {
+	return ss.saveJSONWithChecksum(ctx, FileSharesPath, shares)
 }
 
 // LoadFileShares loads file shares from S3 with automatic rollback on corruption.
-func (ss *SystemStore) LoadFileShares() ([]*FileShare, error) {
+func (ss *SystemStore) LoadFileShares(ctx context.Context) ([]*FileShare, error) {
 	var shares []*FileShare
-	if err := ss.loadJSONWithChecksum(FileSharesPath, &shares, 3); err != nil {
+	if err := ss.loadJSONWithChecksum(ctx, FileSharesPath, &shares, 3); err != nil {
 		return nil, err
 	}
 	return shares, nil
@@ -243,36 +244,36 @@ func (ss *SystemStore) LoadFileShares() ([]*FileShare, error) {
 // --- Stats History ---
 
 // SaveStatsHistory saves stats history to S3 with checksum validation.
-func (ss *SystemStore) SaveStatsHistory(data interface{}) error {
-	return ss.saveJSONWithChecksum(StatsHistoryPath, data)
+func (ss *SystemStore) SaveStatsHistory(ctx context.Context, data interface{}) error {
+	return ss.saveJSONWithChecksum(ctx, StatsHistoryPath, data)
 }
 
 // LoadStatsHistory loads stats history from S3 with automatic rollback on corruption.
-func (ss *SystemStore) LoadStatsHistory(target interface{}) error {
-	return ss.loadJSONWithChecksum(StatsHistoryPath, target, 3)
+func (ss *SystemStore) LoadStatsHistory(ctx context.Context, target interface{}) error {
+	return ss.loadJSONWithChecksum(ctx, StatsHistoryPath, target, 3)
 }
 
 // SaveJSON saves arbitrary JSON data to a specified path in the system bucket with checksum validation.
 // This is a generic method for saving any stats or data to custom paths like "stats/{peer}.docker.json".
-func (ss *SystemStore) SaveJSON(path string, data interface{}) error {
-	return ss.saveJSONWithChecksum(path, data)
+func (ss *SystemStore) SaveJSON(ctx context.Context, path string, data interface{}) error {
+	return ss.saveJSONWithChecksum(ctx, path, data)
 }
 
 // LoadJSON loads arbitrary JSON data from a specified path in the system bucket with automatic rollback on corruption.
-func (ss *SystemStore) LoadJSON(path string, target interface{}) error {
-	return ss.loadJSONWithChecksum(path, target, 3)
+func (ss *SystemStore) LoadJSON(ctx context.Context, path string, target interface{}) error {
+	return ss.loadJSONWithChecksum(ctx, path, target, 3)
 }
 
 // --- WireGuard Clients ---
 
 // SaveWireGuardClients saves WireGuard client configs to S3 with checksum validation.
-func (ss *SystemStore) SaveWireGuardClients(data interface{}) error {
-	return ss.saveJSONWithChecksum(WireGuardClientsPath, data)
+func (ss *SystemStore) SaveWireGuardClients(ctx context.Context, data interface{}) error {
+	return ss.saveJSONWithChecksum(ctx, WireGuardClientsPath, data)
 }
 
 // LoadWireGuardClients loads WireGuard client configs from S3 with automatic rollback on corruption.
-func (ss *SystemStore) LoadWireGuardClients(target interface{}) error {
-	return ss.loadJSONWithChecksum(WireGuardClientsPath, target, 3)
+func (ss *SystemStore) LoadWireGuardClients(ctx context.Context, target interface{}) error {
+	return ss.loadJSONWithChecksum(ctx, WireGuardClientsPath, target, 3)
 }
 
 // --- WireGuard Concentrator ---
@@ -284,26 +285,26 @@ type WGConcentratorConfig struct {
 }
 
 // SaveWGConcentrator saves the WireGuard concentrator assignment to S3.
-func (ss *SystemStore) SaveWGConcentrator(peerName string) error {
+func (ss *SystemStore) SaveWGConcentrator(ctx context.Context, peerName string) error {
 	config := WGConcentratorConfig{
 		PeerName: peerName,
 		SetAt:    time.Now(),
 	}
-	return ss.saveJSONWithChecksum(WGConcentratorPath, config)
+	return ss.saveJSONWithChecksum(ctx, WGConcentratorPath, config)
 }
 
 // LoadWGConcentrator loads the WireGuard concentrator assignment from S3.
-func (ss *SystemStore) LoadWGConcentrator() (string, error) {
+func (ss *SystemStore) LoadWGConcentrator(ctx context.Context) (string, error) {
 	var config WGConcentratorConfig
-	if err := ss.loadJSONWithChecksum(WGConcentratorPath, &config, 3); err != nil {
+	if err := ss.loadJSONWithChecksum(ctx, WGConcentratorPath, &config, 3); err != nil {
 		return "", err
 	}
 	return config.PeerName, nil
 }
 
 // ClearWGConcentrator removes the WireGuard concentrator assignment from S3.
-func (ss *SystemStore) ClearWGConcentrator() error {
-	return ss.Delete(WGConcentratorPath)
+func (ss *SystemStore) ClearWGConcentrator(ctx context.Context) error {
+	return ss.Delete(ctx, WGConcentratorPath)
 }
 
 // --- DNS Cache ---
@@ -316,7 +317,7 @@ type DNSCacheEntry struct {
 }
 
 // SaveDNSCache saves the DNS cache to S3.
-func (ss *SystemStore) SaveDNSCache(cache map[string]string) error {
+func (ss *SystemStore) SaveDNSCache(ctx context.Context, cache map[string]string) error {
 	entries := make([]DNSCacheEntry, 0, len(cache))
 	now := time.Now()
 	for hostname, meshIP := range cache {
@@ -326,14 +327,14 @@ func (ss *SystemStore) SaveDNSCache(cache map[string]string) error {
 			UpdatedAt: now,
 		})
 	}
-	return ss.saveJSONWithChecksum(DNSCachePath, entries)
+	return ss.saveJSONWithChecksum(ctx, DNSCachePath, entries)
 }
 
 // LoadDNSCache loads the DNS cache from S3 with TTL validation.
 // Entries older than 7 days are filtered out.
-func (ss *SystemStore) LoadDNSCache() (map[string]string, error) {
+func (ss *SystemStore) LoadDNSCache(ctx context.Context) (map[string]string, error) {
 	var entries []DNSCacheEntry
-	if err := ss.loadJSONWithChecksum(DNSCachePath, &entries, 3); err != nil {
+	if err := ss.loadJSONWithChecksum(ctx, DNSCachePath, &entries, 3); err != nil {
 		return nil, err
 	}
 
@@ -365,7 +366,7 @@ type DNSAliasEntry struct {
 // SaveDNSAliases saves peer DNS aliases to S3.
 // aliasOwner maps alias -> peer name
 // peerAliases maps peer name -> aliases list
-func (ss *SystemStore) SaveDNSAliases(aliasOwner map[string]string, peerAliases map[string][]string) error {
+func (ss *SystemStore) SaveDNSAliases(ctx context.Context, aliasOwner map[string]string, peerAliases map[string][]string) error {
 	// Store as peer-centric data (peer -> aliases list)
 	entries := make([]DNSAliasEntry, 0, len(peerAliases))
 	for peerName, aliases := range peerAliases {
@@ -376,14 +377,14 @@ func (ss *SystemStore) SaveDNSAliases(aliasOwner map[string]string, peerAliases 
 			})
 		}
 	}
-	return ss.saveJSONWithChecksum(DNSAliasPath, entries)
+	return ss.saveJSONWithChecksum(ctx, DNSAliasPath, entries)
 }
 
 // LoadDNSAliases loads peer DNS aliases from S3.
 // Returns both the peer->aliases map and the alias->peer reverse map.
-func (ss *SystemStore) LoadDNSAliases() (peerAliases map[string][]string, aliasOwner map[string]string, err error) {
+func (ss *SystemStore) LoadDNSAliases(ctx context.Context) (peerAliases map[string][]string, aliasOwner map[string]string, err error) {
 	var entries []DNSAliasEntry
-	if err := ss.loadJSONWithChecksum(DNSAliasPath, &entries, 3); err != nil {
+	if err := ss.loadJSONWithChecksum(ctx, DNSAliasPath, &entries, 3); err != nil {
 		return nil, nil, err
 	}
 
@@ -403,14 +404,14 @@ func (ss *SystemStore) LoadDNSAliases() (peerAliases map[string][]string, aliasO
 // --- Filter Rules ---
 
 // SaveFilterRules saves filter rules to S3 with checksum validation.
-func (ss *SystemStore) SaveFilterRules(data FilterRulesData) error {
-	return ss.saveJSONWithChecksum(FilterRulesPath, data)
+func (ss *SystemStore) SaveFilterRules(ctx context.Context, data FilterRulesData) error {
+	return ss.saveJSONWithChecksum(ctx, FilterRulesPath, data)
 }
 
 // LoadFilterRules loads filter rules from S3 with automatic rollback on corruption.
-func (ss *SystemStore) LoadFilterRules() (*FilterRulesData, error) {
+func (ss *SystemStore) LoadFilterRules(ctx context.Context) (*FilterRulesData, error) {
 	var data FilterRulesData
-	if err := ss.loadJSONWithChecksum(FilterRulesPath, &data, 3); err != nil {
+	if err := ss.loadJSONWithChecksum(ctx, FilterRulesPath, &data, 3); err != nil {
 		return nil, err
 	}
 	return &data, nil
@@ -419,15 +420,15 @@ func (ss *SystemStore) LoadFilterRules() (*FilterRulesData, error) {
 // --- IP Allocations ---
 
 // SaveIPAllocations saves IP allocator state to S3 with checksum validation.
-func (ss *SystemStore) SaveIPAllocations(data IPAllocationsData) error {
-	return ss.saveJSONWithChecksum(IPAllocationsPath, data)
+func (ss *SystemStore) SaveIPAllocations(ctx context.Context, data IPAllocationsData) error {
+	return ss.saveJSONWithChecksum(ctx, IPAllocationsPath, data)
 }
 
 // LoadIPAllocations loads IP allocator state from S3 with automatic rollback on corruption.
 // Returns nil if the object doesn't exist (first coordinator startup).
-func (ss *SystemStore) LoadIPAllocations() (*IPAllocationsData, error) {
+func (ss *SystemStore) LoadIPAllocations(ctx context.Context) (*IPAllocationsData, error) {
 	var data IPAllocationsData
-	if err := ss.loadJSONWithChecksum(IPAllocationsPath, &data, 3); err != nil {
+	if err := ss.loadJSONWithChecksum(ctx, IPAllocationsPath, &data, 3); err != nil {
 		return nil, err
 	}
 
@@ -455,7 +456,7 @@ type MetadataWrapper struct {
 }
 
 // saveJSONWithChecksum saves JSON with a checksum wrapper for corruption detection.
-func (ss *SystemStore) saveJSONWithChecksum(key string, v interface{}) error {
+func (ss *SystemStore) saveJSONWithChecksum(ctx context.Context, key string, v interface{}) error {
 	// Marshal payload (compact for checksum consistency)
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -481,7 +482,7 @@ func (ss *SystemStore) saveJSONWithChecksum(key string, v interface{}) error {
 		return fmt.Errorf("marshal wrapper: %w", err)
 	}
 
-	_, err = ss.store.PutObject(SystemBucket, key, bytes.NewReader(wrappedData),
+	_, err = ss.store.PutObject(ctx, SystemBucket, key, bytes.NewReader(wrappedData),
 		int64(len(wrappedData)), "application/json", nil)
 	if err != nil {
 		return fmt.Errorf("put %s: %w", key, err)
@@ -493,9 +494,9 @@ func (ss *SystemStore) saveJSONWithChecksum(key string, v interface{}) error {
 // loadJSONWithChecksum loads and validates JSON with automatic rollback on corruption.
 // If the current version is corrupted, it tries up to maxRetries previous versions.
 // Returns nil if the object doesn't exist (same as loadJSON for backward compatibility).
-func (ss *SystemStore) loadJSONWithChecksum(key string, target interface{}, maxRetries int) error {
+func (ss *SystemStore) loadJSONWithChecksum(ctx context.Context, key string, target interface{}, maxRetries int) error {
 	// Try loading current version first
-	if err := ss.tryLoadVersion(key, "", target); err == nil {
+	if err := ss.tryLoadVersion(ctx, key, "", target); err == nil {
 		return nil // Success
 	} else if errors.Is(err, ErrObjectNotFound) {
 		return nil // Not found is OK - return nil with empty target
@@ -504,7 +505,7 @@ func (ss *SystemStore) loadJSONWithChecksum(key string, target interface{}, maxR
 	}
 
 	// Current version failed - try previous versions
-	versions, err := ss.store.ListVersions(SystemBucket, key)
+	versions, err := ss.store.ListVersions(ctx, SystemBucket, key)
 	if err != nil {
 		if errors.Is(err, ErrObjectNotFound) || errors.Is(err, ErrBucketNotFound) {
 			return nil // No versions exist - return nil
@@ -520,11 +521,11 @@ func (ss *SystemStore) loadJSONWithChecksum(key string, target interface{}, maxR
 		}
 
 		log.Info().Str("key", key).Str("version", ver.VersionID).Msg("attempting rollback")
-		if err := ss.tryLoadVersion(key, ver.VersionID, target); err == nil {
+		if err := ss.tryLoadVersion(ctx, key, ver.VersionID, target); err == nil {
 			// Success - restore this version as current
 			log.Warn().Str("key", key).Str("version", ver.VersionID).
 				Msg("recovered from corrupted data using previous version")
-			if _, err := ss.store.RestoreVersion(SystemBucket, key, ver.VersionID); err != nil {
+			if _, err := ss.store.RestoreVersion(ctx, SystemBucket, key, ver.VersionID); err != nil {
 				log.Error().Err(err).Msg("failed to restore recovered version")
 			}
 			return nil
@@ -538,15 +539,15 @@ func (ss *SystemStore) loadJSONWithChecksum(key string, target interface{}, maxR
 
 // tryLoadVersion attempts to load and validate a specific version.
 // It supports both checksum-wrapped format (new) and direct JSON (legacy).
-func (ss *SystemStore) tryLoadVersion(key, versionID string, target interface{}) error {
+func (ss *SystemStore) tryLoadVersion(ctx context.Context, key, versionID string, target interface{}) error {
 	// Get object (specific version if provided)
 	var reader io.ReadCloser
 	var err error
 
 	if versionID == "" {
-		reader, _, err = ss.store.GetObject(SystemBucket, key)
+		reader, _, err = ss.store.GetObject(ctx, SystemBucket, key)
 	} else {
-		reader, _, err = ss.store.GetObjectVersion(SystemBucket, key, versionID)
+		reader, _, err = ss.store.GetObjectVersion(ctx, SystemBucket, key, versionID)
 	}
 
 	if err != nil {
@@ -601,9 +602,9 @@ func (ss *SystemStore) tryLoadVersion(key, versionID string, target interface{})
 // If the S3 key already exists, no migration is performed.
 // If the local file exists, it's read and saved to the S3 path.
 // Returns true if migration was performed.
-func (ss *SystemStore) MigrateFromFile(localPath, s3Key string) (bool, error) {
+func (ss *SystemStore) MigrateFromFile(ctx context.Context, localPath, s3Key string) (bool, error) {
 	// Check if already exists in S3
-	_, _, err := ss.store.GetObject(SystemBucket, s3Key)
+	_, _, err := ss.store.GetObject(ctx, SystemBucket, s3Key)
 	if err == nil {
 		return false, nil // Already migrated
 	}
@@ -621,7 +622,7 @@ func (ss *SystemStore) MigrateFromFile(localPath, s3Key string) (bool, error) {
 	}
 
 	// Save to S3
-	if _, err := ss.store.PutObject(SystemBucket, s3Key, bytes.NewReader(data), int64(len(data)), "application/json", nil); err != nil {
+	if _, err := ss.store.PutObject(ctx, SystemBucket, s3Key, bytes.NewReader(data), int64(len(data)), "application/json", nil); err != nil {
 		return false, fmt.Errorf("save to S3: %w", err)
 	}
 
@@ -629,15 +630,15 @@ func (ss *SystemStore) MigrateFromFile(localPath, s3Key string) (bool, error) {
 }
 
 // Exists checks if an object exists in the system bucket.
-func (ss *SystemStore) Exists(key string) bool {
-	_, err := ss.store.HeadObject(SystemBucket, key)
+func (ss *SystemStore) Exists(ctx context.Context, key string) bool {
+	_, err := ss.store.HeadObject(ctx, SystemBucket, key)
 	return err == nil
 }
 
 // Delete permanently removes an object from the system bucket.
 // Unlike user data, system configuration is not tombstoned.
-func (ss *SystemStore) Delete(key string) error {
-	return ss.store.PurgeObject(SystemBucket, key)
+func (ss *SystemStore) Delete(ctx context.Context, key string) error {
+	return ss.store.PurgeObject(ctx, SystemBucket, key)
 }
 
 // Raw returns the underlying store for advanced operations.

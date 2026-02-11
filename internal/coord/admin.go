@@ -878,7 +878,7 @@ func (s *Server) handleGroupCreate(w http.ResponseWriter, r *http.Request) {
 
 	// Persist
 	if s.s3SystemStore != nil {
-		if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+		if err := s.s3SystemStore.SaveGroups(r.Context(), s.s3Authorizer.Groups.List()); err != nil {
 			log.Warn().Err(err).Msg("failed to persist groups")
 		}
 	}
@@ -941,7 +941,7 @@ func (s *Server) handleGroupByName(w http.ResponseWriter, r *http.Request) {
 
 		// Persist
 		if s.s3SystemStore != nil {
-			if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+			if err := s.s3SystemStore.SaveGroups(r.Context(), s.s3Authorizer.Groups.List()); err != nil {
 				log.Warn().Err(err).Msg("failed to persist groups")
 			}
 		}
@@ -992,7 +992,7 @@ func (s *Server) handleGroupMembers(w http.ResponseWriter, r *http.Request, grou
 
 		// Persist
 		if s.s3SystemStore != nil {
-			if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+			if err := s.s3SystemStore.SaveGroups(r.Context(), s.s3Authorizer.Groups.List()); err != nil {
 				log.Warn().Err(err).Msg("failed to persist groups")
 			}
 		}
@@ -1016,7 +1016,7 @@ func (s *Server) handleGroupMembers(w http.ResponseWriter, r *http.Request, grou
 
 		// Persist
 		if s.s3SystemStore != nil {
-			if err := s.s3SystemStore.SaveGroups(s.s3Authorizer.Groups.List()); err != nil {
+			if err := s.s3SystemStore.SaveGroups(r.Context(), s.s3Authorizer.Groups.List()); err != nil {
 				log.Warn().Err(err).Msg("failed to persist groups")
 			}
 		}
@@ -1066,7 +1066,7 @@ func (s *Server) handleGroupBindings(w http.ResponseWriter, r *http.Request, gro
 
 		// Persist
 		if s.s3SystemStore != nil {
-			if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
+			if err := s.s3SystemStore.SaveGroupBindings(r.Context(), s.s3Authorizer.GroupBindings.List()); err != nil {
 				log.Warn().Err(err).Msg("failed to persist group bindings")
 			}
 		}
@@ -1102,7 +1102,7 @@ type FileShareResponse struct {
 }
 
 // handleSharesList returns all file shares.
-func (s *Server) handleSharesList(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleSharesList(w http.ResponseWriter, r *http.Request) {
 	if s.fileShareMgr == nil {
 		s.jsonError(w, "file shares not enabled", http.StatusServiceUnavailable)
 		return
@@ -1115,7 +1115,7 @@ func (s *Server) handleSharesList(w http.ResponseWriter, _ *http.Request) {
 	for i, share := range shares {
 		// Calculate bucket size (returns 0 on error, which is fine for display)
 		bucketName := s.fileShareMgr.BucketName(share.Name)
-		sizeBytes, _ := s.s3Store.CalculateBucketSize(bucketName)
+		sizeBytes, _ := s.s3Store.CalculateBucketSize(r.Context(), bucketName)
 
 		response[i] = FileShareResponse{
 			FileShare: share,
@@ -1212,7 +1212,7 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 		opts.GuestReadSet = true
 	}
 
-	share, err := s.fileShareMgr.Create(req.Name, req.Description, ownerID, req.QuotaBytes, opts)
+	share, err := s.fileShareMgr.Create(r.Context(), req.Name, req.Description, ownerID, req.QuotaBytes, opts)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			s.jsonError(w, err.Error(), http.StatusConflict)
@@ -1224,7 +1224,7 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 
 	// Persist group bindings (file share creates them)
 	if s.s3SystemStore != nil {
-		if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
+		if err := s.s3SystemStore.SaveGroupBindings(r.Context(), s.s3Authorizer.GroupBindings.List()); err != nil {
 			log.Warn().Err(err).Msg("failed to persist group bindings")
 		}
 	}
@@ -1267,14 +1267,14 @@ func (s *Server) handleShareByName(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := s.fileShareMgr.Delete(shareName); err != nil {
+		if err := s.fileShareMgr.Delete(r.Context(), shareName); err != nil {
 			s.jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		// Persist group bindings (file share removes them)
 		if s.s3SystemStore != nil {
-			if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
+			if err := s.s3SystemStore.SaveGroupBindings(r.Context(), s.s3Authorizer.GroupBindings.List()); err != nil {
 				log.Warn().Err(err).Msg("failed to persist group bindings")
 			}
 		}
@@ -1314,7 +1314,7 @@ func (s *Server) handlePeersMgmt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	peers, err := s.s3SystemStore.LoadPeers()
+	peers, err := s.s3SystemStore.LoadPeers(r.Context())
 	if err != nil {
 		s.jsonError(w, "failed to load peers", http.StatusInternalServerError)
 		return
@@ -1504,7 +1504,7 @@ func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
 
 		// Persist
 		if s.s3SystemStore != nil {
-			if err := s.s3SystemStore.SaveBindings(s.s3Authorizer.Bindings.List()); err != nil {
+			if err := s.s3SystemStore.SaveBindings(r.Context(), s.s3Authorizer.Bindings.List()); err != nil {
 				log.Warn().Err(err).Msg("failed to persist bindings")
 			}
 		}
@@ -1558,7 +1558,7 @@ func (s *Server) handleBindingByName(w http.ResponseWriter, r *http.Request) {
 
 			// Persist
 			if s.s3SystemStore != nil {
-				if err := s.s3SystemStore.SaveBindings(s.s3Authorizer.Bindings.List()); err != nil {
+				if err := s.s3SystemStore.SaveBindings(r.Context(), s.s3Authorizer.Bindings.List()); err != nil {
 					log.Warn().Err(err).Msg("failed to persist bindings")
 				}
 			}
@@ -1581,7 +1581,7 @@ func (s *Server) handleBindingByName(w http.ResponseWriter, r *http.Request) {
 
 			// Persist
 			if s.s3SystemStore != nil {
-				if err := s.s3SystemStore.SaveGroupBindings(s.s3Authorizer.GroupBindings.List()); err != nil {
+				if err := s.s3SystemStore.SaveGroupBindings(r.Context(), s.s3Authorizer.GroupBindings.List()); err != nil {
 					log.Warn().Err(err).Msg("failed to persist group bindings")
 				}
 			}
@@ -1778,7 +1778,7 @@ func (s *Server) handleS3ListBuckets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	buckets, err := s.s3Store.ListBuckets()
+	buckets, err := s.s3Store.ListBuckets(r.Context())
 	if err != nil {
 		s.jsonError(w, "failed to list buckets", http.StatusInternalServerError)
 		return
@@ -1840,7 +1840,7 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 	prefix := r.URL.Query().Get("prefix")
 	delimiter := r.URL.Query().Get("delimiter")
 
-	objects, _, _, err := s.s3Store.ListObjects(bucket, prefix, "", 1000)
+	objects, _, _, err := s.s3Store.ListObjects(r.Context(), bucket, prefix, "", 1000)
 	if err != nil {
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
@@ -1854,7 +1854,7 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 	}
 
 	// Get bucket metadata to find owner
-	bucketMeta, err := s.s3Store.HeadBucket(bucket)
+	bucketMeta, err := s.s3Store.HeadBucket(r.Context(), bucket)
 	var ownerName string
 	if err == nil && bucketMeta.Owner != "" {
 		// Look up peer name from cached map (falls back to ID if not found)
@@ -1899,7 +1899,7 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 
 	// Calculate sizes for all folders (prefixes) found
 	for commonPrefix := range prefixSizes {
-		size, err := s.s3Store.CalculatePrefixSize(bucket, commonPrefix)
+		size, err := s.s3Store.CalculatePrefixSize(r.Context(), bucket, commonPrefix)
 		if err != nil {
 			size = 0 // Gracefully handle errors - show 0 size rather than failing
 		}
@@ -1924,24 +1924,24 @@ func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, 
 		// Check for versionId query param
 		versionID := r.URL.Query().Get("versionId")
 		if versionID != "" {
-			s.handleS3GetObjectVersion(w, bucket, key, versionID)
+			s.handleS3GetObjectVersion(r.Context(), w, bucket, key, versionID)
 		} else {
-			s.handleS3GetObject(w, bucket, key)
+			s.handleS3GetObject(r.Context(), w, bucket, key)
 		}
 	case http.MethodPut:
 		s.handleS3PutObject(w, r, bucket, key)
 	case http.MethodDelete:
 		s.handleS3DeleteObject(w, r, bucket, key)
 	case http.MethodHead:
-		s.handleS3HeadObject(w, bucket, key)
+		s.handleS3HeadObject(r.Context(), w, bucket, key)
 	default:
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 // handleS3GetObject returns the object content.
-func (s *Server) handleS3GetObject(w http.ResponseWriter, bucket, key string) {
-	reader, meta, err := s.s3Store.GetObject(bucket, key)
+func (s *Server) handleS3GetObject(ctx context.Context, w http.ResponseWriter, bucket, key string) {
+	reader, meta, err := s.s3Store.GetObject(ctx, bucket, key)
 	if err != nil {
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
@@ -1966,8 +1966,8 @@ func (s *Server) handleS3GetObject(w http.ResponseWriter, bucket, key string) {
 }
 
 // handleS3GetObjectVersion returns a specific version of an object.
-func (s *Server) handleS3GetObjectVersion(w http.ResponseWriter, bucket, key, versionID string) {
-	reader, meta, err := s.s3Store.GetObjectVersion(bucket, key, versionID)
+func (s *Server) handleS3GetObjectVersion(ctx context.Context, w http.ResponseWriter, bucket, key, versionID string) {
+	reader, meta, err := s.s3Store.GetObjectVersion(ctx, bucket, key, versionID)
 	if err != nil {
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
@@ -2004,7 +2004,7 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	}
 
 	// Check if object is tombstoned (read-only)
-	if existingMeta, err := s.s3Store.HeadObject(bucket, key); err == nil && existingMeta.IsTombstoned() {
+	if existingMeta, err := s.s3Store.HeadObject(r.Context(), bucket, key); err == nil && existingMeta.IsTombstoned() {
 		s.jsonError(w, "object is deleted and read-only", http.StatusForbidden)
 		return
 	}
@@ -2029,7 +2029,7 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 		return
 	}
 
-	meta, err := s.s3Store.PutObject(bucket, key, bytes.NewReader(body), int64(len(body)), contentType, nil)
+	meta, err := s.s3Store.PutObject(r.Context(), bucket, key, bytes.NewReader(body), int64(len(body)), contentType, nil)
 	if err != nil {
 		s.jsonError(w, "failed to store object: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -2062,7 +2062,7 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, r *http.Request, bu
 		return
 	}
 
-	err := s.s3Store.DeleteObject(bucket, key)
+	err := s.s3Store.DeleteObject(r.Context(), bucket, key)
 	if err != nil {
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
@@ -2096,8 +2096,8 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, r *http.Request, bu
 }
 
 // handleS3HeadObject returns object metadata.
-func (s *Server) handleS3HeadObject(w http.ResponseWriter, bucket, key string) {
-	meta, err := s.s3Store.HeadObject(bucket, key)
+func (s *Server) handleS3HeadObject(ctx context.Context, w http.ResponseWriter, bucket, key string) {
+	meta, err := s.s3Store.HeadObject(ctx, bucket, key)
 	if err != nil {
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound), errors.Is(err, s3.ErrObjectNotFound):
@@ -2135,7 +2135,7 @@ func (s *Server) handleS3ListVersions(w http.ResponseWriter, r *http.Request, bu
 		return
 	}
 
-	versions, err := s.s3Store.ListVersions(bucket, key)
+	versions, err := s.s3Store.ListVersions(r.Context(), bucket, key)
 	if err != nil {
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
@@ -2195,7 +2195,7 @@ func (s *Server) handleS3RestoreVersion(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	meta, err := s.s3Store.RestoreVersion(bucket, key, req.VersionID)
+	meta, err := s.s3Store.RestoreVersion(r.Context(), bucket, key, req.VersionID)
 	if err != nil {
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
@@ -2231,7 +2231,7 @@ func (s *Server) handleS3UndeleteObject(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// Untombstone the object
-	if err := s.s3Store.UntombstoneObject(bucket, key); err != nil {
+	if err := s.s3Store.UntombstoneObject(r.Context(), bucket, key); err != nil {
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)
@@ -2332,7 +2332,7 @@ func (s *Server) persistExternalPanels() error {
 		panelPtrs[i] = &externalPanels[i]
 	}
 
-	return s.s3SystemStore.SavePanels(panelPtrs)
+	return s.s3SystemStore.SavePanels(context.Background(), panelPtrs)
 }
 
 // handlePanels handles GET (list) and POST (register) for panels.
@@ -2588,7 +2588,7 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, path := range files {
-		versions, err := store.ListVersions(s3.SystemBucket, path)
+		versions, err := store.ListVersions(context.Background(), s3.SystemBucket, path)
 
 		fileInfo := make(map[string]interface{})
 		fileInfo["exists"] = err == nil && len(versions) > 0

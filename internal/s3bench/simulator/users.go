@@ -132,7 +132,7 @@ func (um *UserManager) createFileShare(ctx context.Context, dept story.Departmen
 	}
 
 	// Create the file share
-	_, err := um.shareManager.Create(dept.FileShare, dept.Name, ownerID, quotaBytes, opts)
+	_, err := um.shareManager.Create(context.Background(), dept.FileShare, dept.Name, ownerID, quotaBytes, opts)
 	if err != nil {
 		return fmt.Errorf("create file share: %w", err)
 	}
@@ -247,7 +247,7 @@ func (um *UserManager) RevokePermission(characterID, fileShareName string) error
 func (um *UserManager) Cleanup() error {
 	// Delete all file shares
 	for _, dept := range um.story.Departments() {
-		_ = um.shareManager.Delete(dept.FileShare)
+		_ = um.shareManager.Delete(context.Background(), dept.FileShare)
 	}
 
 	// Remove all role bindings

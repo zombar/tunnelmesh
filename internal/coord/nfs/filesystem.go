@@ -3,6 +3,7 @@ package nfs
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -83,13 +84,13 @@ func (f *S3Filesystem) OpenFile(filename string, flag int, perm os.FileMode) (bi
 	}
 
 	// Check if file exists
-	meta, err := f.store.HeadObject(f.bucket, key)
+	meta, err := f.store.HeadObject(context.Background(), f.bucket, key)
 	exists := err == nil
 
 	// Handle create/truncate flags
 	if flag&os.O_CREATE != 0 && !exists {
 		// Create empty file
-		_, err := f.store.PutObject(f.bucket, key, bytes.NewReader(nil), 0, "application/octet-stream", nil)
+		_, err := f.store.PutObject(context.Background(), f.bucket, key, bytes.NewReader(nil), 0, "application/octet-stream", nil)
 		if err != nil {
 			return nil, err
 		}
@@ -120,7 +121,7 @@ func (f *S3Filesystem) Stat(filename string) (os.FileInfo, error) {
 	key := f.normalizePath(filename)
 
 	// Check if it's a file
-	meta, err := f.store.HeadObject(f.bucket, key)
+	meta, err := f.store.HeadObject(context.Background(), f.bucket, key)
 	if err == nil {
 		return &s3FileInfo{
 			name:    filepath.Base(filename),
@@ -132,7 +133,7 @@ func (f *S3Filesystem) Stat(filename string) (os.FileInfo, error) {
 	}
 
 	// Check if it's a directory (has children)
-	objects, _, _, err := f.store.ListObjects(f.bucket, key+"/", "", 1)
+	objects, _, _, err := f.store.ListObjects(context.Background(), f.bucket, key+"/", "", 1)
 	if err != nil {
 		return nil, os.ErrNotExist
 	}
@@ -159,7 +160,7 @@ func (f *S3Filesystem) Rename(oldpath, newpath string) error {
 	newKey := f.normalizePath(newpath)
 
 	// Get the object
-	reader, meta, err := f.store.GetObject(f.bucket, oldKey)
+	reader, meta, err := f.store.GetObject(context.Background(), f.bucket, oldKey)
 	if err != nil {
 		return err
 	}
@@ -170,13 +171,13 @@ func (f *S3Filesystem) Rename(oldpath, newpath string) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.store.PutObject(f.bucket, newKey, bytes.NewReader(data), int64(len(data)), meta.ContentType, meta.Metadata)
+	_, err = f.store.PutObject(context.Background(), f.bucket, newKey, bytes.NewReader(data), int64(len(data)), meta.ContentType, meta.Metadata)
 	if err != nil {
 		return err
 	}
 
 	// Delete old
-	return f.store.DeleteObject(f.bucket, oldKey)
+	return f.store.DeleteObject(context.Background(), f.bucket, oldKey)
 }
 
 // Remove removes a file.
@@ -185,7 +186,7 @@ func (f *S3Filesystem) Remove(filename string) error {
 		return errReadOnly
 	}
 	key := f.normalizePath(filename)
-	return f.store.DeleteObject(f.bucket, key)
+	return f.store.DeleteObject(context.Background(), f.bucket, key)
 }
 
 // Join joins path elements using forward slashes (S3 compatible).
@@ -211,7 +212,7 @@ func (f *S3Filesystem) ReadDir(path string) ([]os.FileInfo, error) {
 		prefix += "/"
 	}
 
-	objects, _, _, err := f.store.ListObjects(f.bucket, prefix, "", 10000)
+	objects, _, _, err := f.store.ListObjects(context.Background(), f.bucket, prefix, "", 10000)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +329,7 @@ func (f *s3File) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 
-	reader, _, err := f.fs.store.GetObject(f.fs.bucket, f.key)
+	reader, _, err := f.fs.store.GetObject(context.Background(), f.fs.bucket, f.key)
 	if err != nil {
 		return 0, err
 	}
@@ -363,7 +364,7 @@ func (f *s3File) Write(p []byte) (int, error) {
 		f.buffer = new(bytes.Buffer)
 		// If appending, read existing content first
 		if f.flag&os.O_APPEND != 0 && f.size > 0 {
-			reader, _, err := f.fs.store.GetObject(f.fs.bucket, f.key)
+			reader, _, err := f.fs.store.GetObject(context.Background(), f.fs.bucket, f.key)
 			if err == nil {
 				_, _ = io.Copy(f.buffer, reader)
 				_ = reader.Close()
@@ -395,7 +396,7 @@ func (f *s3File) Close() error {
 	// If we have a write buffer, flush it to S3
 	if f.buffer != nil && f.buffer.Len() > 0 {
 		data := f.buffer.Bytes()
-		_, err := f.fs.store.PutObject(f.fs.bucket, f.key, bytes.NewReader(data), int64(len(data)), "application/octet-stream", nil)
+		_, err := f.fs.store.PutObject(context.Background(), f.fs.bucket, f.key, bytes.NewReader(data), int64(len(data)), "application/octet-stream", nil)
 		return err
 	}
 	return nil
@@ -414,11 +415,11 @@ func (f *s3File) Truncate(size int64) error {
 		return errReadOnly
 	}
 	if size == 0 {
-		_, err := f.fs.store.PutObject(f.fs.bucket, f.key, bytes.NewReader(nil), 0, "application/octet-stream", nil)
+		_, err := f.fs.store.PutObject(context.Background(), f.fs.bucket, f.key, bytes.NewReader(nil), 0, "application/octet-stream", nil)
 		return err
 	}
 	// For non-zero truncate, read existing, truncate, and write back
-	reader, _, err := f.fs.store.GetObject(f.fs.bucket, f.key)
+	reader, _, err := f.fs.store.GetObject(context.Background(), f.fs.bucket, f.key)
 	if err != nil {
 		return err
 	}
@@ -433,7 +434,7 @@ func (f *s3File) Truncate(size int64) error {
 		data = append(data, make([]byte, size-int64(len(data)))...)
 	}
 
-	_, err = f.fs.store.PutObject(f.fs.bucket, f.key, bytes.NewReader(data), size, "application/octet-stream", nil)
+	_, err = f.fs.store.PutObject(context.Background(), f.fs.bucket, f.key, bytes.NewReader(data), size, "application/octet-stream", nil)
 	return err
 }
 

@@ -3,6 +3,7 @@ package s3
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	cryptorand "crypto/rand"
 	"encoding/binary"
@@ -256,7 +257,7 @@ func (s *Store) objectMetaPath(bucket, key string) string {
 }
 
 // CreateBucket creates a new bucket.
-func (s *Store) CreateBucket(bucket, owner string) error {
+func (s *Store) CreateBucket(ctx context.Context, bucket, owner string) error {
 	// Validate bucket name (defense in depth)
 	if err := validateName(bucket); err != nil {
 		return fmt.Errorf("invalid bucket name: %w", err)
@@ -298,7 +299,7 @@ func (s *Store) CreateBucket(bucket, owner string) error {
 }
 
 // DeleteBucket removes an empty bucket.
-func (s *Store) DeleteBucket(bucket string) error {
+func (s *Store) DeleteBucket(ctx context.Context, bucket string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -328,7 +329,7 @@ func (s *Store) DeleteBucket(bucket string) error {
 
 // TombstoneBucket marks a bucket as soft-deleted.
 // All objects in a tombstoned bucket are treated as tombstoned.
-func (s *Store) TombstoneBucket(bucket string) error {
+func (s *Store) TombstoneBucket(ctx context.Context, bucket string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -349,7 +350,7 @@ func (s *Store) TombstoneBucket(bucket string) error {
 }
 
 // UntombstoneBucket restores a tombstoned bucket.
-func (s *Store) UntombstoneBucket(bucket string) error {
+func (s *Store) UntombstoneBucket(ctx context.Context, bucket string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -382,7 +383,7 @@ func (s *Store) writeBucketMeta(bucket string, meta *BucketMeta) error {
 }
 
 // HeadBucket checks if a bucket exists.
-func (s *Store) HeadBucket(bucket string) (*BucketMeta, error) {
+func (s *Store) HeadBucket(ctx context.Context, bucket string) (*BucketMeta, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -410,7 +411,7 @@ func (s *Store) getBucketMeta(bucket string) (*BucketMeta, error) {
 }
 
 // ListBuckets returns all buckets.
-func (s *Store) ListBuckets() ([]BucketMeta, error) {
+func (s *Store) ListBuckets(ctx context.Context) ([]BucketMeta, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -442,7 +443,7 @@ func (s *Store) ListBuckets() ([]BucketMeta, error) {
 // CalculateBucketSize calculates the total size of all objects in a bucket (including tombstoned).
 // Tombstoned objects still consume disk space until purged, so they count toward size.
 // Returns the total size in bytes, or 0 if the bucket doesn't exist or is empty.
-func (s *Store) CalculateBucketSize(bucketName string) (int64, error) {
+func (s *Store) CalculateBucketSize(ctx context.Context, bucketName string) (int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -462,7 +463,7 @@ func (s *Store) CalculateBucketSize(bucketName string) (int64, error) {
 // CalculatePrefixSize calculates the total size of all objects under a prefix (including tombstoned).
 // This is used for displaying folder sizes in the S3 explorer.
 // Returns the total size in bytes.
-func (s *Store) CalculatePrefixSize(bucketName, prefix string) (int64, error) {
+func (s *Store) CalculatePrefixSize(ctx context.Context, bucketName, prefix string) (int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -476,7 +477,14 @@ func (s *Store) CalculatePrefixSize(bucketName, prefix string) (int64, error) {
 	// Iterate through all objects with the given prefix
 	marker := ""
 	for {
-		objects, isTruncated, nextMarker, err := s.ListObjects(bucketName, prefix, marker, 1000)
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return totalSize, ctx.Err() // Early exit on cancellation
+		default:
+		}
+
+		objects, isTruncated, nextMarker, err := s.ListObjects(ctx, bucketName, prefix, marker, 1000)
 		if err != nil {
 			return 0, fmt.Errorf("list objects: %w", err)
 		}
@@ -513,7 +521,7 @@ func (s *Store) updateBucketSize(bucketName string, delta int64) error {
 
 // PutObject writes an object to a bucket using CDC chunks stored in CAS.
 // Archives the current version before overwriting (for version history).
-func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, contentType string, metadata map[string]string) (*ObjectMeta, error) {
+func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string, metadata map[string]string) (*ObjectMeta, error) {
 	// Validate names (defense in depth)
 	if err := validateName(bucket); err != nil {
 		return nil, fmt.Errorf("invalid bucket name: %w", err)
@@ -577,7 +585,7 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 	// Store each chunk in CAS
 	chunks := make([]string, 0, len(chunkData))
 	for _, chunk := range chunkData {
-		hash, err := s.cas.WriteChunk(chunk)
+		hash, err := s.cas.WriteChunk(ctx, chunk)
 		if err != nil {
 			return nil, fmt.Errorf("write chunk: %w", err)
 		}
@@ -644,7 +652,7 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 	}
 
 	// Prune expired versions (lazy cleanup)
-	s.pruneExpiredVersions(bucket, key)
+	s.pruneExpiredVersions(ctx, bucket, key)
 
 	// Update bucket size (new object adds to size, replacement adjusts delta)
 	sizeDelta := written - oldSize
@@ -660,7 +668,7 @@ func (s *Store) PutObject(bucket, key string, reader io.Reader, size int64, cont
 }
 
 // GetObject retrieves an object from a bucket.
-func (s *Store) GetObject(bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
+func (s *Store) GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
 	// Validate names (defense in depth)
 	if err := validateName(bucket); err != nil {
 		return nil, nil, fmt.Errorf("invalid bucket name: %w", err)
@@ -683,11 +691,11 @@ func (s *Store) GetObject(bucket, key string) (io.ReadCloser, *ObjectMeta, error
 		return nil, nil, err
 	}
 
-	return s.getObjectContent(bucket, key, meta)
+	return s.getObjectContent(ctx, bucket, key, meta)
 }
 
 // HeadObject returns object metadata without the body.
-func (s *Store) HeadObject(bucket, key string) (*ObjectMeta, error) {
+func (s *Store) HeadObject(ctx context.Context, bucket, key string) (*ObjectMeta, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -735,7 +743,7 @@ func (s *Store) getObjectMeta(bucket, key string) (*ObjectMeta, error) {
 // DeleteObject soft-deletes (tombstones) an object on first call.
 // If the object is already tombstoned, it permanently purges it.
 // This allows "delete twice to permanently remove" UX pattern.
-func (s *Store) DeleteObject(bucket, key string) error {
+func (s *Store) DeleteObject(ctx context.Context, bucket, key string) error {
 	// Validate names (defense in depth)
 	if err := validateName(bucket); err != nil {
 		return fmt.Errorf("invalid bucket name: %w", err)
@@ -745,28 +753,28 @@ func (s *Store) DeleteObject(bucket, key string) error {
 	}
 
 	// Check if object or bucket is already tombstoned
-	bucketMeta, err := s.HeadBucket(bucket)
+	bucketMeta, err := s.HeadBucket(ctx, bucket)
 	if err != nil {
 		return err
 	}
 
-	objMeta, err := s.HeadObject(bucket, key)
+	objMeta, err := s.HeadObject(ctx, bucket, key)
 	if err != nil {
 		return err
 	}
 
 	// If already tombstoned (object or bucket level), purge permanently
 	if objMeta.IsTombstoned() || bucketMeta.IsTombstoned() {
-		return s.PurgeObject(bucket, key)
+		return s.PurgeObject(ctx, bucket, key)
 	}
 
 	// First delete: tombstone
-	return s.TombstoneObject(bucket, key)
+	return s.TombstoneObject(ctx, bucket, key)
 }
 
 // TombstoneObject marks an object as tombstoned (soft-deleted).
 // The object data is preserved but marked for cleanup after the retention period.
-func (s *Store) TombstoneObject(bucket, key string) error {
+func (s *Store) TombstoneObject(ctx context.Context, bucket, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -805,7 +813,7 @@ func (s *Store) TombstoneObject(bucket, key string) error {
 }
 
 // UntombstoneObject restores a tombstoned object, making it accessible again.
-func (s *Store) UntombstoneObject(bucket, key string) error {
+func (s *Store) UntombstoneObject(ctx context.Context, bucket, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -844,7 +852,7 @@ func (s *Store) UntombstoneObject(bucket, key string) error {
 
 // PurgeObject permanently removes an object and all its versions from a bucket.
 // This is used by the cleanup process for tombstoned objects past retention.
-func (s *Store) PurgeObject(bucket, key string) error {
+func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -862,14 +870,14 @@ func (s *Store) PurgeObject(bucket, key string) error {
 	metaPath := s.objectMetaPath(bucket, key)
 
 	// Delete all versions first (this also collects chunks for GC)
-	s.deleteAllVersions(bucket, key)
+	s.deleteAllVersions(ctx, bucket, key)
 
 	// Delete current version's chunks
 	if s.cas != nil && len(meta.Chunks) > 0 {
 		for _, hash := range meta.Chunks {
 			// Check if chunk is still referenced by other objects
 			if !s.isChunkReferenced(hash, bucket, key, meta.VersionID) {
-				_ = s.cas.DeleteChunk(hash)
+				_ = s.cas.DeleteChunk(ctx, hash)
 			}
 		}
 	}
@@ -909,7 +917,7 @@ func (s *Store) TombstoneRetentionDays() int {
 
 // PurgeTombstonedObjects removes all tombstoned objects older than the retention period.
 // Returns the number of objects purged.
-func (s *Store) PurgeTombstonedObjects() int {
+func (s *Store) PurgeTombstonedObjects(ctx context.Context) int {
 	s.mu.RLock()
 	retentionDays := s.tombstoneRetentionDays
 	s.mu.RUnlock()
@@ -922,23 +930,37 @@ func (s *Store) PurgeTombstonedObjects() int {
 	purgedCount := 0
 
 	// List all buckets
-	buckets, err := s.ListBuckets()
+	buckets, err := s.ListBuckets(ctx)
 	if err != nil {
 		return 0
 	}
 
 	for _, bucket := range buckets {
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return purgedCount // Early exit on cancellation
+		default:
+		}
+
 		// Paginate through all objects in the bucket
 		marker := ""
 		for {
-			objects, isTruncated, nextMarker, err := s.ListObjects(bucket.Name, "", marker, 1000)
+			// Check for cancellation in pagination loop
+			select {
+			case <-ctx.Done():
+				return purgedCount // Early exit on cancellation
+			default:
+			}
+
+			objects, isTruncated, nextMarker, err := s.ListObjects(ctx, bucket.Name, "", marker, 1000)
 			if err != nil {
 				break
 			}
 
 			for _, obj := range objects {
 				if obj.IsTombstoned() && obj.TombstonedAt.Before(cutoff) {
-					if err := s.PurgeObject(bucket.Name, obj.Key); err == nil {
+					if err := s.PurgeObject(ctx, bucket.Name, obj.Key); err == nil {
 						purgedCount++
 					}
 				}
@@ -957,7 +979,7 @@ func (s *Store) PurgeTombstonedObjects() int {
 // ListObjects lists objects in a bucket with optional prefix filter and pagination.
 // marker is the key to start after (exclusive) for pagination.
 // Returns (objects, isTruncated, nextMarker, error).
-func (s *Store) ListObjects(bucket, prefix, marker string, maxKeys int) ([]ObjectMeta, bool, string, error) {
+func (s *Store) ListObjects(ctx context.Context, bucket, prefix, marker string, maxKeys int) ([]ObjectMeta, bool, string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1070,7 +1092,7 @@ func (s *Store) listObjectsUnsafe(bucket, prefix, marker string, maxKeys int) ([
 
 // InitCAS initializes the content-addressable storage for the store.
 // masterKey should be derived from the mesh PSK for consistent encryption across coordinators.
-func (s *Store) InitCAS(masterKey [32]byte) error {
+func (s *Store) InitCAS(ctx context.Context, masterKey [32]byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1182,7 +1204,7 @@ func (s *Store) archiveCurrentVersion(bucket, key string) error {
 //
 // Returns the number of versions pruned.
 // nolint:gocyclo // Version pruning has complex retention logic
-func (s *Store) pruneExpiredVersions(bucket, key string) int {
+func (s *Store) pruneExpiredVersions(ctx context.Context, bucket, key string) int {
 	versionDir := s.versionDir(bucket, key)
 	entries, err := os.ReadDir(versionDir)
 	if err != nil {
@@ -1325,8 +1347,8 @@ func (s *Store) pruneExpiredVersions(bucket, key string) int {
 		if s.cas != nil && len(v.meta.Chunks) > 0 {
 			for _, hash := range v.meta.Chunks {
 				// Use global check to ensure chunk isn't used elsewhere
-				if !s.isChunkReferencedGlobally(hash) {
-					_ = s.cas.DeleteChunk(hash)
+				if !s.isChunkReferencedGlobally(ctx, hash) {
+					_ = s.cas.DeleteChunk(ctx, hash)
 				}
 			}
 		}
@@ -1337,7 +1359,7 @@ func (s *Store) pruneExpiredVersions(bucket, key string) int {
 
 // isChunkReferencedGlobally checks if a chunk is referenced by ANY object in ANY bucket.
 // This is the safe way to check before deleting a chunk to prevent data loss.
-func (s *Store) isChunkReferencedGlobally(hash string) bool {
+func (s *Store) isChunkReferencedGlobally(ctx context.Context, hash string) bool {
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
 	bucketEntries, err := os.ReadDir(bucketsDir)
 	if err != nil {
@@ -1554,7 +1576,7 @@ type GCStats struct {
 //   - Phase 1: Prune expired versions (Lock per object, brief)
 //   - Phase 2: Rebuild reference set after pruning (RLock only)
 //   - Phase 3: Delete orphaned chunks (no Store lock, CAS has its own)
-func (s *Store) RunGarbageCollection() GCStats {
+func (s *Store) RunGarbageCollection(ctx context.Context) GCStats {
 	stats := GCStats{}
 
 	if s.cas == nil {
@@ -1566,7 +1588,7 @@ func (s *Store) RunGarbageCollection() GCStats {
 
 	// Phase 1: Prune expired versions across all buckets
 	// This uses the original per-object pruning which is safe for concurrent access
-	s.pruneAllExpiredVersionsSimple(&stats)
+	s.pruneAllExpiredVersionsSimple(ctx, &stats)
 
 	// Phase 2: Build reference set AFTER pruning (read-only)
 	// This ensures we capture the current state after version deletion
@@ -1574,7 +1596,7 @@ func (s *Store) RunGarbageCollection() GCStats {
 
 	// Phase 3: Delete orphaned chunks (not in reference set)
 	// CAS has its own locking; we don't need Store lock here
-	s.deleteOrphanedChunks(&stats, referencedChunks, gcStartTime)
+	s.deleteOrphanedChunks(ctx, &stats, referencedChunks, gcStartTime)
 
 	// Update quota if tracking
 	if s.quota != nil {
@@ -1650,7 +1672,7 @@ func (s *Store) buildChunkReferenceSet() map[string]struct{} {
 // pruneAllExpiredVersionsSimple prunes expired versions across all buckets.
 // Takes brief write locks per object to minimize contention.
 // Uses the standard pruneExpiredVersions which handles chunk cleanup safely.
-func (s *Store) pruneAllExpiredVersionsSimple(stats *GCStats) {
+func (s *Store) pruneAllExpiredVersionsSimple(ctx context.Context, stats *GCStats) {
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
 	bucketEntries, err := os.ReadDir(bucketsDir)
 	if err != nil {
@@ -1658,6 +1680,11 @@ func (s *Store) pruneAllExpiredVersionsSimple(stats *GCStats) {
 	}
 
 	for _, bucketEntry := range bucketEntries {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		if !bucketEntry.IsDir() {
 			continue
 		}
@@ -1669,6 +1696,11 @@ func (s *Store) pruneAllExpiredVersionsSimple(stats *GCStats) {
 		metaEntries, _ := os.ReadDir(metaDir)
 
 		for _, metaEntry := range metaEntries {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			if metaEntry.IsDir() || filepath.Ext(metaEntry.Name()) != ".json" {
 				continue
 			}
@@ -1679,7 +1711,7 @@ func (s *Store) pruneAllExpiredVersionsSimple(stats *GCStats) {
 
 			// Brief lock for this object's pruning
 			s.mu.Lock()
-			pruned := s.pruneExpiredVersions(bucket, key)
+			pruned := s.pruneExpiredVersions(ctx, bucket, key)
 			s.mu.Unlock()
 
 			stats.VersionsPruned += pruned
@@ -1690,9 +1722,14 @@ func (s *Store) pruneAllExpiredVersionsSimple(stats *GCStats) {
 // deleteOrphanedChunks deletes chunks not in the reference set.
 // Uses CAS's own locking; doesn't need Store lock.
 // Skips chunks created after gcStartTime to avoid races.
-func (s *Store) deleteOrphanedChunks(stats *GCStats, referencedChunks map[string]struct{}, gcStartTime time.Time) {
+func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, referencedChunks map[string]struct{}, gcStartTime time.Time) {
 	chunksDir := filepath.Join(s.dataDir, "chunks")
 	_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		if err != nil || info.IsDir() {
 			return nil
 		}
@@ -1707,7 +1744,7 @@ func (s *Store) deleteOrphanedChunks(stats *GCStats, referencedChunks map[string
 		if _, referenced := referencedChunks[hash]; !referenced {
 			stats.BytesReclaimed += info.Size()
 			// CAS.DeleteChunk has its own locking
-			if s.cas.DeleteChunk(hash) == nil {
+			if s.cas.DeleteChunk(ctx, hash) == nil {
 				stats.ChunksDeleted++
 			}
 		}
@@ -1716,7 +1753,7 @@ func (s *Store) deleteOrphanedChunks(stats *GCStats, referencedChunks map[string
 }
 
 // ListVersions returns all versions of an object.
-func (s *Store) ListVersions(bucket, key string) ([]VersionInfo, error) {
+func (s *Store) ListVersions(ctx context.Context, bucket, key string) ([]VersionInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1779,7 +1816,7 @@ func (s *Store) ListVersions(bucket, key string) ([]VersionInfo, error) {
 }
 
 // GetObjectVersion retrieves a specific version of an object.
-func (s *Store) GetObjectVersion(bucket, key, versionID string) (io.ReadCloser, *ObjectMeta, error) {
+func (s *Store) GetObjectVersion(ctx context.Context, bucket, key, versionID string) (io.ReadCloser, *ObjectMeta, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1796,7 +1833,7 @@ func (s *Store) GetObjectVersion(bucket, key, versionID string) (io.ReadCloser, 
 
 	if currentMeta != nil && currentMeta.VersionID == versionID {
 		// Return current version
-		return s.getObjectContent(bucket, key, currentMeta)
+		return s.getObjectContent(ctx, bucket, key, currentMeta)
 	}
 
 	// Look for archived version
@@ -1814,12 +1851,13 @@ func (s *Store) GetObjectVersion(bucket, key, versionID string) (io.ReadCloser, 
 		return nil, nil, fmt.Errorf("unmarshal version meta: %w", err)
 	}
 
-	return s.getObjectContent(bucket, key, &meta)
+	return s.getObjectContent(ctx, bucket, key, &meta)
 }
 
 // chunkReader implements io.ReadCloser for streaming chunk reads.
 // It reads chunks on-demand from CAS, avoiding loading entire files into memory.
 type chunkReader struct {
+	ctx       context.Context
 	cas       *CAS
 	chunks    []string // Ordered list of chunk hashes
 	chunkIdx  int      // Current chunk index
@@ -1828,8 +1866,9 @@ type chunkReader struct {
 }
 
 // newChunkReader creates a streaming reader for the given chunks.
-func newChunkReader(cas *CAS, chunks []string) *chunkReader {
+func newChunkReader(ctx context.Context, cas *CAS, chunks []string) *chunkReader {
 	return &chunkReader{
+		ctx:    ctx,
 		cas:    cas,
 		chunks: chunks,
 	}
@@ -1849,7 +1888,7 @@ func (r *chunkReader) Read(p []byte) (n int, err error) {
 			}
 
 			// Load next chunk
-			r.chunkData, err = r.cas.ReadChunk(r.chunks[r.chunkIdx])
+			r.chunkData, err = r.cas.ReadChunk(r.ctx, r.chunks[r.chunkIdx])
 			if err != nil {
 				return n, fmt.Errorf("read chunk %s: %w", r.chunks[r.chunkIdx], err)
 			}
@@ -1874,7 +1913,7 @@ func (r *chunkReader) Close() error {
 
 // getObjectContent returns the content of an object by reading its chunks from CAS.
 // Uses streaming to avoid loading entire files into memory.
-func (s *Store) getObjectContent(bucket, key string, meta *ObjectMeta) (io.ReadCloser, *ObjectMeta, error) {
+func (s *Store) getObjectContent(ctx context.Context, bucket, key string, meta *ObjectMeta) (io.ReadCloser, *ObjectMeta, error) {
 	if s.cas == nil {
 		return nil, nil, fmt.Errorf("CAS not initialized")
 	}
@@ -1884,12 +1923,12 @@ func (s *Store) getObjectContent(bucket, key string, meta *ObjectMeta) (io.ReadC
 		return io.NopCloser(bytes.NewReader(nil)), meta, nil
 	}
 
-	return newChunkReader(s.cas, meta.Chunks), meta, nil
+	return newChunkReader(ctx, s.cas, meta.Chunks), meta, nil
 }
 
 // RestoreVersion makes a previous version the current version.
 // This creates a new version (with new version ID) containing the old version's content.
-func (s *Store) RestoreVersion(bucket, key, versionID string) (*ObjectMeta, error) {
+func (s *Store) RestoreVersion(ctx context.Context, bucket, key, versionID string) (*ObjectMeta, error) {
 	// Validate names
 	if err := validateName(bucket); err != nil {
 		return nil, fmt.Errorf("invalid bucket name: %w", err)
@@ -1961,13 +2000,13 @@ func (s *Store) RestoreVersion(bucket, key, versionID string) (*ObjectMeta, erro
 	}
 
 	// Prune expired versions
-	s.pruneExpiredVersions(bucket, key)
+	s.pruneExpiredVersions(ctx, bucket, key)
 
 	return &newMeta, nil
 }
 
 // deleteAllVersions removes all versions of an object (used when deleting the object).
-func (s *Store) deleteAllVersions(bucket, key string) {
+func (s *Store) deleteAllVersions(ctx context.Context, bucket, key string) {
 	versionDir := s.versionDir(bucket, key)
 
 	// Collect all chunk hashes from versions for GC
@@ -2003,8 +2042,8 @@ func (s *Store) deleteAllVersions(bucket, key string) {
 	// This checks ALL objects in ALL buckets to ensure chunk is truly orphaned
 	if s.cas != nil {
 		for hash := range chunksToCheck {
-			if !s.isChunkReferencedGlobally(hash) {
-				_ = s.cas.DeleteChunk(hash)
+			if !s.isChunkReferencedGlobally(ctx, hash) {
+				_ = s.cas.DeleteChunk(ctx, hash)
 			}
 		}
 	}

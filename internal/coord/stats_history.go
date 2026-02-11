@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"sync"
@@ -194,7 +195,7 @@ func (sh *StatsHistory) Save(path string, s3Store *s3.SystemStore) (*SaveResult,
 
 			// Use coordinator subfolder to organize stats by which coordinator collected them
 			peerPath := "stats/" + sh.coordinatorName + "/" + peerName + ".network.json"
-			if err := s3Store.SaveJSON(peerPath, peerHistory); err != nil {
+			if err := s3Store.SaveJSON(context.Background(), peerPath, peerHistory); err != nil {
 				log.Warn().Err(err).Str("peer", peerName).Msg("failed to save peer network stats to S3")
 				result.FailedPeers = append(result.FailedPeers, peerName)
 			} else {
@@ -241,7 +242,7 @@ func (sh *StatsHistory) Load(path string, s3Store *s3.SystemStore) error {
 
 	// Try loading from S3 first if available
 	if s3Store != nil {
-		if err := s3Store.LoadStatsHistory(&data); err == nil && len(data.Peers) > 0 {
+		if err := s3Store.LoadStatsHistory(context.Background(), &data); err == nil && len(data.Peers) > 0 {
 			log.Debug().Int("peers", len(data.Peers)).Msg("loaded stats history from S3")
 			// Successfully loaded from S3, apply data and return
 			sh.applyLoadedData(&data)

@@ -129,7 +129,7 @@ func (r *relayManager) SetWGConcentrator(peerName string) {
 	// Persist to S3 if enabled (async to avoid blocking)
 	if s3Store != nil {
 		go func() {
-			if err := s3Store.SaveWGConcentrator(peerName); err != nil {
+			if err := s3Store.SaveWGConcentrator(context.Background(), peerName); err != nil {
 				log.Warn().Err(err).Msg("failed to persist WG concentrator")
 			} else {
 				log.Debug().Str("peer", peerName).Msg("persisted WG concentrator to S3")
@@ -170,7 +170,7 @@ func (r *relayManager) ClearWGConcentrator(peerName string) {
 		// Clear from S3 if enabled
 		if s3Store != nil {
 			go func() {
-				if err := s3Store.ClearWGConcentrator(); err != nil {
+				if err := s3Store.ClearWGConcentrator(context.Background()); err != nil {
 					log.Debug().Err(err).Msg("failed to clear WG concentrator from S3")
 				} else {
 					log.Debug().Msg("cleared WG concentrator from S3")
