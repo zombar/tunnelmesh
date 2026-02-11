@@ -137,9 +137,61 @@ func TestNormalizeServerURL(t *testing.T) {
 			expected: "http://127.0.0.50:8081",
 		},
 		{
-			name:     "HTTP private IP (allowed for internal networks)",
+			name:     "HTTP private IP 192.168.x.x (allowed for internal networks)",
 			input:    "http://192.168.1.10:8081",
 			expected: "http://192.168.1.10:8081",
+		},
+		{
+			name:     "HTTP private IP 192.168.0.1",
+			input:    "http://192.168.0.1:8081",
+			expected: "http://192.168.0.1:8081",
+		},
+		{
+			name:     "HTTP private IP 192.168.255.254",
+			input:    "http://192.168.255.254:8081",
+			expected: "http://192.168.255.254:8081",
+		},
+		{
+			name:     "HTTP private IP 10.0.0.1 (Class A)",
+			input:    "http://10.0.0.1:8081",
+			expected: "http://10.0.0.1:8081",
+		},
+		{
+			name:     "HTTP private IP 10.123.45.67",
+			input:    "http://10.123.45.67:8081",
+			expected: "http://10.123.45.67:8081",
+		},
+		{
+			name:     "HTTP private IP 10.255.255.255",
+			input:    "http://10.255.255.255:8081",
+			expected: "http://10.255.255.255:8081",
+		},
+		{
+			name:     "HTTP private IP 172.16.0.1 (start of 172.16.0.0/12)",
+			input:    "http://172.16.0.1:8081",
+			expected: "http://172.16.0.1:8081",
+		},
+		{
+			name:     "HTTP private IP 172.20.10.5 (middle of 172.16.0.0/12)",
+			input:    "http://172.20.10.5:8081",
+			expected: "http://172.20.10.5:8081",
+		},
+		{
+			name:     "HTTP private IP 172.31.255.255 (end of 172.16.0.0/12)",
+			input:    "http://172.31.255.255:8081",
+			expected: "http://172.31.255.255:8081",
+		},
+		{
+			name:        "HTTP 172.15.255.255 (before private range - should fail)",
+			input:       "http://172.15.255.255:8081",
+			expectError: true,
+			errorMsg:    "must use HTTPS for remote servers",
+		},
+		{
+			name:        "HTTP 172.32.0.1 (after private range - should fail)",
+			input:       "http://172.32.0.1:8081",
+			expectError: true,
+			errorMsg:    "must use HTTPS for remote servers",
 		},
 		{
 			name:        "HTTP public IP (should fail)",

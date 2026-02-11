@@ -336,9 +336,10 @@ func DefaultPeerPanels() []string {
 }
 
 // DefaultAdminPanels returns panel IDs that only admins get by default.
+// Note: Admins also inherit all panels from DefaultPeerPanels (alerts, visualizer, etc.)
 func DefaultAdminPanels() []string {
 	return []string{
-		PanelAlerts, PanelPeers, PanelLogs, PanelWireGuard, PanelFilter, PanelDNS,
+		PanelPeers, PanelLogs, PanelWireGuard, PanelFilter, PanelDNS,
 		PanelPeerMgmt, PanelGroups, PanelBindings, PanelDocker,
 	}
 }
