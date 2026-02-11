@@ -200,7 +200,11 @@ docker-up: docker-build
 	@read -p "Run 'sudo tunnelmesh join --context docker'? [Y/n] " answer; \
 	if [ "$$answer" != "n" ] && [ "$$answer" != "N" ]; then \
 		sudo tunnelmesh context rm docker 2>/dev/null || true; \
-		sudo tunnelmesh join --server http://localhost:8081 --token docker-test-token-123 --context docker; \
+		export TUNNELMESH_TOKEN=docker-test-token-123; \
+		echo "Joining mesh with coordinator at http://localhost:8081..."; \
+		sudo -E tunnelmesh join http://localhost:8081 --context docker; \
+		echo ""; \
+		echo "Admin interface should open at https://this.tm"; \
 	fi
 
 docker-down:
