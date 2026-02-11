@@ -177,10 +177,6 @@ coordinator:
   listen: ":8443"  # Coordination API listen address (default: ":8443")
   data_dir: "/var/lib/tunnelmesh"  # Data directory for persistence
 
-  # Admin panel, relay, and S3 are always enabled (hardcoded ports: 443, 9000)
-  # DNS is always enabled for all peers
-
-  # Optional: reverse proxy for monitoring tools
   monitoring:
     prometheus_url: "http://localhost:9090"
     grafana_url: "http://localhost:3000"
