@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -644,6 +645,58 @@ func TestObjectLifecycle_PurgeTombstonedObjectsDisabled(t *testing.T) {
 	// Object should still exist
 	_, err = store.HeadObject(context.Background(), "test-bucket", "file.txt")
 	assert.NoError(t, err)
+}
+
+func TestObjectLifecycle_PurgeCancellation(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+
+	// Create and tombstone many objects (10000 objects to ensure cancellation occurs mid-operation)
+	totalObjects := 10000
+	for i := 0; i < totalObjects; i++ {
+		key := fmt.Sprintf("file-%04d.txt", i)
+		_, err := store.PutObject(context.Background(), "test-bucket", key, bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+		require.NoError(t, err)
+
+		// Tombstone with old timestamp so they'll be purged
+		err = store.TombstoneObject(context.Background(), "test-bucket", key)
+		require.NoError(t, err)
+
+		// Manually backdate tombstone to 100 days ago
+		meta, _ := store.HeadObject(context.Background(), "test-bucket", key)
+		oldTime := time.Now().UTC().AddDate(0, 0, -100)
+		meta.TombstonedAt = &oldTime
+		metaPath := filepath.Join(store.dataDir, "buckets", "test-bucket", "meta", key+".json")
+		metaJSON, _ := json.Marshal(meta)
+		_ = os.WriteFile(metaPath, metaJSON, 0600)
+	}
+
+	store.SetTombstoneRetentionDays(30) // Expire after 30 days
+
+	// Create a context with a short timeout (should cancel mid-operation with 10k objects)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Run purge - it should be cancelled mid-operation by timeout
+	purged := store.PurgeTombstonedObjects(ctx)
+
+	// Verify partial progress: some objects purged, but not all
+	assert.Greater(t, purged, 0, "should have purged at least one object before cancellation")
+	assert.Less(t, purged, totalObjects, "should not have purged all objects due to cancellation")
+
+	t.Logf("Purged %d objects before cancellation (out of %d)", purged, totalObjects)
+
+	// Verify some objects still exist (not all were purged)
+	remaining := 0
+	for i := 0; i < totalObjects; i++ {
+		key := fmt.Sprintf("file-%04d.txt", i)
+		_, err := store.HeadObject(context.Background(), "test-bucket", key)
+		if err == nil {
+			remaining++
+		}
+	}
+	assert.Greater(t, remaining, 0, "some objects should still exist after early cancellation")
+	assert.Equal(t, totalObjects-purged, remaining, "remaining objects should equal total minus purged")
 }
 
 func TestBucketTombstone(t *testing.T) {
