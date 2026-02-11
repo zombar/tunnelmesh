@@ -55,6 +55,7 @@ type relayManager struct {
 	wgConcentrator string                     // peerName of WireGuard concentrator (if any)
 	mu             sync.Mutex
 	s3SystemStore  *s3.SystemStore // For persisting concentrator assignment
+	ctx            context.Context // Server lifecycle context for background operations
 
 	// API request tracking
 	apiRequests   map[uint32]chan []byte // reqID -> response channel
@@ -97,11 +98,13 @@ var upgrader = websocket.Upgrader{
 }
 
 // newRelayManager creates a new relay manager.
-func newRelayManager() *relayManager {
+// ctx is the server lifecycle context used for background operations.
+func newRelayManager(ctx context.Context) *relayManager {
 	return &relayManager{
 		pending:     make(map[string]*relayConn),
 		persistent:  make(map[string]*persistentConn),
 		apiRequests: make(map[uint32]chan []byte),
+		ctx:         ctx,
 		// s3SystemStore will be set later via SetS3Store()
 	}
 }
@@ -129,7 +132,7 @@ func (r *relayManager) SetWGConcentrator(peerName string) {
 	// Persist to S3 if enabled (async to avoid blocking)
 	if s3Store != nil {
 		go func() {
-			if err := s3Store.SaveWGConcentrator(context.Background(), peerName); err != nil {
+			if err := s3Store.SaveWGConcentrator(r.ctx, peerName); err != nil {
 				log.Warn().Err(err).Msg("failed to persist WG concentrator")
 			} else {
 				log.Debug().Str("peer", peerName).Msg("persisted WG concentrator to S3")
@@ -170,7 +173,7 @@ func (r *relayManager) ClearWGConcentrator(peerName string) {
 		// Clear from S3 if enabled
 		if s3Store != nil {
 			go func() {
-				if err := s3Store.ClearWGConcentrator(context.Background()); err != nil {
+				if err := s3Store.ClearWGConcentrator(r.ctx); err != nil {
 					log.Debug().Err(err).Msg("failed to clear WG concentrator from S3")
 				} else {
 					log.Debug().Msg("cleared WG concentrator from S3")
@@ -811,7 +814,7 @@ func (r *relayManager) PushServicePorts(peerName string, ports []uint16) {
 // Admin mux: Preferred by peers with mesh connectivity for better security.
 func (s *Server) setupRelayRoutes() {
 	if s.relay == nil {
-		s.relay = newRelayManager()
+		s.relay = newRelayManager(s.ctx)
 		// Set S3 store (always available for WG concentrator persistence)
 		s.relay.SetS3Store(s.s3SystemStore)
 	}

@@ -66,6 +66,7 @@ type serverStats struct {
 // This separation ensures the admin interface (dashboards, monitoring, config) is never
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
+	ctx             context.Context // Server lifecycle context for background operations
 	cfg             *config.PeerConfig
 	mux             *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
 	adminMux        *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
@@ -291,6 +292,7 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	}
 
 	srv := &Server{
+		ctx:          ctx,
 		cfg:          cfg,
 		mux:          http.NewServeMux(),
 		peers:        make(map[string]*peerInfo),
