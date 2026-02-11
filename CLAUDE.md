@@ -192,14 +192,15 @@ Docker integration is **automatically enabled** when:
 **Optional configuration:**
 
 ```yaml
-# server.yaml - only if you need non-default settings
-join_mesh:
-  name: coordinator
-  server: localhost:8080
-  auth_token: your-token
-  docker:
-    socket: "unix:///var/run/docker.sock"  # Custom socket path
-    auto_port_forward: false                # Disable automatic port forwarding
+# coordinator.yaml - only if you need non-default settings
+docker:
+  socket: "unix:///var/run/docker.sock"  # Custom socket path
+  auto_port_forward: false                # Disable automatic port forwarding
+```
+
+Join coordinator with token (server URL and auth token are CLI-only):
+```bash
+tunnelmesh join --token your-token --config coordinator.yaml
 ```
 
 **Security Note**: Docker socket access grants root-equivalent privileges. Use with caution. Consider Docker rootless mode for enhanced security.

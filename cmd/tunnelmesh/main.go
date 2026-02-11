@@ -123,25 +123,27 @@ func main() {
 		Short: "TunnelMesh - P2P SSH tunnel mesh network",
 		Long: `TunnelMesh creates encrypted P2P tunnels between peers using SSH.
 
-QUICK START - Run a coordinator (with local peer):
+QUICK START - Bootstrap coordinator (first node):
 
-  # 1. Generate config (server + peer combined):
-  tunnelmesh init --server --peer
+  # Generate a secure token (save this securely - you'll need it for peers):
+  TOKEN=$(openssl rand -hex 32)
 
-  # 2. Start the coordinator:
-  tunnelmesh serve --config server.yaml
+  # Start coordinator (no server URL = auto-coordinator mode):
+  tunnelmesh join --token $TOKEN
 
-  # First peer to join becomes admin automatically
+  # Save token to secure file for later use:
+  echo "$TOKEN" > ~/.tunnelmesh/mesh-token.txt
+  chmod 600 ~/.tunnelmesh/mesh-token.txt
 
 QUICK START - Join an existing mesh:
 
-  # 1. Join using invite token from admin:
-  tunnelmesh join --server coord.example.com --token <token> --context work
+  # Join using coordinator URL and token:
+  tunnelmesh join coord.example.com:8443 --token <token> --context work
 
   # Identity is automatic - derived from your SSH key
   # First user to join becomes admin
 
-  # 2. Install as system service (optional):
+  # Install as system service (optional):
   tunnelmesh service install
 
 MANAGING BUCKETS:
@@ -164,12 +166,25 @@ For more help on any command, use: tunnelmesh <command> --help`,
 
 	// Join command
 	joinCmd := &cobra.Command{
-		Use:   "join",
+		Use:   "join [server-url]",
 		Short: "Join the mesh network",
-		Long:  "Register with the coordination server and start the mesh daemon",
-		RunE:  runJoin,
+		Long: `Join the mesh network by connecting to a coordinator.
+
+Examples:
+  # Bootstrap a new mesh (first coordinator - no server URL)
+  TOKEN=$(openssl rand -hex 32)
+  tunnelmesh join --token $TOKEN
+  # Save token securely: echo "$TOKEN" > ~/.tunnelmesh/mesh-token.txt && chmod 600 $_
+
+  # Join an existing mesh (regular peer)
+  tunnelmesh join coord.example.com:8443 --token $TOKEN
+
+When no server URL is provided, automatically bootstraps as coordinator.
+Server URLs automatically use HTTPS. Omit scheme in the URL.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: runJoin,
 	}
-	joinCmd.Flags().StringVarP(&serverURL, "server", "s", "", "coordination server URL")
+	joinCmd.Flags().StringVarP(&serverURL, "server", "s", "", "coordination server URL (deprecated: use positional argument)")
 	joinCmd.Flags().StringVarP(&authToken, "token", "t", "", "authentication token")
 	joinCmd.Flags().BoolVar(&wireguardEnabled, "wireguard", false, "enable WireGuard concentrator mode")
 	joinCmd.Flags().Float64Var(&latitude, "latitude", 0, "manual geolocation latitude (-90 to 90)")
@@ -362,13 +377,20 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 		Int("ssh_port", cfg.SSHPort).
 		Msg("config loaded")
 
-	// Validate configuration
-	// Standalone coordinators (first in network) can have empty servers list
-	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
-		return fmt.Errorf("servers required for non-coordinator peers")
+	// If no server URL provided, assume bootstrap coordinator
+	if len(cfg.Servers) == 0 {
+		if !cfg.Coordinator.Enabled {
+			log.Info().Msg("no server URL provided - enabling coordinator mode for bootstrap")
+			cfg.Coordinator.Enabled = true
+			// Set default coordinator listen if not configured
+			if cfg.Coordinator.Listen == "" {
+				cfg.Coordinator.Listen = ":8443"
+			}
+		}
 	}
+
 	if cfg.AuthToken == "" {
-		return fmt.Errorf("auth_token is required in config")
+		return fmt.Errorf("auth token required (pass via CLI: --token <token>)")
 	}
 
 	// Log network interface information for debugging
@@ -527,9 +549,21 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Override with flags
-	if serverURL != "" {
-		cfg.Servers = []string{serverURL}
+	// Get server URL from positional argument or flag
+	var joinServerURL string
+	if len(args) > 0 {
+		joinServerURL = args[0]
+	} else if serverURL != "" {
+		joinServerURL = serverURL
+	}
+
+	// Normalize server URL: add https:// if no scheme provided
+	// Server URL is CLI-only, not a config option
+	if joinServerURL != "" {
+		if !strings.HasPrefix(joinServerURL, "http://") && !strings.HasPrefix(joinServerURL, "https://") {
+			joinServerURL = "https://" + joinServerURL
+		}
+		cfg.Servers = []string{joinServerURL}
 	}
 	if authToken != "" {
 		cfg.AuthToken = authToken
@@ -551,12 +585,20 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		cfg.AllowExitTraffic = true
 	}
 
-	// Validate configuration (allow empty servers for standalone coordinators)
-	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
-		return fmt.Errorf("servers required for non-coordinator peers\nHint: run with --server flag to update context credentials")
+	// If no server URL provided, assume bootstrap coordinator
+	if len(cfg.Servers) == 0 {
+		if !cfg.Coordinator.Enabled {
+			log.Info().Msg("no server URL provided - enabling coordinator mode for bootstrap")
+			cfg.Coordinator.Enabled = true
+			// Set default coordinator listen if not configured
+			if cfg.Coordinator.Listen == "" {
+				cfg.Coordinator.Listen = ":8443"
+			}
+		}
 	}
+
 	if cfg.AuthToken == "" {
-		return fmt.Errorf("auth_token is required\nHint: run with --token flag to update context credentials")
+		return fmt.Errorf("auth token required\nUsage: tunnelmesh join [server-url] --token <token>\nExample: tunnelmesh join coord.example.com:8443 --token my-secret-token")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -655,13 +697,20 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	// Always use system hostname as node name
 	cfg.Name, _ = os.Hostname()
 
-	// Validate configuration
-	// Standalone coordinators (first in network) can have empty servers list
-	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
-		return fmt.Errorf("servers required for non-coordinator peers")
+	// If no server URL provided, assume bootstrap coordinator
+	if len(cfg.Servers) == 0 {
+		if !cfg.Coordinator.Enabled {
+			log.Info().Msg("no server URL provided - enabling coordinator mode for bootstrap")
+			cfg.Coordinator.Enabled = true
+			// Set default coordinator listen if not configured
+			if cfg.Coordinator.Listen == "" {
+				cfg.Coordinator.Listen = ":8443"
+			}
+		}
 	}
+
 	if cfg.AuthToken == "" {
-		return fmt.Errorf("auth_token is required")
+		return fmt.Errorf("auth token required (pass via CLI: --token <token>)")
 	}
 
 	// Apply configured log level from config file

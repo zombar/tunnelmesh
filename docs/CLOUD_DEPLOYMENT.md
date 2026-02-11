@@ -331,9 +331,6 @@ nodes = {
 ```yaml
 # Home server peer config
 name: "homelab"
-servers:
-  - "https://tunnelmesh.example.com"
-auth_token: "your-token"
 
 dns:
   enabled: true
@@ -341,15 +338,15 @@ dns:
     - "nas"
     - "plex"
     - "homeassistant"
-```text
+```
 
 On the home server:
 
 ```bash
-sudo tunnelmesh join --config peer.yaml --context homelab
+sudo tunnelmesh join tunnelmesh.example.com --token your-mesh-token --config peer.yaml --context homelab
 sudo tunnelmesh service install
 sudo tunnelmesh service start
-```text
+```
 
 ---
 
@@ -400,11 +397,8 @@ nodes = {
 Each developer runs:
 
 ```bash
-sudo tunnelmesh join \
-  --server https://tunnelmesh.example.com \
-  --token team-token \
-  --context team
-```text
+sudo tunnelmesh join tunnelmesh.example.com --token team-token --context team
+```
 
 ---
 
@@ -458,12 +452,11 @@ Players join from their gaming PCs:
 
 ```bash
 # Automatic UDP hole-punching for lowest latency
-sudo tunnelmesh join \
-  --server https://tunnelmesh.example.com \
+sudo tunnelmesh join tunnelmesh.example.com \
   --token game-token \
   --name player1 \
   --context gaming
-```text
+```
 
 ---
 

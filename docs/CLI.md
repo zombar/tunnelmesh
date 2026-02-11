@@ -8,8 +8,13 @@ Complete command-line reference for TunnelMesh with examples and walkthroughs.
 # Generate SSH keys (first time only)
 tunnelmesh init
 
-# Join the mesh as a peer (or coordinator with coordinator.enabled: true)
-sudo tunnelmesh join -c peer.yaml --context home
+# Bootstrap coordinator (first node)
+TOKEN=$(openssl rand -hex 32)
+sudo tunnelmesh join --token $TOKEN --context coord
+# Save token securely: echo "$TOKEN" > ~/.tunnelmesh/mesh-token.txt && chmod 600 $_
+
+# Join existing mesh as peer (use same token)
+sudo tunnelmesh join coord.example.com:8443 --token $TOKEN --context home
 
 # List your contexts
 tunnelmesh context list
@@ -31,7 +36,9 @@ sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
 
-> **Contexts simplify management:** After joining with `--context`, TunnelMesh remembers your configuration. Subsequent commands use the active context automatically—no need to specify `-c` every time.
+> **Contexts simplify management:** After joining with `--context`, TunnelMesh remembers
+> your configuration. Subsequent commands use the active context automatically—no need to
+> specify `-c` every time.
 >
 > Commands that work without a context: `init`, `version`, and `context` subcommands.
 
@@ -124,56 +131,53 @@ tunnelmesh init
 ```text
 INF keys generated path=~/.tunnelmesh/id_ed25519
 INF public key path=~/.tunnelmesh/id_ed25519.pub
-```
+```text
 
 ---
 
 ### tunnelmesh join
 
-Join the mesh as a peer. If `coordinator.enabled: true` in your config, this also starts coordinator services (discovery, admin UI, relay, S3).
+Join the mesh network. When no server URL is provided, automatically bootstraps as a coordinator (first node in mesh).
 
 ```bash
-tunnelmesh join [flags]
+tunnelmesh join [server-url] [flags]
 ```
 
 **Flags:**
 
-| Flag | Short | Description |
-| ------ | ------- | ------------- |
-| `--server` | `-s` | Coordination server URL |
-| `--token` | `-t` | Authentication token |
-| `--name` | `-n` | Peer name (defaults to hostname) |
-| `--context` |  | Save/update as named context |
-| `--wireguard` |  | Enable WireGuard concentrator |
-| `--exit-node` |  | Route internet through specified peer |
-| `--allow-exit-traffic` |  | Allow this peer as exit for others |
-| `--latitude` |  | Manual latitude (-90 to 90) |
-| `--longitude` |  | Manual longitude (-180 to 180) |
-| `--city` |  | City name for admin UI display |
-| `--enable-tracing` |  | Enable runtime tracing |
+|Flag|Short|Description|
+|-----|-----|-----------|
+|`--server`|`-s`|Coordination server URL (deprecated: use positional argument)|
+|`--token`|`-t`|Authentication token|
+|`--name`|`-n`|Peer name (defaults to hostname)|
+|`--context`||Save/update as named context|
+|`--wireguard`||Enable WireGuard concentrator|
+|`--exit-node`||Route internet through specified peer|
+|`--allow-exit-traffic`||Allow this peer as exit for others|
+|`--latitude`||Manual latitude (-90 to 90)|
+|`--longitude`||Manual longitude (-180 to 180)|
+|`--city`||City name for admin UI display|
+|`--enable-tracing`||Enable runtime tracing|
 
 **Example - Basic join:**
 
 ```bash
-sudo tunnelmesh join \
-  --server https://tunnelmesh.example.com \
+sudo tunnelmesh join tunnelmesh.example.com \
   --token your-secure-token
 ```
 
 **Example - Join with exit peer:**
 
 ```bash
-sudo tunnelmesh join \
-  --server https://tunnelmesh.example.com \
+sudo tunnelmesh join tunnelmesh.example.com \
   --token your-secure-token \
-  --exit-node server-peer
+  --exit-peer server-peer
 ```
 
 **Example - Join as exit peer:**
 
 ```bash
-sudo tunnelmesh join \
-  --server https://tunnelmesh.example.com \
+sudo tunnelmesh join tunnelmesh.example.com \
   --token your-secure-token \
   --allow-exit-traffic \
   --latitude 1.3521 \
@@ -184,17 +188,16 @@ sudo tunnelmesh join \
 **Example - Join with WireGuard concentrator:**
 
 ```bash
-sudo tunnelmesh join \
-  --server https://tunnelmesh.example.com \
+sudo tunnelmesh join tunnelmesh.example.com \
   --token your-secure-token \
   --wireguard
 ```
 
-**Example - Start as coordinator:**
+**Example - Bootstrap coordinator (first node):**
 
 ```bash
-# With config file that has coordinator.enabled: true
-sudo tunnelmesh join --config coordinator.yaml
+# No server URL = automatically becomes coordinator
+sudo tunnelmesh join --token your-secure-token
 ```
 
 **Generate a config:**
@@ -265,12 +268,12 @@ tunnelmesh context list
 
 **Example output:**
 
-```
+```text
 NAME         SERVER                      STATUS     ACTIVE
 home         http://home-server:8080     running    *
 work         https://work.mesh.io        stopped
 dev          http://192.168.1.10:8080    -
-```
+```text
 
 - `STATUS`: Service status (`running`, `stopped`, or `-` if no service installed)
 - `ACTIVE`: `*` marks the currently active context
@@ -335,7 +338,7 @@ If no name is provided, shows the active context.
 
 **Example output:**
 
-```
+```text
 Context: home
   Config:     /home/user/.tunnelmesh/home.yaml
   Server:     http://home-server:8080
@@ -343,7 +346,7 @@ Context: home
   Domain:     .tunnelmesh
   DNS Listen: 127.0.0.53:5353
   Service:    tunnelmesh-home (running)
-```
+```text
 
 ---
 
@@ -357,7 +360,7 @@ tunnelmesh status
 
 **Example output:**
 
-```
+```text
 TunnelMesh Status
 =================
 
@@ -400,7 +403,7 @@ tunnelmesh peers
 
 **Example output:**
 
-```
+```text
 NAME                 MESH IP         PUBLIC IP            LAST SEEN
 -------------------- --------------- -------------------- --------------------
 coordinator          172.30.0.1      203.0.113.10         2024-01-15 10:30:45
@@ -480,7 +483,7 @@ tunnelmesh benchmark server-peer
 
 **Example output:**
 
-```
+```text
 Benchmarking server-peer (172.30.0.1)...
   Direction:  upload
   Size:       10 MB
@@ -541,29 +544,29 @@ tunnelmesh service <subcommand> [flags]
 
 **Common flags (all subcommands):**
 
-| Flag | Description |
-| ------ | ------------- |
-| `--context` | Target specific context (default: active context) |
+|Flag|Description|
+|-----|-----------|
+|`--context`|Target specific context (default: active context)|
 
 **Install flags:**
 
-| Flag | Short | Description |
-| ------ | ------- | ------------- |
-| `--user` |  | Run as user (Linux/macOS) |
-| `--force` | `-f` | Force reinstall |
+|Flag|Short|Description|
+|-----|-----|-----------|
+|`--user`||Run as user (Linux/macOS)|
+|`--force`|`-f`|Force reinstall|
 
 **Logs flags:**
 
-| Flag | Description |
-| ------ | ------------- |
-| `--follow` | Follow logs in real-time |
-| `--lines` | Number of lines to show |
+|Flag|Description|
+|-----|-----------|
+|`--follow`|Follow logs in real-time|
+|`--lines`|Number of lines to show|
 
 **Example - Install peer service (context-based):**
 
 ```bash
 # First, join and create a context
-sudo tunnelmesh join --config /etc/tunnelmesh/peer.yaml --context home
+sudo tunnelmesh join coord.example.com:8443 --token your-mesh-token --config /etc/tunnelmesh/peer.yaml --context home
 
 # Install service for the active context
 sudo tunnelmesh service install
@@ -591,8 +594,8 @@ sudo tunnelmesh service start
 
 ```bash
 # Join two different meshes
-sudo tunnelmesh join --config ~/.tunnelmesh/home.yaml --context home
-sudo tunnelmesh join --config ~/.tunnelmesh/work.yaml --context work
+sudo tunnelmesh join home-coord.example.com:8443 --token home-token --config ~/.tunnelmesh/home.yaml --context home
+sudo tunnelmesh join work-coord.example.com:8443 --token work-token --config ~/.tunnelmesh/work.yaml --context work
 
 # Install services for both
 sudo tunnelmesh service install --context home
@@ -669,7 +672,7 @@ tunnelmesh version
 
 **Example output:**
 
-```
+```text
 tunnelmesh v1.5.0
   Commit:     abc123def
   Build Time: 2024-01-15T10:00:00Z
@@ -708,7 +711,7 @@ tunnelmesh init --peer    # Generate peer.yaml with all options
 
 Set up TunnelMesh for personal use with a cloud server and laptop.
 
-**Step 1: Deploy coordinator (cloud server)**
+#### Step 1: Deploy coordinator (cloud server)
 
 ```bash
 # On your cloud server
@@ -725,7 +728,7 @@ sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
 
-**Step 2: Connect laptop**
+#### Step 2: Connect laptop
 
 ```bash
 # On your laptop
@@ -735,10 +738,10 @@ tunnelmesh init --peer --output ~/.tunnelmesh/vpn.yaml
 nano ~/.tunnelmesh/vpn.yaml
 
 # Join and save as context
-sudo tunnelmesh join --config ~/.tunnelmesh/vpn.yaml --context vpn
+sudo tunnelmesh join vpn-coord.example.com:8443 --token vpn-token --config ~/.tunnelmesh/vpn.yaml --context vpn
 ```
 
-**Step 3: Verify connection**
+#### Step 3: Verify connection
 
 ```bash
 # Check status (uses active context)
@@ -755,7 +758,7 @@ curl ifconfig.me
 
 Connect a development team for direct machine access.
 
-**Step 1: Deploy minimal coordinator**
+#### Step 1: Deploy minimal coordinator
 
 ```bash
 # On a small cloud instance
@@ -769,19 +772,18 @@ sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
 
-**Step 2: Each developer joins**
+#### Step 2: Each developer joins
 
 ```bash
 # Each team member runs:
 tunnelmesh init
 
-sudo tunnelmesh join \
-  --server http://coordinator-ip:8080 \
+sudo tunnelmesh join coordinator-ip:8080 \
   --token team-secret-token \
   --context team
 ```
 
-**Step 3: Team collaboration**
+#### Step 3: Team collaboration
 
 ```bash
 # SSH to teammate
@@ -798,7 +800,7 @@ psql -h charlie.tunnelmesh mydb
 
 Access home network from anywhere.
 
-**Step 1: Cloud coordinator with WireGuard**
+#### Step 1: Cloud coordinator with WireGuard
 
 ```bash
 # Deploy to cloud (see terraform docs)
@@ -808,10 +810,10 @@ tunnelmesh init --peer --output coordinator.yaml
 # Edit: set auth_token, enable coordinator.enabled: true, enable wireguard
 nano coordinator.yaml
 
-sudo tunnelmesh join --config coordinator.yaml
+sudo tunnelmesh join --token my-secret-token --config coordinator.yaml
 ```
 
-**Step 2: Home server joins**
+#### Step 2: Home server joins
 
 ```bash
 # On your home server (Raspberry Pi, NAS, etc.)
@@ -820,12 +822,12 @@ tunnelmesh init --peer --output peer.yaml
 # Edit: set name, server, auth_token, add dns.aliases for services
 nano peer.yaml
 
-sudo tunnelmesh join --config peer.yaml --context homelab
+sudo tunnelmesh join coord.example.com:8443 --token my-secret-token --config peer.yaml --context homelab
 sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
 
-**Step 3: Mobile access via WireGuard**
+#### Step 3: Mobile access via WireGuard
 
 1. Open admin dashboard: `https://cloud.example.com/`
 2. Go to WireGuard > Add Client
@@ -853,7 +855,7 @@ tunnelmesh status --context home
 
 ```bash
 # Join with --context to save configuration
-sudo tunnelmesh join --config /path/to/config.yaml --context mycontext
+sudo tunnelmesh join coord.example.com:8443 --token your-mesh-token --config /path/to/config.yaml --context mycontext
 
 # Or create context manually
 tunnelmesh context create mycontext --config /path/to/config.yaml

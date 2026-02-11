@@ -8,12 +8,9 @@
 # Your node's unique name
 name: "mynode"
 
-# Coordination server URLs (leave empty if this IS the coordinator)
-servers:
-  - "https://coord.example.com:8443"
-  # - "https://coord2.example.com:8443"  # Optional: failover
-
-# Authentication token (must match coordinator's auth_token)
+# Authentication token and coordinator URL are CLI-only (not in config):
+#   Bootstrap coordinator: tunnelmesh join --token my-secret-token
+#   Join existing mesh: tunnelmesh join coord.example.com:8443 --token my-secret-token
 auth_token: "your-secure-token-here"
 
 # SSH server port for peer-to-peer connections

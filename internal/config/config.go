@@ -84,8 +84,8 @@ type WireGuardPeerConfig struct {
 // PeerConfig holds configuration for a peer node.
 type PeerConfig struct {
 	Name              string              `yaml:"name"`
-	Servers           []string            `yaml:"servers"` // Coordinator URLs (e.g., ["https://coord1.example.com:8443"])
-	AuthToken         string              `yaml:"auth_token"`
+	Servers           []string            `yaml:"-"` // CLI-only: passed via positional argument to 'join' command
+	AuthToken         string              `yaml:"-"` // CLI-only: passed via --token flag
 	SSHPort           int                 `yaml:"ssh_port"`
 	PrivateKey        string              `yaml:"private_key"`
 	ControlSocket     string              `yaml:"control_socket"`     // Unix socket path for CLI commands (default: /var/run/tunnelmesh.sock)
@@ -364,14 +364,10 @@ func (c *PeerConfig) IsMetricsEnabled() bool {
 }
 
 // Validate checks if the peer configuration is valid.
+// Note: Server URL and auth token are validated in the join command since they're CLI-only.
 func (c *PeerConfig) Validate() error {
 	if c.Name == "" {
 		return fmt.Errorf("name is required")
-	}
-	// Standalone coordinators (first in network) don't need servers
-	// Regular peers must have servers to connect to
-	if len(c.Servers) == 0 && !c.Coordinator.Enabled {
-		return fmt.Errorf("servers required for non-coordinator peers")
 	}
 	if c.SSHPort <= 0 || c.SSHPort > 65535 {
 		return fmt.Errorf("ssh_port must be between 1 and 65535")

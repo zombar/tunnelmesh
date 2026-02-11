@@ -69,7 +69,7 @@ tunnelmesh version
 
 ### Create the Coordinator Configuration
 
-#### Linux/macOS
+#### Coordinator Config - Linux/macOS
 
 ```bash
 # Create config directory
@@ -82,7 +82,7 @@ tunnelmesh init --peer --output /etc/tunnelmesh/coordinator.yaml
 sudo nano /etc/tunnelmesh/coordinator.yaml
 ```
 
-#### Windows (PowerShell as Administrator)
+#### Coordinator Config - Windows
 
 ```powershell
 # Create config directory
@@ -102,7 +102,7 @@ notepad "C:\ProgramData\TunnelMesh\coordinator.yaml"
 TunnelMesh uses **contexts** to manage multiple mesh configurations. Each context tracks a config file, allocated IP,
 and service status.
 
-#### Linux/macOS
+#### Install Coordinator Service - Linux/macOS
 
 ```bash
 # Create a context for the coordinator
@@ -119,7 +119,7 @@ tunnelmesh service status
 tunnelmesh service logs --follow
 ```
 
-#### Windows (PowerShell as Administrator)
+#### Install Coordinator Service - Windows
 
 ```powershell
 # Create a context for the coordinator
@@ -180,7 +180,7 @@ This creates:
 
 ### Create the Peer Configuration
 
-#### Linux/macOS
+#### Peer Config - Linux/macOS
 
 ```bash
 # Create config directory
@@ -189,13 +189,11 @@ sudo mkdir -p /etc/tunnelmesh
 # Generate peer configuration
 tunnelmesh init --peer --output /etc/tunnelmesh/peer.yaml
 
-# Edit and configure:
-#   - name: unique identifier for this peer
-#   - server: URL of your coordination server
-#   - auth_token: must match server's token
+# Edit config if needed (most settings are optional)
+# Server URL and auth token are passed via CLI, not config
 sudo nano /etc/tunnelmesh/peer.yaml
 
-#### Windows (PowerShell as Administrator)
+#### Peer Config - Windows
 
 ```powershell
 # Create config directory
@@ -204,10 +202,8 @@ New-Item -ItemType Directory -Force -Path "C:\ProgramData\TunnelMesh"
 # Generate peer configuration
 tunnelmesh init --peer --output "C:\ProgramData\TunnelMesh\peer.yaml"
 
-# Edit and configure:
-#   - name: unique identifier for this peer
-#   - server: URL of your coordination server
-#   - auth_token: must match server's token
+# Edit config if needed (most settings are optional)
+# Server URL and auth token are passed via CLI, not config
 notepad "C:\ProgramData\TunnelMesh\peer.yaml"
 ```
 
@@ -217,7 +213,7 @@ notepad "C:\ProgramData\TunnelMesh\peer.yaml"
 
 Each peer should have its own context. This allows you to manage multiple mesh memberships and switch between them easily.
 
-#### Linux/macOS
+#### Install Peer Service - Linux/macOS
 
 ```bash
 # Join the mesh and create a context (this also prompts to install CA cert if missing)
@@ -234,7 +230,7 @@ tunnelmesh service status
 tunnelmesh service logs --follow
 ```
 
-#### Windows (PowerShell as Administrator)
+#### Install Peer Service - Windows
 
 ```powershell
 # Join the mesh and create a context
@@ -250,7 +246,8 @@ tunnelmesh service start
 tunnelmesh service status
 ```
 
-**Tip:** When joining, if the mesh CA certificate isn't installed, TunnelMesh will prompt you to install it for HTTPS access to mesh services.
+**Tip:** When joining, if the mesh CA certificate isn't installed, TunnelMesh will prompt you
+to install it for HTTPS access to mesh services.
 
 ---
 
@@ -286,7 +283,8 @@ Open port **2222** (or your configured `ssh_port`) for:
 
 - Incoming SSH tunnel connections from other peers
 
-If a peer is behind NAT and cannot receive incoming connections, TunnelMesh will automatically use reverse connections through peers that are reachable.
+If a peer is behind NAT and cannot receive incoming connections, TunnelMesh will
+automatically use reverse connections through peers that are reachable.
 
 ---
 
@@ -302,7 +300,7 @@ tunnelmesh context list
 
 Example output:
 
-```
+```text
 NAME      SERVER                      STATUS     ACTIVE
 home      http://home-server:8080     running    *
 work      https://work.mesh.io        stopped
@@ -317,7 +315,8 @@ When you switch contexts, system DNS resolution switches to that mesh:
 tunnelmesh context use work
 ```
 
-This changes which mesh's DNS resolver handles `.tunnelmesh` domains. The previous mesh's tunnels remain active—only the "focus" changes.
+This changes which mesh's DNS resolver handles `.tunnelmesh` domains. The previous mesh's
+tunnels remain active—only the "focus" changes.
 
 ### Start/stop individual contexts
 
@@ -366,7 +365,7 @@ cat /etc/tunnelmesh/peer.yaml
 ### DNS resolution not working
 
 1. Confirm `dns.enabled: true` in config
- 2. Check if DNS is listening: `netstat -ln | grep 5353` 
+2. Check if DNS is listening: `netstat -ln | grep 5353`
 3. Configure system to use the local resolver (see main README)
 
 ---
@@ -384,7 +383,8 @@ For full configuration options, see the [main README](../README.md).
 
 ## Part 3: Exit Peer Setup (Optional)
 
-Exit peers allow you to route internet traffic through a specific peer while keeping mesh traffic direct. This is useful for geo-unblocking or routing through a trusted exit point.
+Exit peers allow you to route internet traffic through a specific peer while keeping mesh
+traffic direct. This is useful for geo-unblocking or routing through a trusted exit point.
 
 ### Configure the Exit Peer
 

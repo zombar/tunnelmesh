@@ -149,18 +149,30 @@ Generate configs with `tunnelmesh init --peer` or see the full [peer.yaml.exampl
 
 ### Coordinator Configuration
 
-Coordinators are peers that enable coordinator services. The first admin peer to join becomes a coordinator automatically.
+**Generate a secure token for your mesh:**
+```bash
+TOKEN=$(openssl rand -hex 32)
+# Save token securely for peers:
+echo "$TOKEN" > ~/.tunnelmesh/mesh-token.txt
+chmod 600 ~/.tunnelmesh/mesh-token.txt
+```
+
+**Bootstrap coordinator (first node):**
+
+When you run `tunnelmesh join` without a server URL, it automatically bootstraps as a coordinator:
+
+```bash
+tunnelmesh join --token $TOKEN
+```
+
+This creates a new mesh with default coordinator settings. For custom configuration:
 
 ```yaml
 name: "coordinator"
-servers:
-  - "https://coord1.example.com:8443"  # Bootstrap from existing coordinator (optional)
-auth_token: "your-secure-token"
 
-# Enable coordinator services
+# Coordinator services (auto-enabled when no server URL provided)
 coordinator:
-  enabled: true
-  listen: ":8443"
+  listen: ":8443"  # Default is :8443
 
   admin:
     enabled: true
@@ -179,11 +191,13 @@ dns:
 
 ### Regular Peer Configuration
 
+**Join existing mesh (use same token as coordinator):**
+```bash
+tunnelmesh join coord.example.com:8443 --token a4f8b2c9d3e7f1a2b5c8d4e9f2a3b6c7d8e1f4a5b2c9d6e3f7a1b4c8d5e2f9a6 --config peer.yaml
+```
+
 ```yaml
 name: "mynode"
-servers:
-  - "https://coord.example.com:8443"
-auth_token: "your-secure-token"
 
 dns:
   enabled: true
