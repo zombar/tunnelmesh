@@ -52,7 +52,7 @@ services:
       - mesh-control
     environment:
       - SERVER_URL=http://172.28.0.10:8080
-      - AUTH_TOKEN=docker-test-token-123
+      - AUTH_TOKEN=${TUNNELMESH_TOKEN}
       - PING_INTERVAL=2
       - DISCOVERY_INTERVAL=20
 
@@ -98,7 +98,7 @@ services:
     network_mode: "service:server"
     environment:
       - COORD_SERVER_URL=http://localhost:8080
-      - AUTH_TOKEN=docker-test-token-123
+      - AUTH_TOKEN=${TUNNELMESH_TOKEN}
       - POLL_INTERVAL=30s
       - OUTPUT_FILE=/targets/peers.json
       - METRICS_PORT=9443
@@ -184,7 +184,7 @@ services:
     network_mode: "service:server"
     environment:
       - COORD_SERVER_URL=http://localhost:8080
-      - AUTH_TOKEN=docker-test-token-123
+      - AUTH_TOKEN=${TUNNELMESH_TOKEN}
       - LOCAL_PEER=benchmarker
       - BENCHMARK_INTERVAL=30s       # Start new batch every 30s
       - BENCHMARK_CONCURRENCY=3      # 3 concurrent transfers per batch
