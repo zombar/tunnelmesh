@@ -195,9 +195,15 @@ func getServiceConfig() (*svc.ServiceConfig, error) {
 		return nil, fmt.Errorf("context %q not found", ctxName)
 	}
 
-	// Validate token format if present (must be 64 hex characters = 32 bytes)
-	if ctx.AuthToken != "" && !isValidAuthToken(ctx.AuthToken) {
-		return nil, fmt.Errorf("invalid auth token in context %q: must be 64 hex characters (generate with: openssl rand -hex 32)", ctxName)
+	// Auth token must be provided via TUNNELMESH_TOKEN environment variable (not stored in context)
+	authToken := os.Getenv("TUNNELMESH_TOKEN")
+	if authToken == "" {
+		return nil, fmt.Errorf("TUNNELMESH_TOKEN environment variable not set; auth token required for service installation")
+	}
+
+	// Validate token format (must be 64 hex characters = 32 bytes)
+	if !isValidAuthToken(authToken) {
+		return nil, fmt.Errorf("invalid TUNNELMESH_TOKEN: must be 64 hex characters (generate with: openssl rand -hex 32)")
 	}
 
 	// If explicit config path provided, use it
@@ -206,9 +212,9 @@ func getServiceConfig() (*svc.ServiceConfig, error) {
 		configPath = ctx.ConfigPath
 	}
 	if configPath == "" {
-		// No config path - generate one from context values if we have server/token
-		if ctx.Server == "" || ctx.AuthToken == "" {
-			return nil, fmt.Errorf("context %q has no config path and no server/token; use --config to specify one", ctxName)
+		// No config path - generate one from context values if we have server
+		if ctx.Server == "" {
+			return nil, fmt.Errorf("context %q has no config path and no server URL; use --config to specify one", ctxName)
 		}
 		// Generate config file from context
 		generatedPath, err := generateConfigFromContext(ctx)
@@ -227,7 +233,7 @@ func getServiceConfig() (*svc.ServiceConfig, error) {
 		ConfigPath:  configPath,
 		UserName:    serviceUser,
 		Server:      ctx.Server,
-		AuthToken:   ctx.AuthToken,
+		AuthToken:   authToken,
 	}, nil
 }
 
@@ -479,9 +485,9 @@ func generateConfigFromContext(ctx *context.Context) (string, error) {
 		dnsListen = "127.0.0.53:5353"
 	}
 
-	// Note: server URL and auth_token are passed via CLI arguments, not config file
+	// Note: server URL and auth_token are passed via environment variables, not config file
 	configContent := fmt.Sprintf(`# Auto-generated from context %q
-# Server URL and auth token are passed via service command-line arguments
+# Server URL (TUNNELMESH_SERVER) and auth token (TUNNELMESH_TOKEN) are passed via environment variables
 private_key: %q
 
 dns:

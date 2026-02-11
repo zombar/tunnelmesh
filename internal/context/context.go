@@ -10,11 +10,12 @@ import (
 )
 
 // Context represents a named mesh configuration.
+// Security note: Contexts store topology (server URL, domain) but NOT credentials.
+// Auth tokens must be provided via TUNNELMESH_TOKEN environment variable.
 type Context struct {
 	Name       string `json:"name"`
 	ConfigPath string `json:"config_path"`
 	Server     string `json:"server,omitempty"`
-	AuthToken  string `json:"auth_token,omitempty"` // Stored for rejoining without --token flag
 	Domain     string `json:"domain,omitempty"`
 	MeshIP     string `json:"mesh_ip,omitempty"`
 	DNSListen  string `json:"dns_listen,omitempty"`

@@ -893,7 +893,6 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 				Name:       joinContext,
 				ConfigPath: cfgFile,
 				Server:     cfg.PrimaryServer(),
-				AuthToken:  cfg.AuthToken,
 				Domain:     resp.Domain,
 				MeshIP:     resp.MeshIP,
 				DNSListen:  cfg.DNS.Listen,
@@ -2001,11 +2000,11 @@ func loadConfig() (*config.PeerConfig, error) {
 				}
 			}
 			// If context has server info but no config file, use context values
-			// This happens when joining with positional URL and --token flag instead of --config
+			// This happens when joining with positional URL instead of --config
+			// Auth token is read from TUNNELMESH_TOKEN environment variable
 			if activeCtx.Server != "" {
 				return &config.PeerConfig{
 					Servers:    []string{activeCtx.Server},
-					AuthToken:  activeCtx.AuthToken,
 					SSHPort:    2222,
 					PrivateKey: filepath.Join(homeDir, ".tunnelmesh", "id_ed25519"),
 					TUN: config.TUNConfig{
