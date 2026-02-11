@@ -145,13 +145,16 @@ func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	srv, err := NewServer(context.Background(), cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	srv, err := NewServer(ctx, cfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = srv.Shutdown() })
 	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
+	defer func() { _ = srv.Shutdown() }()
 
 	// Register an exit node
 	client := NewClient(ts.URL, "test-token")

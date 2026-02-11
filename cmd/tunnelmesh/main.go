@@ -301,7 +301,7 @@ Examples:
 // This allows the first node in a mesh to automatically become a coordinator.
 func ensureCoordinatorConfig(cfg *config.PeerConfig) {
 	if len(cfg.Servers) == 0 && !cfg.Coordinator.Enabled {
-		log.Info().Msg("no server URL provided - enabling coordinator mode for bootstrap")
+		log.Warn().Msg("no server URL provided - automatically enabling coordinator mode for bootstrap (set TUNNELMESH_SERVER to join existing mesh)")
 		cfg.Coordinator.Enabled = true
 		// Set default coordinator listen if not configured
 		if cfg.Coordinator.Listen == "" {
@@ -380,6 +380,21 @@ func normalizeServerURL(serverURL string) (string, error) {
 		return "", fmt.Errorf("invalid server URL %q: %w", serverURL, err)
 	}
 
+	// Validate scheme (only HTTPS for security)
+	if parsedURL.Scheme == "http" {
+		return "", fmt.Errorf("server URL must use HTTPS, not HTTP: %q", serverURL)
+	}
+
+	// Validate that path is empty or just "/"
+	if parsedURL.Path != "" && parsedURL.Path != "/" {
+		return "", fmt.Errorf("server URL should not include path: %q", serverURL)
+	}
+
+	// Validate no query parameters
+	if parsedURL.RawQuery != "" {
+		return "", fmt.Errorf("server URL should not include query parameters: %q", serverURL)
+	}
+
 	// Add default port :8443 if no port specified
 	if parsedURL.Port() == "" {
 		parsedURL.Host += ":8443"
@@ -422,6 +437,9 @@ func runJoinFromService(ctx context.Context, configPath string) error {
 		log.Info().Str("server", normalized).Msg("loaded server from TUNNELMESH_SERVER env var")
 	}
 	if envToken := os.Getenv("TUNNELMESH_TOKEN"); envToken != "" {
+		if !isValidAuthToken(envToken) {
+			return fmt.Errorf("invalid TUNNELMESH_TOKEN: must be 64 hex characters (generate with: openssl rand -hex 32)")
+		}
 		cfg.AuthToken = envToken
 		log.Info().Msg("loaded auth token from TUNNELMESH_TOKEN env var")
 	}
@@ -614,6 +632,9 @@ func runJoin(cmd *cobra.Command, args []string) error {
 
 	// Read auth token from environment variable (never from CLI for security)
 	if envToken := os.Getenv("TUNNELMESH_TOKEN"); envToken != "" {
+		if !isValidAuthToken(envToken) {
+			return fmt.Errorf("invalid TUNNELMESH_TOKEN: must be 64 hex characters (generate with: openssl rand -hex 32)")
+		}
 		cfg.AuthToken = envToken
 	}
 
@@ -742,6 +763,9 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 
 	if cfg.AuthToken == "" {
 		return fmt.Errorf("auth token required: set TUNNELMESH_TOKEN environment variable")
+	}
+	if !isValidAuthToken(cfg.AuthToken) {
+		return fmt.Errorf("invalid auth token: must be 64 hex characters (generate with: openssl rand -hex 32)")
 	}
 
 	// Apply configured log level from config file
