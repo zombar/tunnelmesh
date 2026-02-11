@@ -84,7 +84,7 @@ func (a *S3StoreAdapter) List(ctx context.Context, bucket string) ([]string, err
 		// Check context cancellation between pages
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, fmt.Errorf("list objects in bucket %s cancelled: %w", bucket, ctx.Err())
 		default:
 		}
 	}

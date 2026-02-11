@@ -240,7 +240,7 @@ func (r *relayManager) SendAPIRequest(ctx context.Context, method string, body [
 	case resp := <-respChan:
 		return resp, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, fmt.Errorf("API request to WireGuard concentrator: %w", ctx.Err())
 	}
 }
 
@@ -319,7 +319,7 @@ func (r *relayManager) QueryFilterRules(ctx context.Context, peerName string, ti
 	case resp := <-respChan:
 		return resp, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, fmt.Errorf("query filter rules from %s: %w", peerName, ctx.Err())
 	}
 }
 

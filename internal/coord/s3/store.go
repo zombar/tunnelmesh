@@ -480,7 +480,7 @@ func (s *Store) CalculatePrefixSize(ctx context.Context, bucketName, prefix stri
 		// Check for cancellation
 		select {
 		case <-ctx.Done():
-			return totalSize, ctx.Err() // Early exit on cancellation
+			return totalSize, fmt.Errorf("calculate prefix size for %s/%s: %w", bucketName, prefix, ctx.Err())
 		default:
 		}
 
@@ -1727,7 +1727,7 @@ func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, refere
 	_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("delete orphaned chunks cancelled: %w", ctx.Err())
 		default:
 		}
 		if err != nil || info.IsDir() {
@@ -1857,6 +1857,9 @@ func (s *Store) GetObjectVersion(ctx context.Context, bucket, key, versionID str
 // chunkReader implements io.ReadCloser for streaming chunk reads.
 // It reads chunks on-demand from CAS, avoiding loading entire files into memory.
 type chunkReader struct {
+	// Note: Storing context here is necessary because io.Reader.Read() doesn't accept context.
+	// This is a short-lived struct (per-request lifetime) used for streaming object content.
+	// The context is checked on each Read() call to respect cancellation.
 	ctx       context.Context
 	cas       *CAS
 	chunks    []string // Ordered list of chunk hashes
@@ -1876,6 +1879,11 @@ func newChunkReader(ctx context.Context, cas *CAS, chunks []string) *chunkReader
 
 // Read implements io.Reader, fetching chunks on demand.
 func (r *chunkReader) Read(p []byte) (n int, err error) {
+	// Check for context cancellation before reading
+	if err := r.ctx.Err(); err != nil {
+		return 0, fmt.Errorf("read cancelled: %w", err)
+	}
+
 	for n < len(p) {
 		// If we've exhausted current chunk, load the next one
 		if r.chunkPos >= len(r.chunkData) {
@@ -1885,6 +1893,11 @@ func (r *chunkReader) Read(p []byte) (n int, err error) {
 					return n, nil
 				}
 				return 0, io.EOF
+			}
+
+			// Check for cancellation before expensive I/O
+			if err := r.ctx.Err(); err != nil {
+				return n, fmt.Errorf("read cancelled: %w", err)
 			}
 
 			// Load next chunk
