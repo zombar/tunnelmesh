@@ -2033,6 +2033,15 @@ function registerBuiltinPanels() {
             sortOrder: 30,
         },
         {
+            id: 'alerts',
+            sectionId: 'alerts-section',
+            tab: 'mesh',
+            title: 'Active Alerts',
+            category: 'monitoring',
+            collapsible: false,
+            sortOrder: 35,
+        },
+        {
             id: 'peers',
             sectionId: 'peers-section',
             tab: 'mesh',
