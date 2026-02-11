@@ -41,8 +41,8 @@ func newTestConfig(t *testing.T) *config.PeerConfig {
 	}
 }
 
-// cleanupServer properly shuts down a server with timeout to prevent
-// "directory not empty" errors during temp directory cleanup.
+// cleanupServer shuts down a server with a timeout to prevent hanging tests.
+// The server's WaitGroup ensures all background goroutines complete before returning.
 func cleanupServer(t *testing.T, srv *Server) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
