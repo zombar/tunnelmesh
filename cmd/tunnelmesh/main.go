@@ -755,8 +755,10 @@ func discoverAndRegisterWithCoordinator(
 
 //nolint:gocyclo // Join function coordinates multiple complex subsystems (peer, coordinator, TUN, DNS, etc)
 func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, onJoined OnJoinedFunc) error {
-	// Always use system hostname as node name
-	cfg.Name, _ = os.Hostname()
+	// Use configured name if provided, otherwise fallback to hostname
+	if cfg.Name == "" {
+		cfg.Name, _ = os.Hostname()
+	}
 
 	// Enable coordinator mode for bootstrap if no server URL
 	ensureCoordinatorConfig(cfg)
