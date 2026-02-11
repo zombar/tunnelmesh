@@ -2100,7 +2100,8 @@ func (s *Store) Close() error {
 	defer s.mu.Unlock()
 
 	// Sync all bucket directories and their subdirectories to ensure
-	// all filesystem operations are complete before cleanup
+	// all filesystem operations are complete before cleanup.
+	// This is critical for tests with race detector where cleanup happens immediately.
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
 	if buckets, err := os.ReadDir(bucketsDir); err == nil {
 		for _, bucket := range buckets {
@@ -2108,9 +2109,31 @@ func (s *Store) Close() error {
 				continue
 			}
 			bucketPath := filepath.Join(bucketsDir, bucket.Name())
+			metaDir := filepath.Join(bucketPath, "meta")
 
-			// Sync meta directory
-			if f, err := os.Open(filepath.Join(bucketPath, "meta")); err == nil {
+			// Sync all metadata files first
+			if metaFiles, err := os.ReadDir(metaDir); err == nil {
+				for _, metaFile := range metaFiles {
+					if metaFile.IsDir() {
+						continue
+					}
+					metaPath := filepath.Join(metaDir, metaFile.Name())
+					if f, err := os.Open(metaPath); err == nil {
+						_ = f.Sync()
+						_ = f.Close()
+					}
+				}
+			}
+
+			// Sync meta directory itself
+			if f, err := os.Open(metaDir); err == nil {
+				_ = f.Sync()
+				_ = f.Close()
+			}
+
+			// Sync objects directory if it exists
+			objectsDir := filepath.Join(bucketPath, "objects")
+			if f, err := os.Open(objectsDir); err == nil {
 				_ = f.Sync()
 				_ = f.Close()
 			}
