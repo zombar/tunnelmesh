@@ -30,7 +30,9 @@ tunnelmesh status
 
 ### Admin Peer Configuration
 
-Admin privileges are granted via the coordinator's `admin_peers` configuration:
+> [!IMPORTANT]
+> Admin privileges are granted via the coordinator's `admin_peers` configuration - there is no
+> automatic "first user becomes admin" behavior.
 
 ```yaml
 # coordinator.yaml
@@ -41,7 +43,8 @@ coordinator:
     - "alice"             # Peer name (fallback - can change)
 ```
 
-**Recommended**: Use Peer IDs for security:
+> [!TIP]
+> **Recommended**: Use Peer IDs for security:
 
 - Peer IDs are immutable (SHA256 of SSH public key)
 - Peer names can be changed by users

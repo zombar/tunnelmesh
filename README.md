@@ -35,7 +35,10 @@ routing.
 
 ### What Requires Admin Access?
 
-TunnelMesh separates **network functionality** (no admin required) from **configuration operations** (admin only):
+> [!NOTE]
+> TunnelMesh separates **network functionality** (no admin required) from **configuration operations**
+> (admin only). Most features work without admin access - you only need admin rights to configure
+> and manage the mesh.
 
 **Works Without Admin** (all peers):
 - Join mesh and establish encrypted tunnels

@@ -5,9 +5,10 @@ and security best practices.
 
 ## Overview
 
-TunnelMesh uses a **configuration-based admin model** where admin privileges are granted via the
-coordinator's `admin_peers` field. There is no "first user becomes admin" behavior - admins must be
-explicitly configured.
+> [!IMPORTANT]
+> TunnelMesh uses a **configuration-based admin model** where admin privileges are granted via the
+> coordinator's `admin_peers` field. There is **no "first user becomes admin" behavior** - admins must be
+> explicitly configured.
 
 **Key points:**
 
@@ -60,6 +61,9 @@ admin_peers: ["alice", "bob", "coordinator"]
 ```
 
 #### Peer ID Matching (Recommended)
+
+> [!TIP]
+> **Recommended**: Use peer IDs for security. They're immutable and tied to SSH keys.
 
 **Format**: 16 hexadecimal characters (SHA256 of SSH public key, first 8 bytes)
 
@@ -170,8 +174,9 @@ All core mesh networking features work for non-admin peers:
 - ✅ View mesh topology
 - ✅ See geographic map (if location data available)
 
-**Summary**: Non-admin peers can fully participate in the mesh network and access services.
-They just cannot configure or manage mesh-wide settings.
+> [!NOTE]
+> **Summary**: Non-admin peers can fully participate in the mesh network and access services.
+> They just cannot configure or manage mesh-wide settings.
 
 ## What Requires Admin Access
 
@@ -228,8 +233,9 @@ Admin access is required for mesh/data plane **configuration and management**:
 
 - ❌ Access admin panels: peers, logs, wireguard, filter, dns, users, groups, bindings, docker
 
-**Summary**: Admin access is for **configuration**, not for basic mesh usage. If you just need to
-use the mesh network and access services, you don't need admin rights.
+> [!NOTE]
+> **Summary**: Admin access is for **configuration**, not for basic mesh usage. If you just need to
+> use the mesh network and access services, you don't need admin rights.
 
 ## Admin Panel Access
 
@@ -278,6 +284,10 @@ See the [User Identity and RBAC Guide](USER_IDENTITY.md) for complete RBAC docum
 ## Security Considerations
 
 ### Use Peer IDs, Not Names
+
+> [!WARNING]
+> **Security Best Practice**: Always use peer IDs, not names, for admin_peers in production.
+> Peer names can be changed by users, while peer IDs are immutable and tied to SSH keys.
 
 **Recommended configuration**:
 
@@ -338,7 +348,9 @@ Now admin access is tied to the SSH key, not the mutable peer name.
 
 ### Protect Coordinator Config
 
-The coordinator config contains the admin_peers list, which controls who gets admin access:
+> [!CAUTION]
+> **Protect your coordinator config file**: The admin_peers list controls who gets admin access.
+> Set restrictive permissions to prevent unauthorized modifications.
 
 ```bash
 # Set restrictive permissions
@@ -463,6 +475,10 @@ coordinator:
 
 **Scenario**: Public mesh where no one has admin access (monitoring only).
 
+> [!WARNING]
+> **Advanced use case**: With an empty admin_peers list, you won't be able to manage the mesh via UI.
+> All configuration must be done via config files.
+
 ```yaml
 # coordinator.yaml
 coordinator:
@@ -476,8 +492,6 @@ coordinator:
 - All peers have network functionality only
 - No one can access admin panels or configure mesh settings
 - Useful for read-only/monitoring deployments
-
-**Note**: You won't be able to manage the mesh via UI. All configuration must be done via config files.
 
 ## Troubleshooting
 

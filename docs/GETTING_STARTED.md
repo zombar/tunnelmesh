@@ -84,6 +84,10 @@ sudo nano /etc/tunnelmesh/coordinator.yaml
 
 ### Configure Admin Peers
 
+> [!IMPORTANT]
+> **Admin access is not automatic**: You must explicitly configure which peers have admin access
+> via the `admin_peers` field in the coordinator config.
+
 Edit the coordinator config to specify which peers should have admin access:
 
 ```bash
@@ -101,7 +105,11 @@ coordinator:
     - "alice"        # Add other admin peer names
 ```
 
-**Important**: Use Peer IDs (not names) for better security:
+> [!TIP]
+> **Security Best Practice**: Use Peer IDs (not names) for better security. Peer IDs are immutable
+> and tied to SSH keys, while peer names can be changed by users.
+
+**Steps to use peer IDs**:
 
 1. Start the coordinator once to generate peer keys
 2. View the peer ID: `tunnelmesh status`
