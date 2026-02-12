@@ -107,11 +107,10 @@ func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte
 }
 
 // selectDocumentFormat randomly selects a document format.
+// Returns either "markdown" (60%) or "json" (40%).
 func selectDocumentFormat() string {
 	r := mrand.Intn(100)
 	if r < 60 {
-		return "plain"
-	} else if r < 85 {
 		return "markdown"
 	}
 	return "json"
