@@ -10,7 +10,6 @@ describe('CONSTANTS', () => {
         expect(CONSTANTS.POLL_INTERVAL_MS).toBe(10000);
         expect(CONSTANTS.TOAST_DURATION_MS).toBe(4000);
         expect(CONSTANTS.MAX_HISTORY_POINTS).toBe(20);
-        expect(CONSTANTS.MAX_CHART_POINTS).toBe(360);
     });
 });
 

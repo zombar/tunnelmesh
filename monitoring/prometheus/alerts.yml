@@ -396,17 +396,6 @@ groups:
           summary: "Network stats save stalled"
           description: "Stats for {{ $labels.peer }} not saved for 10+ minutes"
 
-      # Stats history save failure
-      - alert: StatsHistorySaveFailed
-        expr: rate(tunnelmesh_coordinator_stats_history_save_errors_total[5m]) > 0
-        for: 5m
-        labels:
-          severity: warning
-          category: data
-        annotations:
-          summary: "Stats history save failing on coordinator"
-          description: "Cannot persist stats history to S3"
-
       # Stats replication severely lagged (critical)
       - alert: StatsReplicationLag
         expr: time() - tunnelmesh_network_stats_last_save_timestamp > 3600
