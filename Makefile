@@ -200,6 +200,7 @@ docker-up: docker-build
 	TUNNELMESH_TOKEN=$$TUNNELMESH_TOKEN $(DOCKER_COMPOSE) up -d; \
 	echo "TunnelMesh Docker environment started"; \
 	echo "Use 'make docker-logs' to follow logs"; \
+	echo "Use 'make docker-logs-coords' to follow coordinator logs"; \
 	echo ""; \
 	echo "=== Join from this machine ==="; \
 	read -p "Run 'sudo tunnelmesh join --context docker'? [Y/n] " answer; \
@@ -210,6 +211,15 @@ docker-up: docker-build
 		echo ""; \
 		echo "Admin interface should open at https://this.tm"; \
 	fi
+
+# Scale coordinators to N replicas
+docker-scale-coords:
+	@read -p "Number of coordinators (current: 2): " replicas; \
+	cd docker && docker compose up -d --scale coordinator=$$replicas
+
+# View coordinator logs
+docker-logs-coords:
+	$(DOCKER_COMPOSE) logs -f coordinator
 
 docker-down:
 	$(DOCKER_COMPOSE) down
@@ -386,12 +396,14 @@ help:
 	@echo "  service-logs      - Follow service logs"
 	@echo ""
 	@echo "Docker targets:"
-	@echo "  docker-build   - Build Docker images"
-	@echo "  docker-up      - Start server + 5 client mesh environment"
-	@echo "  docker-down    - Stop and remove containers"
-	@echo "  docker-logs    - Follow container logs"
-	@echo "  docker-clean   - Remove containers and images"
-	@echo "  docker-test    - Build, start, and show mesh status"
+	@echo "  docker-build        - Build Docker images"
+	@echo "  docker-up           - Start 2 coordinators + 5 client mesh environment"
+	@echo "  docker-down         - Stop and remove containers"
+	@echo "  docker-logs         - Follow container logs"
+	@echo "  docker-logs-coords  - Follow coordinator logs only"
+	@echo "  docker-scale-coords - Scale coordinators to N replicas"
+	@echo "  docker-clean        - Remove containers and images"
+	@echo "  docker-test         - Build, start, and show mesh status"
 	@echo ""
 	@echo "GitHub Container Registry targets:"
 	@echo "  ghcr-login     - Show login instructions for ghcr.io"

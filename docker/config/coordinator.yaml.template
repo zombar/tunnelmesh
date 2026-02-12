@@ -1,0 +1,23 @@
+# TunnelMesh Coordinator Configuration
+# Name is auto-generated from hostname: coordinator-<hostname>
+
+name: "${COORD_NAME}"
+private_key: "/root/.tunnelmesh/id_ed25519"
+
+# Coordinator services configuration
+coordinator:
+  enabled: true
+  listen: ":8080"
+  admin_peers: ["coordinator-*", "mynode"]  # Pattern matching for all coordinators
+  service_ports: [9443, 3100]    # Allow metrics and Loki access
+  locations: true                # Enable map panel
+  monitoring:
+    prometheus_url: "http://localhost:9090"
+    grafana_url: "http://localhost:3000"
+
+# Log shipping to local Loki (each coordinator has its own)
+loki:
+  enabled: true
+  url: "http://127.0.0.1:3100"
+  batch_size: 100
+  flush_interval: "5s"

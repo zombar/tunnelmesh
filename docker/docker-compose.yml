@@ -1,27 +1,34 @@
 services:
-  server:
+  coordinator:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: tunnelmesh-server
-    hostname: server
-    entrypoint: ["/bin/bash", "/scripts/server-entrypoint.sh"]
+    hostname: coordinator
+    deploy:
+      replicas: 2  # Default to 2 coordinators for replication testing
+    entrypoint: ["/bin/bash", "/scripts/coordinator-entrypoint.sh"]
     volumes:
-      - ./config/server.yaml:/etc/tunnelmesh/server.yaml:ro
-      - ./scripts/server-entrypoint.sh:/scripts/server-entrypoint.sh:ro
-      - metrics-data:/var/lib/tunnelmesh
-      - s3-data:/var/lib/tunnelmesh/s3
-      - server-keys:/root/.tunnelmesh  # Persist SSH keys across restarts
+      - ./config/coordinator.yaml.template:/etc/tunnelmesh/coordinator.yaml.template:ro
+      - ./scripts/coordinator-entrypoint.sh:/scripts/coordinator-entrypoint.sh:ro
+      # Use tmpfs for ephemeral storage (testing only)
+      - type: tmpfs
+        target: /var/lib/tunnelmesh
+        tmpfs:
+          size: 2147483648  # 2GB
+      - type: tmpfs
+        target: /root/.tunnelmesh
       - /var/run/docker.sock:/var/run/docker.sock:ro  # Docker socket for container management
     cap_add:
       - NET_ADMIN
     devices:
       - /dev/net/tun:/dev/net/tun
     networks:
-      mesh-control:
-        ipv4_address: 172.28.0.10
+      - mesh-control
+      # Remove static IP - let docker assign IPs dynamically for scaling
     ports:
-      - "8081:8080"   # Coordination API (peers connect here)
+      - "8081:8080"   # Coordination API (load-balanced across all coordinators)
+      - "9090:9090"   # Prometheus (each coordinator runs its own)
+      - "3000:3000"   # Grafana (each coordinator runs its own)
     environment:
       - TUNNELMESH_TOKEN=${TUNNELMESH_TOKEN}
     healthcheck:
@@ -46,24 +53,25 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     depends_on:
-      server:
+      coordinator:
         condition: service_started
     networks:
       - mesh-control
     environment:
-      - SERVER_URL=http://172.28.0.10:8080
+      - SERVER_URL=http://coordinator:8080  # DNS round-robin across all coordinators
       - AUTH_TOKEN=${TUNNELMESH_TOKEN}
       - PING_INTERVAL=2
       - DISCOVERY_INTERVAL=20
 
-  # Monitoring stack - shares server's network namespace for mesh access
-  # Note: These use network_mode: "service:server" which binds to server's container.
-  # The restart: true ensures they restart when server restarts/recreates.
+  # Monitoring stack - shares coordinator's network namespace for mesh access
+  # Note: These use network_mode: "service:coordinator" which binds to coordinator's container.
+  # The restart: true ensures they restart when coordinator restarts/recreates.
+  # Each coordinator replica runs its own monitoring stack.
   prometheus:
     image: prom/prometheus:latest
     container_name: tunnelmesh-prometheus
-    # Share server's network namespace to access mesh IPs via TUN
-    network_mode: "service:server"
+    # Share coordinator's network namespace to access mesh IPs via TUN
+    network_mode: "service:coordinator"
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -84,7 +92,7 @@ services:
       retries: 3
       start_period: 10s
     depends_on:
-      server:
+      coordinator:
         condition: service_healthy
         restart: true
     restart: unless-stopped
@@ -94,8 +102,8 @@ services:
       context: ..
       dockerfile: monitoring/sd_generator/Dockerfile
     container_name: tunnelmesh-sd-generator
-    # Share server's network to reach coord API and resolve mesh DNS
-    network_mode: "service:server"
+    # Share coordinator's network to reach coord API and resolve mesh DNS
+    network_mode: "service:coordinator"
     environment:
       - COORD_SERVER_URL=http://localhost:8080
       - AUTH_TOKEN=${TUNNELMESH_TOKEN}
@@ -112,7 +120,7 @@ services:
       retries: 3
       start_period: 5s
     depends_on:
-      server:
+      coordinator:
         condition: service_healthy
         restart: true
     restart: unless-stopped
@@ -120,8 +128,8 @@ services:
   grafana:
     image: grafana/grafana:latest
     container_name: tunnelmesh-grafana
-    # Share server's network namespace
-    network_mode: "service:server"
+    # Share coordinator's network namespace
+    network_mode: "service:coordinator"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -130,7 +138,7 @@ services:
       - GF_AUTH_DISABLE_LOGIN_FORM=false
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_HTTP_PORT=3000
-      - GF_SERVER_ROOT_URL=https://server-node.tunnelmesh/grafana/
+      - GF_SERVER_ROOT_URL=https://coordinator-node.tunnelmesh/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/tunnelmesh.json
     volumes:
@@ -144,7 +152,7 @@ services:
       retries: 3
       start_period: 15s
     depends_on:
-      server:
+      coordinator:
         condition: service_healthy
         restart: true
       prometheus:
@@ -156,8 +164,8 @@ services:
   loki:
     image: grafana/loki:latest
     container_name: tunnelmesh-loki
-    # Share server's network namespace to receive logs from mesh peers
-    network_mode: "service:server"
+    # Share coordinator's network namespace to receive logs from mesh peers
+    network_mode: "service:coordinator"
     command: -config.file=/etc/loki/local-config.yaml
     volumes:
       - ../monitoring/loki/config.yaml:/etc/loki/local-config.yaml:ro
@@ -170,7 +178,7 @@ services:
       retries: 3
       start_period: 10s
     depends_on:
-      server:
+      coordinator:
         condition: service_healthy
         restart: true
     restart: unless-stopped
@@ -180,8 +188,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.benchmarker
     container_name: tunnelmesh-benchmarker
-    # Share server's network namespace to access mesh IPs via TUN
-    network_mode: "service:server"
+    # Share coordinator's network namespace to access mesh IPs via TUN
+    network_mode: "service:coordinator"
     environment:
       - COORD_SERVER_URL=http://localhost:8080
       - AUTH_TOKEN=${TUNNELMESH_TOKEN}
@@ -198,7 +206,7 @@ services:
     volumes:
       - benchmark-results:/results
     depends_on:
-      server:
+      coordinator:
         condition: service_healthy
         restart: true
     restart: unless-stopped
@@ -211,18 +219,6 @@ networks:
         - subnet: 172.28.0.0/24
 
 volumes:
-  metrics-data:
-    name: tunnelmesh-metrics-data
-    labels:
-      - "com.tunnelmesh.description=Stats history for dashboard charts"
-  s3-data:
-    name: tunnelmesh-s3-data
-    labels:
-      - "com.tunnelmesh.description=S3 storage for users, groups, and file shares"
-  server-keys:
-    name: tunnelmesh-server-keys
-    labels:
-      - "com.tunnelmesh.description=Server SSH keys for mesh join identity"
   prometheus-data:
   grafana-data:
   loki-data:

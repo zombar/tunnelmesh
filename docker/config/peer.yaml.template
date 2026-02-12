@@ -5,7 +5,7 @@ name: "${NODE_NAME}"
 ssh_port: 2222
 log_level: "info"
 private_key: "/root/.tunnelmesh/id_ed25519"
-exit_peer: "server-node"  # Route internet traffic through the server
+# exit_peer: "coordinator-node"  # Optional: Route internet traffic through a coordinator
 tun:
   name: "tun-mesh0"
   mtu: 1400
@@ -14,8 +14,9 @@ dns:
   listen: "127.0.0.53:53"
   aliases:
     - "alt.${NODE_NAME}"
-loki:
-  enabled: true
-  url: "http://server-node.tunnelmesh:3100"
-  batch_size: 100
-  flush_interval: "5s"
+# Loki log shipping disabled for clients (coordinators handle their own logs)
+# loki:
+#   enabled: true
+#   url: "http://coordinator-node.tunnelmesh:3100"
+#   batch_size: 100
+#   flush_interval: "5s"
