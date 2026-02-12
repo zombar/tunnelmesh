@@ -29,7 +29,7 @@ func NewGenerator(s story.Story) *Generator {
 }
 
 // Generate creates a document based on the rule and context.
-// Randomly selects between markdown and JSON formats.
+// Randomly selects between markdown and JSON formats (unless format is already set in context).
 // Returns content, format ("markdown" or "json"), and error.
 func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte, string, error) {
 	g.docCounts[rule.Type]++
@@ -41,8 +41,14 @@ func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte
 	ctx.Data["DocumentNumber"] = g.docCounts[rule.Type]
 	ctx.Data["Rule"] = rule
 
-	// Randomly select document format (60% markdown, 40% JSON)
-	format := selectDocumentFormat()
+	// Use format from context if set (for version consistency), otherwise randomly select
+	var format string
+	if f, ok := ctx.Data["Format"].(string); ok {
+		format = f
+	} else {
+		// Randomly select document format (60% markdown, 40% JSON)
+		format = selectDocumentFormat()
+	}
 
 	var content []byte
 	var err error

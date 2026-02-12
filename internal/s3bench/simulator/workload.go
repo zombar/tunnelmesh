@@ -132,6 +132,9 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 				return nil, fmt.Errorf("generating document %s #%d: %w", rule.Type, docNum, err)
 			}
 
+			// Store format in context for version consistency
+			ctx.Data["Format"] = format
+
 			// Generate filename with random suffix and correct extension
 			var ext string
 			var contentType string
@@ -205,12 +208,13 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 					break
 				}
 
-				// Generate updated content
+				// Generate updated content (preserve format from original)
 				versionCtx := ctx
 				versionCtx.Timestamp = time.Now().Add(versionTime)
 				versionCtx.StoryElapsed = versionTime
 				versionCtx.Data["DocumentNumber"] = docNum
 				versionCtx.Data["Version"] = v
+				// Format is already in ctx.Data["Format"] and will be reused
 
 				versionContent, _, err := w.generator.Generate(rule, versionCtx)
 				if err != nil {
