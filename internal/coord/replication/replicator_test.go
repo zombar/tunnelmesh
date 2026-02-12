@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -899,4 +900,308 @@ func TestReplicateObject_NoChunkRegistry(t *testing.T) {
 	// The fallback calls ReplicateOperation which will send to all peers
 	// We just verify it doesn't crash
 	assert.NoError(t, err, "Fallback to file-level replication should work")
+}
+
+// ==== Striping Policy Tests ====
+
+func TestStripingPolicy_PrimaryOwner(t *testing.T) {
+	tests := []struct {
+		name       string
+		peers      []string
+		chunkIndex int
+		wantOwner  string
+	}{
+		{
+			name:       "single peer",
+			peers:      []string{"coord-a"},
+			chunkIndex: 0,
+			wantOwner:  "coord-a",
+		},
+		{
+			name:       "single peer, any index",
+			peers:      []string{"coord-a"},
+			chunkIndex: 5,
+			wantOwner:  "coord-a",
+		},
+		{
+			name:       "two peers, index 0",
+			peers:      []string{"coord-b", "coord-a"}, // will be sorted
+			chunkIndex: 0,
+			wantOwner:  "coord-a", // sorted: [coord-a, coord-b]
+		},
+		{
+			name:       "two peers, index 1",
+			peers:      []string{"coord-b", "coord-a"},
+			chunkIndex: 1,
+			wantOwner:  "coord-b",
+		},
+		{
+			name:       "three peers, round-robin",
+			peers:      []string{"coord-c", "coord-a", "coord-b"},
+			chunkIndex: 2,
+			wantOwner:  "coord-c", // sorted: [a, b, c], index 2 % 3 = 2 -> c
+		},
+		{
+			name:       "three peers, wraps around",
+			peers:      []string{"coord-a", "coord-b", "coord-c"},
+			chunkIndex: 3,
+			wantOwner:  "coord-a", // 3 % 3 = 0 -> a
+		},
+		{
+			name:       "empty peers",
+			peers:      []string{},
+			chunkIndex: 0,
+			wantOwner:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sp := NewStripingPolicy(tt.peers)
+			got := sp.PrimaryOwner(tt.chunkIndex)
+			assert.Equal(t, tt.wantOwner, got)
+		})
+	}
+}
+
+func TestStripingPolicy_AssignedChunks(t *testing.T) {
+	// 10 chunks across 3 peers (sorted: [a, b, c])
+	sp := NewStripingPolicy([]string{"coord-c", "coord-a", "coord-b"})
+
+	chunksA := sp.AssignedChunks("coord-a", 10)
+	chunksB := sp.AssignedChunks("coord-b", 10)
+	chunksC := sp.AssignedChunks("coord-c", 10)
+
+	// Round-robin: a gets 0,3,6,9; b gets 1,4,7; c gets 2,5,8
+	assert.Equal(t, []int{0, 3, 6, 9}, chunksA)
+	assert.Equal(t, []int{1, 4, 7}, chunksB)
+	assert.Equal(t, []int{2, 5, 8}, chunksC)
+
+	// All chunks are covered exactly once
+	all := make(map[int]bool)
+	for _, idx := range chunksA {
+		all[idx] = true
+	}
+	for _, idx := range chunksB {
+		all[idx] = true
+	}
+	for _, idx := range chunksC {
+		all[idx] = true
+	}
+	assert.Len(t, all, 10)
+
+	// Unknown peer gets nothing
+	chunksX := sp.AssignedChunks("coord-x", 10)
+	assert.Nil(t, chunksX)
+}
+
+func TestStripingPolicy_ChunksForPeer_WithReplicationFactor(t *testing.T) {
+	// 6 chunks, 3 peers, RF=2
+	sp := NewStripingPolicy([]string{"coord-a", "coord-b", "coord-c"})
+
+	chunksA := sp.ChunksForPeer("coord-a", 6, 2)
+	chunksB := sp.ChunksForPeer("coord-b", 6, 2)
+	chunksC := sp.ChunksForPeer("coord-c", 6, 2)
+
+	// Primary assignments: a=0,3; b=1,4; c=2,5
+	// With RF=2, each chunk also goes to the next peer:
+	// chunk 0: primary=a(0), replica=b(1) -> a,b
+	// chunk 1: primary=b(1), replica=c(2) -> b,c
+	// chunk 2: primary=c(2), replica=a(0) -> c,a
+	// chunk 3: primary=a(0), replica=b(1) -> a,b
+	// chunk 4: primary=b(1), replica=c(2) -> b,c
+	// chunk 5: primary=c(2), replica=a(0) -> c,a
+	assert.Equal(t, []int{0, 2, 3, 5}, chunksA) // primary 0,3 + replica from c: 2,5
+	assert.Equal(t, []int{0, 1, 3, 4}, chunksB) // primary 1,4 + replica from a: 0,3
+	assert.Equal(t, []int{1, 2, 4, 5}, chunksC) // primary 2,5 + replica from b: 1,4
+
+	// Each chunk appears exactly RF times across all peers
+	chunkCount := make(map[int]int)
+	for _, idx := range chunksA {
+		chunkCount[idx]++
+	}
+	for _, idx := range chunksB {
+		chunkCount[idx]++
+	}
+	for _, idx := range chunksC {
+		chunkCount[idx]++
+	}
+	for i := 0; i < 6; i++ {
+		assert.Equal(t, 2, chunkCount[i], "chunk %d should appear exactly RF=2 times", i)
+	}
+}
+
+func TestStripedReplicateObject_Distribution(t *testing.T) {
+	// Test that ReplicateObject with striping only sends assigned chunks to each peer
+	ctx := context.Background()
+	broker := newTestTransportBroker()
+
+	// Create sender coordinator
+	senderTransport := broker.newTransportFor("coord-sender")
+	senderS3 := newMockS3Store()
+
+	// Create chunk data
+	chunkHashes := []string{"hash-0", "hash-1", "hash-2", "hash-3", "hash-4", "hash-5"}
+	chunkData := map[string][]byte{
+		"hash-0": []byte("data-0"),
+		"hash-1": []byte("data-1"),
+		"hash-2": []byte("data-2"),
+		"hash-3": []byte("data-3"),
+		"hash-4": []byte("data-4"),
+		"hash-5": []byte("data-5"),
+	}
+
+	senderS3.addObjectWithChunks("bucket1", "file.txt", chunkHashes, chunkData)
+
+	// Create chunk registry - sender owns all chunks, peers own none
+	registry := NewChunkRegistry("coord-sender", nil)
+	for _, hash := range chunkHashes {
+		_ = registry.RegisterChunk(hash, int64(len(chunkData[hash])))
+	}
+
+	sender := NewReplicator(Config{
+		NodeID:        "coord-sender",
+		Transport:     senderTransport,
+		S3Store:       senderS3,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+
+	// Add two peers
+	sender.AddPeer("coord-peer1")
+	sender.AddPeer("coord-peer2")
+
+	// Track chunks received by each peer via intercepting broker
+	var peer1Chunks []string
+	var peer2Chunks []string
+	var mu sync.Mutex
+
+	for _, peerID := range []string{"coord-peer1", "coord-peer2"} {
+		peerTransport := broker.newTransportFor(peerID)
+		peerS3 := newMockS3Store()
+		peerRegistry := NewChunkRegistry(peerID, nil)
+
+		capturedPeerID := peerID
+		receiver := NewReplicator(Config{
+			NodeID:        peerID,
+			Transport:     peerTransport,
+			S3Store:       peerS3,
+			ChunkRegistry: peerRegistry,
+			Logger:        zerolog.Nop(),
+		})
+		_ = receiver
+
+		// Wrap the handler in the broker to intercept messages
+		broker.mu.Lock()
+		originalHandler := broker.handlers[peerID]
+		broker.handlers[peerID] = func(from string, data []byte) error {
+			msg, err := UnmarshalMessage(data)
+			if err == nil && msg.Type == MessageTypeReplicateChunk {
+				var payload ReplicateChunkPayload
+				if jsonErr := json.Unmarshal(msg.Payload, &payload); jsonErr == nil {
+					mu.Lock()
+					if capturedPeerID == "coord-peer1" {
+						peer1Chunks = append(peer1Chunks, payload.ChunkHash)
+					} else {
+						peer2Chunks = append(peer2Chunks, payload.ChunkHash)
+					}
+					mu.Unlock()
+				}
+			}
+			return originalHandler(from, data)
+		}
+		broker.mu.Unlock()
+	}
+
+	// Replicate to peer1
+	err := sender.ReplicateObject(ctx, "bucket1", "file.txt", "coord-peer1")
+	require.NoError(t, err)
+
+	// Replicate to peer2
+	err = sender.ReplicateObject(ctx, "bucket1", "file.txt", "coord-peer2")
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// With striping (3 coordinators, RF=2), each peer should get 4 of 6 chunks
+	// Total sent should be 8, not 12 (without striping both would get all 6)
+	totalSent := len(peer1Chunks) + len(peer2Chunks)
+	assert.Less(t, totalSent, 12, "Striping should reduce total chunks sent (got %d)", totalSent)
+	assert.Greater(t, len(peer1Chunks), 0, "peer1 should receive some chunks")
+	assert.Greater(t, len(peer2Chunks), 0, "peer2 should receive some chunks")
+}
+
+func TestStripedReplicateObject_SinglePeer(t *testing.T) {
+	// With only one peer (besides self), all chunks should be replicated
+	ctx := context.Background()
+	broker := newTestTransportBroker()
+
+	senderTransport := broker.newTransportFor("coord-sender")
+	senderS3 := newMockS3Store()
+
+	chunkHashes := []string{"hash-0", "hash-1", "hash-2"}
+	chunkData := map[string][]byte{
+		"hash-0": []byte("data-0"),
+		"hash-1": []byte("data-1"),
+		"hash-2": []byte("data-2"),
+	}
+
+	senderS3.addObjectWithChunks("bucket1", "file.txt", chunkHashes, chunkData)
+
+	registry := NewChunkRegistry("coord-sender", nil)
+	for _, hash := range chunkHashes {
+		_ = registry.RegisterChunk(hash, int64(len(chunkData[hash])))
+	}
+
+	sender := NewReplicator(Config{
+		NodeID:        "coord-sender",
+		Transport:     senderTransport,
+		S3Store:       senderS3,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+
+	// Only one peer
+	sender.AddPeer("coord-peer1")
+
+	// Set up receiver
+	peerTransport := broker.newTransportFor("coord-peer1")
+	peerS3 := newMockS3Store()
+	_ = NewReplicator(Config{
+		NodeID:        "coord-peer1",
+		Transport:     peerTransport,
+		S3Store:       peerS3,
+		ChunkRegistry: NewChunkRegistry("coord-peer1", nil),
+		Logger:        zerolog.Nop(),
+	})
+
+	var receivedChunks []string
+	var mu sync.Mutex
+
+	// Wrap the handler in the broker to intercept messages
+	broker.mu.Lock()
+	originalHandler := broker.handlers["coord-peer1"]
+	broker.handlers["coord-peer1"] = func(from string, data []byte) error {
+		msg, err := UnmarshalMessage(data)
+		if err == nil && msg.Type == MessageTypeReplicateChunk {
+			var payload ReplicateChunkPayload
+			if jsonErr := json.Unmarshal(msg.Payload, &payload); jsonErr == nil {
+				mu.Lock()
+				receivedChunks = append(receivedChunks, payload.ChunkHash)
+				mu.Unlock()
+			}
+		}
+		return originalHandler(from, data)
+	}
+	broker.mu.Unlock()
+
+	err := sender.ReplicateObject(ctx, "bucket1", "file.txt", "coord-peer1")
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// With RF=2 and only 2 coordinators total, all chunks go to the single peer
+	assert.Len(t, receivedChunks, 3, "Single peer should receive all chunks with RF=2")
 }

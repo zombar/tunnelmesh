@@ -153,6 +153,21 @@ jobs:
           name: dashboard-js
           fail_ci_if_error: false
 
+  test-simulator:
+    name: Simulator Tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.7'
+      - name: Run simulator tests (full)
+        env:
+          TUNNELMESH_TEST: "1"
+        run: go test -v -timeout 10m ./internal/s3bench/simulator/
+
   build:
     name: Build
     needs: [checks, lint, security, test, lint-frontend, test-js]

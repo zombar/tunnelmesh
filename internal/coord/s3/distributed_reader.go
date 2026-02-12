@@ -4,26 +4,60 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
 )
 
+// PrefetchConfig controls the parallel chunk prefetch pipeline.
+type PrefetchConfig struct {
+	WindowSize  int // Max chunks to prefetch ahead (default 8)
+	Parallelism int // Number of parallel fetch workers (default 4)
+}
+
+// DefaultPrefetchConfig returns the default prefetch configuration.
+func DefaultPrefetchConfig() PrefetchConfig {
+	return PrefetchConfig{
+		WindowSize:  8,
+		Parallelism: 4,
+	}
+}
+
+// prefetchResult holds the result of fetching a single chunk.
+type prefetchResult struct {
+	index int
+	data  []byte
+	err   error
+}
+
 // DistributedChunkReader reads chunks from local storage or remote coordinators.
-// It implements io.Reader and transparently fetches missing chunks from peers.
+// It implements io.ReadCloser and transparently fetches missing chunks from peers.
+// When Parallelism > 1 and a replicator is configured, chunks are prefetched in
+// parallel and reassembled in order.
 type DistributedChunkReader struct {
-	ctx          context.Context
-	chunks       []string               // Ordered list of chunk hashes
-	chunkIndex   int                    // Current chunk being read
-	currentChunk []byte                 // Buffer for current chunk
-	chunkOffset  int                    // Offset within current chunk
-	localCAS     *CAS                   // Local chunk storage
-	registry     ChunkRegistryInterface // Global chunk ownership index
-	replicator   ReplicatorInterface    // For fetching from remote peers
-	logger       zerolog.Logger         // Structured logger
-	timeout      time.Duration
-	totalSize    int64 // Total file size (for progress tracking)
-	bytesRead    int64 // Bytes read so far
+	ctx        context.Context
+	cancel     context.CancelFunc // cancels prefetch goroutines
+	chunks     []string           // Ordered list of chunk hashes
+	localCAS   *CAS               // Local chunk storage
+	registry   ChunkRegistryInterface
+	replicator ReplicatorInterface
+	logger     zerolog.Logger
+	timeout    time.Duration
+	totalSize  int64
+	bytesRead  int64
+
+	// Prefetch pipeline state
+	prefetchCfg PrefetchConfig
+	resultCh    chan prefetchResult     // results from workers
+	readyBuf    map[int]*prefetchResult // out-of-order buffer
+	nextRead    int                     // next chunk index Read() expects
+	started     bool                    // lazy-start flag
+
+	// Sequential fallback state (used when parallelism <= 1 or no replicator)
+	currentChunk []byte
+	chunkOffset  int
+	chunkIndex   int
 }
 
 // DistributedChunkReaderConfig contains configuration for the distributed chunk reader.
@@ -35,45 +69,65 @@ type DistributedChunkReaderConfig struct {
 	Logger     zerolog.Logger         // Structured logger (optional)
 	Timeout    time.Duration          // Timeout for remote chunk fetches
 	TotalSize  int64                  // Total file size
+	Prefetch   PrefetchConfig         // Parallel prefetch settings
 }
 
 // NewDistributedChunkReader creates a new distributed chunk reader.
 func NewDistributedChunkReader(ctx context.Context, config DistributedChunkReaderConfig) *DistributedChunkReader {
 	timeout := config.Timeout
 	if timeout == 0 {
-		timeout = 30 * time.Second // Default timeout
+		timeout = 30 * time.Second
 	}
 
-	logger := config.Logger
-	// Note: Logger is required in config. Callers should pass zerolog.Nop() if no logging desired.
+	prefetch := config.Prefetch
+	if prefetch.WindowSize == 0 {
+		prefetch.WindowSize = DefaultPrefetchConfig().WindowSize
+	}
+	if prefetch.Parallelism == 0 {
+		prefetch.Parallelism = DefaultPrefetchConfig().Parallelism
+	}
+
+	childCtx, cancel := context.WithCancel(ctx)
 
 	return &DistributedChunkReader{
-		ctx:        ctx,
-		chunks:     config.Chunks,
-		localCAS:   config.LocalCAS,
-		registry:   config.Registry,
-		replicator: config.Replicator,
-		logger:     logger,
-		timeout:    timeout,
-		totalSize:  config.TotalSize,
+		ctx:         childCtx,
+		cancel:      cancel,
+		chunks:      config.Chunks,
+		localCAS:    config.LocalCAS,
+		registry:    config.Registry,
+		replicator:  config.Replicator,
+		logger:      config.Logger,
+		timeout:     timeout,
+		totalSize:   config.TotalSize,
+		prefetchCfg: prefetch,
+		readyBuf:    make(map[int]*prefetchResult),
 	}
+}
+
+// useParallel returns true if parallel prefetch should be used.
+func (r *DistributedChunkReader) useParallel() bool {
+	return r.prefetchCfg.Parallelism > 1 && r.replicator != nil
 }
 
 // Read implements io.Reader, reading data from chunks (local or remote).
 func (r *DistributedChunkReader) Read(p []byte) (int, error) {
-	// Load next chunk if needed
+	if r.useParallel() {
+		return r.readParallel(p)
+	}
+	return r.readSequential(p)
+}
+
+// readSequential is the original sequential read path.
+func (r *DistributedChunkReader) readSequential(p []byte) (int, error) {
 	if r.currentChunk == nil || r.chunkOffset >= len(r.currentChunk) {
-		// Check if we've exhausted all chunks
 		if r.chunkIndex >= len(r.chunks) {
 			return 0, io.EOF
 		}
-
 		if err := r.loadNextChunk(); err != nil {
 			return 0, err
 		}
 	}
 
-	// Copy from current chunk to output buffer
 	n := copy(p, r.currentChunk[r.chunkOffset:])
 	r.chunkOffset += n
 	r.bytesRead += int64(n)
@@ -81,77 +135,205 @@ func (r *DistributedChunkReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// loadNextChunk fetches the next chunk (local or remote).
-func (r *DistributedChunkReader) loadNextChunk() error {
-	if r.chunkIndex >= len(r.chunks) {
-		return io.EOF
+// readParallel uses the prefetch pipeline for parallel chunk reads.
+func (r *DistributedChunkReader) readParallel(p []byte) (int, error) {
+	if !r.started {
+		r.startPrefetch()
+		r.started = true
 	}
 
-	chunkHash := r.chunks[r.chunkIndex]
+	if r.currentChunk == nil || r.chunkOffset >= len(r.currentChunk) {
+		if r.nextRead >= len(r.chunks) {
+			return 0, io.EOF
+		}
+		if err := r.loadNextPrefetched(); err != nil {
+			return 0, err
+		}
+	}
+
+	n := copy(p, r.currentChunk[r.chunkOffset:])
+	r.chunkOffset += n
+	r.bytesRead += int64(n)
+
+	return n, nil
+}
+
+// startPrefetch launches the producer and worker goroutines.
+func (r *DistributedChunkReader) startPrefetch() {
+	// Buffer up to WindowSize results to allow workers to run ahead
+	r.resultCh = make(chan prefetchResult, r.prefetchCfg.WindowSize)
+
+	// Work channel: producer sends chunk indices, workers consume
+	workCh := make(chan int, r.prefetchCfg.WindowSize)
+
+	// Launch producer
+	go func() {
+		defer close(workCh)
+		for i := range r.chunks {
+			select {
+			case workCh <- i:
+			case <-r.ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Launch worker pool
+	parallelism := r.prefetchCfg.Parallelism
+	if parallelism > len(r.chunks) {
+		parallelism = len(r.chunks)
+	}
+
+	var wg sync.WaitGroup
+	for w := 0; w < parallelism; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range workCh {
+				data, err := r.fetchChunk(idx)
+				select {
+				case r.resultCh <- prefetchResult{index: idx, data: data, err: err}:
+				case <-r.ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	// Close resultCh when all workers are done
+	go func() {
+		wg.Wait()
+		close(r.resultCh)
+	}()
+}
+
+// loadNextPrefetched waits for the next chunk in order from the prefetch pipeline.
+func (r *DistributedChunkReader) loadNextPrefetched() error {
+	for {
+		// Check if we already have the next chunk buffered
+		if res, ok := r.readyBuf[r.nextRead]; ok {
+			delete(r.readyBuf, r.nextRead)
+			if res.err != nil {
+				return res.err
+			}
+			r.currentChunk = res.data
+			r.chunkOffset = 0
+			r.nextRead++
+			return nil
+		}
+
+		// Wait for more results
+		res, ok := <-r.resultCh
+		if !ok {
+			// Channel closed, all workers done
+			if r.nextRead >= len(r.chunks) {
+				return io.EOF
+			}
+			// Check buffer one more time
+			if res, ok := r.readyBuf[r.nextRead]; ok {
+				delete(r.readyBuf, r.nextRead)
+				if res.err != nil {
+					return res.err
+				}
+				r.currentChunk = res.data
+				r.chunkOffset = 0
+				r.nextRead++
+				return nil
+			}
+			return fmt.Errorf("prefetch pipeline closed before chunk %d was delivered", r.nextRead)
+		}
+
+		if res.index == r.nextRead {
+			// This is the chunk we need
+			if res.err != nil {
+				return res.err
+			}
+			r.currentChunk = res.data
+			r.chunkOffset = 0
+			r.nextRead++
+			return nil
+		}
+
+		// Out of order - buffer it
+		r.readyBuf[res.index] = &res
+	}
+}
+
+// fetchChunk fetches a single chunk by index (used by parallel workers).
+// Tries local CAS first, then remote via registry/replicator.
+func (r *DistributedChunkReader) fetchChunk(idx int) ([]byte, error) {
+	chunkHash := r.chunks[idx]
 
 	// Try local first (fast path)
 	chunkData, err := r.localCAS.ReadChunk(r.ctx, chunkHash)
 	if err == nil {
-		r.currentChunk = chunkData
-		r.chunkOffset = 0
-		r.chunkIndex++
-		return nil
+		return chunkData, nil
 	}
 
 	// Not local - check if registry is available
 	if r.registry == nil {
-		return fmt.Errorf("chunk %s not found locally and no registry available", chunkHash)
+		return nil, fmt.Errorf("chunk %s not found locally and no registry available", chunkHash)
 	}
 
 	// Query registry for owners
 	owners, err := r.registry.GetOwners(chunkHash)
 	if err != nil || len(owners) == 0 {
-		return fmt.Errorf("chunk %s not found: no owners in registry", chunkHash)
+		return nil, fmt.Errorf("chunk %s not found: no owners in registry", chunkHash)
 	}
 
 	// Try each owner in order
 	var lastErr error
 	for _, ownerID := range owners {
-		chunkData, err := r.fetchChunkFromPeer(ownerID, chunkHash)
+		chunkData, err = r.fetchChunkFromPeer(ownerID, chunkHash)
 		if err != nil {
 			lastErr = err
-			continue // Try next owner
+			continue
 		}
 
-		// Success - cache locally for future reads
-		if _, err := r.localCAS.WriteChunk(r.ctx, chunkData); err != nil {
-			// Log but don't fail - we have the data in memory and can still serve it
-			// This is expected if disk is full or permissions are insufficient
+		// Cache locally for future reads
+		if _, werr := r.localCAS.WriteChunk(r.ctx, chunkData); werr != nil {
 			r.logger.Warn().
-				Err(err).
+				Err(werr).
 				Str("chunk_hash", chunkHash[:8]+"...").
 				Int("chunk_size", len(chunkData)).
 				Msg("Failed to cache chunk locally after remote fetch")
 		}
-		// Note: No debug logging on success to avoid hot-path overhead
 
-		// Register ownership locally (we now have the chunk)
+		// Register ownership locally
 		if r.registry != nil {
-			if err := r.registry.RegisterChunk(chunkHash, int64(len(chunkData))); err != nil {
-				// Log but don't fail - chunk is cached even if registry update fails
+			if rerr := r.registry.RegisterChunk(chunkHash, int64(len(chunkData))); rerr != nil {
 				r.logger.Warn().
-					Err(err).
+					Err(rerr).
 					Str("chunk_hash", chunkHash[:8]+"...").
 					Msg("Failed to register chunk ownership in registry")
 			}
 		}
 
-		r.currentChunk = chunkData
-		r.chunkOffset = 0
-		r.chunkIndex++
-		return nil
+		return chunkData, nil
 	}
 
 	if lastErr != nil {
-		return fmt.Errorf("failed to fetch chunk %s from any owner: %w", chunkHash, lastErr)
+		return nil, fmt.Errorf("failed to fetch chunk %s from any owner: %w", chunkHash, lastErr)
 	}
 
-	return fmt.Errorf("failed to fetch chunk %s from %d owners", chunkHash, len(owners))
+	return nil, fmt.Errorf("failed to fetch chunk %s from %d owners", chunkHash, len(owners))
+}
+
+// loadNextChunk fetches the next chunk sequentially (used in sequential fallback path).
+func (r *DistributedChunkReader) loadNextChunk() error {
+	if r.chunkIndex >= len(r.chunks) {
+		return io.EOF
+	}
+
+	data, err := r.fetchChunk(r.chunkIndex)
+	if err != nil {
+		return err
+	}
+
+	r.currentChunk = data
+	r.chunkOffset = 0
+	r.chunkIndex++
+	return nil
 }
 
 // fetchChunkFromPeer requests a chunk from a remote coordinator.
@@ -163,8 +345,6 @@ func (r *DistributedChunkReader) fetchChunkFromPeer(peerID, chunkHash string) ([
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	// Use replicator to fetch chunk from peer
-	// The replicator will send a chunk request and wait for the response
 	chunkData, err := r.replicator.FetchChunk(ctx, peerID, chunkHash)
 	if err != nil {
 		return nil, fmt.Errorf("fetch chunk from %s: %w", peerID, err)
@@ -180,8 +360,9 @@ func (r *DistributedChunkReader) fetchChunkFromPeer(peerID, chunkHash string) ([
 	return chunkData, nil
 }
 
-// Close implements io.Closer (no-op for this reader).
+// Close cancels prefetch goroutines and releases resources.
 func (r *DistributedChunkReader) Close() error {
+	r.cancel()
 	return nil
 }
 

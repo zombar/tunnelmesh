@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -1123,10 +1124,106 @@ func (r *Replicator) GetState() *State {
 	return r.state
 }
 
+// ==== Chunk Striping Policy ====
+
+// StripingPolicy distributes chunks across coordinators using round-robin.
+// This ensures parallel reads can fetch different chunks from different peers.
+type StripingPolicy struct {
+	Peers []string // Sorted coordinator IDs (including self)
+}
+
+// NewStripingPolicy creates a striping policy from the given peer list.
+// Peers are sorted for deterministic assignment.
+func NewStripingPolicy(peers []string) *StripingPolicy {
+	sorted := make([]string, len(peers))
+	copy(sorted, peers)
+	sort.Strings(sorted)
+	return &StripingPolicy{Peers: sorted}
+}
+
+// PrimaryOwner returns the coordinator that should own a given chunk index.
+// Uses round-robin: chunkIndex % len(peers).
+func (sp *StripingPolicy) PrimaryOwner(chunkIndex int) string {
+	if len(sp.Peers) == 0 {
+		return ""
+	}
+	return sp.Peers[chunkIndex%len(sp.Peers)]
+}
+
+// AssignedChunks returns the chunk indices assigned to a specific peer.
+func (sp *StripingPolicy) AssignedChunks(peerID string, totalChunks int) []int {
+	if len(sp.Peers) == 0 {
+		return nil
+	}
+
+	// Find peer index
+	peerIdx := -1
+	for i, p := range sp.Peers {
+		if p == peerID {
+			peerIdx = i
+			break
+		}
+	}
+	if peerIdx < 0 {
+		return nil
+	}
+
+	var assigned []int
+	for i := 0; i < totalChunks; i++ {
+		if i%len(sp.Peers) == peerIdx {
+			assigned = append(assigned, i)
+		}
+	}
+	return assigned
+}
+
+// ChunksForPeer returns the chunk indices that should be replicated to a peer,
+// respecting the replication factor. Each chunk goes to its primary owner plus
+// the next (replicationFactor-1) peers in order.
+func (sp *StripingPolicy) ChunksForPeer(peerID string, totalChunks int, replicationFactor int) []int {
+	if len(sp.Peers) == 0 {
+		return nil
+	}
+
+	// Find peer index
+	peerIdx := -1
+	for i, p := range sp.Peers {
+		if p == peerID {
+			peerIdx = i
+			break
+		}
+	}
+	if peerIdx < 0 {
+		return nil
+	}
+
+	// Cap replication factor to number of peers
+	rf := replicationFactor
+	if rf > len(sp.Peers) {
+		rf = len(sp.Peers)
+	}
+
+	var chunks []int
+	for i := 0; i < totalChunks; i++ {
+		primary := i % len(sp.Peers)
+		// Check if this peer is within the replication window for this chunk
+		for r := 0; r < rf; r++ {
+			replica := (primary + r) % len(sp.Peers)
+			if replica == peerIdx {
+				chunks = append(chunks, i)
+				break
+			}
+		}
+	}
+	return chunks
+}
+
 // ==== Phase 4: Chunk-Level Replication Functions ====
 
 // ReplicateObject replicates a file to a specific peer by sending individual chunks.
 // Only chunks not already owned by the peer are sent (bandwidth optimization).
+// When multiple peers exist, uses striping to distribute chunks so different
+// coordinators hold different primary chunks, enabling parallel reads.
 // Enables resume capability: failed transfers can be resumed from the last successful chunk.
 func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID string) error {
 	// Chunk registry required for chunk-level replication
@@ -1163,11 +1260,50 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 		remoteChunkSet[hash] = true
 	}
 
-	// Determine which chunks need replication
+	// Build striping policy to determine which chunks this peer should own.
+	// All coordinators (self + peers) participate in striping. The local coordinator
+	// already has all chunks via PutObject, so we only replicate to remote peers.
+	peers := r.GetPeers()
+	allCoords := make([]string, 0, len(peers)+1)
+	allCoords = append(allCoords, r.nodeID)
+	allCoords = append(allCoords, peers...)
+
+	// Determine which chunks need replication to this peer
 	var chunksToReplicate []string
-	for _, chunkHash := range meta.Chunks {
-		if !remoteChunkSet[chunkHash] {
-			chunksToReplicate = append(chunksToReplicate, chunkHash)
+
+	if len(allCoords) > 1 {
+		// Multi-coordinator: use striping policy
+		// Default replication factor of 2 (each chunk on primary + 1 replica)
+		replicationFactor := 2
+
+		sp := NewStripingPolicy(allCoords)
+		assignedIndices := sp.ChunksForPeer(peerID, len(meta.Chunks), replicationFactor)
+
+		// Build set of assigned indices for fast lookup
+		assignedSet := make(map[int]bool, len(assignedIndices))
+		for _, idx := range assignedIndices {
+			assignedSet[idx] = true
+		}
+
+		// Only replicate chunks that are both assigned to this peer AND not already there
+		for idx, chunkHash := range meta.Chunks {
+			if assignedSet[idx] && !remoteChunkSet[chunkHash] {
+				chunksToReplicate = append(chunksToReplicate, chunkHash)
+			}
+		}
+
+		r.logger.Debug().
+			Str("peer", peerID).
+			Int("assigned_chunks", len(assignedIndices)).
+			Int("total_chunks", len(meta.Chunks)).
+			Int("replication_factor", replicationFactor).
+			Msg("Using striped replication")
+	} else {
+		// Single coordinator or no peers: replicate all missing chunks
+		for _, chunkHash := range meta.Chunks {
+			if !remoteChunkSet[chunkHash] {
+				chunksToReplicate = append(chunksToReplicate, chunkHash)
+			}
 		}
 	}
 
