@@ -57,20 +57,27 @@ func (m *mockTransport) getLastSent(coordMeshIP string) []byte {
 
 // mockS3Store implements S3Store for testing.
 type mockS3Store struct {
-	mu      sync.Mutex
-	objects map[string]mockS3Object // map["bucket/key"]object
-	putErr  error                   // If set, Put will return this error
+	mu            sync.Mutex
+	objects       map[string]mockS3Object // map["bucket/key"]object
+	chunks        map[string][]byte       // map[hash]data (for chunk-level operations)
+	putErr        error                   // If set, Put will return this error
+	metaErr       error                   // If set, GetObjectMeta will return this error
+	chunkErr      error                   // If set, chunk operations will return this error
+	chunkRequests int                     // Count of ReadChunk calls
 }
 
 type mockS3Object struct {
 	data        []byte
 	contentType string
 	metadata    map[string]string
+	chunks      []string                  // Chunk hashes (for chunk-level replication)
+	chunkMeta   map[string]*ChunkMetadata // Per-chunk metadata
 }
 
 func newMockS3Store() *mockS3Store {
 	return &mockS3Store{
 		objects: make(map[string]mockS3Object),
+		chunks:  make(map[string][]byte),
 	}
 }
 
@@ -160,6 +167,214 @@ func (m *mockS3Store) ListBuckets(ctx context.Context) ([]string, error) {
 		result = append(result, b)
 	}
 	return result, nil
+}
+
+// GetObjectMeta returns object metadata (for chunk-level replication).
+func (m *mockS3Store) GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectMeta, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.metaErr != nil {
+		return nil, m.metaErr
+	}
+
+	obj, exists := m.objects[m.makeKey(bucket, key)]
+	if !exists {
+		return nil, fmt.Errorf("object not found")
+	}
+
+	return &ObjectMeta{
+		Key:           key,
+		Size:          int64(len(obj.data)),
+		ContentType:   obj.contentType,
+		Metadata:      obj.metadata,
+		Chunks:        obj.chunks,
+		ChunkMetadata: obj.chunkMeta,
+	}, nil
+}
+
+// ReadChunk reads a chunk from CAS.
+func (m *mockS3Store) ReadChunk(ctx context.Context, hash string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.chunkRequests++
+
+	if m.chunkErr != nil {
+		return nil, m.chunkErr
+	}
+
+	data, exists := m.chunks[hash]
+	if !exists {
+		return nil, fmt.Errorf("chunk not found: %s", hash)
+	}
+
+	return data, nil
+}
+
+// WriteChunkDirect writes a chunk to CAS.
+func (m *mockS3Store) WriteChunkDirect(ctx context.Context, hash string, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.chunkErr != nil {
+		return m.chunkErr
+	}
+
+	m.chunks[hash] = append([]byte(nil), data...)
+	return nil
+}
+
+// addObjectWithChunks adds an object with chunk-level metadata (helper for tests).
+func (m *mockS3Store) addObjectWithChunks(bucket, key string, chunks []string, chunkData map[string][]byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Add chunks to CAS
+	chunkMetadata := make(map[string]*ChunkMetadata)
+	var totalSize int64
+	for _, hash := range chunks {
+		if data, ok := chunkData[hash]; ok {
+			m.chunks[hash] = append([]byte(nil), data...)
+			chunkMetadata[hash] = &ChunkMetadata{
+				Hash: hash,
+				Size: int64(len(data)),
+			}
+			totalSize += int64(len(data))
+		}
+	}
+
+	// Reconstruct full data (calculate size for preallocation)
+	var size int
+	for _, hash := range chunks {
+		size += len(m.chunks[hash])
+	}
+	data := make([]byte, 0, size)
+	for _, hash := range chunks {
+		data = append(data, m.chunks[hash]...)
+	}
+
+	// Add object
+	m.objects[m.makeKey(bucket, key)] = mockS3Object{
+		data:        data,
+		contentType: "application/octet-stream",
+		metadata:    make(map[string]string),
+		chunks:      chunks,
+		chunkMeta:   chunkMetadata,
+	}
+}
+
+// testTransportBroker routes messages between multiple coordinators in tests.
+type testTransportBroker struct {
+	mu       sync.Mutex
+	handlers map[string]func(from string, data []byte) error // map[coordID]handler
+}
+
+func newTestTransportBroker() *testTransportBroker {
+	return &testTransportBroker{
+		handlers: make(map[string]func(from string, data []byte) error),
+	}
+}
+
+// newTransportFor creates a transport for a specific coordinator.
+func (b *testTransportBroker) newTransportFor(coordID string) *brokerTransport {
+	return &brokerTransport{
+		broker:  b,
+		coordID: coordID,
+	}
+}
+
+// brokerTransport is a per-coordinator transport that routes via the broker.
+type brokerTransport struct {
+	broker  *testTransportBroker
+	coordID string // This coordinator's ID
+}
+
+func (t *brokerTransport) SendToCoordinator(ctx context.Context, destCoordID string, data []byte) error {
+	t.broker.mu.Lock()
+	handler := t.broker.handlers[destCoordID]
+	t.broker.mu.Unlock()
+
+	if handler == nil {
+		return fmt.Errorf("no handler registered for %s", destCoordID)
+	}
+
+	// Deliver synchronously for deterministic tests
+	return handler(t.coordID, data)
+}
+
+func (t *brokerTransport) RegisterHandler(handler func(from string, data []byte) error) {
+	t.broker.mu.Lock()
+	defer t.broker.mu.Unlock()
+	t.broker.handlers[t.coordID] = handler
+}
+
+// mockChunkRegistry implements ChunkRegistryInterface for testing.
+type mockChunkRegistry struct {
+	mu        sync.Mutex
+	ownership map[string]map[string]bool // map[chunkHash]map[coordID]bool
+}
+
+func newMockChunkRegistry() *mockChunkRegistry {
+	return &mockChunkRegistry{
+		ownership: make(map[string]map[string]bool),
+	}
+}
+
+func (m *mockChunkRegistry) RegisterChunk(hash string, size int64) error {
+	return nil // No-op for tests
+}
+
+func (m *mockChunkRegistry) UnregisterChunk(hash string) error {
+	return nil // No-op for tests
+}
+
+func (m *mockChunkRegistry) GetOwners(hash string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var owners []string
+	if coords, ok := m.ownership[hash]; ok {
+		for coordID := range coords {
+			owners = append(owners, coordID)
+		}
+	}
+	return owners, nil
+}
+
+func (m *mockChunkRegistry) GetChunksOwnedBy(coordID string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var chunks []string
+	for hash, coords := range m.ownership {
+		if coords[coordID] {
+			chunks = append(chunks, hash)
+		}
+	}
+	return chunks, nil
+}
+
+func (m *mockChunkRegistry) AddOwner(hash string, coordID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.ownership[hash] == nil {
+		m.ownership[hash] = make(map[string]bool)
+	}
+	m.ownership[hash][coordID] = true
+	return nil
+}
+
+// setOwnership sets chunk ownership for testing.
+func (m *mockChunkRegistry) setOwnership(hash string, coordIDs []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.ownership[hash] = make(map[string]bool)
+	for _, coordID := range coordIDs {
+		m.ownership[hash][coordID] = true
+	}
 }
 
 func TestNewReplicator(t *testing.T) {
@@ -500,4 +715,188 @@ func createTestReplicatorWithMocks(t *testing.T, transport *mockTransport, s3 *m
 	}
 
 	return NewReplicator(config)
+}
+
+// ==== Phase 4: Chunk-Level Replication Tests ====
+
+func TestReplicateObject_AllChunksAlreadyReplicated(t *testing.T) {
+	ctx := context.Background()
+	s3 := newMockS3Store()
+	registry := newMockChunkRegistry()
+	transport := newMockTransport()
+
+	// Create object with 3 chunks
+	chunks := []string{"chunk1", "chunk2", "chunk3"}
+	chunkData := map[string][]byte{
+		"chunk1": []byte("data1"),
+		"chunk2": []byte("data2"),
+		"chunk3": []byte("data3"),
+	}
+	s3.addObjectWithChunks("bucket1", "file.txt", chunks, chunkData)
+
+	// Mark all chunks as already owned by peer
+	for _, hash := range chunks {
+		registry.setOwnership(hash, []string{"coord-local", "coord-peer"})
+	}
+
+	replicator := NewReplicator(Config{
+		NodeID:        "coord-local",
+		Transport:     transport,
+		S3Store:       s3,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+
+	// Replicate to peer (should skip all chunks)
+	err := replicator.ReplicateObject(ctx, "bucket1", "file.txt", "coord-peer")
+	require.NoError(t, err)
+
+	// Verify no chunk read requests were made
+	assert.Equal(t, 0, s3.chunkRequests, "Expected 0 chunk requests when all chunks already replicated")
+}
+
+func TestReplicateObject_SomeMissingChunks(t *testing.T) {
+	ctx := context.Background()
+	senderS3 := newMockS3Store()
+	receiverS3 := newMockS3Store()
+	registry := newMockChunkRegistry()
+
+	// Create transport broker for message routing
+	broker := newTestTransportBroker()
+
+	// Create replicator pair with separate transports
+	sender := NewReplicator(Config{
+		NodeID:          "coord-sender",
+		Transport:       broker.newTransportFor("coord-sender"),
+		S3Store:         senderS3,
+		ChunkRegistry:   registry,
+		ChunkAckTimeout: 1 * time.Second, // Reasonable timeout
+		Logger:          zerolog.Nop(),
+	})
+
+	receiver := NewReplicator(Config{
+		NodeID:        "coord-receiver",
+		Transport:     broker.newTransportFor("coord-receiver"),
+		S3Store:       receiverS3,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+
+	// Receiver is used indirectly via the broker routing messages to its handler
+	_ = receiver
+
+	// Create object with 5 chunks on sender
+	chunks := []string{"chunk1", "chunk2", "chunk3", "chunk4", "chunk5"}
+	chunkData := map[string][]byte{
+		"chunk1": []byte("data1"),
+		"chunk2": []byte("data2"),
+		"chunk3": []byte("data3"),
+		"chunk4": []byte("data4"),
+		"chunk5": []byte("data5"),
+	}
+	senderS3.addObjectWithChunks("bucket1", "file.txt", chunks, chunkData)
+
+	// Receiver already has chunks 1, 3, 5
+	registry.setOwnership("chunk1", []string{"coord-sender", "coord-receiver"})
+	registry.setOwnership("chunk2", []string{"coord-sender"})
+	registry.setOwnership("chunk3", []string{"coord-sender", "coord-receiver"})
+	registry.setOwnership("chunk4", []string{"coord-sender"})
+	registry.setOwnership("chunk5", []string{"coord-sender", "coord-receiver"})
+
+	// Replicate (should only send chunks 2 and 4)
+	err := sender.ReplicateObject(ctx, "bucket1", "file.txt", "coord-receiver")
+	require.NoError(t, err)
+
+	// Wait for async handlers
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify receiver got exactly 2 chunks (chunk2 and chunk4)
+	assert.Equal(t, 2, len(receiverS3.chunks), "Expected 2 chunks to be replicated")
+
+	// Verify correct chunks received
+	assert.Contains(t, receiverS3.chunks, "chunk2", "chunk2 should be replicated")
+	assert.Contains(t, receiverS3.chunks, "chunk4", "chunk4 should be replicated")
+
+	// Verify chunk registry updated with receiver as owner
+	owners2, _ := registry.GetOwners("chunk2")
+	assert.Contains(t, owners2, "coord-receiver", "Receiver should own chunk2 after replication")
+
+	owners4, _ := registry.GetOwners("chunk4")
+	assert.Contains(t, owners4, "coord-receiver", "Receiver should own chunk4 after replication")
+}
+
+func TestReplicateObject_ChunkReadError(t *testing.T) {
+	ctx := context.Background()
+	s3 := newMockS3Store()
+	registry := newMockChunkRegistry()
+	transport := newMockTransport()
+
+	// Create object
+	chunks := []string{"chunk1"}
+	chunkData := map[string][]byte{"chunk1": []byte("data1")}
+	s3.addObjectWithChunks("bucket1", "file.txt", chunks, chunkData)
+
+	// Mark chunk as needing replication
+	registry.setOwnership("chunk1", []string{"coord-local"})
+
+	// Inject read error
+	s3.chunkErr = fmt.Errorf("disk error")
+
+	replicator := NewReplicator(Config{
+		NodeID:        "coord-local",
+		Transport:     transport,
+		S3Store:       s3,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+
+	// Replicate should fail
+	err := replicator.ReplicateObject(ctx, "bucket1", "file.txt", "coord-peer")
+	require.Error(t, err, "Expected error when chunk read fails")
+	assert.Contains(t, err.Error(), "disk error", "Error should mention chunk error")
+}
+
+func TestReplicateObject_ObjectNotFound(t *testing.T) {
+	ctx := context.Background()
+	s3 := newMockS3Store()
+	registry := newMockChunkRegistry()
+	transport := newMockTransport()
+
+	replicator := NewReplicator(Config{
+		NodeID:        "coord-local",
+		Transport:     transport,
+		S3Store:       s3,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+
+	// Try to replicate non-existent object
+	err := replicator.ReplicateObject(ctx, "bucket1", "nonexistent.txt", "coord-peer")
+	require.Error(t, err, "Expected error for non-existent object")
+	assert.Contains(t, err.Error(), "object not found", "Error should indicate object not found")
+}
+
+func TestReplicateObject_NoChunkRegistry(t *testing.T) {
+	ctx := context.Background()
+	s3 := newMockS3Store()
+	transport := newMockTransport()
+
+	// Create simple object (no chunk metadata)
+	_ = s3.Put(ctx, "bucket1", "file.txt", []byte("data"), "text/plain", nil)
+
+	// No chunk registry (should fall back to file-level replication)
+	replicator := NewReplicator(Config{
+		NodeID:    "coord-local",
+		Transport: transport,
+		S3Store:   s3,
+		Logger:    zerolog.Nop(),
+	})
+	replicator.AddPeer("coord-peer")
+
+	// Should not panic or error (falls back to file-level)
+	err := replicator.ReplicateObject(ctx, "bucket1", "file.txt", "coord-peer")
+
+	// The fallback calls ReplicateOperation which will send to all peers
+	// We just verify it doesn't crash
+	assert.NoError(t, err, "Fallback to file-level replication should work")
 }

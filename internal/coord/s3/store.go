@@ -667,6 +667,10 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	md5Hasher := md5.New()
 	now := time.Now().UTC()
 
+	// Read coordinatorID once to avoid repeated field access
+	// Safe because s.mu.Lock() is already held (line 626)
+	coordID := s.coordinatorID
+
 	for {
 		// Check for context cancellation to allow interrupting long uploads
 		select {
@@ -704,15 +708,21 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 
 		// Create per-chunk metadata with version vector
 		versionVector := make(map[string]uint64)
-		if s.coordinatorID != "" {
-			versionVector[s.coordinatorID] = 1 // Initial version
+		if coordID != "" {
+			versionVector[coordID] = 1 // Initial version
+		}
+
+		// Create owners array (only if coordinator ID is set)
+		var owners []string
+		if coordID != "" {
+			owners = []string{coordID}
 		}
 
 		chunkMetadata[chunkHash] = &ChunkMetadata{
 			Hash:          chunkHash,
 			Size:          int64(len(chunk)),
 			VersionVector: versionVector,
-			Owners:        []string{s.coordinatorID},
+			Owners:        owners,
 			FirstSeen:     now,
 			LastModified:  now,
 		}
@@ -738,8 +748,8 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 
 	// Create file-level version vector
 	fileVersionVector := make(map[string]uint64)
-	if s.coordinatorID != "" {
-		fileVersionVector[s.coordinatorID] = 1 // Initial version
+	if coordID != "" {
+		fileVersionVector[coordID] = 1 // Initial version
 	}
 
 	// Write object metadata
@@ -1110,6 +1120,71 @@ func (s *Store) PurgeTombstonedObjects(ctx context.Context) int {
 	}
 
 	return purgedCount
+}
+
+// ==== Phase 4: Chunk-Level Replication Interface Methods ====
+
+// GetObjectMeta retrieves object metadata without loading chunk data.
+// This is used by the replicator to determine which chunks to send.
+func (s *Store) GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectMeta, error) {
+	// Validate names
+	if err := validateName(bucket); err != nil {
+		return nil, fmt.Errorf("invalid bucket name: %w", err)
+	}
+	if err := validateName(key); err != nil {
+		return nil, fmt.Errorf("invalid key: %w", err)
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Check bucket exists
+	if _, err := s.getBucketMeta(bucket); err != nil {
+		return nil, err
+	}
+
+	// Get object metadata (includes chunk list and chunk metadata)
+	meta, err := s.getObjectMeta(bucket, key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Return copy to prevent external modification
+	metaCopy := *meta
+	return &metaCopy, nil
+}
+
+// ReadChunk reads a chunk from CAS by its hash.
+// This is used by the replicator to fetch chunk data for sending to peers.
+func (s *Store) ReadChunk(ctx context.Context, hash string) ([]byte, error) {
+	if s.cas == nil {
+		return nil, fmt.Errorf("CAS not initialized")
+	}
+
+	return s.cas.ReadChunk(ctx, hash)
+}
+
+// WriteChunkDirect writes chunk data directly to CAS.
+// This is used by the replication receiver to store incoming chunks.
+// Unlike WriteChunk via PutObject, this doesn't create object metadata.
+func (s *Store) WriteChunkDirect(ctx context.Context, hash string, data []byte) error {
+	if s.cas == nil {
+		return fmt.Errorf("CAS not initialized")
+	}
+
+	// Validate hash for security - don't trust sender
+	computedHash := ContentHash(data)
+	if computedHash != hash {
+		return fmt.Errorf("hash mismatch: expected %s, got %s", hash, computedHash)
+	}
+
+	// CAS WriteChunk is idempotent - if chunk exists, it returns immediately
+	_, err := s.cas.WriteChunk(ctx, data)
+	if err != nil {
+		return fmt.Errorf("write chunk to CAS: %w", err)
+	}
+
+	return nil
 }
 
 // ListObjects lists objects in a bucket with optional prefix filter and pagination.
