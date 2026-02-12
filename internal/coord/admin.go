@@ -2174,35 +2174,35 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// Limit request body size to prevent DoS
 	r.Body = http.MaxBytesReader(w, r.Body, MaxS3ObjectSize)
 
-	// Read body
-	body, err := io.ReadAll(r.Body)
+	// Stream body directly to PutObject — avoids buffering the entire object in memory.
+	// PutObject uses StreamingChunker internally (~64KB peak memory per upload).
+	// r.ContentLength is used for early quota checks; -1 if chunked (quota still enforced post-write).
+	meta, err := s.s3Store.PutObject(r.Context(), bucket, key, r.Body, r.ContentLength, contentType, nil)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			s.jsonError(w, "object too large (max 10MB)", http.StatusRequestEntityTooLarge)
 			return
 		}
-		s.jsonError(w, "failed to read body", http.StatusBadRequest)
-		return
-	}
-
-	meta, err := s.s3Store.PutObject(r.Context(), bucket, key, bytes.NewReader(body), int64(len(body)), contentType, nil)
-	if err != nil {
 		s.jsonError(w, "failed to store object: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Replicate to other coordinators asynchronously
+	// Replicate to other coordinators asynchronously using chunk-level replication.
+	// Chunks are already stored by PutObject above — ReplicateObject reads them from CAS
+	// and only sends chunks the remote peer doesn't already have.
 	if s.replicator != nil {
 		go func() {
-			// Use request context with timeout for proper cancellation propagation
-			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if err := s.replicator.ReplicateOperation(ctx, bucket, key, body, contentType, nil); err != nil {
-				log.Error().Err(err).
-					Str("bucket", bucket).
-					Str("key", key).
-					Msg("Failed to replicate S3 PUT operation")
+			for _, peerID := range s.replicator.GetPeers() {
+				if err := s.replicator.ReplicateObject(ctx, bucket, key, peerID); err != nil {
+					log.Error().Err(err).
+						Str("peer", peerID).
+						Str("bucket", bucket).
+						Str("key", key).
+						Msg("Failed to replicate S3 PUT operation")
+				}
 			}
 		}()
 	}
