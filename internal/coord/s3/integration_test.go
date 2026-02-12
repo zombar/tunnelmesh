@@ -39,7 +39,7 @@ func TestConcurrent_MultipleUploads(t *testing.T) {
 	ctx := context.Background()
 
 	// Create bucket
-	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "test-owner"))
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "test-owner", 2))
 
 	// Upload multiple files concurrently
 	const numUploads = 50
@@ -84,7 +84,7 @@ func TestConcurrent_ReadsAndWrites(t *testing.T) {
 	ctx := context.Background()
 
 	// Create bucket and upload some initial files
-	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "test-owner"))
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "test-owner", 2))
 
 	const numFiles = 20
 	for i := 0; i < numFiles; i++ {
@@ -223,7 +223,7 @@ func TestConcurrent_RegistryUpdates(t *testing.T) {
 	ctx := context.Background()
 
 	// Create bucket
-	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "test-owner"))
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "test-owner", 2))
 
 	// Concurrent uploads will trigger concurrent registry updates
 	const numUploads = 30
@@ -261,6 +261,16 @@ type threadSafeRegistry struct {
 }
 
 func (r *threadSafeRegistry) RegisterChunk(hash string, size int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.owners[hash] == nil {
+		r.owners[hash] = []string{"local"}
+	}
+	return nil
+}
+
+func (r *threadSafeRegistry) RegisterChunkWithReplication(hash string, size int64, replicationFactor int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -314,7 +324,7 @@ func TestConcurrent_DeleteAndRead(t *testing.T) {
 	ctx := context.Background()
 
 	// Create bucket and upload files
-	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "test-owner"))
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "test-owner", 2))
 
 	const numFiles = 50
 	for i := 0; i < numFiles; i++ {
@@ -419,7 +429,7 @@ func TestConcurrent_BucketOperations(t *testing.T) {
 			owner := fmt.Sprintf("owner-%d", workerID)
 
 			// Create bucket
-			err := store.CreateBucket(ctx, bucketName, owner)
+			err := store.CreateBucket(ctx, bucketName, owner, 2)
 			if err != nil {
 				errs <- fmt.Errorf("create bucket: %w", err)
 				return
@@ -489,7 +499,7 @@ func TestConcurrent_VersioningAndReads(t *testing.T) {
 	ctx := context.Background()
 
 	// Create bucket
-	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "test-owner"))
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "test-owner", 2))
 
 	const key = "versioned-file.txt"
 

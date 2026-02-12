@@ -122,7 +122,7 @@ func TestGC_GracePeriod(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create bucket
-	err = store.CreateBucket(ctx, "test-bucket", "test-user")
+	err = store.CreateBucket(ctx, "test-bucket", "test-user", 2)
 	require.NoError(t, err)
 
 	// Upload file
@@ -290,6 +290,10 @@ func TestGC_RegistryUnavailable(t *testing.T) {
 type failingChunkRegistry struct{}
 
 func (f *failingChunkRegistry) RegisterChunk(hash string, size int64) error {
+	return assert.AnError
+}
+
+func (f *failingChunkRegistry) RegisterChunkWithReplication(hash string, size int64, replicationFactor int) error {
 	return assert.AnError
 }
 

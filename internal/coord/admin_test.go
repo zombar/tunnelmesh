@@ -249,7 +249,7 @@ func newTestServerWithS3AndBucket(t *testing.T) *Server {
 	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	// Create a test bucket
-	err = srv.s3Store.CreateBucket(context.Background(), "test-bucket", "admin")
+	err = srv.s3Store.CreateBucket(context.Background(), "test-bucket", "admin", 2)
 	require.NoError(t, err)
 
 	return srv

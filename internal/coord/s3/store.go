@@ -34,16 +34,22 @@ const GCGracePeriod = 1 * time.Hour
 
 // BucketMeta contains bucket metadata.
 type BucketMeta struct {
-	Name         string     `json:"name"`
-	CreatedAt    time.Time  `json:"created_at"`
-	Owner        string     `json:"owner"`                   // User ID who created the bucket
-	TombstonedAt *time.Time `json:"tombstoned_at,omitempty"` // When bucket was soft-deleted
-	SizeBytes    int64      `json:"size_bytes"`              // Total size of non-tombstoned objects (updated incrementally)
+	Name              string     `json:"name"`
+	CreatedAt         time.Time  `json:"created_at"`
+	Owner             string     `json:"owner"`                   // User ID who created the bucket
+	TombstonedAt      *time.Time `json:"tombstoned_at,omitempty"` // When bucket was soft-deleted
+	SizeBytes         int64      `json:"size_bytes"`              // Total size of non-tombstoned objects (updated incrementally)
+	ReplicationFactor int        `json:"replication_factor"`      // Number of replicas (1-3)
 }
 
 // IsTombstoned returns true if the bucket has been soft-deleted.
 func (bm *BucketMeta) IsTombstoned() bool {
 	return bm.TombstonedAt != nil
+}
+
+// BucketMetadataUpdate contains mutable bucket metadata fields (admin-only).
+type BucketMetadataUpdate struct {
+	ReplicationFactor *int `json:"replication_factor,omitempty"` // Update replication factor (1-3)
 }
 
 // ChunkMetadata contains per-chunk metadata for distributed replication.
@@ -115,6 +121,9 @@ type VersionRetentionPolicy struct {
 type ChunkRegistryInterface interface {
 	// RegisterChunk registers a chunk as owned by the local coordinator
 	RegisterChunk(hash string, size int64) error
+
+	// RegisterChunkWithReplication registers a chunk with a custom replication factor
+	RegisterChunkWithReplication(hash string, size int64, replicationFactor int) error
 
 	// UnregisterChunk removes the local coordinator as an owner of the chunk
 	UnregisterChunk(hash string) error
@@ -368,11 +377,16 @@ func (s *Store) objectMetaPath(bucket, key string) string {
 	return filepath.Join(s.bucketPath(bucket), "meta", key+".json")
 }
 
-// CreateBucket creates a new bucket.
-func (s *Store) CreateBucket(ctx context.Context, bucket, owner string) error {
+// CreateBucket creates a new bucket with specified replication factor.
+func (s *Store) CreateBucket(ctx context.Context, bucket, owner string, replicationFactor int) error {
 	// Validate bucket name (defense in depth)
 	if err := validateName(bucket); err != nil {
 		return fmt.Errorf("invalid bucket name: %w", err)
+	}
+
+	// Validate replication factor
+	if replicationFactor < 1 || replicationFactor > 3 {
+		return fmt.Errorf("replication factor must be 1-3, got %d", replicationFactor)
 	}
 
 	s.mu.Lock()
@@ -392,9 +406,10 @@ func (s *Store) CreateBucket(ctx context.Context, bucket, owner string) error {
 
 	// Write bucket metadata
 	meta := BucketMeta{
-		Name:      bucket,
-		CreatedAt: time.Now().UTC(),
-		Owner:     owner,
+		Name:              bucket,
+		CreatedAt:         time.Now().UTC(),
+		Owner:             owner,
+		ReplicationFactor: replicationFactor,
 	}
 
 	metaPath := s.bucketMetaPath(bucket)
@@ -408,6 +423,30 @@ func (s *Store) CreateBucket(ctx context.Context, bucket, owner string) error {
 	}
 
 	return nil
+}
+
+// UpdateBucketMetadata updates mutable bucket metadata (admin-only operation).
+// Currently only replication factor can be updated.
+func (s *Store) UpdateBucketMetadata(ctx context.Context, bucket string, updates BucketMetadataUpdate) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	meta, err := s.getBucketMeta(bucket)
+	if err != nil {
+		return err
+	}
+
+	// Validate and apply replication factor update
+	if updates.ReplicationFactor != nil {
+		rf := *updates.ReplicationFactor
+		if rf < 1 || rf > 3 {
+			return fmt.Errorf("replication factor must be 1-3, got %d", rf)
+		}
+		meta.ReplicationFactor = rf
+	}
+
+	// Save updated metadata
+	return s.writeBucketMeta(bucket, meta)
 }
 
 // DeleteBucket removes an empty bucket.
@@ -660,10 +699,14 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check bucket exists
-	if _, err := s.getBucketMeta(bucket); err != nil {
+	// Check bucket exists and get metadata (including replication factor)
+	bucketMeta, err := s.getBucketMeta(bucket)
+	if err != nil {
 		return nil, err
 	}
+
+	// Get bucket's replication factor for chunk registration
+	replicationFactor := bucketMeta.ReplicationFactor
 
 	metaPath := s.objectMetaPath(bucket, key)
 
@@ -726,9 +769,9 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 			return nil, fmt.Errorf("write chunk %s: %w", chunkHash, err)
 		}
 
-		// Register chunk ownership in distributed registry (if configured)
+		// Register chunk ownership in distributed registry with bucket's replication factor
 		if s.chunkRegistry != nil {
-			if err := s.chunkRegistry.RegisterChunk(chunkHash, int64(len(chunk))); err != nil {
+			if err := s.chunkRegistry.RegisterChunkWithReplication(chunkHash, int64(len(chunk)), replicationFactor); err != nil {
 				// Don't fail upload if registry update fails (eventual consistency)
 				// but log to stderr in debug mode for troubleshooting
 				if os.Getenv("DEBUG") != "" || os.Getenv("TUNNELMESH_DEBUG") != "" {

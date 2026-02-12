@@ -33,7 +33,7 @@ func TestNewStore(t *testing.T) {
 func TestStoreCreateBucket(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 
-	err := store.CreateBucket(context.Background(), "test-bucket", "alice")
+	err := store.CreateBucket(context.Background(), "test-bucket", "alice", 2)
 	require.NoError(t, err)
 
 	// Verify bucket exists
@@ -47,18 +47,18 @@ func TestStoreCreateBucket(t *testing.T) {
 func TestStoreCreateBucketAlreadyExists(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 
-	err := store.CreateBucket(context.Background(), "test-bucket", "alice")
+	err := store.CreateBucket(context.Background(), "test-bucket", "alice", 2)
 	require.NoError(t, err)
 
 	// Try to create again
-	err = store.CreateBucket(context.Background(), "test-bucket", "bob")
+	err = store.CreateBucket(context.Background(), "test-bucket", "bob", 2)
 	assert.ErrorIs(t, err, ErrBucketExists)
 }
 
 func TestStoreDeleteBucket(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 
-	err := store.CreateBucket(context.Background(), "test-bucket", "alice")
+	err := store.CreateBucket(context.Background(), "test-bucket", "alice", 2)
 	require.NoError(t, err)
 
 	err = store.DeleteBucket(context.Background(), "test-bucket")
@@ -79,7 +79,7 @@ func TestStoreDeleteBucketNotFound(t *testing.T) {
 func TestStoreDeleteBucketNotEmpty(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 
-	err := store.CreateBucket(context.Background(), "test-bucket", "alice")
+	err := store.CreateBucket(context.Background(), "test-bucket", "alice", 2)
 	require.NoError(t, err)
 
 	// Add an object
@@ -107,8 +107,8 @@ func TestStoreListBuckets(t *testing.T) {
 	assert.Empty(t, buckets)
 
 	// Create some buckets
-	require.NoError(t, store.CreateBucket(context.Background(), "bucket-a", "alice"))
-	require.NoError(t, store.CreateBucket(context.Background(), "bucket-b", "bob"))
+	require.NoError(t, store.CreateBucket(context.Background(), "bucket-a", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "bucket-b", "bob", 2))
 
 	buckets, err = store.ListBuckets(context.Background())
 	require.NoError(t, err)
@@ -124,7 +124,7 @@ func TestStoreListBuckets(t *testing.T) {
 
 func TestStorePutObject(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	content := []byte("hello world")
 	meta, err := store.PutObject(context.Background(), "test-bucket", "greeting.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
@@ -139,7 +139,7 @@ func TestStorePutObject(t *testing.T) {
 
 func TestStorePutObject_SetsExpiry(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Set default object expiry to 25 years (9125 days)
 	store.SetDefaultObjectExpiryDays(9125)
@@ -156,7 +156,7 @@ func TestStorePutObject_SetsExpiry(t *testing.T) {
 
 func TestStorePutObject_NoExpiryWhenNotConfigured(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Don't set expiry - objects should have no expiry
 	content := []byte("hello world")
@@ -175,7 +175,7 @@ func TestStorePutObjectBucketNotFound(t *testing.T) {
 
 func TestStorePutObjectNestedKey(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	content := []byte("nested content")
 	meta, err := store.PutObject(context.Background(), "test-bucket", "path/to/file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
@@ -194,7 +194,7 @@ func TestStorePutObjectNestedKey(t *testing.T) {
 
 func TestStorePutObjectWithMetadata(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	userMeta := map[string]string{
 		"x-amz-meta-author":  "alice",
@@ -213,7 +213,7 @@ func TestStorePutObjectWithMetadata(t *testing.T) {
 
 func TestStoreGetObject(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	content := []byte("hello world")
 	_, err := store.PutObject(context.Background(), "test-bucket", "greeting.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
@@ -233,7 +233,7 @@ func TestStoreGetObject(t *testing.T) {
 
 func TestStoreGetObjectNotFound(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	_, _, err := store.GetObject(context.Background(), "test-bucket", "nonexistent.txt")
 	assert.ErrorIs(t, err, ErrObjectNotFound)
@@ -248,7 +248,7 @@ func TestStoreGetObjectBucketNotFound(t *testing.T) {
 
 func TestStoreHeadObject(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	content := []byte("hello world")
 	_, err := store.PutObject(context.Background(), "test-bucket", "greeting.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
@@ -264,7 +264,7 @@ func TestStoreHeadObject(t *testing.T) {
 
 func TestStoreHeadObjectNotFound(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	_, err := store.HeadObject(context.Background(), "test-bucket", "nonexistent.txt")
 	assert.ErrorIs(t, err, ErrObjectNotFound)
@@ -272,7 +272,7 @@ func TestStoreHeadObjectNotFound(t *testing.T) {
 
 func TestStoreDeleteObject(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
 	require.NoError(t, err)
@@ -288,7 +288,7 @@ func TestStoreDeleteObject(t *testing.T) {
 
 func TestStorePurgeObject(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
 	require.NoError(t, err)
@@ -304,7 +304,7 @@ func TestStorePurgeObject(t *testing.T) {
 
 func TestStoreDeleteObjectNotFound(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	err := store.DeleteObject(context.Background(), "test-bucket", "nonexistent.txt")
 	assert.ErrorIs(t, err, ErrObjectNotFound)
@@ -319,7 +319,7 @@ func TestStoreDeleteObjectBucketNotFound(t *testing.T) {
 
 func TestStoreListObjects(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Add some objects
 	objects := []string{"a.txt", "b.txt", "c.txt"}
@@ -335,7 +335,7 @@ func TestStoreListObjects(t *testing.T) {
 
 func TestStoreListObjectsWithPrefix(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Add some objects with different prefixes
 	objects := []string{"docs/a.txt", "docs/b.txt", "images/c.png"}
@@ -355,7 +355,7 @@ func TestStoreListObjectsWithPrefix(t *testing.T) {
 
 func TestStoreListObjectsWithMaxKeys(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Add 5 objects
 	for i := 0; i < 5; i++ {
@@ -379,7 +379,7 @@ func TestStoreListObjectsBucketNotFound(t *testing.T) {
 
 func TestStoreListObjectsEmpty(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	list, isTruncated, _, err := store.ListObjects(context.Background(), "test-bucket", "", "", 0)
 	require.NoError(t, err)
@@ -389,7 +389,7 @@ func TestStoreListObjectsEmpty(t *testing.T) {
 
 func TestStoreOverwriteObject(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Write initial version
 	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("version 1")), 9, "text/plain", nil)
@@ -416,7 +416,7 @@ func TestStoreWithQuota(t *testing.T) {
 
 	store, err := NewStoreWithCAS(tmpDir, quota, masterKey)
 	require.NoError(t, err)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Put object should update quota
 	content := []byte("hello world")
@@ -449,7 +449,7 @@ func TestStoreWithQuota(t *testing.T) {
 
 func TestObjectLifecycle_ExpirySetting(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Set object expiry to 30 days
 	store.SetDefaultObjectExpiryDays(30)
@@ -466,7 +466,7 @@ func TestObjectLifecycle_ExpirySetting(t *testing.T) {
 
 func TestObjectLifecycle_TombstonePreservesContent(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	content := []byte("important data")
 	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
@@ -494,7 +494,7 @@ func TestObjectLifecycle_TombstonePreservesContent(t *testing.T) {
 
 func TestObjectLifecycle_TombstonedObjectInList(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Create two objects
 	_, err := store.PutObject(context.Background(), "test-bucket", "live.txt", bytes.NewReader([]byte("live")), 4, "text/plain", nil)
@@ -529,7 +529,7 @@ func TestObjectLifecycle_TombstonedObjectInList(t *testing.T) {
 
 func TestObjectLifecycle_PurgeRemovesCompletely(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	content := []byte("to be purged")
 	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
@@ -555,7 +555,7 @@ func TestObjectLifecycle_PurgeRemovesCompletely(t *testing.T) {
 
 func TestObjectLifecycle_DoubleTombstoneIsNoop(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
 	require.NoError(t, err)
@@ -577,7 +577,7 @@ func TestObjectLifecycle_DoubleTombstoneIsNoop(t *testing.T) {
 
 func TestObjectLifecycle_PurgeTombstonedObjects(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Create and tombstone some objects
 	_, err := store.PutObject(context.Background(), "test-bucket", "old.txt", bytes.NewReader([]byte("old")), 3, "text/plain", nil)
@@ -630,7 +630,7 @@ func TestObjectLifecycle_PurgeTombstonedObjects(t *testing.T) {
 
 func TestObjectLifecycle_PurgeTombstonedObjectsDisabled(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
 	require.NoError(t, err)
@@ -649,7 +649,7 @@ func TestObjectLifecycle_PurgeTombstonedObjectsDisabled(t *testing.T) {
 
 func TestObjectLifecycle_PurgeCancellation(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Create and tombstone many objects (10000 objects to ensure cancellation occurs mid-operation)
 	totalObjects := 10000
@@ -705,7 +705,7 @@ func TestBucketTombstone(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create bucket with objects
-	err = store.CreateBucket(context.Background(), "test-bucket", "alice")
+	err = store.CreateBucket(context.Background(), "test-bucket", "alice", 2)
 	require.NoError(t, err)
 
 	content := []byte("test content")
@@ -756,7 +756,7 @@ func TestDeleteTwiceToPurge(t *testing.T) {
 	store, err := NewStoreWithCAS(t.TempDir(), nil, masterKey)
 	require.NoError(t, err)
 
-	err = store.CreateBucket(context.Background(), "test-bucket", "alice")
+	err = store.CreateBucket(context.Background(), "test-bucket", "alice", 2)
 	require.NoError(t, err)
 
 	content := []byte("delete me")
@@ -785,7 +785,7 @@ func TestDeleteTwiceToPurge_BucketTombstoned(t *testing.T) {
 	store, err := NewStoreWithCAS(t.TempDir(), nil, masterKey)
 	require.NoError(t, err)
 
-	err = store.CreateBucket(context.Background(), "test-bucket", "alice")
+	err = store.CreateBucket(context.Background(), "test-bucket", "alice", 2)
 	require.NoError(t, err)
 
 	content := []byte("delete me")
@@ -834,7 +834,7 @@ func TestPathTraversal_BucketName(t *testing.T) {
 
 	for _, name := range maliciousBuckets {
 		t.Run(name, func(t *testing.T) {
-			err := store.CreateBucket(context.Background(), name, "attacker")
+			err := store.CreateBucket(context.Background(), name, "attacker", 2)
 			assert.Error(t, err, "bucket name %q should be rejected", name)
 		})
 	}
@@ -842,7 +842,7 @@ func TestPathTraversal_BucketName(t *testing.T) {
 
 func TestPathTraversal_ObjectKey(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Test various path traversal attempts in object keys
 	// Note: URL-encoded attacks are handled at the API layer
@@ -867,7 +867,7 @@ func TestPathTraversal_ObjectKey(t *testing.T) {
 
 func TestPathTraversal_ValidPaths(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Test that valid paths with dots are still allowed
 	validKeys := []string{
@@ -894,7 +894,7 @@ func TestPathTraversal_ValidPaths(t *testing.T) {
 
 func TestPathTraversal_ValidNestedPaths(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Test nested paths that should work
 	content := []byte("valid content")
@@ -1132,7 +1132,7 @@ func newTestStoreWithCAS(t *testing.T) *Store {
 
 func TestVersioning_PutCreatesVersion(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// First write
 	content1 := []byte("version 1")
@@ -1161,7 +1161,7 @@ func TestVersioning_PutCreatesVersion(t *testing.T) {
 
 func TestVersioning_ListVersions(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Create multiple versions
 	for i := 1; i <= 5; i++ {
@@ -1192,7 +1192,7 @@ func TestVersioning_ListVersions(t *testing.T) {
 
 func TestVersioning_GetObjectVersion(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Create versions
 	content1 := []byte("original content")
@@ -1216,7 +1216,7 @@ func TestVersioning_GetObjectVersion(t *testing.T) {
 
 func TestVersioning_RestoreVersion(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Create versions
 	content1 := []byte("original content")
@@ -1249,7 +1249,7 @@ func TestVersioning_RestoreVersion(t *testing.T) {
 
 func TestVersioning_RestoreSharesChunks(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Create original version with specific content
 	content := []byte("content to restore")
@@ -1279,7 +1279,7 @@ func TestVersioning_RestoreSharesChunks(t *testing.T) {
 
 func TestVersioning_DeleteCleansVersions(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Create versions
 	for i := 1; i <= 3; i++ {
@@ -1310,7 +1310,7 @@ func TestVersioning_DeleteCleansVersions(t *testing.T) {
 func TestVersioning_RetentionPruning(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	store.SetVersionRetentionDays(30) // 30 day retention
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Create an object
 	content := []byte("original")
@@ -1330,7 +1330,7 @@ func TestVersioning_RetentionPruning(t *testing.T) {
 
 func TestVersioning_NoVersionsForNewObject(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Create single object
 	content := []byte("single version")
@@ -1348,7 +1348,7 @@ func TestVersioning_NoVersionsForNewObject(t *testing.T) {
 
 func TestConcurrent_PutObject(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	const numGoroutines = 10
 	const numWrites = 5
@@ -1382,7 +1382,7 @@ func TestConcurrent_PutObject(t *testing.T) {
 
 func TestConcurrent_ReadWhileGC(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Create some objects with versions
 	for i := 0; i < 5; i++ {
@@ -1424,7 +1424,7 @@ func TestConcurrent_ReadWhileGC(t *testing.T) {
 
 func TestConcurrent_MultipleKeys(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	const numGoroutines = 10
 	done := make(chan bool, numGoroutines)
@@ -1455,7 +1455,7 @@ func TestConcurrent_MultipleKeys(t *testing.T) {
 
 func TestStreamingRead_LargeFile(t *testing.T) {
 	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice"))
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2))
 
 	// Create a file larger than a single chunk (target ~4KB, max 64KB)
 	// Use 200KB to ensure multiple chunks
@@ -1495,7 +1495,7 @@ func TestCalculateBucketSize(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	bucket := "test-bucket"
 
-	require.NoError(t, store.CreateBucket(context.Background(), bucket, "owner-id"))
+	require.NoError(t, store.CreateBucket(context.Background(), bucket, "owner-id", 2))
 
 	// Initially, bucket size should be 0
 	size, err := store.CalculateBucketSize(context.Background(), bucket)
@@ -1541,7 +1541,7 @@ func TestCalculatePrefixSize(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	bucket := "test-bucket"
 
-	require.NoError(t, store.CreateBucket(context.Background(), bucket, "owner-id"))
+	require.NoError(t, store.CreateBucket(context.Background(), bucket, "owner-id", 2))
 
 	// Create files in different folders
 	files := map[string][]byte{
@@ -1591,7 +1591,7 @@ func TestCalculatePrefixSize_IncludesTombstoned(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	bucket := "test-bucket"
 
-	require.NoError(t, store.CreateBucket(context.Background(), bucket, "owner-id"))
+	require.NoError(t, store.CreateBucket(context.Background(), bucket, "owner-id", 2))
 
 	// Create and delete an object (tombstone it)
 	content := []byte("test content")

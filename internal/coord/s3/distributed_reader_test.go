@@ -36,6 +36,10 @@ func (m *mockChunkRegistry) RegisterChunk(hash string, size int64) error {
 	return nil
 }
 
+func (m *mockChunkRegistry) RegisterChunkWithReplication(hash string, size int64, replicationFactor int) error {
+	return nil
+}
+
 func (m *mockChunkRegistry) UnregisterChunk(hash string) error {
 	return nil
 }

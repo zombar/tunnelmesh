@@ -264,6 +264,32 @@ func (s *Server) setupAdminRoutes() {
 	// DNS records
 	s.adminMux.HandleFunc("/api/dns", s.handleDNS)
 
+	// S3 bucket management API (specific routes before proxy catch-all)
+	s.adminMux.HandleFunc("/api/s3/buckets", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			s.handleListBuckets(w, r)
+		case http.MethodPost:
+			s.handleCreateBucket(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	s.adminMux.HandleFunc("/api/s3/buckets/", func(w http.ResponseWriter, r *http.Request) {
+		// Extract bucket name from path
+		bucket := strings.TrimPrefix(r.URL.Path, "/api/s3/buckets/")
+		bucket = strings.TrimSuffix(bucket, "/")
+
+		switch r.Method {
+		case http.MethodGet:
+			s.handleGetBucket(w, r, bucket)
+		case http.MethodPatch:
+			s.handleUpdateBucket(w, r, bucket)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
 	// S3 proxy for explorer
 	s.adminMux.HandleFunc("/api/s3/", s.handleS3Proxy)
 
@@ -1066,11 +1092,12 @@ func (s *Server) handleSharesList(w http.ResponseWriter, r *http.Request) {
 
 // ShareCreateRequest is the request body for creating a file share.
 type ShareCreateRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	QuotaBytes  int64  `json:"quota_bytes,omitempty"` // Per-share quota in bytes (0 = unlimited within global quota)
-	ExpiresAt   string `json:"expires_at,omitempty"`  // ISO 8601 date when share expires (empty = use default)
-	GuestRead   *bool  `json:"guest_read,omitempty"`  // Allow all mesh users to read (nil = true, false = owner only)
+	Name              string `json:"name"`
+	Description       string `json:"description,omitempty"`
+	QuotaBytes        int64  `json:"quota_bytes,omitempty"`        // Per-share quota in bytes (0 = unlimited within global quota)
+	ExpiresAt         string `json:"expires_at,omitempty"`         // ISO 8601 date when share expires (empty = use default)
+	GuestRead         *bool  `json:"guest_read,omitempty"`         // Allow all mesh users to read (nil = true, false = owner only)
+	ReplicationFactor int    `json:"replication_factor,omitempty"` // Number of replicas (1-3), defaults to 2
 }
 
 // handleShareCreate creates a new file share.
@@ -1146,6 +1173,12 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 	if req.GuestRead != nil {
 		opts.GuestRead = *req.GuestRead
 		opts.GuestReadSet = true
+	}
+	// Set replication factor (default to 2)
+	if req.ReplicationFactor == 0 {
+		opts.ReplicationFactor = 2
+	} else {
+		opts.ReplicationFactor = req.ReplicationFactor
 	}
 
 	share, err := s.fileShareMgr.Create(r.Context(), req.Name, req.Description, ownerID, req.QuotaBytes, opts)
@@ -1569,11 +1602,12 @@ type S3ObjectInfo struct {
 
 // S3BucketInfo represents an S3 bucket for the explorer API.
 type S3BucketInfo struct {
-	Name       string `json:"name"`
-	CreatedAt  string `json:"created_at"`
-	Writable   bool   `json:"writable"`
-	UsedBytes  int64  `json:"used_bytes"`
-	QuotaBytes int64  `json:"quota_bytes,omitempty"` // Per-bucket quota (from file share, 0 = unlimited)
+	Name              string `json:"name"`
+	CreatedAt         string `json:"created_at"`
+	Writable          bool   `json:"writable"`
+	UsedBytes         int64  `json:"used_bytes"`
+	QuotaBytes        int64  `json:"quota_bytes,omitempty"`        // Per-bucket quota (from file share, 0 = unlimited)
+	ReplicationFactor int    `json:"replication_factor,omitempty"` // Number of replicas (1-3)
 }
 
 // S3QuotaInfo represents overall S3 storage quota for the explorer API.
@@ -1742,11 +1776,12 @@ func (s *Server) handleS3ListBuckets(w http.ResponseWriter, r *http.Request) {
 		}
 
 		bucketInfos = append(bucketInfos, S3BucketInfo{
-			Name:       b.Name,
-			CreatedAt:  b.CreatedAt.Format(time.RFC3339),
-			Writable:   writable,
-			UsedBytes:  usedBytes,
-			QuotaBytes: quotaBytes,
+			Name:              b.Name,
+			CreatedAt:         b.CreatedAt.Format(time.RFC3339),
+			Writable:          writable,
+			UsedBytes:         usedBytes,
+			QuotaBytes:        quotaBytes,
+			ReplicationFactor: b.ReplicationFactor,
 		})
 	}
 
@@ -1764,6 +1799,158 @@ func (s *Server) handleS3ListBuckets(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleListBuckets wraps handleS3ListBuckets for the new API route
+func (s *Server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
+	s.handleS3ListBuckets(w, r)
+}
+
+// handleCreateBucket creates a new S3 bucket with specified replication factor
+func (s *Server) handleCreateBucket(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name              string `json:"name"`
+		ReplicationFactor int    `json:"replication_factor"` // Optional, defaults to 2
+		QuotaBytes        int64  `json:"quota_bytes"`        // Optional (not implemented yet)
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate bucket name
+	if err := validateS3Name(req.Name); err != nil {
+		s.jsonError(w, "invalid bucket name: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Default replication factor
+	if req.ReplicationFactor == 0 {
+		req.ReplicationFactor = 2
+	}
+
+	// Validate range
+	if req.ReplicationFactor < 1 || req.ReplicationFactor > 3 {
+		s.jsonError(w, "replication factor must be 1-3", http.StatusBadRequest)
+		return
+	}
+
+	// Check authorization
+	userID := s.getRequestOwner(r)
+	if userID == "" {
+		s.jsonError(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	// Check if user has permission to create buckets
+	if !s.s3Authorizer.Authorize(userID, "create", "buckets", req.Name, "") {
+		s.jsonError(w, "permission denied", http.StatusForbidden)
+		return
+	}
+
+	// Create bucket via S3 store
+	if err := s.s3Store.CreateBucket(r.Context(), req.Name, userID, req.ReplicationFactor); err != nil {
+		if errors.Is(err, s3.ErrBucketExists) {
+			s.jsonError(w, "bucket already exists", http.StatusConflict)
+			return
+		}
+		s.jsonError(w, "failed to create bucket: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"name": req.Name})
+}
+
+// handleGetBucket returns metadata for a specific bucket
+func (s *Server) handleGetBucket(w http.ResponseWriter, r *http.Request, bucket string) {
+	// Validate bucket name
+	if err := validateS3Name(bucket); err != nil {
+		s.jsonError(w, "invalid bucket name: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Get bucket metadata from store
+	buckets, err := s.s3Store.ListBuckets(r.Context())
+	if err != nil {
+		s.jsonError(w, "failed to get bucket", http.StatusInternalServerError)
+		return
+	}
+
+	// Find the requested bucket
+	var bucketMeta *s3.BucketMeta
+	for i := range buckets {
+		if buckets[i].Name == bucket {
+			bucketMeta = &buckets[i]
+			break
+		}
+	}
+
+	if bucketMeta == nil {
+		s.jsonError(w, "bucket not found", http.StatusNotFound)
+		return
+	}
+
+	// Return bucket metadata
+	resp := map[string]interface{}{
+		"name":               bucketMeta.Name,
+		"created_at":         bucketMeta.CreatedAt.Format(time.RFC3339),
+		"owner":              bucketMeta.Owner,
+		"replication_factor": bucketMeta.ReplicationFactor,
+		"size_bytes":         bucketMeta.SizeBytes,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleUpdateBucket updates bucket metadata (admin-only)
+func (s *Server) handleUpdateBucket(w http.ResponseWriter, r *http.Request, bucket string) {
+	var req struct {
+		ReplicationFactor *int `json:"replication_factor,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate bucket name
+	if err := validateS3Name(bucket); err != nil {
+		s.jsonError(w, "invalid bucket name: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Check admin permission (bucket_scope=* or admin role)
+	userID := s.getRequestOwner(r)
+	if userID == "" {
+		s.jsonError(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	// Admin check: user must be an admin to update bucket metadata
+	if !s.s3Authorizer.IsAdmin(userID) {
+		s.jsonError(w, "admin permission required", http.StatusForbidden)
+		return
+	}
+
+	// Update bucket metadata
+	updates := s3.BucketMetadataUpdate{
+		ReplicationFactor: req.ReplicationFactor,
+	}
+
+	if err := s.s3Store.UpdateBucketMetadata(r.Context(), bucket, updates); err != nil {
+		if errors.Is(err, s3.ErrBucketNotFound) {
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+			return
+		}
+		s.jsonError(w, "failed to update bucket: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 // handleS3ListObjects returns objects in a bucket with optional prefix/delimiter.

@@ -30,7 +30,7 @@ func TestS3StoreAdapter_Get_Success(t *testing.T) {
 	}
 
 	// Put object into store
-	err := testStore.CreateBucket(context.Background(), testBucket, "alice")
+	err := testStore.CreateBucket(context.Background(), testBucket, "alice", 2)
 	if err != nil {
 		t.Fatalf("failed to create bucket: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestS3StoreAdapter_Get_NotFound(t *testing.T) {
 	testStore := createTestS3Store(t)
 	adapter := NewS3StoreAdapter(testStore)
 
-	err := testStore.CreateBucket(context.Background(), "test-bucket", "alice")
+	err := testStore.CreateBucket(context.Background(), "test-bucket", "alice", 2)
 	if err != nil {
 		t.Fatalf("failed to create bucket: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestS3StoreAdapter_Get_NilMetadata(t *testing.T) {
 	testKey := "test-key"
 	testData := []byte("data")
 
-	err := testStore.CreateBucket(context.Background(), testBucket, "alice")
+	err := testStore.CreateBucket(context.Background(), testBucket, "alice", 2)
 	if err != nil {
 		t.Fatalf("failed to create bucket: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestS3StoreAdapter_Put_Success(t *testing.T) {
 		"x-amz-meta-type": "text",
 	}
 
-	err := testStore.CreateBucket(context.Background(), testBucket, "alice")
+	err := testStore.CreateBucket(context.Background(), testBucket, "alice", 2)
 	if err != nil {
 		t.Fatalf("failed to create bucket: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestS3StoreAdapter_Put_EmptyData(t *testing.T) {
 	testBucket := "test-bucket"
 	testKey := "empty-file"
 
-	err := testStore.CreateBucket(context.Background(), testBucket, "alice")
+	err := testStore.CreateBucket(context.Background(), testBucket, "alice", 2)
 	if err != nil {
 		t.Fatalf("failed to create bucket: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestS3StoreAdapter_List_Success(t *testing.T) {
 
 	testBucket := "test-bucket"
 
-	err := testStore.CreateBucket(context.Background(), testBucket, "alice")
+	err := testStore.CreateBucket(context.Background(), testBucket, "alice", 2)
 	if err != nil {
 		t.Fatalf("failed to create bucket: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestS3StoreAdapter_List_Empty(t *testing.T) {
 
 	testBucket := "test-bucket"
 
-	err := testStore.CreateBucket(context.Background(), testBucket, "alice")
+	err := testStore.CreateBucket(context.Background(), testBucket, "alice", 2)
 	if err != nil {
 		t.Fatalf("failed to create bucket: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestS3StoreAdapter_ListBuckets_Success(t *testing.T) {
 	// Create some buckets
 	buckets := []string{"bucket1", "bucket2", "bucket3"}
 	for _, bucket := range buckets {
-		err := testStore.CreateBucket(context.Background(), bucket, "alice")
+		err := testStore.CreateBucket(context.Background(), bucket, "alice", 2)
 		if err != nil {
 			t.Fatalf("failed to create bucket %s: %v", bucket, err)
 		}
@@ -364,7 +364,7 @@ func TestS3StoreAdapter_Put_WithComplexMetadata(t *testing.T) {
 		"x-amz-meta-empty": "",
 	}
 
-	err := testStore.CreateBucket(context.Background(), testBucket, "alice")
+	err := testStore.CreateBucket(context.Background(), testBucket, "alice", 2)
 	if err != nil {
 		t.Fatalf("failed to create bucket: %v", err)
 	}

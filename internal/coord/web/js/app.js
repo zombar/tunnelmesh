@@ -2005,6 +2005,7 @@ function openShareModal() {
     document.getElementById('share-name').value = '';
     document.getElementById('share-description').value = '';
     document.getElementById('share-quota').value = '';
+    document.getElementById('share-replication').value = '2';  // Default to 2
     document.getElementById('share-expires').value = '';
     document.getElementById('share-guest-read').checked = true;
     document.getElementById('share-name').focus();
@@ -2022,6 +2023,7 @@ async function createShare() {
     const quotaValue = document.getElementById('share-quota').value.trim();
     const expiresValue = document.getElementById('share-expires').value;
     const guestRead = document.getElementById('share-guest-read').checked;
+    const replicationFactor = parseInt(document.getElementById('share-replication').value);
     // Default to 100 MB if empty, but allow explicit 0 for unlimited
     const quotaMB = quotaValue === '' ? 100 : parseInt(quotaValue, 10) || 0;
 
@@ -2034,7 +2036,13 @@ async function createShare() {
     const quota_bytes = quotaMB > 0 ? quotaMB * 1024 * 1024 : 0;
 
     // Build request body
-    const body = { name, description, quota_bytes, guest_read: guestRead };
+    const body = {
+        name,
+        description,
+        quota_bytes,
+        guest_read: guestRead,
+        replication_factor: replicationFactor
+    };
     if (expiresValue) {
         body.expires_at = expiresValue; // Send as YYYY-MM-DD, backend will parse
     }
@@ -2364,6 +2372,138 @@ async function createBinding() {
     }
 }
 window.createBinding = createBinding;
+
+// ============================
+// Bucket Creation Modal
+// ============================
+
+function openBucketModal() {
+    document.getElementById('bucket-modal').style.display = 'flex';
+    document.getElementById('bucket-name').value = '';
+    document.getElementById('bucket-replication').value = '2';  // Default
+    document.getElementById('bucket-quota').value = '';
+    document.getElementById('bucket-name').focus();
+}
+window.openBucketModal = openBucketModal;
+
+function closeBucketModal() {
+    document.getElementById('bucket-modal').style.display = 'none';
+}
+window.closeBucketModal = closeBucketModal;
+
+async function createBucket() {
+    const name = document.getElementById('bucket-name').value.trim();
+    const replicationFactor = parseInt(document.getElementById('bucket-replication').value);
+    const quotaMB = parseInt(document.getElementById('bucket-quota').value) || 0;
+
+    // Validate bucket name
+    if (!name) {
+        showToast('Bucket name is required', 'error');
+        return;
+    }
+
+    // DNS-safe validation (alphanumeric + hyphens)
+    if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(name)) {
+        showToast('Invalid bucket name. Use lowercase letters, numbers, and hyphens (1-63 chars)', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/s3/buckets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: name,
+                replication_factor: replicationFactor,
+                quota_bytes: quotaMB > 0 ? quotaMB * 1024 * 1024 : 0
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(error || 'Failed to create bucket');
+        }
+
+        showToast(`Bucket "${name}" created successfully`, 'success');
+        closeBucketModal();
+
+        // Refresh S3 explorer to show new bucket
+        if (window.TM && TM.refresh) {
+            TM.refresh.trigger('s3');
+        }
+    } catch (err) {
+        console.error('Create bucket error:', err);
+        showToast(`Failed to create bucket: ${err.message}`, 'error');
+    }
+}
+window.createBucket = createBucket;
+
+// ============================
+// Bucket Properties Modal (Admin-Only)
+// ============================
+
+async function openBucketPropertiesModal(bucketName) {
+    // Fetch full bucket metadata
+    try {
+        const response = await fetch(`/api/s3/buckets/${encodeURIComponent(bucketName)}`);
+        if (!response.ok) throw new Error('Failed to fetch bucket metadata');
+
+        const metadata = await response.json();
+
+        // Populate modal fields
+        document.getElementById('prop-bucket-name').value = metadata.name;
+        document.getElementById('prop-bucket-owner').value = metadata.owner || 'N/A';
+        document.getElementById('prop-bucket-created').value = new Date(metadata.created_at).toLocaleString();
+        document.getElementById('prop-bucket-replication').value = metadata.replication_factor || 2;
+
+        // Store bucket name for save operation
+        document.getElementById('bucket-properties-modal').dataset.bucketName = metadata.name;
+
+        // Show modal
+        document.getElementById('bucket-properties-modal').style.display = 'flex';
+    } catch (err) {
+        console.error('Failed to load bucket properties:', err);
+        showToast('Failed to load bucket properties', 'error');
+    }
+}
+window.openBucketPropertiesModal = openBucketPropertiesModal;
+
+function closeBucketPropertiesModal() {
+    document.getElementById('bucket-properties-modal').style.display = 'none';
+}
+window.closeBucketPropertiesModal = closeBucketPropertiesModal;
+
+async function saveBucketProperties() {
+    const bucketName = document.getElementById('bucket-properties-modal').dataset.bucketName;
+    const replicationFactor = parseInt(document.getElementById('prop-bucket-replication').value);
+
+    try {
+        const response = await fetch(`/api/s3/buckets/${encodeURIComponent(bucketName)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                replication_factor: replicationFactor
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(error || 'Failed to update bucket properties');
+        }
+
+        showToast('Bucket properties updated successfully', 'success');
+        closeBucketPropertiesModal();
+
+        // Refresh S3 explorer
+        if (window.TM && TM.refresh) {
+            TM.refresh.trigger('s3');
+        }
+    } catch (err) {
+        console.error('Save bucket properties error:', err);
+        showToast(`Failed to save: ${err.message}`, 'error');
+    }
+}
+window.saveBucketProperties = saveBucketProperties;
 
 async function deleteBinding(name) {
     if (!confirm('Delete this role binding?')) return;

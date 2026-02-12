@@ -103,6 +103,47 @@ func (cr *ChunkRegistry) RegisterChunk(hash string, size int64) error {
 	return nil
 }
 
+// RegisterChunkWithReplication registers a chunk with a custom replication factor.
+// This is used when bucket-specific replication policies are configured.
+func (cr *ChunkRegistry) RegisterChunkWithReplication(hash string, size int64, replicationFactor int) error {
+	if hash == "" {
+		return fmt.Errorf("chunk hash cannot be empty")
+	}
+	if size <= 0 {
+		return fmt.Errorf("chunk size must be positive, got %d", size)
+	}
+
+	cr.mu.Lock()
+	defer cr.mu.Unlock()
+
+	now := time.Now()
+
+	ownership, exists := cr.ownership[hash]
+	if !exists {
+		// New chunk - create ownership record with custom replication factor
+		ownership = &ChunkOwnership{
+			ChunkHash:         hash,
+			Owners:            make(map[string]time.Time),
+			VersionVector:     NewVersionVector(),
+			ReplicationFactor: replicationFactor, // Use custom replication factor
+			TotalSize:         size,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		}
+		cr.ownership[hash] = ownership
+	}
+
+	// Add local coordinator as owner
+	ownership.Owners[cr.localCoordID] = now
+	ownership.VersionVector.Increment(cr.localCoordID)
+	ownership.UpdatedAt = now
+
+	cr.logger.Debug("Registered chunk %s (size=%d, replication=%d, owners=%d)",
+		truncateHash(hash), size, replicationFactor, len(ownership.Owners))
+
+	return nil
+}
+
 // UnregisterChunk removes the local coordinator as an owner of the chunk.
 // The chunk ownership entry is removed entirely if no owners remain.
 func (cr *ChunkRegistry) UnregisterChunk(hash string) error {

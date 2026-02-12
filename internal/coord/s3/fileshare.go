@@ -40,9 +40,10 @@ func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *aut
 
 // FileShareOptions contains optional settings for creating a file share.
 type FileShareOptions struct {
-	ExpiresAt    time.Time // When the share expires (zero = use default or never)
-	GuestRead    bool      // Allow all mesh users to read (default: true if not specified)
-	GuestReadSet bool      // Whether GuestRead was explicitly set
+	ExpiresAt         time.Time // When the share expires (zero = use default or never)
+	GuestRead         bool      // Allow all mesh users to read (default: true if not specified)
+	GuestReadSet      bool      // Whether GuestRead was explicitly set
+	ReplicationFactor int       // Number of replicas (1-3, default: 2 if 0)
 }
 
 // Create creates a new file share.
@@ -70,7 +71,11 @@ func (m *FileShareManager) Create(ctx context.Context, name, description, ownerI
 		_ = m.store.UntombstoneBucket(ctx, bucketName)
 	} else {
 		// Create new bucket
-		if err := m.store.CreateBucket(ctx, bucketName, ownerID); err != nil {
+		replicationFactor := 2 // Default replication factor
+		if opts != nil && opts.ReplicationFactor > 0 {
+			replicationFactor = opts.ReplicationFactor
+		}
+		if err := m.store.CreateBucket(ctx, bucketName, ownerID, replicationFactor); err != nil {
 			return nil, fmt.Errorf("create bucket: %w", err)
 		}
 	}

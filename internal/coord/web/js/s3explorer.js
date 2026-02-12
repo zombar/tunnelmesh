@@ -986,6 +986,28 @@
         if (!state.currentBucket) {
             // Show buckets as folders
             const buckets = await fetchBuckets();
+
+            // Show "New Bucket" button when viewing bucket list
+            if (browseActions) {
+                // Remove existing New Bucket button if present
+                const existingBtn = browseActions.querySelector('.s3-new-bucket-btn');
+                if (existingBtn) existingBtn.remove();
+
+                // Add New Bucket button
+                const newBucketBtn = document.createElement('button');
+                newBucketBtn.className = 's3-btn s3-new-bucket-btn';
+                newBucketBtn.title = 'Create new bucket';
+                newBucketBtn.onclick = () => window.openBucketModal();
+                newBucketBtn.innerHTML = `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                    </svg>
+                    <span>New Bucket</span>
+                `;
+                browseActions.insertBefore(newBucketBtn, browseActions.firstChild);
+                browseActions.style.display = 'flex';
+            }
+
             state.buckets = buckets;
             items = buckets.map((b) => ({
                 name: b.name,
@@ -993,11 +1015,18 @@
                 isBucket: true,
                 size: b.used_bytes || 0,
                 quota: b.quota_bytes || 0,
+                replication_factor: b.replication_factor || 2,
                 lastModified: b.created_at,
                 expires: null,
                 writable: b.writable,
             }));
         } else {
+            // Remove "New Bucket" button when inside a bucket
+            if (browseActions) {
+                const existingBtn = browseActions.querySelector('.s3-new-bucket-btn');
+                if (existingBtn) existingBtn.remove();
+            }
+
             // Show objects in current path
             const objects = await fetchObjects(state.currentBucket, state.currentPath);
 
@@ -1048,10 +1077,23 @@
             quotaCol.style.display = state.currentBucket ? 'none' : '';
         }
 
+        // Toggle replication column visibility (only show for bucket list, not files)
+        const replicationCol = document.querySelector('.s3-col-replication');
+        if (replicationCol) {
+            replicationCol.style.display = state.currentBucket ? 'none' : '';
+        }
+
         // Toggle owner column visibility (only show for files within bucket, not bucket list)
         const ownerCol = document.querySelector('.s3-col-owner');
         if (ownerCol) {
             ownerCol.style.display = state.currentBucket ? '' : 'none';
+        }
+
+        // Toggle actions column visibility (only show for bucket list if admin)
+        const actionsCol = document.querySelector('.s3-col-actions');
+        const isAdmin = window.TM && window.TM.panel && window.TM.panel.isAdmin();
+        if (actionsCol) {
+            actionsCol.style.display = (!state.currentBucket && isAdmin) ? '' : 'none';
         }
 
         // Always render breadcrumb for navigation
@@ -1109,17 +1151,28 @@
                     const quotaCell = state.currentBucket
                         ? ''
                         : `<td>${item.quota ? formatBytes(item.quota) : '-'}</td>`;
+                    // Only show replication column for bucket list (not when inside a bucket)
+                    const replicationFactor = item.replication_factor || 2;
+                    const replicationCell = state.currentBucket
+                        ? ''
+                        : `<td>${replicationFactor}x</td>`;
                     // Only show owner column when inside a bucket (not for bucket list)
                     const ownerCell = state.currentBucket ? `<td>${escapeHtml(item.owner || '-')}</td>` : '';
+                    // Actions column: show properties button for buckets (admin-only)
+                    const actionsCell = !state.currentBucket && item.isBucket && isAdmin
+                        ? `<td><button class="s3-btn s3-btn-sm" onclick="event.stopPropagation(); window.openBucketPropertiesModal('${escapeJsString(item.name)}')" title="Properties">⚙️</button></td>`
+                        : (!state.currentBucket && isAdmin ? '<td></td>' : '');
                     return `
                 <tr class="${rowClass}" onclick="${onclick}">
                     <td>${checkbox}</td>
                     <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span>${tombstoneBadge}</div></td>
                     <td>${item.size !== null ? formatBytes(item.size) : '-'}</td>
                     ${quotaCell}
+                    ${replicationCell}
                     ${ownerCell}
                     <td>${formatDate(item.lastModified)}</td>
                     <td>${formatExpiry(item.expires)}</td>
+                    ${actionsCell}
                 </tr>
             `;
                 })
