@@ -197,6 +197,8 @@ docker-build:
 docker-up: docker-build
 	@TUNNELMESH_TOKEN=$$(openssl rand -hex 32); \
 	echo "Generated auth token: $${TUNNELMESH_TOKEN:0:16}... (truncated)"; \
+	echo "$$TUNNELMESH_TOKEN" > /tmp/tunnelmesh-docker-token; \
+	chmod 600 /tmp/tunnelmesh-docker-token; \
 	TUNNELMESH_TOKEN=$$TUNNELMESH_TOKEN $(DOCKER_COMPOSE) up -d; \
 	echo "TunnelMesh Docker environment started"; \
 	echo "Use 'make docker-logs' to follow logs"; \
@@ -207,7 +209,7 @@ docker-up: docker-build
 	if [ "$$answer" != "n" ] && [ "$$answer" != "N" ]; then \
 		sudo tunnelmesh context rm docker 2>/dev/null || true; \
 		echo "Joining mesh with coordinator at http://localhost:8081..."; \
-		TUNNELMESH_TOKEN=$$TUNNELMESH_TOKEN sudo -E tunnelmesh join http://localhost:8081 --context docker; \
+		sudo sh -c "TUNNELMESH_TOKEN=$$(cat /tmp/tunnelmesh-docker-token) tunnelmesh join http://localhost:8081 --context docker"; \
 		echo ""; \
 		echo "Admin interface should open at https://this.tm"; \
 	fi
@@ -223,6 +225,7 @@ docker-logs-coords:
 
 docker-down:
 	$(DOCKER_COMPOSE) down
+	@rm -f /tmp/tunnelmesh-docker-token
 
 docker-logs:
 	$(DOCKER_COMPOSE) logs -f
