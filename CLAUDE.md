@@ -27,9 +27,10 @@ make build              # Build binary
 make release-all        # Cross-platform release builds
 
 # Test
-make test               # Run all tests (fast, no race detector - use for normal development)
-make test-verbose       # Verbose test output
-make test-race          # Run with race detector (ONLY use if debugging concurrency issues - slow)
+make test               # Run tests with -short (skips slow simulator stress tests)
+make test-full          # Run ALL tests including slow simulator (used in CI merge jobs)
+make test-verbose       # Verbose test output (with -short)
+make test-race          # Run with race detector (with -short, ONLY for debugging concurrency)
 
 # Lint
 golangci-lint run       # Run linter
