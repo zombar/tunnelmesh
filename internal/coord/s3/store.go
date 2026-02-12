@@ -1784,11 +1784,13 @@ func (s *Store) GetCASStats() CASStats {
 
 // GCStats holds statistics from a garbage collection run.
 type GCStats struct {
-	VersionsPruned   int   // Number of version metadata files deleted
-	ChunksDeleted    int   // Number of orphaned chunks deleted
-	BytesReclaimed   int64 // Approximate bytes reclaimed from chunk deletion
-	ObjectsScanned   int   // Number of objects scanned
-	BucketsProcessed int   // Number of buckets processed
+	VersionsPruned           int   // Number of version metadata files deleted
+	ChunksDeleted            int   // Number of orphaned chunks deleted
+	BytesReclaimed           int64 // Approximate bytes reclaimed from chunk deletion
+	ObjectsScanned           int   // Number of objects scanned
+	BucketsProcessed         int   // Number of buckets processed
+	ChunksSkippedShared      int   // Chunks skipped because owned by other coordinators (Phase 6)
+	ChunksSkippedGracePeriod int   // Chunks skipped due to grace period (Phase 6)
 }
 
 // RunGarbageCollection performs a full garbage collection pass.
@@ -1963,19 +1965,68 @@ func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, refere
 			return nil
 		}
 
+		// Grace period: Only delete chunks older than 1 hour (Phase 6)
+		// This prevents deleting chunks that are being replicated
+		const gracePeriod = 1 * time.Hour
+		if time.Since(info.ModTime()) < gracePeriod {
+			stats.ChunksSkippedGracePeriod++
+			return nil
+		}
+
 		// Extract hash from path (chunks are stored as chunks/ab/abcdef...)
 		hash := filepath.Base(path)
 		if _, referenced := referencedChunks[hash]; !referenced {
+			// Chunk is not referenced locally - check if it's safe to delete
+
+			// Phase 6: Registry-aware deletion
+			// Query registry to see if other coordinators still own this chunk
+			s.mu.RLock()
+			registry := s.chunkRegistry
+			coordID := s.coordinatorID
+			s.mu.RUnlock()
+
+			if registry != nil {
+				owners, err := registry.GetOwners(hash)
+				if err == nil && len(owners) > 0 {
+					// Check if we're the sole owner
+					isSoleOwner := len(owners) == 1 && owners[0] == coordID
+					hasOtherOwners := false
+					for _, owner := range owners {
+						if owner != coordID {
+							hasOtherOwners = true
+							break
+						}
+					}
+
+					if hasOtherOwners {
+						// Other coordinators still own this chunk - don't delete locally
+						stats.ChunksSkippedShared++
+						return nil
+					}
+
+					// If we're the sole owner (or the only owner listed is us),
+					// it's safe to delete
+					if !isSoleOwner && len(owners) > 0 {
+						// Registry has owners but we're not listed - don't delete
+						// (we might be out of sync with registry)
+						stats.ChunksSkippedShared++
+						return nil
+					}
+				}
+				// If GetOwners returns error or empty list, proceed with deletion
+				// (chunk not in registry or registry is unavailable - fail-safe)
+			}
+
+			// Safe to delete: not referenced locally and no other owners
 			stats.BytesReclaimed += info.Size()
+
 			// CAS.DeleteChunk has its own locking
 			if s.cas.DeleteChunk(ctx, hash) == nil {
 				stats.ChunksDeleted++
 
-				// Unregister from chunk registry (if configured)
-				// Note: In Phase 6, we'll make GC registry-aware to check if
-				// chunks are owned by other coordinators before deleting
-				if s.chunkRegistry != nil {
-					_ = s.chunkRegistry.UnregisterChunk(hash)
+				// Unregister from chunk registry
+				if registry != nil {
+					_ = registry.UnregisterChunk(hash)
 				}
 			}
 		}
