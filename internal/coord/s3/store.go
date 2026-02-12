@@ -2313,8 +2313,9 @@ func (s *Store) getObjectContent(ctx context.Context, bucket, key string, meta *
 			Replicator: s.replicator,
 			Logger:     logger,
 			TotalSize:  meta.Size,
+			Prefetch:   PrefetchConfig{WindowSize: 8, Parallelism: 4},
 		})
-		return io.NopCloser(reader), meta, nil
+		return reader, meta, nil
 	}
 
 	// Local-only reads: all chunks must be local

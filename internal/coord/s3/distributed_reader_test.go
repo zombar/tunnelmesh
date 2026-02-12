@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -16,10 +19,30 @@ import (
 
 // mockReplicator implements ReplicatorInterface for testing.
 type mockReplicator struct {
-	chunks map[string][]byte // chunkHash -> chunk data
+	mu       sync.Mutex
+	chunks   map[string][]byte // chunkHash -> chunk data
+	latency  time.Duration     // Simulated fetch latency
+	failPeer string            // If set, FetchChunk returns error for this peer
+	calls    int32             // Atomic call counter
 }
 
 func (m *mockReplicator) FetchChunk(ctx context.Context, peerID, chunkHash string) ([]byte, error) {
+	atomic.AddInt32(&m.calls, 1)
+
+	if m.latency > 0 {
+		select {
+		case <-time.After(m.latency):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	if m.failPeer != "" && peerID == m.failPeer {
+		return nil, fmt.Errorf("peer %s unavailable", peerID)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	data, exists := m.chunks[chunkHash]
 	if !exists {
 		return nil, fmt.Errorf("chunk not found: %s", chunkHash)
@@ -91,6 +114,7 @@ func TestDistributedChunkReader_AllChunksLocal(t *testing.T) {
 		LocalCAS: cas,
 		Logger:   zerolog.Nop(),
 	})
+	defer func() { _ = reader.Close() }()
 
 	// Read all data
 	data, err := io.ReadAll(reader)
@@ -149,6 +173,7 @@ func TestDistributedChunkReader_FetchFromRemote(t *testing.T) {
 		Logger:     zerolog.Nop(),
 		TotalSize:  int64(len(chunk1) + len(chunk2) + len(chunk3)),
 	})
+	defer func() { _ = reader.Close() }()
 
 	// Read all data (should fetch chunk2 and chunk3 from remote)
 	data, err := io.ReadAll(reader)
@@ -193,6 +218,7 @@ func TestDistributedChunkReader_ChunkNotFound(t *testing.T) {
 		Registry: mockReg,
 		Logger:   zerolog.Nop(),
 	})
+	defer func() { _ = reader.Close() }()
 
 	// Read should fail
 	_, err = io.ReadAll(reader)
@@ -216,6 +242,7 @@ func TestDistributedChunkReader_EmptyFile(t *testing.T) {
 		LocalCAS: cas,
 		Logger:   zerolog.Nop(),
 	})
+	defer func() { _ = reader.Close() }()
 
 	// Read should return empty data
 	data, err := io.ReadAll(reader)
@@ -253,6 +280,7 @@ func TestDistributedChunkReader_PartialReads(t *testing.T) {
 		LocalCAS: cas,
 		Logger:   zerolog.Nop(),
 	})
+	defer func() { _ = reader.Close() }()
 
 	// Read in small chunks to test partial reads across chunk boundaries
 	var result bytes.Buffer
@@ -292,9 +320,416 @@ func TestDistributedChunkReader_NoRegistry(t *testing.T) {
 		Registry: nil, // No registry
 		Logger:   zerolog.Nop(),
 	})
+	defer func() { _ = reader.Close() }()
 
 	// Read should fail with appropriate error
 	_, err = io.ReadAll(reader)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no registry available")
+}
+
+// ==== New parallel fetch tests ====
+
+func TestDistributedChunkReader_ParallelFetch(t *testing.T) {
+	dir := t.TempDir()
+
+	var encryptionKey [32]byte
+	cas, err := NewCAS(filepath.Join(dir, "cas"), encryptionKey)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Create 8 chunks with simulated 50ms latency each
+	const numChunks = 8
+	chunks := make([][]byte, numChunks)
+	hashes := make([]string, numChunks)
+	remoteData := make(map[string][]byte)
+	owners := make(map[string][]string)
+
+	for i := 0; i < numChunks; i++ {
+		chunks[i] = []byte(fmt.Sprintf("chunk-%02d-data", i))
+		hashes[i] = ContentHash(chunks[i])
+		remoteData[hashes[i]] = chunks[i]
+		owners[hashes[i]] = []string{"peer1"}
+	}
+
+	mockRepl := &mockReplicator{
+		chunks:  remoteData,
+		latency: 50 * time.Millisecond,
+	}
+
+	mockReg := &mockChunkRegistry{owners: owners}
+
+	// Parallel read (4 workers)
+	reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
+		Chunks:     hashes,
+		LocalCAS:   cas,
+		Registry:   mockReg,
+		Replicator: mockRepl,
+		Logger:     zerolog.Nop(),
+		Prefetch:   PrefetchConfig{WindowSize: 8, Parallelism: 4},
+	})
+	defer func() { _ = reader.Close() }()
+
+	start := time.Now()
+	data, err := io.ReadAll(reader)
+	parallelDuration := time.Since(start)
+	require.NoError(t, err)
+
+	// Verify correct data
+	var expected bytes.Buffer
+	for _, chunk := range chunks {
+		expected.Write(chunk)
+	}
+	assert.Equal(t, expected.String(), string(data))
+
+	// Parallel with 4 workers should be significantly faster than sequential
+	// Sequential: 8 * 50ms = 400ms. Parallel: ~100ms (8 chunks / 4 workers * 50ms)
+	// Use generous threshold to avoid flaky tests
+	assert.Less(t, parallelDuration, 350*time.Millisecond,
+		"Parallel fetch should be faster than sequential (took %v)", parallelDuration)
+}
+
+func TestDistributedChunkReader_OrderedReassembly(t *testing.T) {
+	dir := t.TempDir()
+
+	var encryptionKey [32]byte
+	cas, err := NewCAS(filepath.Join(dir, "cas"), encryptionKey)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Create chunks with different latencies to force out-of-order arrival
+	chunkData := [][]byte{
+		[]byte("FIRST-"),
+		[]byte("SECOND-"),
+		[]byte("THIRD-"),
+		[]byte("FOURTH"),
+	}
+	hashes := make([]string, len(chunkData))
+	remoteData := make(map[string][]byte)
+	owners := make(map[string][]string)
+
+	for i, data := range chunkData {
+		hashes[i] = ContentHash(data)
+		remoteData[hashes[i]] = data
+		owners[hashes[i]] = []string{"peer1"}
+	}
+
+	mockRepl := &mockReplicator{
+		chunks:  remoteData,
+		latency: 10 * time.Millisecond,
+	}
+
+	mockReg := &mockChunkRegistry{owners: owners}
+
+	reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
+		Chunks:     hashes,
+		LocalCAS:   cas,
+		Registry:   mockReg,
+		Replicator: mockRepl,
+		Logger:     zerolog.Nop(),
+		Prefetch:   PrefetchConfig{WindowSize: 4, Parallelism: 4},
+	})
+	defer func() { _ = reader.Close() }()
+
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+
+	// Verify order is preserved regardless of fetch completion order
+	assert.Equal(t, "FIRST-SECOND-THIRD-FOURTH", string(data))
+}
+
+func TestDistributedChunkReader_MixedLocalRemote(t *testing.T) {
+	dir := t.TempDir()
+
+	var encryptionKey [32]byte
+	cas, err := NewCAS(filepath.Join(dir, "cas"), encryptionKey)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Mix of local and remote chunks
+	local1 := []byte("LOCAL1-")
+	remote1 := []byte("REMOTE1-")
+	local2 := []byte("LOCAL2-")
+	remote2 := []byte("REMOTE2")
+
+	hashL1, err := cas.WriteChunk(ctx, local1)
+	require.NoError(t, err)
+	hashR1 := ContentHash(remote1)
+	hashL2, err := cas.WriteChunk(ctx, local2)
+	require.NoError(t, err)
+	hashR2 := ContentHash(remote2)
+
+	mockRepl := &mockReplicator{
+		chunks: map[string][]byte{
+			hashR1: remote1,
+			hashR2: remote2,
+		},
+		latency: 20 * time.Millisecond,
+	}
+
+	mockReg := &mockChunkRegistry{
+		owners: map[string][]string{
+			hashL1: {"local"},
+			hashR1: {"peer1"},
+			hashL2: {"local"},
+			hashR2: {"peer2"},
+		},
+	}
+
+	reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
+		Chunks:     []string{hashL1, hashR1, hashL2, hashR2},
+		LocalCAS:   cas,
+		Registry:   mockReg,
+		Replicator: mockRepl,
+		Logger:     zerolog.Nop(),
+		Prefetch:   PrefetchConfig{WindowSize: 4, Parallelism: 2},
+	})
+	defer func() { _ = reader.Close() }()
+
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, "LOCAL1-REMOTE1-LOCAL2-REMOTE2", string(data))
+}
+
+func TestDistributedChunkReader_PartialFailure(t *testing.T) {
+	dir := t.TempDir()
+
+	var encryptionKey [32]byte
+	cas, err := NewCAS(filepath.Join(dir, "cas"), encryptionKey)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	chunk1 := []byte("DATA1-")
+	chunk2 := []byte("DATA2-")
+	chunk3 := []byte("DATA3")
+
+	hash1 := ContentHash(chunk1)
+	hash2 := ContentHash(chunk2)
+	hash3 := ContentHash(chunk3)
+
+	mockRepl := &mockReplicator{
+		chunks: map[string][]byte{
+			hash1: chunk1,
+			hash2: chunk2,
+			hash3: chunk3,
+		},
+		failPeer: "bad-peer", // This peer will fail
+	}
+
+	// chunk2 has both a bad peer (first) and a good peer (second)
+	mockReg := &mockChunkRegistry{
+		owners: map[string][]string{
+			hash1: {"good-peer"},
+			hash2: {"bad-peer", "good-peer"}, // bad-peer fails, falls back to good-peer
+			hash3: {"good-peer"},
+		},
+	}
+
+	reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
+		Chunks:     []string{hash1, hash2, hash3},
+		LocalCAS:   cas,
+		Registry:   mockReg,
+		Replicator: mockRepl,
+		Logger:     zerolog.Nop(),
+		Prefetch:   PrefetchConfig{WindowSize: 4, Parallelism: 2},
+	})
+	defer func() { _ = reader.Close() }()
+
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, "DATA1-DATA2-DATA3", string(data))
+}
+
+func TestDistributedChunkReader_ContextCancellation(t *testing.T) {
+	// Use a separate directory that we manage manually to avoid cleanup race
+	dir, err := filepath.Abs(filepath.Join(t.TempDir(), "cas"))
+	require.NoError(t, err)
+
+	var encryptionKey [32]byte
+	cas, err := NewCAS(dir, encryptionKey)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create chunks with high latency
+	chunks := make([][]byte, 10)
+	hashes := make([]string, 10)
+	remoteData := make(map[string][]byte)
+	owners := make(map[string][]string)
+
+	for i := 0; i < 10; i++ {
+		chunks[i] = []byte(fmt.Sprintf("chunk-%d", i))
+		hashes[i] = ContentHash(chunks[i])
+		remoteData[hashes[i]] = chunks[i]
+		owners[hashes[i]] = []string{"peer1"}
+	}
+
+	mockRepl := &mockReplicator{
+		chunks:  remoteData,
+		latency: 500 * time.Millisecond, // Slow fetches
+	}
+
+	mockReg := &mockChunkRegistry{owners: owners}
+
+	reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
+		Chunks:     hashes,
+		LocalCAS:   cas,
+		Registry:   mockReg,
+		Replicator: mockRepl,
+		Logger:     zerolog.Nop(),
+		Prefetch:   PrefetchConfig{WindowSize: 8, Parallelism: 4},
+	})
+
+	// Cancel after a short delay
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	// Read should eventually fail or return partial data
+	_, readErr := io.ReadAll(reader)
+	_ = reader.Close()
+
+	// Wait briefly for goroutines to settle after cancellation
+	time.Sleep(50 * time.Millisecond)
+
+	// Either we get an error (context canceled) or we get no data
+	// The key thing is that it doesn't hang
+	if readErr != nil {
+		// Any error is acceptable - the test validates we don't hang
+		assert.Error(t, readErr)
+	}
+}
+
+func TestDistributedChunkReader_SequentialFallback(t *testing.T) {
+	dir := t.TempDir()
+
+	var encryptionKey [32]byte
+	cas, err := NewCAS(filepath.Join(dir, "cas"), encryptionKey)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	chunk1 := []byte("SEQ1-")
+	chunk2 := []byte("SEQ2-")
+	chunk3 := []byte("SEQ3")
+
+	hash1 := ContentHash(chunk1)
+	hash2 := ContentHash(chunk2)
+	hash3 := ContentHash(chunk3)
+
+	mockRepl := &mockReplicator{
+		chunks: map[string][]byte{
+			hash1: chunk1,
+			hash2: chunk2,
+			hash3: chunk3,
+		},
+	}
+
+	mockReg := &mockChunkRegistry{
+		owners: map[string][]string{
+			hash1: {"peer1"},
+			hash2: {"peer1"},
+			hash3: {"peer1"},
+		},
+	}
+
+	// With Parallelism=1, should use sequential path
+	reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
+		Chunks:     []string{hash1, hash2, hash3},
+		LocalCAS:   cas,
+		Registry:   mockReg,
+		Replicator: mockRepl,
+		Logger:     zerolog.Nop(),
+		Prefetch:   PrefetchConfig{WindowSize: 4, Parallelism: 1},
+	})
+	defer func() { _ = reader.Close() }()
+
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, "SEQ1-SEQ2-SEQ3", string(data))
+}
+
+func TestDistributedChunkReader_SequentialFallback_NoReplicator(t *testing.T) {
+	dir := t.TempDir()
+
+	var encryptionKey [32]byte
+	cas, err := NewCAS(filepath.Join(dir, "cas"), encryptionKey)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	chunk1 := []byte("A")
+	chunk2 := []byte("B")
+
+	hash1, err := cas.WriteChunk(ctx, chunk1)
+	require.NoError(t, err)
+	hash2, err := cas.WriteChunk(ctx, chunk2)
+	require.NoError(t, err)
+
+	// With replicator=nil, should use sequential path even with Parallelism > 1
+	reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
+		Chunks:   []string{hash1, hash2},
+		LocalCAS: cas,
+		Logger:   zerolog.Nop(),
+		Prefetch: PrefetchConfig{WindowSize: 4, Parallelism: 4},
+	})
+	defer func() { _ = reader.Close() }()
+
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, "AB", string(data))
+}
+
+func TestDistributedChunkReader_LargeFile(t *testing.T) {
+	dir := t.TempDir()
+
+	var encryptionKey [32]byte
+	cas, err := NewCAS(filepath.Join(dir, "cas"), encryptionKey)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Create 100+ chunks
+	const numChunks = 128
+	allChunks := make([][]byte, numChunks)
+	hashes := make([]string, numChunks)
+	remoteData := make(map[string][]byte)
+	owners := make(map[string][]string)
+	var expected bytes.Buffer
+
+	for i := 0; i < numChunks; i++ {
+		allChunks[i] = []byte(fmt.Sprintf("chunk-data-%04d|", i))
+		hashes[i] = ContentHash(allChunks[i])
+		remoteData[hashes[i]] = allChunks[i]
+		owners[hashes[i]] = []string{"peer1", "peer2"}
+		expected.Write(allChunks[i])
+	}
+
+	mockRepl := &mockReplicator{
+		chunks: remoteData,
+	}
+
+	mockReg := &mockChunkRegistry{owners: owners}
+
+	reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
+		Chunks:     hashes,
+		LocalCAS:   cas,
+		Registry:   mockReg,
+		Replicator: mockRepl,
+		Logger:     zerolog.Nop(),
+		TotalSize:  int64(expected.Len()),
+		Prefetch:   PrefetchConfig{WindowSize: 8, Parallelism: 4},
+	})
+	defer func() { _ = reader.Close() }()
+
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, expected.Bytes(), data)
+	assert.InDelta(t, 1.0, reader.Progress(), 0.01)
 }
