@@ -1,0 +1,42 @@
+{
+  "scenario": "alien_invasion",
+  "description": "72 hours of first contact, invasion, and human resistance",
+  "time_scale": 100,
+  "mesh_mode": true,
+  "coordinator_url": "http://localhost:8081",
+  "start_time": "2026-02-12T16:09:03.394317Z",
+  "end_time": "2026-02-12T16:10:52.611089Z",
+  "duration": "1m49.216500167s",
+  "story_duration": "72h0m0s",
+  "operations": {
+    "tasks_generated": 10836,
+    "tasks_completed": 447,
+    "tasks_failed": 0,
+    "uploads": 127,
+    "downloads": 0,
+    "updates": 320,
+    "deletes": 0
+  },
+  "data": {
+    "bytes_uploaded": 1854060,
+    "bytes_downloaded": 0,
+    "documents_created": 127,
+    "versions_created": 447
+  },
+  "performance": {
+    "avg_upload_latency": "11.185557ms",
+    "avg_download_latency": "0s",
+    "p95_upload_latency": "0s",
+    "p99_upload_latency": "0s"
+  },
+  "security": {
+    "adversary_attempts": 159,
+    "adversary_denials": 0,
+    "adversary_denial_rate": 0
+  },
+  "workflows": {
+    "tests_run": 12,
+    "tests_passed": 0,
+    "tests_failed": 0
+  }
+}

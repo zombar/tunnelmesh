@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math"
+	mrand "math/rand"
 	"strings"
 	"text/template"
 	"time"
@@ -61,6 +62,7 @@ func NewGenerator(s story.Story) *Generator {
 }
 
 // Generate creates a document based on the rule and context.
+// Randomly selects between plain text, markdown, and JSON formats.
 func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte, error) {
 	g.docCounts[rule.Type]++
 
@@ -71,15 +73,28 @@ func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte
 	ctx.Data["DocumentNumber"] = g.docCounts[rule.Type]
 	ctx.Data["Rule"] = rule
 
-	// Select generator function based on document type
-	generatorFunc, ok := documentGenerators[rule.Type]
-	if !ok {
-		return nil, fmt.Errorf("unknown document type: %s", rule.Type)
+	// Randomly select document format (60% plain text, 25% markdown, 15% JSON)
+	format := selectDocumentFormat()
+
+	var content []byte
+	var err error
+
+	switch format {
+	case "markdown":
+		content, err = GenerateMarkdownDocument(rule.Type, ctx)
+	case "json":
+		content, err = GenerateJSONDocument(rule.Type, ctx)
+	default: // "plain" or fallback
+		// Use existing generator functions for plain text
+		generatorFunc, ok := documentGenerators[rule.Type]
+		if !ok {
+			return nil, fmt.Errorf("unknown document type: %s", rule.Type)
+		}
+		content, err = generatorFunc(ctx)
 	}
 
-	content, err := generatorFunc(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("generating %s: %w", rule.Type, err)
+		return nil, fmt.Errorf("generating %s (%s format): %w", rule.Type, format, err)
 	}
 
 	// Apply data pattern transformation
@@ -89,6 +104,17 @@ func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte
 	content = EnsureSizeRange(content, rule.SizeRange)
 
 	return content, nil
+}
+
+// selectDocumentFormat randomly selects a document format.
+func selectDocumentFormat() string {
+	r := mrand.Intn(100)
+	if r < 60 {
+		return "plain"
+	} else if r < 85 {
+		return "markdown"
+	}
+	return "json"
 }
 
 // ApplyDataPattern applies a data pattern to the content.

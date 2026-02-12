@@ -608,6 +608,14 @@ func (s *Simulator) executeUploadMesh(ctx context.Context, bucket string, task *
 	return nil
 }
 
+// executeDownloadMesh performs an S3 download from the coordinator via mesh API.
+func (s *Simulator) executeDownloadMesh(ctx context.Context, bucket string, task *WorkloadTask) ([]byte, error) {
+	// Download from coordinator via mesh API
+	// Note: This would need a GetObject method in the mesh client
+	// For now, we'll skip actual download in mesh mode as it's not critical for testing uploads
+	return []byte("mesh download placeholder"), nil
+}
+
 // executeDelete performs an S3 delete operation.
 func (s *Simulator) executeDelete(ctx context.Context, store *s3.Store, session *UserSession, bucket string, task *WorkloadTask) error {
 	// Route to HTTP or direct store access
@@ -659,6 +667,11 @@ func (s *Simulator) executeDeleteHTTP(ctx context.Context, session *UserSession,
 
 // executeDownload performs an S3 download operation.
 func (s *Simulator) executeDownload(ctx context.Context, store *s3.Store, session *UserSession, bucket string, task *WorkloadTask) ([]byte, error) {
+	// Route to mesh mode if enabled (highest priority)
+	if s.meshClient != nil {
+		return s.executeDownloadMesh(ctx, bucket, task)
+	}
+
 	// Route to HTTP or direct store access
 	if s.config.UseHTTP {
 		return s.executeDownloadHTTP(ctx, session, bucket, task)

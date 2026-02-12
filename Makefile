@@ -196,7 +196,7 @@ docker-build:
 
 docker-up: docker-build
 	@TUNNELMESH_TOKEN=$$(openssl rand -hex 32); \
-	echo "Generated auth token: $${TUNNELMESH_TOKEN:0:16}... (truncated)"; \
+	echo "Generated auth token: $$TUNNELMESH_TOKEN"; \
 	printf "%s" "$$TUNNELMESH_TOKEN" > /tmp/tunnelmesh-docker-token; \
 	chmod 600 /tmp/tunnelmesh-docker-token; \
 	TUNNELMESH_TOKEN=$$TUNNELMESH_TOKEN $(DOCKER_COMPOSE) up -d; \

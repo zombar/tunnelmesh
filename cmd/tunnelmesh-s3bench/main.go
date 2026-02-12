@@ -57,6 +57,7 @@ var (
 	coordinatorURL string
 	sshKeyPath     string
 	insecureTLS    bool
+	authToken      string
 )
 
 func main() {
@@ -111,6 +112,7 @@ func init() {
 	runCmd.Flags().StringVar(&coordinatorURL, "coordinator", "", "Coordinator URL (enables mesh mode, e.g., https://coordinator.example.com:8443)")
 	runCmd.Flags().StringVar(&sshKeyPath, "ssh-key", "", "SSH private key path (default: ~/.tunnelmesh/s3bench_key)")
 	runCmd.Flags().BoolVar(&insecureTLS, "insecure-tls", true, "Skip TLS certificate verification (default: true for self-signed certs)")
+	runCmd.Flags().StringVar(&authToken, "auth-token", "", "Coordinator auth token (for protected coordinators)")
 }
 
 var runCmd = &cobra.Command{
@@ -278,7 +280,7 @@ func runScenario(cmd *cobra.Command, args []string) error {
 
 		// Register with coordinator
 		log.Info().Msg("Registering with coordinator...")
-		meshInfo, err := mesh.RegisterWithCoordinator(ctx, coordinatorURL, creds, insecureTLS)
+		meshInfo, err := mesh.RegisterWithCoordinator(ctx, coordinatorURL, creds, insecureTLS, authToken)
 		if err != nil {
 			return fmt.Errorf("registration failed: %w", err)
 		}

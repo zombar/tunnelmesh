@@ -23,7 +23,7 @@ type MeshInfo struct {
 
 // RegisterWithCoordinator registers s3bench as a peer with the coordinator.
 // Returns mesh connectivity information needed for S3 API access.
-func RegisterWithCoordinator(ctx context.Context, coordinatorURL string, creds *Credentials, insecureSkipVerify bool) (*MeshInfo, error) {
+func RegisterWithCoordinator(ctx context.Context, coordinatorURL string, creds *Credentials, insecureSkipVerify bool, authToken string) (*MeshInfo, error) {
 	// Get local IPs for registration
 	publicIPs, privateIPs, behindNAT := proto.GetLocalIPs()
 
@@ -63,6 +63,11 @@ func RegisterWithCoordinator(ctx context.Context, coordinatorURL string, creds *
 		return nil, fmt.Errorf("create HTTP request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Add auth token if provided
+	if authToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+authToken)
+	}
 
 	// Execute request
 	resp, err := client.Do(httpReq)

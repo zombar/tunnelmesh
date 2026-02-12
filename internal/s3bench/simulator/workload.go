@@ -249,10 +249,57 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 		}
 	}
 
+	// Generate download operations (20% of uploads get downloaded)
+	downloadTasks := w.generateDownloadTasks(tasks)
+	tasks = append(tasks, downloadTasks...)
+
 	// Sort tasks by real time
 	sortTasksByTime(tasks)
 
 	return tasks, nil
+}
+
+// generateDownloadTasks creates download tasks for some uploaded documents.
+func (w *WorkloadGenerator) generateDownloadTasks(uploadTasks []WorkloadTask) []WorkloadTask {
+	var downloads []WorkloadTask
+
+	// Track uploaded documents by filename
+	uploadedDocs := make(map[string]WorkloadTask)
+	for _, task := range uploadTasks {
+		if task.Operation == "upload" || task.Operation == "update" {
+			uploadedDocs[task.Filename] = task
+		}
+	}
+
+	// Generate downloads for ~20% of uploaded documents
+	for filename, uploadTask := range uploadedDocs {
+		// 20% chance to download this document
+		if rand.Intn(100) < 20 {
+			// Download some time after upload (30-90% through story)
+			downloadTime := uploadTask.StoryTime + time.Duration(float64(w.story.Duration())*0.3*(1+rand.Float64()))
+			if downloadTime > w.story.Duration() {
+				downloadTime = w.story.Duration() - 1*time.Minute
+			}
+
+			downloadTask := WorkloadTask{
+				TaskID:      w.nextTaskID(),
+				StoryTime:   downloadTime,
+				RealTime:    story.ScaledDuration(downloadTime, w.timeScale),
+				DocType:     uploadTask.DocType,
+				DocNumber:   uploadTask.DocNumber,
+				Filename:    filename,
+				ContentType: uploadTask.ContentType,
+				Author:      uploadTask.Author,
+				Phase:       uploadTask.Phase,
+				Context:     uploadTask.Context,
+				Operation:   "download",
+				FileShare:   uploadTask.FileShare,
+			}
+			downloads = append(downloads, downloadTask)
+		}
+	}
+
+	return downloads
 }
 
 // nextTaskID generates a unique task ID.
