@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
@@ -42,7 +43,7 @@ func NewCoordinatorClient(meshIP string, creds *Credentials, insecureSkipVerify 
 
 // CreateBucket creates a new S3 bucket on the coordinator.
 func (c *CoordinatorClient) CreateBucket(ctx context.Context, bucketName, ownerID string, quotaMB int64) error {
-	url := fmt.Sprintf("%s/api/s3/buckets", c.baseURL)
+	requestURL := fmt.Sprintf("%s/api/s3/buckets", c.baseURL)
 
 	// Build request payload
 	payload := map[string]interface{}{
@@ -61,7 +62,7 @@ func (c *CoordinatorClient) CreateBucket(ctx context.Context, bucketName, ownerI
 	}
 
 	// Create request
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -73,7 +74,7 @@ func (c *CoordinatorClient) CreateBucket(ctx context.Context, bucketName, ownerI
 	// Execute request
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("HTTP POST %s: %w", url, err)
+		return fmt.Errorf("HTTP POST %s: %w", requestURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -92,9 +93,9 @@ func (c *CoordinatorClient) CreateBucket(ctx context.Context, bucketName, ownerI
 
 // BucketExists checks if a bucket exists on the coordinator.
 func (c *CoordinatorClient) BucketExists(ctx context.Context, bucketName string) (bool, error) {
-	url := fmt.Sprintf("%s/api/s3/buckets/%s", c.baseURL, bucketName)
+	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s", c.baseURL, url.PathEscape(bucketName))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, requestURL, nil)
 	if err != nil {
 		return false, fmt.Errorf("create request: %w", err)
 	}
@@ -102,7 +103,7 @@ func (c *CoordinatorClient) BucketExists(ctx context.Context, bucketName string)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("HTTP HEAD %s: %w", url, err)
+		return false, fmt.Errorf("HTTP HEAD %s: %w", requestURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -118,9 +119,9 @@ func (c *CoordinatorClient) BucketExists(ctx context.Context, bucketName string)
 
 // PutObject uploads an object to the coordinator S3 API.
 func (c *CoordinatorClient) PutObject(ctx context.Context, bucket, key string, body []byte, contentType string, metadata map[string]string) error {
-	url := fmt.Sprintf("%s/api/s3/buckets/%s/objects/%s", c.baseURL, bucket, key)
+	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s/objects/%s", c.baseURL, url.PathEscape(bucket), url.PathEscape(key))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -138,7 +139,7 @@ func (c *CoordinatorClient) PutObject(ctx context.Context, bucket, key string, b
 	// Execute request
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("HTTP PUT %s: %w", url, err)
+		return fmt.Errorf("HTTP PUT %s: %w", requestURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -153,9 +154,9 @@ func (c *CoordinatorClient) PutObject(ctx context.Context, bucket, key string, b
 
 // DeleteObject deletes an object from the coordinator S3 API.
 func (c *CoordinatorClient) DeleteObject(ctx context.Context, bucket, key string) error {
-	url := fmt.Sprintf("%s/api/s3/buckets/%s/objects/%s", c.baseURL, bucket, key)
+	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s/objects/%s", c.baseURL, url.PathEscape(bucket), url.PathEscape(key))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, requestURL, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -164,7 +165,7 @@ func (c *CoordinatorClient) DeleteObject(ctx context.Context, bucket, key string
 	// Execute request
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("HTTP DELETE %s: %w", url, err)
+		return fmt.Errorf("HTTP DELETE %s: %w", requestURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -178,6 +179,41 @@ func (c *CoordinatorClient) DeleteObject(ctx context.Context, bucket, key string
 	}
 
 	return nil
+}
+
+// GetObject downloads an object from the coordinator S3 API.
+func (c *CoordinatorClient) GetObject(ctx context.Context, bucket, key string) ([]byte, error) {
+	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s/objects/%s", c.baseURL, url.PathEscape(bucket), url.PathEscape(key))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	c.setBasicAuth(req)
+
+	// Execute request
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP GET %s: %w", requestURL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// Check response
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("object not found: %s/%s", bucket, key)
+	}
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("get object failed: %d %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	// Read response body
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+
+	return data, nil
 }
 
 // setBasicAuth sets HTTP Basic Auth header using S3 credentials.

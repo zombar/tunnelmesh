@@ -414,6 +414,67 @@ func TestS3Proxy_PutObject(t *testing.T) {
 	assert.Equal(t, content, data)
 }
 
+func TestS3Proxy_PutObject_Streaming(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Use an io.Pipe to provide a non-seekable, non-bufferable streaming body.
+	// This verifies the handler works with a true streaming reader (like a real HTTP body),
+	// not just bytes.Reader which can be consumed all at once.
+	content := make([]byte, 128*1024) // 128KB — larger than streaming chunk size (~64KB)
+	for i := range content {
+		content[i] = byte(i % 256)
+	}
+
+	pr, pw := io.Pipe()
+	go func() {
+		// Write in small chunks to simulate a streaming upload
+		for offset := 0; offset < len(content); {
+			end := offset + 4096
+			if end > len(content) {
+				end = len(content)
+			}
+			_, err := pw.Write(content[offset:end])
+			if err != nil {
+				pw.CloseWithError(err)
+				return
+			}
+			offset = end
+		}
+		_ = pw.Close()
+	}()
+
+	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/test-bucket/objects/streamed.bin", pr)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.ContentLength = int64(len(content))
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NotEmpty(t, rec.Header().Get("ETag"))
+
+	// Verify the object was stored correctly
+	reader, _, err := srv.s3Store.GetObject(context.Background(), "test-bucket", "streamed.bin")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+
+	data, _ := io.ReadAll(reader)
+	assert.Equal(t, content, data)
+}
+
+func TestS3Proxy_PutObject_TooLarge(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Create a body just over the 10MB limit — use a reader that claims a large size
+	// to trigger MaxBytesReader during streaming through PutObject.
+	oversize := make([]byte, MaxS3ObjectSize+1)
+	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/test-bucket/objects/huge.bin", bytes.NewReader(oversize))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+}
+
 func TestS3Proxy_PutObject_SystemBucketForbidden(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 

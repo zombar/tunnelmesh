@@ -386,11 +386,16 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 			nodeID = "coordinator"
 		}
 
+		// Initialize chunk registry for chunk-level replication (avoids buffering full objects)
+		chunkRegistry := replication.NewChunkRegistry(nodeID, nil)
+		srv.s3Store.SetChunkRegistry(chunkRegistry)
+
 		// Initialize replicator
 		srv.replicator = replication.NewReplicator(replication.Config{
 			NodeID:               nodeID,
 			Transport:            srv.meshTransport,
 			S3Store:              s3Adapter,
+			ChunkRegistry:        chunkRegistry,
 			Logger:               log.Logger,
 			Context:              ctx, // Pass server context for proper cancellation
 			AckTimeout:           10 * time.Second,

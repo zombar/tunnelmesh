@@ -610,10 +610,11 @@ func (s *Simulator) executeUploadMesh(ctx context.Context, bucket string, task *
 
 // executeDownloadMesh performs an S3 download from the coordinator via mesh API.
 func (s *Simulator) executeDownloadMesh(ctx context.Context, bucket string, task *WorkloadTask) ([]byte, error) {
-	// Download from coordinator via mesh API
-	// Note: This would need a GetObject method in the mesh client
-	// For now, we'll skip actual download in mesh mode as it's not critical for testing uploads
-	return []byte("mesh download placeholder"), nil
+	data, err := s.meshClient.GetObject(ctx, bucket, task.Filename)
+	if err != nil {
+		return nil, fmt.Errorf("downloading object %s/%s: %w", bucket, task.Filename, err)
+	}
+	return data, nil
 }
 
 // executeDelete performs an S3 delete operation.

@@ -17,7 +17,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -57,30 +56,6 @@ var (
 	Commit    = "unknown"
 	BuildTime = "unknown"
 )
-
-// ballast is a large allocation that reduces GC frequency by increasing the
-// target heap size. This is particularly effective for reducing latency spikes
-// caused by GC pauses in packet forwarding paths. Package-level to ensure it
-// stays alive for the lifetime of the process.
-//
-//nolint:gochecknoglobals
-var ballast []byte
-
-// setupGCTuning configures the Go garbage collector for lower latency.
-// It sets GOGC to 200 and allocates a memory ballast.
-func setupGCTuning() {
-	// Set GOGC to 200 (default is 100) to trigger GC less frequently.
-	// This trades memory for lower latency variance.
-	debug.SetGCPercent(200)
-
-	// Allocate a 10MB ballast. The GC triggers when live heap reaches
-	// GOGC% of the previous heap size. With a ballast, the effective
-	// trigger point is higher, reducing GC frequency for small allocations.
-	ballast = make([]byte, 10<<20) // 10MB
-
-	// Prevent the ballast from being optimized away
-	runtime.KeepAlive(ballast)
-}
 
 var (
 	cfgFile  string
@@ -838,8 +813,6 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	}
 
 	// Tune GC for lower latency in packet forwarding
-	setupGCTuning()
-
 	// Start coordinator services if enabled (before registration)
 	// This allows this peer to register with itself if it's the bootstrap coordinator
 	var srv *coord.Server
