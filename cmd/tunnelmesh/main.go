@@ -414,9 +414,15 @@ func normalizeServerURL(serverURL string) (string, error) {
 		return "", fmt.Errorf("invalid server URL %q: %w", serverURL, err)
 	}
 
-	// Validate scheme (require HTTPS except for localhost)
-	if parsedURL.Scheme == "http" && !isLocalhostURL(parsedURL) {
+	// Validate scheme (require HTTPS except for localhost or if explicitly allowed)
+	allowHTTP := os.Getenv("TUNNELMESH_ALLOW_HTTP") == "true"
+	if parsedURL.Scheme == "http" && !isLocalhostURL(parsedURL) && !allowHTTP {
 		return "", fmt.Errorf("server URL must use HTTPS for remote servers (HTTP is only allowed for localhost): %q", serverURL)
+	}
+
+	// Warn if using HTTP with remote server (insecure)
+	if parsedURL.Scheme == "http" && allowHTTP && !isLocalhostURL(parsedURL) {
+		log.Warn().Msgf("Using HTTP for remote server %q (TUNNELMESH_ALLOW_HTTP=true) - THIS IS INSECURE", serverURL)
 	}
 
 	// Validate that path is empty or just "/"
