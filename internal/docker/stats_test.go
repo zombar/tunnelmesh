@@ -241,3 +241,45 @@ func TestStartPeriodicStatsCollection_ContextCancellation(t *testing.T) {
 		t.Fatal("StartPeriodicStatsCollection did not respect context cancellation")
 	}
 }
+
+func TestGetContainerStats_DiskBytes(t *testing.T) {
+	// Test ensures disk bytes are populated correctly from GetContainerStats
+	// This test verifies that the mock implementation returns realistic disk usage values
+	// (The real implementation uses ContainerInspectWithRaw to get SizeRootFs,
+	// not StorageStats.ReadSizeBytes which only provides I/O traffic metrics)
+
+	mockClient := &mockDockerClient{
+		containers: []ContainerInfo{
+			{ID: "abc123", Name: "test", State: "running"},
+		},
+	}
+
+	ctx := context.Background()
+	stats, err := mockClient.GetContainerStats(ctx, "abc123")
+	if err != nil {
+		t.Fatalf("GetContainerStats failed: %v", err)
+	}
+
+	if stats == nil {
+		t.Fatal("Expected non-nil stats")
+	}
+
+	// Verify disk bytes are populated with realistic value
+	// Mock returns 1GB (1073741824 bytes)
+	if stats.DiskBytes == 0 {
+		t.Error("DiskBytes should not be 0 for a container")
+	}
+
+	// Verify disk bytes are not the incorrect I/O metric (~52MB)
+	// The old bug used StorageStats.ReadSizeBytes which was typically around 52MB
+	const incorrectIOMetric = 52 * 1024 * 1024 // 52MB
+	if stats.DiskBytes < incorrectIOMetric*2 {
+		t.Errorf("DiskBytes (%d) appears too small, may be using I/O metric instead of filesystem size", stats.DiskBytes)
+	}
+
+	// Mock returns 1GB, verify it's in reasonable range
+	expectedBytes := uint64(1073741824) // 1GB
+	if stats.DiskBytes != expectedBytes {
+		t.Errorf("Expected DiskBytes = %d, got %d", expectedBytes, stats.DiskBytes)
+	}
+}

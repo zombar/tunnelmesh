@@ -119,8 +119,17 @@ func (c *realDockerClient) GetContainerStats(ctx context.Context, id string) (*C
 		memPercent = float64(v.MemoryStats.Usage) / float64(v.MemoryStats.Limit) * 100.0
 	}
 
-	// Get disk usage (sum of all storage layers)
-	diskBytes := v.StorageStats.ReadSizeBytes
+	// Get disk size from inspect API (stats API doesn't provide actual disk usage)
+	// Note: Docker stats API only provides I/O metrics (StorageStats.ReadSizeBytes),
+	// not filesystem size. We need SizeRootFs from the inspect API.
+	diskBytes := uint64(0)
+	inspect, _, err := c.cli.ContainerInspectWithRaw(ctx, id, true) // getSize=true
+	if err != nil {
+		log.Warn().Err(err).Str("container", id).Msg("Failed to get container size, using 0")
+		// Continue with zero disk bytes rather than failing entire stats call
+	} else if inspect.SizeRootFs != nil {
+		diskBytes = uint64(*inspect.SizeRootFs)
+	}
 
 	return &ContainerStats{
 		ContainerID:   v.ID,
