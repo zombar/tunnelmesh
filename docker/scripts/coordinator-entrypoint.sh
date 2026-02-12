@@ -37,12 +37,23 @@ envsubst < /etc/tunnelmesh/coordinator.yaml.template > /etc/tunnelmesh/coordinat
 echo "Generated config:"
 cat /etc/tunnelmesh/coordinator.yaml
 
-# Build command - each coordinator bootstraps independently
-CMD="tunnelmesh join --config /etc/tunnelmesh/coordinator.yaml"
-
-# Set log level from environment (default: info)
+# Build command - coord-1 bootstraps, others join coord-1
 LOG_LEVEL="${LOG_LEVEL:-info}"
-CMD="$CMD --log-level $LOG_LEVEL"
+
+if [ "$(hostname)" = "coord-1" ]; then
+    # coord-1 is the bootstrap coordinator
+    echo "Starting as BOOTSTRAP coordinator..."
+    CMD="tunnelmesh join --config /etc/tunnelmesh/coordinator.yaml --log-level $LOG_LEVEL"
+else
+    # coord-2 and coord-3 join coord-1's mesh
+    echo "Waiting for coord-1 to be ready..."
+    until curl -sf http://coord-1:8080/health > /dev/null 2>&1; do
+        echo "  coord-1 not ready, waiting..."
+        sleep 2
+    done
+    echo "coord-1 is ready! Joining mesh..."
+    CMD="tunnelmesh join http://coord-1:8080 --config /etc/tunnelmesh/coordinator.yaml --log-level $LOG_LEVEL"
+fi
 
 # Start the coordinator
 echo "Starting mesh coordinator..."

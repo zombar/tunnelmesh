@@ -80,6 +80,9 @@ services:
       - "8082:8080"  # Different port for coordinator 2
     environment:
       - TUNNELMESH_TOKEN=${TUNNELMESH_TOKEN}
+    depends_on:
+      coord-1:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 5s
@@ -115,6 +118,9 @@ services:
       - "8083:8080"  # Different port for coordinator 3
     environment:
       - TUNNELMESH_TOKEN=${TUNNELMESH_TOKEN}
+    depends_on:
+      coord-1:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 5s
