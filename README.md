@@ -492,15 +492,22 @@ See **[CLI Reference](docs/CLI.md)** for complete documentation, all flags, and 
 
 ## Docker Deployment
 
-Run TunnelMesh in containers for development, testing, or production. See the **[Docker Deployment
-Guide](docs/DOCKER.md)** for complete documentation.
+Run TunnelMesh in containers for development, testing, or production. The docker-compose setup includes **scalable coordinators** for testing chunk-level replication between multiple coordinator nodes. See the **[Docker Deployment Guide](docs/DOCKER.md)** for complete documentation.
 
 ```bash
 cd docker
-docker compose up -d        # Start the full mesh stack
-docker compose logs -f      # View logs
-make docker-test            # Run connectivity tests
+docker compose up -d                         # Start with 2 coordinators (default)
+docker compose up -d --scale coordinator=3   # Scale to 3 coordinators
+make docker-logs-coords                      # View coordinator logs
+make docker-test                             # Run connectivity tests
 ```
+
+**Multi-coordinator features:**
+- Coordinators discover each other via peer registration (no primary/replica distinction)
+- S3 chunks replicated peer-to-peer based on per-bucket replication factors
+- Each coordinator runs its own monitoring stack (Prometheus/Grafana/Loki)
+- Ephemeral storage (tmpfs) for testing - data resets on restart
+- Easy scaling for replication testing: `make docker-scale-coords`
 
 ## Cloud Deployment
 

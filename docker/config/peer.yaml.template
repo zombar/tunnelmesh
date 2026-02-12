@@ -14,9 +14,9 @@ dns:
   listen: "127.0.0.53:53"
   aliases:
     - "alt.${NODE_NAME}"
-# Loki log shipping disabled for clients (coordinators handle their own logs)
-# loki:
-#   enabled: true
-#   url: "http://coordinator-node.tunnelmesh:3100"
-#   batch_size: 100
-#   flush_interval: "5s"
+# Loki log shipping to coordinator (uses Docker DNS round-robin)
+loki:
+  enabled: true
+  url: "http://coordinator:3100"  # Docker DNS load-balances across coordinators
+  batch_size: 100
+  flush_interval: "5s"
