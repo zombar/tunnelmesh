@@ -7,6 +7,7 @@ Complete command-line reference for TunnelMesh with examples and walkthroughs.
 > [!IMPORTANT]
 > **Sudo Required**: TunnelMesh needs elevated privileges to create TUN network interfaces. Always run
 > with `sudo` except for `init`, `version`, and `context` commands.
+
 > [!WARNING]
 > **Secure Token Storage**: Auth tokens are passed via environment variable (`TUNNELMESH_TOKEN`), not CLI
 > flags. Never commit tokens to git or share them publicly. Store securely with `chmod 600` permissions.
