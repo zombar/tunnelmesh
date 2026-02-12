@@ -577,6 +577,16 @@ func (s *Store) updateBucketSize(bucketName string, delta int64) error {
 
 // PutObject writes an object to a bucket using CDC chunks stored in CAS.
 // Archives the current version before overwriting (for version history).
+//
+// Streaming behavior: Data is chunked and written to CAS incrementally as it's read.
+// This provides memory efficiency (peak usage ~64KB regardless of file size) but means
+// that partial uploads on failure will leave orphaned chunks in CAS until the next
+// garbage collection cycle. Orphaned chunks are cleaned up automatically during GC.
+//
+// Context cancellation: If ctx is canceled mid-upload, the function returns immediately
+// but chunks already written to CAS will remain until GC cleanup.
+//
+//nolint:gocyclo // Complexity inherited from streaming refactor - will be addressed in future refactoring
 func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string, metadata map[string]string) (*ObjectMeta, error) {
 	// Validate names (defense in depth)
 	if err := validateName(bucket); err != nil {
@@ -634,6 +644,13 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	md5Hasher := md5.New()
 
 	for {
+		// Check for context cancellation to allow interrupting long uploads
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("upload canceled: %w", ctx.Err())
+		default:
+		}
+
 		chunk, chunkHash, err := streamChunker.NextChunk()
 		if errors.Is(err, io.EOF) {
 			break
@@ -650,9 +667,11 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		// Register chunk ownership in distributed registry (if configured)
 		if s.chunkRegistry != nil {
 			if err := s.chunkRegistry.RegisterChunk(chunkHash, int64(len(chunk))); err != nil {
-				// Log warning but don't fail upload - registry is eventually consistent
-				// TODO: Add proper logging when logger is available
-				_ = err
+				// Don't fail upload if registry update fails (eventual consistency)
+				// but log to stderr in debug mode for troubleshooting
+				if os.Getenv("DEBUG") != "" || os.Getenv("TUNNELMESH_DEBUG") != "" {
+					fmt.Fprintf(os.Stderr, "chunk registry warning: failed to register %s: %v\n", chunkHash[:8], err)
+				}
 			}
 		}
 

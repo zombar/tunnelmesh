@@ -461,14 +461,21 @@ func (cr *ChunkRegistry) CleanupStaleOwners(maxAge time.Duration) int {
 
 	for hash, ownership := range cr.ownership {
 		// Remove stale owners
+		ownersCleaned := false
 		for coordID, lastSeen := range ownership.Owners {
 			if lastSeen.Before(cutoff) {
 				delete(ownership.Owners, coordID)
-				ownership.VersionVector.Increment(cr.localCoordID) // Increment local VV
-				ownership.UpdatedAt = time.Now()
+				ownersCleaned = true
 				cleaned++
 				cr.logger.Debug("Cleaned stale owner %s for chunk %s (last seen: %v)", coordID, truncateHash(hash), lastSeen)
 			}
+		}
+
+		// Update version vector once per chunk (not per owner removed)
+		// This prevents causality tracking issues when multiple owners are cleaned
+		if ownersCleaned {
+			ownership.VersionVector.Increment(cr.localCoordID)
+			ownership.UpdatedAt = time.Now()
 		}
 
 		// Remove entire entry if no owners remain
