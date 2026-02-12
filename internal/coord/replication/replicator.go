@@ -1488,18 +1488,18 @@ func (r *Replicator) FetchChunk(ctx context.Context, peerID, chunkHash string) (
 		return nil, fmt.Errorf("send to coordinator: %w", err)
 	}
 
-	// Wait for response with timeout
-	timeout := 30 * time.Second
+	// Wait for response with timeout (use context for proper timeout handling)
+	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	select {
 	case response := <-responseChan:
 		if !response.Success {
 			return nil, fmt.Errorf("fetch chunk failed: %s", response.Error)
 		}
 		return response.ChunkData, nil
-	case <-ctx.Done():
-		return nil, fmt.Errorf("context canceled: %w", ctx.Err())
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("fetch chunk timeout after %v", timeout)
+	case <-fetchCtx.Done():
+		return nil, fmt.Errorf("fetch chunk timeout or canceled: %w", fetchCtx.Err())
 	}
 }
 
