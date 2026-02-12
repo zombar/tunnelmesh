@@ -83,7 +83,7 @@ LOG_LEVEL="${LOG_LEVEL:-info}"
 if [ "$(hostname)" = "coordinator-1" ]; then
     # coordinator-1 is the bootstrap coordinator
     echo "Starting as BOOTSTRAP coordinator..."
-    CMD="tunnelmesh join --config /etc/tunnelmesh/coordinator.yaml --log-level $LOG_LEVEL --latitude $LATITUDE --longitude $LONGITUDE --city \"$CITY_NAME\""
+    CMD="tunnelmesh join --config /etc/tunnelmesh/coordinator.yaml --log-level $LOG_LEVEL --latitude $LATITUDE --longitude $LONGITUDE --city $CITY_NAME"
 else
     # coordinator-2 and coordinator-3 join coordinator-1's mesh
     echo "Waiting for coordinator-1 to be ready..."
@@ -95,7 +95,7 @@ else
 
     # Allow HTTP for Docker testing environment
     export TUNNELMESH_ALLOW_HTTP=true
-    CMD="tunnelmesh join http://coordinator-1:8080 --config /etc/tunnelmesh/coordinator.yaml --log-level $LOG_LEVEL --latitude $LATITUDE --longitude $LONGITUDE --city \"$CITY_NAME\""
+    CMD="tunnelmesh join http://coordinator-1:8080 --config /etc/tunnelmesh/coordinator.yaml --log-level $LOG_LEVEL --latitude $LATITUDE --longitude $LONGITUDE --city $CITY_NAME"
 fi
 
 # Start the coordinator
