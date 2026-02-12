@@ -115,11 +115,17 @@ type ChunkRegistryInterface interface {
 }
 
 // Store provides S3 storage with content-addressable chunks and versioning.
+// ReplicatorInterface defines the interface for chunk replication (to avoid import cycle).
+type ReplicatorInterface interface {
+	FetchChunk(ctx context.Context, peerID, chunkHash string) ([]byte, error)
+}
+
 type Store struct {
 	dataDir                 string
 	cas                     *CAS // Content-addressable storage for chunks
 	quota                   *QuotaManager
 	chunkRegistry           ChunkRegistryInterface // Optional distributed chunk ownership tracking
+	replicator              ReplicatorInterface    // Optional replicator for fetching remote chunks (Phase 5)
 	coordinatorID           string                 // Local coordinator ID for version vectors (optional)
 	defaultObjectExpiryDays int                    // Days until objects expire (0 = never)
 	defaultShareExpiryDays  int                    // Days until file shares expire (0 = never)
@@ -213,6 +219,13 @@ func (s *Store) SetChunkRegistry(registry ChunkRegistryInterface) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.chunkRegistry = registry
+}
+
+// SetReplicator sets the replicator for fetching remote chunks (Phase 5).
+func (s *Store) SetReplicator(replicator ReplicatorInterface) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.replicator = replicator
 }
 
 // SetCoordinatorID sets the coordinator ID for version vector tracking.
@@ -2154,6 +2167,26 @@ func (s *Store) getObjectContent(ctx context.Context, bucket, key string, meta *
 		return io.NopCloser(bytes.NewReader(nil)), meta, nil
 	}
 
+	// Use distributed chunk reader if replicator is configured (Phase 5)
+	// This enables fetching missing chunks from remote coordinators
+	s.mu.RLock()
+	replicator := s.replicator
+	registry := s.chunkRegistry
+	s.mu.RUnlock()
+
+	if replicator != nil && registry != nil {
+		// Distributed reads: can fetch chunks from remote peers
+		reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
+			Chunks:     meta.Chunks,
+			LocalCAS:   s.cas,
+			Registry:   registry,
+			Replicator: replicator,
+			TotalSize:  meta.Size,
+		})
+		return io.NopCloser(reader), meta, nil
+	}
+
+	// Local-only reads: all chunks must be local
 	return newChunkReader(ctx, s.cas, meta.Chunks), meta, nil
 }
 

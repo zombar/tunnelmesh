@@ -108,8 +108,9 @@ type Replicator struct {
 	pending   map[string]*pendingReplication // map[messageID]*pendingReplication
 
 	// Pending chunk ACKs (chunk-level, Phase 4)
-	pendingChunksMu sync.RWMutex
-	pendingChunks   map[string]*pendingChunkReplication // map[messageID]*pendingChunkReplication
+	pendingChunksMu      sync.RWMutex
+	pendingChunks        map[string]*pendingChunkReplication        // map[messageID]*pendingChunkReplication
+	pendingFetchRequests map[string]chan *FetchChunkResponsePayload // map[requestID]chan (Phase 5)
 
 	// Rate limiting
 	rateLimiter *rate.Limiter // Limits incoming replication messages per second
@@ -538,6 +539,10 @@ func (r *Replicator) handleIncomingMessage(from string, data []byte) error {
 		return r.handleReplicateChunk(msg)
 	case MessageTypeChunkAck:
 		return r.handleChunkAck(msg)
+	case MessageTypeFetchChunk:
+		return r.handleFetchChunk(msg)
+	case MessageTypeFetchChunkResponse:
+		return r.handleFetchChunkResponse(msg)
 	default:
 		r.logger.Warn().Str("type", string(msg.Type)).Msg("Unknown message type")
 		return fmt.Errorf("unknown message type: %s", msg.Type)
@@ -1432,4 +1437,177 @@ func (r *Replicator) waitForChunkAck(ctx context.Context, msgID string) (*ChunkA
 	case <-pending.timeout.C:
 		return nil, fmt.Errorf("chunk ack timeout after %v", r.chunkAckTimeout)
 	}
+}
+
+// FetchChunk requests a chunk from a remote peer (for distributed reads).
+func (r *Replicator) FetchChunk(ctx context.Context, peerID, chunkHash string) ([]byte, error) {
+	requestID := uuid.New().String()
+	msgID := uuid.New().String()
+
+	// Create fetch request payload
+	payload := FetchChunkPayload{
+		ChunkHash: chunkHash,
+		RequestID: requestID,
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal fetch payload: %w", err)
+	}
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeFetchChunk,
+		ID:      msgID,
+		From:    r.nodeID,
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("marshal message: %w", err)
+	}
+
+	// Track pending fetch request
+	responseChan := make(chan *FetchChunkResponsePayload, 1)
+	r.pendingChunksMu.Lock()
+	if r.pendingFetchRequests == nil {
+		r.pendingFetchRequests = make(map[string]chan *FetchChunkResponsePayload)
+	}
+	r.pendingFetchRequests[requestID] = responseChan
+	r.pendingChunksMu.Unlock()
+
+	// Clean up on return
+	defer func() {
+		r.pendingChunksMu.Lock()
+		delete(r.pendingFetchRequests, requestID)
+		close(responseChan)
+		r.pendingChunksMu.Unlock()
+	}()
+
+	// Send via transport
+	if err := r.transport.SendToCoordinator(ctx, peerID, data); err != nil {
+		return nil, fmt.Errorf("send to coordinator: %w", err)
+	}
+
+	// Wait for response with timeout
+	timeout := 30 * time.Second
+	select {
+	case response := <-responseChan:
+		if !response.Success {
+			return nil, fmt.Errorf("fetch chunk failed: %s", response.Error)
+		}
+		return response.ChunkData, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("context canceled: %w", ctx.Err())
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("fetch chunk timeout after %v", timeout)
+	}
+}
+
+// handleFetchChunk processes an incoming chunk fetch request.
+func (r *Replicator) handleFetchChunk(msg *Message) error {
+	var payload FetchChunkPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal fetch chunk: %w", err)
+	}
+
+	r.logger.Debug().
+		Str("chunk", truncateHashForLog(payload.ChunkHash)).
+		Str("request_id", payload.RequestID).
+		Str("from", msg.From).
+		Msg("Received chunk fetch request")
+
+	// Read chunk from local storage
+	chunkData, err := r.s3.ReadChunk(context.Background(), payload.ChunkHash)
+
+	// Create response
+	response := FetchChunkResponsePayload{
+		ChunkHash: payload.ChunkHash,
+		RequestID: payload.RequestID,
+		Success:   err == nil,
+	}
+
+	if err != nil {
+		response.Error = fmt.Sprintf("chunk not found: %v", err)
+		r.logger.Warn().
+			Str("chunk", truncateHashForLog(payload.ChunkHash)).
+			Err(err).
+			Msg("Failed to read chunk for fetch request")
+	} else {
+		response.ChunkData = chunkData
+	}
+
+	// Send response
+	return r.sendFetchChunkResponse(msg.From, response)
+}
+
+// handleFetchChunkResponse processes an incoming chunk fetch response.
+func (r *Replicator) handleFetchChunkResponse(msg *Message) error {
+	var payload FetchChunkResponsePayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal fetch chunk response: %w", err)
+	}
+
+	r.logger.Debug().
+		Str("chunk", truncateHashForLog(payload.ChunkHash)).
+		Str("request_id", payload.RequestID).
+		Bool("success", payload.Success).
+		Msg("Received chunk fetch response")
+
+	// Find pending fetch request
+	r.pendingChunksMu.RLock()
+	responseChan, exists := r.pendingFetchRequests[payload.RequestID]
+	r.pendingChunksMu.RUnlock()
+
+	if !exists {
+		// Response for unknown request (probably timed out already)
+		r.logger.Warn().
+			Str("request_id", payload.RequestID).
+			Msg("Received fetch response for unknown request")
+		return nil
+	}
+
+	// Deliver response to waiting goroutine (non-blocking)
+	select {
+	case responseChan <- &payload:
+		// Response delivered successfully
+	default:
+		// Channel full or closed (timeout fired or FetchChunk not waiting)
+	}
+
+	return nil
+}
+
+// sendFetchChunkResponse sends a chunk fetch response to a peer.
+func (r *Replicator) sendFetchChunkResponse(peerID string, payload FetchChunkResponsePayload) error {
+	msgID := uuid.New().String()
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal fetch response: %w", err)
+	}
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeFetchChunkResponse,
+		ID:      msgID,
+		From:    r.nodeID,
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal message: %w", err)
+	}
+
+	// Send via transport (use background context since this is a response)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := r.transport.SendToCoordinator(ctx, peerID, data); err != nil {
+		return fmt.Errorf("send to coordinator: %w", err)
+	}
+
+	return nil
 }

@@ -45,6 +45,12 @@ const (
 
 	// MessageTypeChunkAck acknowledges successful chunk replication
 	MessageTypeChunkAck MessageType = "chunk_ack"
+
+	// MessageTypeFetchChunk requests chunk data from a peer (for distributed reads)
+	MessageTypeFetchChunk MessageType = "fetch_chunk"
+
+	// MessageTypeFetchChunkResponse returns chunk data in response to a fetch request
+	MessageTypeFetchChunkResponse MessageType = "fetch_chunk_response"
 )
 
 // Message is the envelope for all replication protocol messages.
@@ -147,6 +153,21 @@ type ChunkAckPayload struct {
 	ChunkIndex  int    `json:"chunk_index"`
 	Success     bool   `json:"success"`
 	Error       string `json:"error,omitempty"`
+}
+
+// FetchChunkPayload requests chunk data from a peer.
+type FetchChunkPayload struct {
+	ChunkHash string `json:"chunk_hash"` // SHA-256 of chunk to fetch
+	RequestID string `json:"request_id"` // For matching response
+}
+
+// FetchChunkResponsePayload returns chunk data.
+type FetchChunkResponsePayload struct {
+	ChunkHash string `json:"chunk_hash"` // SHA-256 of chunk
+	ChunkData []byte `json:"chunk_data"` // Chunk data (compressed + encrypted)
+	RequestID string `json:"request_id"` // Matches FetchChunkPayload.RequestID
+	Success   bool   `json:"success"`
+	Error     string `json:"error,omitempty"`
 }
 
 // NewReplicateMessage creates a new replication message.
