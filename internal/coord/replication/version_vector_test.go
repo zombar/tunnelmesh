@@ -469,3 +469,102 @@ func TestVersionVector_CausalityScenarios(t *testing.T) {
 		assert.NotNil(t, winner23)
 	})
 }
+
+func TestCompareVersionVectorMaps(t *testing.T) {
+	tests := []struct {
+		name     string
+		vv1      map[string]uint64
+		vv2      map[string]uint64
+		expected VectorRelationship
+	}{
+		{
+			name:     "equal",
+			vv1:      map[string]uint64{"A": 1, "B": 2},
+			vv2:      map[string]uint64{"A": 1, "B": 2},
+			expected: VectorEqual,
+		},
+		{
+			name:     "vv1 before vv2",
+			vv1:      map[string]uint64{"A": 1},
+			vv2:      map[string]uint64{"A": 2},
+			expected: VectorBefore,
+		},
+		{
+			name:     "vv1 after vv2",
+			vv1:      map[string]uint64{"A": 2},
+			vv2:      map[string]uint64{"A": 1},
+			expected: VectorAfter,
+		},
+		{
+			name:     "concurrent",
+			vv1:      map[string]uint64{"A": 2, "B": 1},
+			vv2:      map[string]uint64{"A": 1, "B": 2},
+			expected: VectorConcurrent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := CompareVersionVectorMaps(tt.vv1, tt.vv2)
+			if result != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestMergeVersionVectorMaps(t *testing.T) {
+	vv1 := map[string]uint64{"A": 2, "B": 1, "C": 3}
+	vv2 := map[string]uint64{"A": 1, "B": 3, "D": 2}
+
+	merged := MergeVersionVectorMaps(vv1, vv2)
+
+	expected := map[string]uint64{
+		"A": 2, // max(2, 1)
+		"B": 3, // max(1, 3)
+		"C": 3, // only in vv1
+		"D": 2, // only in vv2
+	}
+
+	if len(merged) != len(expected) {
+		t.Fatalf("expected %d entries, got %d", len(expected), len(merged))
+	}
+
+	for k, expectedVal := range expected {
+		if merged[k] != expectedVal {
+			t.Errorf("key %s: expected %d, got %d", k, expectedVal, merged[k])
+		}
+	}
+}
+
+func TestResolveConflictMaps(t *testing.T) {
+	// Concurrent version vectors
+	vv1 := map[string]uint64{"A": 2, "B": 1}
+	vv2 := map[string]uint64{"A": 1, "B": 2}
+
+	winner := ResolveConflictMaps(vv1, vv2)
+
+	// Should use deterministic tie-breaker
+	// The result should be one of the inputs
+	if !mapsEqual(winner, vv1) && !mapsEqual(winner, vv2) {
+		t.Error("winner should be one of the input version vectors")
+	}
+
+	// Calling again should give same result (deterministic)
+	winner2 := ResolveConflictMaps(vv1, vv2)
+	if !mapsEqual(winner, winner2) {
+		t.Error("conflict resolution should be deterministic")
+	}
+}
+
+func mapsEqual(m1, m2 map[string]uint64) bool {
+	if len(m1) != len(m2) {
+		return false
+	}
+	for k, v := range m1 {
+		if m2[k] != v {
+			return false
+		}
+	}
+	return true
+}
