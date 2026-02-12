@@ -1999,27 +1999,27 @@ func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, refere
 			if registry != nil {
 				owners, err := registry.GetOwners(hash)
 				if err == nil && len(owners) > 0 {
-					// Check if we're the sole owner
-					isSoleOwner := len(owners) == 1 && owners[0] == coordID
-					hasOtherOwners := false
-					for _, owner := range owners {
-						if owner != coordID {
-							hasOtherOwners = true
-							break
+					// Fast path: sole owner check
+					if len(owners) == 1 && owners[0] == coordID {
+						// We're the sole owner - safe to delete
+					} else {
+						// Check if any other coordinator owns this chunk
+						hasOtherOwners := false
+						for _, owner := range owners {
+							if owner != coordID {
+								hasOtherOwners = true
+								break
+							}
 						}
-					}
 
-					if hasOtherOwners {
-						// Other coordinators still own this chunk - don't delete locally
-						stats.ChunksSkippedShared++
-						return nil
-					}
+						if hasOtherOwners {
+							// Other coordinators still own this chunk - don't delete locally
+							stats.ChunksSkippedShared++
+							return nil
+						}
 
-					// If we're the sole owner (or the only owner listed is us),
-					// it's safe to delete
-					if !isSoleOwner && len(owners) > 0 {
-						// Registry has owners but we're not listed - don't delete
-						// (we might be out of sync with registry)
+						// Owners list exists but doesn't include us - registry might be out of sync
+						// Don't delete to be safe
 						stats.ChunksSkippedShared++
 						return nil
 					}
