@@ -30,6 +30,22 @@ func GenerateKeyPair(privPath string) error {
 	return SaveKeyPairFromED25519(privPath, pubKey, privKey)
 }
 
+// GenerateKeyPairFromSeed generates a deterministic ED25519 key pair from a seed string.
+// The same seed will always produce the same key pair.
+// WARNING: This reduces security and should ONLY be used for testing environments.
+// For production, use GenerateKeyPair which uses cryptographically secure randomness.
+func GenerateKeyPairFromSeed(privPath string, seed string) error {
+	// Derive 32-byte seed from input string
+	h := sha256.Sum256([]byte(seed))
+
+	// ED25519 private key is 64 bytes: [32-byte seed][32-byte public key]
+	// NewKeyFromSeed creates the full key deterministically from just the seed
+	privKey := ed25519.NewKeyFromSeed(h[:])
+	pubKey := privKey.Public().(ed25519.PublicKey)
+
+	return SaveKeyPairFromED25519(privPath, pubKey, privKey)
+}
+
 // SaveKeyPairFromED25519 saves an existing ED25519 keypair in SSH format.
 // The private key is saved to privPath and public key to privPath.pub
 func SaveKeyPairFromED25519(privPath string, pubKey ed25519.PublicKey, privKey ed25519.PrivateKey) error {
@@ -115,7 +131,8 @@ func LoadAuthorizedKeys(path string) ([]ssh.PublicKey, error) {
 }
 
 // EnsureKeyPairExists loads an existing key pair or generates a new one.
-func EnsureKeyPairExists(privPath string) (ssh.Signer, error) {
+// If seed is provided, generates keys deterministically from the seed (TESTING ONLY).
+func EnsureKeyPairExists(privPath string, seed string) (ssh.Signer, error) {
 	// Try to load existing key
 	signer, err := LoadPrivateKey(privPath)
 	if err == nil {
@@ -130,8 +147,14 @@ func EnsureKeyPairExists(privPath string) (ssh.Signer, error) {
 
 	// Generate new key pair if it doesn't exist
 	if isNotExist {
-		if err := GenerateKeyPair(privPath); err != nil {
-			return nil, fmt.Errorf("generate key pair: %w", err)
+		if seed != "" {
+			if err := GenerateKeyPairFromSeed(privPath, seed); err != nil {
+				return nil, fmt.Errorf("generate key pair from seed: %w", err)
+			}
+		} else {
+			if err := GenerateKeyPair(privPath); err != nil {
+				return nil, fmt.Errorf("generate key pair: %w", err)
+			}
 		}
 		return LoadPrivateKey(privPath)
 	}

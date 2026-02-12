@@ -121,16 +121,86 @@ func TestEnsureKeyPairExists(t *testing.T) {
 	privPath := filepath.Join(dir, "id_ed25519")
 
 	// First call should generate keys
-	signer1, err := EnsureKeyPairExists(privPath)
+	signer1, err := EnsureKeyPairExists(privPath, "")
 	require.NoError(t, err)
 	assert.NotNil(t, signer1)
 
 	// Second call should load existing keys
-	signer2, err := EnsureKeyPairExists(privPath)
+	signer2, err := EnsureKeyPairExists(privPath, "")
 	require.NoError(t, err)
 	assert.NotNil(t, signer2)
 
 	// Keys should be the same
+	assert.Equal(t,
+		ssh.MarshalAuthorizedKey(signer1.PublicKey()),
+		ssh.MarshalAuthorizedKey(signer2.PublicKey()),
+	)
+}
+
+func TestGenerateKeyPairFromSeed(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	seed := "test-seed-coordinator-1"
+
+	// Generate keys from seed twice in different locations
+	privPath1 := filepath.Join(dir, "key1", "id_ed25519")
+	err := GenerateKeyPairFromSeed(privPath1, seed)
+	require.NoError(t, err)
+
+	privPath2 := filepath.Join(dir, "key2", "id_ed25519")
+	err = GenerateKeyPairFromSeed(privPath2, seed)
+	require.NoError(t, err)
+
+	// Load both keys
+	signer1, err := LoadPrivateKey(privPath1)
+	require.NoError(t, err)
+
+	signer2, err := LoadPrivateKey(privPath2)
+	require.NoError(t, err)
+
+	// Keys should be identical (deterministic)
+	assert.Equal(t,
+		ssh.MarshalAuthorizedKey(signer1.PublicKey()),
+		ssh.MarshalAuthorizedKey(signer2.PublicKey()),
+	)
+
+	// Different seed should produce different keys
+	privPath3 := filepath.Join(dir, "key3", "id_ed25519")
+	err = GenerateKeyPairFromSeed(privPath3, "different-seed")
+	require.NoError(t, err)
+
+	signer3, err := LoadPrivateKey(privPath3)
+	require.NoError(t, err)
+
+	assert.NotEqual(t,
+		ssh.MarshalAuthorizedKey(signer1.PublicKey()),
+		ssh.MarshalAuthorizedKey(signer3.PublicKey()),
+	)
+}
+
+func TestEnsureKeyPairExistsWithSeed(t *testing.T) {
+	dir, cleanup := testutil.TempDir(t)
+	defer cleanup()
+
+	privPath := filepath.Join(dir, "id_ed25519")
+	seed := "coordinator-replica-1"
+
+	// First call with seed should generate deterministic keys
+	signer1, err := EnsureKeyPairExists(privPath, seed)
+	require.NoError(t, err)
+	assert.NotNil(t, signer1)
+
+	// Remove the key
+	require.NoError(t, os.Remove(privPath))
+	require.NoError(t, os.Remove(privPath+".pub"))
+
+	// Second call with same seed should regenerate identical keys
+	signer2, err := EnsureKeyPairExists(privPath, seed)
+	require.NoError(t, err)
+	assert.NotNil(t, signer2)
+
+	// Keys should be identical
 	assert.Equal(t,
 		ssh.MarshalAuthorizedKey(signer1.PublicKey()),
 		ssh.MarshalAuthorizedKey(signer2.PublicKey()),

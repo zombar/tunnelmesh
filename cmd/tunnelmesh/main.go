@@ -101,6 +101,9 @@ var (
 	// Context flag for join command
 	joinContext string
 
+	// Deterministic key generation (TESTING ONLY)
+	keygenSeed string
+
 	// Server feature flags
 	// Tracing flag
 	enableTracing bool
@@ -194,6 +197,7 @@ Auth token must be set via TUNNELMESH_TOKEN environment variable.`,
 	joinCmd.Flags().BoolVar(&allowExitTraffic, "allow-exit-traffic", false, "allow this peer to act as exit peer for other peers")
 	joinCmd.Flags().BoolVar(&enableTracing, "enable-tracing", false, "enable runtime tracing (exposes /debug/trace endpoint)")
 	joinCmd.Flags().StringVar(&joinContext, "context", "", "save/update context with this name after joining")
+	joinCmd.Flags().StringVar(&keygenSeed, "keygen-seed", "", "seed for deterministic key generation (TESTING ONLY - reduces security)")
 	rootCmd.AddCommand(joinCmd)
 
 	// Status command
@@ -629,6 +633,28 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	setupLogging()
 	logStartupBanner()
 
+	// Display security warning if using deterministic key generation
+	if keygenSeed != "" {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+		fmt.Fprintln(os.Stderr, "@           SECURITY WARNING: DETERMINISTIC KEYS         @")
+		fmt.Fprintln(os.Stderr, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Using --keygen-seed generates SSH keys deterministically from")
+		fmt.Fprintln(os.Stderr, "the provided seed value. This REDUCES SECURITY and should")
+		fmt.Fprintln(os.Stderr, "ONLY be used for testing environments.")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "  ⚠️  Predictable keys are vulnerable to cryptographic attacks")
+		fmt.Fprintln(os.Stderr, "  ⚠️  Anyone with the seed can generate your private keys")
+		fmt.Fprintln(os.Stderr, "  ⚠️  Do NOT use in production or with sensitive data")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "For production deployments, remove --keygen-seed to use")
+		fmt.Fprintln(os.Stderr, "cryptographically secure random key generation.")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+		fmt.Fprintln(os.Stderr)
+	}
+
 	// Initialize tracing if enabled
 	if enableTracing {
 		if err := tracing.Init(true, tracing.DefaultBufferSize); err != nil {
@@ -873,8 +899,8 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			Msg("coordinator server started, now joining mesh as peer")
 	}
 
-	// Ensure keys exist
-	signer, err := config.EnsureKeyPairExists(cfg.PrivateKey)
+	// Ensure keys exist (use deterministic seed if provided)
+	signer, err := config.EnsureKeyPairExists(cfg.PrivateKey, keygenSeed)
 	if err != nil {
 		return fmt.Errorf("load keys: %w", err)
 	}

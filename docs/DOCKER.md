@@ -227,7 +227,7 @@ volumes:
   - type: tmpfs
     target: /var/lib/tunnelmesh
     tmpfs:
-      size: 2147483648  # 2GB
+      size: 268435456  # 256MB
   - type: tmpfs
     target: /root/.tunnelmesh
 ```
