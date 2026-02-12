@@ -14,7 +14,7 @@ func TestPanelRegistry_BuiltinPanels(t *testing.T) {
 
 	// Should have all built-in panels
 	panels := registry.List()
-	assert.Len(t, panels, 15) // visualizer, map, charts, alerts, peers, logs, wireguard, filter, dns, s3, shares, users, groups, bindings, docker
+	assert.Len(t, panels, 14) // visualizer, map, alerts, peers, logs, wireguard, filter, dns, s3, shares, users, groups, bindings, docker
 
 	// Check specific panels exist
 	assert.NotNil(t, registry.Get(PanelVisualizer))
@@ -45,8 +45,8 @@ func TestPanelRegistry_ListByTab(t *testing.T) {
 	// Data tab should have: peer-mgmt, groups, bindings, dns
 	assert.Len(t, dataPanels, 4)
 
-	// Mesh tab should have: visualizer, map, charts, alerts, peers, logs, wireguard, filter
-	assert.Len(t, meshPanels, 8)
+	// Mesh tab should have: visualizer, map, alerts, peers, logs, wireguard, filter
+	assert.Len(t, meshPanels, 7)
 }
 
 func TestPanelRegistry_RegisterExternal(t *testing.T) {
@@ -222,7 +222,7 @@ func TestAuthorizer_GetAccessiblePanels_Admin(t *testing.T) {
 	auth.Bindings.Add(NewRoleBinding("alice", RoleAdmin, ""))
 
 	panels := auth.GetAccessiblePanels("alice")
-	assert.Len(t, panels, 15) // All built-in panels
+	assert.Len(t, panels, 14) // All built-in panels
 }
 
 func TestAuthorizer_GetAccessiblePanels_DirectBindings(t *testing.T) {
@@ -269,12 +269,11 @@ func TestAuthorizer_GetAccessiblePanels_ViaGroup(t *testing.T) {
 	// Grant everyone group access to user panels
 	auth.GroupBindings.Add(NewGroupBindingForPanel(GroupEveryone, PanelVisualizer))
 	auth.GroupBindings.Add(NewGroupBindingForPanel(GroupEveryone, PanelMap))
-	auth.GroupBindings.Add(NewGroupBindingForPanel(GroupEveryone, PanelCharts))
 	auth.GroupBindings.Add(NewGroupBindingForPanel(GroupEveryone, PanelS3))
 	auth.GroupBindings.Add(NewGroupBindingForPanel(GroupEveryone, PanelShares))
 
 	panels := auth.GetAccessiblePanels("alice")
-	assert.Len(t, panels, 5)
+	assert.Len(t, panels, 4)
 }
 
 func TestAuthorizer_GetAccessiblePanels_AdminViaGroup(t *testing.T) {
@@ -285,7 +284,7 @@ func TestAuthorizer_GetAccessiblePanels_AdminViaGroup(t *testing.T) {
 
 	// admins should get all panels via IsAdmin check
 	panels := auth.GetAccessiblePanels("alice")
-	assert.Len(t, panels, 15) // All panels
+	assert.Len(t, panels, 14) // All panels
 }
 
 // --- Default panel tests ---
@@ -294,7 +293,6 @@ func TestDefaultPeerPanels(t *testing.T) {
 	defaults := DefaultPeerPanels()
 	assert.Contains(t, defaults, PanelVisualizer)
 	assert.Contains(t, defaults, PanelMap)
-	assert.Contains(t, defaults, PanelCharts)
 	assert.Contains(t, defaults, PanelS3)
 	assert.Contains(t, defaults, PanelShares)
 	assert.NotContains(t, defaults, PanelPeers)

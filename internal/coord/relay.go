@@ -953,26 +953,6 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 		s.peersMu.Lock()
 		if peer, exists := s.peers[sourcePeer]; exists {
 			now := time.Now()
-			// Calculate rates if we have previous stats
-			if peer.stats != nil && !peer.lastStatsTime.IsZero() {
-				// Use actual time delta for accurate rate calculation
-				delta := now.Sub(peer.lastStatsTime).Seconds()
-				// Skip if delta is too large (server/peer restart) or too small
-				// Also skip if counters decreased (peer restart with counter reset)
-				if delta > 0 && delta < 60 &&
-					stats.BytesSent >= peer.stats.BytesSent &&
-					stats.BytesReceived >= peer.stats.BytesReceived {
-					dp := StatsDataPoint{
-						Timestamp:           now,
-						BytesSentRate:       float64(stats.BytesSent-peer.stats.BytesSent) / delta,
-						BytesReceivedRate:   float64(stats.BytesReceived-peer.stats.BytesReceived) / delta,
-						PacketsSentRate:     float64(stats.PacketsSent-peer.stats.PacketsSent) / delta,
-						PacketsReceivedRate: float64(stats.PacketsReceived-peer.stats.PacketsReceived) / delta,
-					}
-					s.statsHistory.RecordStats(sourcePeer, dp)
-				}
-			}
-
 			peer.peer.LastSeen = now
 			peer.prevStats = peer.stats // Save current as previous BEFORE updating
 			peer.prevStatsTime = peer.lastStatsTime

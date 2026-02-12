@@ -79,7 +79,6 @@ type Server struct {
 	dnsCache        map[string]string // hostname -> mesh IP
 	aliasOwner      map[string]string // alias -> peer name (reverse lookup for ownership)
 	serverStats     serverStats
-	statsHistory    *StatsHistory // Per-peer stats time series
 	relay           *relayManager
 	holePunch       *holePunchManager
 	wgStore         *wireguard.Store      // WireGuard client storage
@@ -286,12 +285,6 @@ func (a *ipAllocator) saveToS3Async(data s3.IPAllocationsData) {
 
 // NewServer creates a new coordination server.
 func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
-	// Determine coordinator name for stats organization
-	coordinatorName := cfg.Name
-	if coordinatorName == "" {
-		coordinatorName = "coordinator"
-	}
-
 	// Create a cancellable context for server lifecycle
 	// This allows us to stop all background operations on shutdown
 	ctx, cancel := context.WithCancel(ctx)
@@ -304,7 +297,6 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 		coordinators: make(map[string]*peerInfo),
 		dnsCache:     make(map[string]string),
 		aliasOwner:   make(map[string]string),
-		statsHistory: NewStatsHistory(coordinatorName),
 		serverStats: serverStats{
 			startTime: time.Now(),
 		},
@@ -347,11 +339,6 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 		return nil, fmt.Errorf("initialize CA: %w", err)
 	}
 	srv.ca = ca
-
-	// Load persisted stats history
-	if err := srv.LoadStatsHistory(); err != nil {
-		log.Warn().Err(err).Msg("failed to load stats history, starting fresh")
-	}
 
 	// Initialize packet filter
 	srv.filter = routing.NewPacketFilter(cfg.Coordinator.Filter.IsDefaultDeny())
@@ -418,64 +405,6 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 
 	srv.setupRoutes(ctx)
 	return srv, nil
-}
-
-// statsHistoryPath returns the file path for stats history persistence.
-func (s *Server) statsHistoryPath() string {
-	return filepath.Join(s.cfg.Coordinator.DataDir, "stats_history.json")
-}
-
-// LoadStatsHistory loads stats history from S3 or disk.
-func (s *Server) LoadStatsHistory() error {
-	// Ensure data directory exists (needed for file fallback)
-	if err := os.MkdirAll(s.cfg.Coordinator.DataDir, 0755); err != nil {
-		return fmt.Errorf("create data directory: %w", err)
-	}
-
-	path := s.statsHistoryPath()
-	if err := s.statsHistory.Load(path, s.s3SystemStore); err != nil {
-		return err
-	}
-
-	peerCount := s.statsHistory.PeerCount()
-	if peerCount > 0 {
-		log.Info().Int("peers", peerCount).Str("source", "S3").Msg("loaded stats history")
-	}
-	return nil
-}
-
-// SaveStatsHistory persists stats history to S3 or disk.
-func (s *Server) SaveStatsHistory() error {
-	startTime := time.Now()
-	path := s.statsHistoryPath()
-	result, err := s.statsHistory.Save(path, s.s3SystemStore)
-	if err != nil {
-		if s.coordMetrics != nil {
-			s.coordMetrics.statsHistorySaveErrors.WithLabelValues("save_failed").Inc()
-		}
-		return fmt.Errorf("save stats history: %w", err)
-	}
-
-	// Record successful save
-	if s.coordMetrics != nil {
-		// Record aggregate stats history save metrics
-		s.coordMetrics.statsHistorySaveTotal.Inc()
-		s.coordMetrics.statsHistorySaveDuration.Observe(time.Since(startTime).Seconds())
-
-		// Update per-peer last save timestamp for successful saves
-		now := float64(time.Now().Unix())
-		for _, peerName := range result.SuccessfulPeers {
-			s.coordMetrics.networkStatsLastSave.WithLabelValues(peerName).Set(now)
-		}
-
-		// Track per-peer save errors
-		for _, peerName := range result.FailedPeers {
-			s.coordMetrics.networkStatsSaveErrors.WithLabelValues(peerName, "s3_write").Inc()
-		}
-	}
-
-	log.Debug().Str("destination", "S3").Msg("saved stats history")
-	return nil
 }
 
 // refreshPeerNameCache reloads the peer ID -> name mapping from storage.
@@ -671,12 +600,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	// Save stats history
-	if err := s.SaveStatsHistory(); err != nil {
-		log.Error().Err(err).Msg("failed to save stats history")
-		errs = append(errs, fmt.Errorf("save stats history: %w", err))
-	}
-
 	// Save DNS data (cache and aliases)
 	// This ensures final state is persisted even if async saves are in-flight
 	s.saveDNSData()
@@ -757,9 +680,6 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := s.SaveStatsHistory(); err != nil {
-					log.Warn().Err(err).Msg("failed to save stats history")
-				}
 				if err := s.SaveFilterRules(ctx); err != nil {
 					log.Warn().Err(err).Msg("failed to save filter rules")
 				}
@@ -1110,20 +1030,8 @@ func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) erro
 }
 
 // recoverCoordinatorState recovers ephemeral coordinator state from S3.
-// This includes stats history, WG concentrator assignment, and DNS cache/aliases.
+// This includes WG concentrator assignment and DNS cache/aliases.
 func (s *Server) recoverCoordinatorState(ctx context.Context, cfg *config.PeerConfig, systemStore *s3.SystemStore) {
-	// Migrate stats history from file to S3 if needed
-	statsHistoryFile := filepath.Join(cfg.Coordinator.DataDir, "stats_history.json")
-	if migrated, err := systemStore.MigrateFromFile(ctx, statsHistoryFile, s3.StatsHistoryPath); err != nil {
-		log.Warn().Err(err).Msg("failed to migrate stats history to S3")
-	} else if migrated {
-		log.Info().Msg("migrated stats history from file to S3")
-		// Delete local file after successful migration
-		if err := os.Remove(statsHistoryFile); err != nil {
-			log.Debug().Err(err).Msg("failed to remove old stats history file")
-		}
-	}
-
 	// Recover WireGuard concentrator assignment
 	if concentrator, err := systemStore.LoadWGConcentrator(ctx); err == nil && concentrator != "" {
 		log.Info().Str("peer", concentrator).Msg("recovering WireGuard concentrator assignment")
@@ -1823,11 +1731,6 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 		// Also remove UDP endpoint
 		if s.holePunch != nil {
 			s.holePunch.RemoveEndpoint(name)
-		}
-
-		// Clean up stats history for the peer
-		if s.statsHistory != nil {
-			s.statsHistory.CleanupPeer(name)
 		}
 
 		if !exists {

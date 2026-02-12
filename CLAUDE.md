@@ -126,14 +126,14 @@ Access control via existing RBAC system:
 4. **GroupBinding**: Same pattern, applied to groups
 
 **Default groups**:
-- `everyone`: visualizer, map, charts, s3, shares
+- `everyone`: visualizer, map, s3, shares
 - `all_admin_users`: peers, logs, wireguard, filter, dns, users, groups, bindings, docker
 
 ### Built-in Panel IDs
 
 | Tab  | Panels                                                |
 |------|-------------------------------------------------------|
-| mesh | visualizer, map, charts, peers, logs, wireguard, filter, dns |
+| mesh | visualizer, map, peers, logs, wireguard, filter, dns |
 | data | s3, shares, users, groups, bindings, docker           |
 
 ### CSS Design Tokens

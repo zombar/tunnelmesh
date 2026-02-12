@@ -11,7 +11,6 @@ import (
 const (
 	PanelVisualizer = "visualizer"
 	PanelMap        = "map"
-	PanelCharts     = "charts"
 	PanelAlerts     = "alerts"
 	PanelPeers      = "peers"
 	PanelLogs       = "logs"
@@ -80,7 +79,6 @@ func (r *PanelRegistry) registerBuiltinPanels() {
 		// Mesh tab panels
 		{ID: PanelVisualizer, Name: "Network Topology", Tab: PanelTabMesh, Category: PanelCategoryNetwork, SortOrder: 10, Builtin: true},
 		{ID: PanelMap, Name: "Node Locations", Tab: PanelTabMesh, Category: PanelCategoryNetwork, SortOrder: 20, Builtin: true},
-		{ID: PanelCharts, Name: "Network Activity", Tab: PanelTabMesh, Category: PanelCategoryNetwork, SortOrder: 30, Builtin: true},
 		{ID: PanelAlerts, Name: "Active Alerts", Tab: PanelTabMesh, Category: PanelCategoryMonitoring, SortOrder: 35, Builtin: true},
 		{ID: PanelPeers, Name: "Connected Peers", Tab: PanelTabMesh, Category: PanelCategoryNetwork, SortOrder: 40, Builtin: true},
 		{ID: PanelLogs, Name: "Peer Logs", Tab: PanelTabMesh, Category: PanelCategoryMonitoring, SortOrder: 50, Builtin: true},
@@ -322,7 +320,7 @@ func (r *PanelRegistry) Update(id string, update PanelDefinition) error {
 // BuiltinPanelIDs returns all built-in panel IDs.
 func BuiltinPanelIDs() []string {
 	return []string{
-		PanelVisualizer, PanelMap, PanelCharts, PanelAlerts, PanelPeers,
+		PanelVisualizer, PanelMap, PanelAlerts, PanelPeers,
 		PanelLogs, PanelWireGuard, PanelFilter, PanelDNS,
 		PanelS3, PanelShares, PanelPeerMgmt, PanelGroups, PanelBindings, PanelDocker,
 	}
@@ -331,7 +329,7 @@ func BuiltinPanelIDs() []string {
 // DefaultPeerPanels returns panel IDs that peers get by default.
 func DefaultPeerPanels() []string {
 	return []string{
-		PanelVisualizer, PanelMap, PanelCharts, PanelAlerts, PanelS3, PanelShares,
+		PanelVisualizer, PanelMap, PanelAlerts, PanelS3, PanelShares,
 	}
 }
 
