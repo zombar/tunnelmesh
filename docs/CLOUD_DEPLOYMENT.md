@@ -1,9 +1,15 @@
 # Cloud Deployment with Terraform
 
-Deploy TunnelMesh infrastructure to DigitalOcean using Terraform. This guide covers various deployment scenarios from
-simple single-node setups to multi-region mesh networks.
+> [!NOTE]
+> Deploy TunnelMesh infrastructure to DigitalOcean using Terraform. This guide covers various deployment
+> scenarios from simple single-node setups (~$4/month) to multi-region mesh networks (~$12+/month).
 
 ## Prerequisites
+
+> [!IMPORTANT]
+> **Before you begin**: Ensure you have Terraform installed, a DigitalOcean account with API token, a
+> domain managed in DigitalOcean DNS, and an SSH key uploaded to DigitalOcean. Missing any of these
+> will cause deployment to fail.
 
 - [Terraform](https://developer.hashicorp.com/terraform/install) installed
 - DigitalOcean account with API token
@@ -33,10 +39,18 @@ terraform apply
 
 ## Deployment Scenarios
 
+> [!TIP]
+> **Choose your scenario**: Start simple (Scenario 1: All-in-One) and scale up as needed. Each scenario
+> includes cost estimates, use cases, and complete configuration. You can always add more nodes later.
+
 TunnelMesh is flexible. Whether you need a simple personal VPN, a global team mesh, or a sophisticated multi-region
 network with exit peers, there's a configuration for you.
 
 ### Scenario 1: All-in-One (Starter)
+
+> [!TIP]
+> **Recommended for beginners**: This is the simplest and cheapest deployment. Start here and scale up
+> only when you need regional presence or dedicated services.
 
 **The simplest deployment.** A single $4/month droplet runs everything: coordinator, mesh peer, and WireGuard
 concentrator. Perfect for personal use, small teams, or testing.

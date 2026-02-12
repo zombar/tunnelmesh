@@ -1,7 +1,9 @@
 # NFS File Sharing
 
-TunnelMesh provides an NFS v3 server for mounting file shares as network drives. The NFS server is backed by the S3
-storage system and uses the same authentication and authorization.
+> [!NOTE]
+> TunnelMesh provides an NFS v3 server for mounting file shares as network drives. The NFS server is
+> backed by S3 storage and uses TLS certificate authentication. **Automatically enabled** when file
+> shares exist - no manual configuration needed.
 
 ## Overview
 
@@ -69,8 +71,10 @@ this.tm:/myshare /Volumes/myshare nfs vers=3,tcp 0 0
 
 ## Authentication
 
-The NFS server authenticates clients using TLS client certificates. This happens automatically when you connect from a
-mesh peer - your peer's identity certificate is used.
+> [!IMPORTANT]
+> **Certificate-based authentication**: The NFS server authenticates using TLS client certificates, not
+> traditional NFS auth. This happens automatically when mounting from a mesh peer - your peer's identity
+> certificate is used. No additional setup required.
 
 Authentication flow:
 
@@ -128,6 +132,10 @@ The NFS server supports standard file operations:
 | List directories | ✓ |
 | Rename/move | ✓ |
 | File attributes | Basic (size, timestamps) |
+
+> [!WARNING]
+> **Performance consideration**: NFS is convenient for small files and browsing, but S3 API is faster for
+> large file transfers (supports multipart uploads). Use NFS for convenience, S3 for performance.
 
 ### Limitations
 

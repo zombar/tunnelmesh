@@ -1,10 +1,16 @@
 # Internal Packet Filter
 
-TunnelMesh includes a built-in internal packet filter that controls which ports are accessible on each peer within the
-mesh network. The filter operates at the IP packet level, inspecting TCP and UDP traffic before it reaches local
-services.
+> [!IMPORTANT]
+> TunnelMesh includes a built-in internal packet filter that controls which ports are accessible on
+> each peer within the mesh. **Default is secure**: Allowlist mode (deny by default) unless explicitly
+> configured otherwise. Only allowed ports are accessible.
 
 ## Overview
+
+> [!TIP]
+> **Use coordinator for mesh-wide rules**: Common ports like SSH and metrics should be allowed at the
+> coordinator level. Use peer config for local services. Use temporary rules (CLI/admin panel) for
+> testing before committing to config.
 
 - **Default deny mode**: Block all incoming ports unless explicitly allowed (allowlist)
 - **Per-peer rules**: Target specific source peers for fine-grained access control
@@ -16,7 +22,7 @@ services.
 
 Rules come from four sources, merged with "most restrictive wins" logic:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │  Coordinator Config (server.yaml)                       │
 │  → Global defaults pushed to ALL peers on connect       │
@@ -279,22 +285,35 @@ Default alerts in `monitoring/prometheus/alerts.yml`:
 
 ## ICMP Handling
 
+> [!NOTE]
+> **ICMP always allowed**: Ping and traceroute work regardless of filter configuration. Only TCP and
+> UDP traffic is subject to filter rules. This ensures basic network diagnostics always work.
+
 ICMP traffic (ping, traceroute) is **always allowed** through the filter for diagnostic purposes. Only TCP and UDP
 packets are subject to filter rules.
 
 ## Best Practices
 
-1. **Default is secure**: The filter defaults to `default_deny: true` (allowlist mode) if not specified. Only set `default_deny: false` if you explicitly want blocklist mode.
+> [!WARNING]
+> **Security first**: Never set `default_deny: false` in production. Allowlist mode (default deny) is
+> the secure default. Only explicitly allowed ports should be accessible.
 
-2. **Use coordinator for mesh-wide rules**: Common ports like SSH and metrics should be allowed at the coordinator level.
+1. **Default is secure**: The filter defaults to `default_deny: true` (allowlist mode) if not specified.
+   Only set `default_deny: false` if you explicitly want blocklist mode.
 
-3. **Use peer config for local services**: Web servers, databases, and other services specific to a peer should be configured locally.
+2. **Use coordinator for mesh-wide rules**: Common ports like SSH and metrics should be allowed at the
+   coordinator level.
+
+3. **Use peer config for local services**: Web servers, databases, and other services specific to a peer
+   should be configured locally.
 
 4. **Use temporary rules for testing**: Add rules via CLI to test before committing to config.
 
-5. **Monitor filtered packets**: Watch the `tunnelmesh_dropped_filtered_total` metric for unexpected blocks or attack patterns.
+5. **Monitor filtered packets**: Watch the `tunnelmesh_dropped_filtered_total` metric for unexpected blocks
+   or attack patterns.
 
-6. **Use per-peer rules sparingly**: Global rules are easier to manage. Use per-peer rules only when necessary for security isolation.
+6. **Use per-peer rules sparingly**: Global rules are easier to manage. Use per-peer rules only when
+   necessary for security isolation.
 
 ## Troubleshooting
 

@@ -1,7 +1,8 @@
 # S3-Compatible Storage
 
-TunnelMesh includes an S3-compatible object storage service that runs on the coordinator. This provides mesh-only
-accessible storage for shared files, configurations, and internal coordinator state.
+> [!IMPORTANT]
+> TunnelMesh includes an S3-compatible object storage service that runs on the coordinator. This provides
+> **mesh-only accessible** storage - the S3 API is not exposed to the public internet for security.
 
 File shares can also be mounted as network drives via NFS - see the [NFS documentation](NFS.md).
 
@@ -67,6 +68,10 @@ The S3 API is available at `https://this.tm:9000` (or your configured port).
 
 ### Authentication
 
+> [!NOTE]
+> **Multiple authentication methods supported**: TunnelMesh S3 accepts AWS Signature V4 (standard S3),
+> Basic Auth (simple), and Bearer Token (access key only). Use whatever your client library supports.
+
 The S3 service supports multiple authentication methods:
 
 1. **AWS Signature V4** - Standard S3 authentication
@@ -75,13 +80,13 @@ The S3 service supports multiple authentication methods:
    Authorization: AWS4-HMAC-SHA256 Credential=ACCESS_KEY/...
    ```
 
-1. **Basic Auth** - Simple username/password
+2. **Basic Auth** - Simple username/password
 
    ```text
    Authorization: Basic base64(access_key:secret_key)
    ```
 
-1. **Bearer Token** - Access key only
+3. **Bearer Token** - Access key only
 
    ```text
    Authorization: Bearer access_key
@@ -125,6 +130,10 @@ tunnelmesh object delete my-bucket/path/to/file.txt
 ```
 
 ## System Bucket
+
+> [!WARNING]
+> **Reserved bucket**: The `_tunnelmesh` bucket stores critical coordinator state. Do not delete or
+> modify it manually. Only service users with the `system` role can access it.
 
 The coordinator uses a reserved `_tunnelmesh` bucket for internal state:
 
@@ -309,11 +318,21 @@ All S3 data is stored in the configured `data_dir`:
 
 ### Backup
 
+> [!CAUTION]
+> **Backup the data directory**: S3 data is stored on disk, not in a database. Regular backups of the
+> `data_dir` are essential. Stop the coordinator before backup to ensure consistency.
+
 To backup S3 data, copy the entire `data_dir`:
 
 ```bash
-tar -czf s3-backup.tar.gz /var/lib/tunnelmesh/s3
+# Stop coordinator first
+sudo systemctl stop tunnelmesh
 
+# Backup data
+tar -czf s3-backup-$(date +%Y%m%d).tar.gz /var/lib/tunnelmesh/s3
+
+# Restart
+sudo systemctl start tunnelmesh
 ```
 
 ### Restore

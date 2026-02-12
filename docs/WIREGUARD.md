@@ -1,7 +1,9 @@
 # WireGuard Integration
 
-TunnelMesh supports WireGuard clients through a **concentrator** architecture. This allows standard WireGuard apps on
-phones, tablets, and laptops to connect to the mesh without running the full TunnelMesh client.
+> [!NOTE]
+> TunnelMesh supports WireGuard clients through a **concentrator** architecture. This allows standard
+> WireGuard apps on phones, tablets, and laptops to connect to the mesh without running the full
+> TunnelMesh client. Perfect for mobile devices where native TunnelMesh isn't available.
 
 ## How It Works
 
@@ -46,6 +48,10 @@ phones, tablets, and laptops to connect to the mesh without running the full Tun
 
 ### 1. Enable WireGuard on a Peer
 
+> [!WARNING]
+> **Firewall Requirement**: Ensure UDP port 51820 is open in your firewall/security group. WireGuard
+> will not work without this. Test with `nc -zvu your-ip 51820` from a client network.
+
 Add `--wireguard` when joining:
 
 ```bash
@@ -77,10 +83,13 @@ wireguard:
   endpoint: "203.0.113.50:51820"  # or "wg.example.com:51820"
 ```
 
-**Important distinction:**
-
-- `server` = Coordination server URL (HTTPS, port 443/8443) - mesh registration
-- `endpoint` = This peer's WireGuard endpoint (UDP, port 51820) - where mobile clients connect
+> [!IMPORTANT]
+> **Critical distinction** - Don't confuse these two URLs:
+>
+> - `server` = Coordination server URL (HTTPS, port 443/8443) - mesh registration
+> - `endpoint` = This peer's WireGuard endpoint (UDP, port 51820) - where mobile clients connect
+>
+> The `endpoint` must be THIS PEER's public IP/hostname, not the coordinator's!
 
 ### 2. Add a Client via Admin Panel
 
@@ -429,6 +438,11 @@ sudo wg-quick down tunnelmesh
 
 ## Split Tunneling
 
+> [!TIP]
+> **Default is split-tunnel**: Only mesh traffic (10.42.0.0/16) routes through the tunnel. Internet
+> traffic goes directly from your device, saving bandwidth and reducing latency. Change `AllowedIPs`
+> to route all traffic through the mesh.
+
 By default, WireGuard clients only route mesh traffic (10.42.0.0/16) through the tunnel. Internet traffic goes
 directly.
 
@@ -554,6 +568,10 @@ MTU = 1380
 ---
 
 ## Security Considerations
+
+> [!CAUTION]
+> **Key Security**: Private keys are generated locally and never transmitted. Treat WireGuard configs
+> like passwords - don't share between devices, store securely, and rotate periodically.
 
 ### Key Management
 

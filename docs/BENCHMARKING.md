@@ -1,7 +1,9 @@
 # Benchmarking and Stress Testing
 
-TunnelMesh includes built-in benchmarking tools to measure throughput, latency, and test mesh performance under adverse
-network conditions.
+> [!NOTE]
+> TunnelMesh includes built-in benchmarking tools to measure throughput, latency, and test mesh
+> performance under adverse network conditions. Benchmark traffic flows through **actual mesh tunnels**,
+> giving realistic performance metrics.
 
 ## Overview
 
@@ -81,6 +83,11 @@ Chaos Testing Flags:
 
 ## Chaos Testing
 
+> [!WARNING]
+> **Chaos testing impacts performance**: Packet loss, latency, and bandwidth limits intentionally
+> degrade performance. Use these flags to test resilience, not to measure baseline performance.
+> Always run clean benchmarks first.
+
 Chaos testing simulates adverse network conditions to stress test your mesh and verify resilience.
 
 ### Use Cases
@@ -117,6 +124,10 @@ tunnelmesh benchmark peer-1 --size 50MB --packet-loss 5 --output with-loss.json
 ```
 
 ## Docker Benchmarker
+
+> [!CAUTION]
+> **Aggressive stress testing**: The Docker benchmarker runs continuous benchmarks with 3-6 simultaneous
+> transfers at all times. This keeps the mesh under constant load. Use in development/testing, not production.
 
 The Docker benchmarker runs **aggressive continuous benchmarks** with multiple concurrent transfers and randomized chaos
 settings. The mesh is always under load.
@@ -269,6 +280,11 @@ Error: cannot resolve peer "peer-1": is the mesh daemon running?
 - High jitter may indicate network congestion
 - Check for competing traffic on the mesh
 - Verify both peers have stable connections
+
+> [!TIP]
+> **Best practice**: Always establish a clean baseline first with `--packet-loss 0`. Then compare chaos
+> results against the baseline to quantify performance degradation. Use larger transfers (100MB+) for
+> accurate throughput measurement.
 
 ## Best Practices
 

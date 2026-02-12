@@ -4,6 +4,13 @@ Complete command-line reference for TunnelMesh with examples and walkthroughs.
 
 ## TL;DR - Most Common Commands
 
+> [!IMPORTANT]
+> **Sudo Required**: TunnelMesh needs elevated privileges to create TUN network interfaces. Always run
+> with `sudo` except for `init`, `version`, and `context` commands.
+> [!WARNING]
+> **Secure Token Storage**: Auth tokens are passed via environment variable (`TUNNELMESH_TOKEN`), not CLI
+> flags. Never commit tokens to git or share them publicly. Store securely with `chmod 600` permissions.
+
 ```bash
 # Generate SSH keys (first time only)
 tunnelmesh init
@@ -36,9 +43,10 @@ sudo tunnelmesh service install
 sudo tunnelmesh service start
 ```
 
-> **Contexts simplify management:** After joining with `--context`, TunnelMesh remembers
-> your configuration. Subsequent commands use the active context automatically—no need to
-> specify `-c` every time.
+> [!TIP]
+> **Contexts simplify management:** After joining with `--context`, TunnelMesh remembers your
+> configuration. Subsequent commands use the active context automatically—no need to specify `-c`
+> every time. Perfect for managing multiple meshes (work, home, dev).
 >
 > Commands that work without a context: `init`, `version`, and `context` subcommands.
 
@@ -706,9 +714,17 @@ tunnelmesh init --peer    # Generate peer.yaml with all options
 
 ## Walkthroughs
 
+> [!NOTE]
+> These walkthroughs provide complete end-to-end setups for common use cases. Each includes cloud
+> deployment, peer configuration, and verification steps.
+
 ### Walkthrough 1: Personal VPN Setup
 
 Set up TunnelMesh for personal use with a cloud server and laptop.
+
+> [!TIP]
+> **Prerequisites**: Cloud server (DigitalOcean, AWS, etc.) with public IP, domain name (optional but
+> recommended), and local machine with TunnelMesh installed.
 
 #### Step 1: Deploy coordinator (cloud server)
 

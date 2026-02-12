@@ -1,6 +1,8 @@
 # Docker Deployment
 
-This guide covers running TunnelMesh in Docker containers for development, testing, and production deployments.
+> [!NOTE]
+> This guide covers running TunnelMesh in Docker containers for development, testing, and production
+> deployments. Containers need elevated privileges (NET_ADMIN) to create TUN interfaces.
 
 ## Quick Start
 
@@ -87,6 +89,10 @@ docker compose logs --tail=100 server
 **Note:** The admin panel and monitoring tools are only accessible from within the mesh network for security.
 
 ## Container Requirements
+
+> [!WARNING]
+> **Elevated privileges required**: TunnelMesh containers need NET_ADMIN capability and access to
+> /dev/net/tun to create network interfaces. This is unavoidable for VPN/tunnel software.
 
 TunnelMesh containers need elevated privileges for TUN interface creation:
 
@@ -314,6 +320,10 @@ docker compose logs -f server
 
 ## Production Considerations
 
+> [!TIP]
+> **Production checklist**: Use resource limits, restart policies, log rotation, secrets management,
+> and health checks. Don't run containers as root where possible (though NET_ADMIN requires root).
+
 ### Resource Limits
 
 ```yaml
@@ -348,6 +358,10 @@ services:
         max-size: "10m"
         max-file: "3"
 ```
+
+> [!CAUTION]
+> **Security best practices**: Never hardcode auth tokens in compose files. Use Docker secrets or
+> environment files with restricted permissions. Limit port exposure to only what's necessary.
 
 ### Security
 
