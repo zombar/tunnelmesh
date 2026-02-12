@@ -111,7 +111,7 @@ func init() {
 	// Mesh integration flags
 	runCmd.Flags().StringVar(&coordinatorURL, "coordinator", "", "Coordinator URL (enables mesh mode, e.g., https://coordinator.example.com:8443)")
 	runCmd.Flags().StringVar(&sshKeyPath, "ssh-key", "", "SSH private key path (default: ~/.tunnelmesh/s3bench_key)")
-	runCmd.Flags().BoolVar(&insecureTLS, "insecure-tls", true, "Skip TLS certificate verification (default: true for self-signed certs)")
+	runCmd.Flags().BoolVar(&insecureTLS, "insecure-tls", false, "Skip TLS certificate verification (only use with self-signed certs for testing)")
 	runCmd.Flags().StringVar(&authToken, "auth-token", "", "Coordinator auth token (for protected coordinators)")
 }
 
