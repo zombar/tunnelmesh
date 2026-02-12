@@ -1951,6 +1951,12 @@ func (s *Server) handleUpdateBucket(w http.ResponseWriter, r *http.Request, buck
 		return
 	}
 
+	// Block system bucket modifications (check before auth to match S3 proxy pattern)
+	if bucket == auth.SystemBucket {
+		s.jsonError(w, "cannot modify system bucket", http.StatusForbidden)
+		return
+	}
+
 	// Check admin permission (bucket_scope=* or admin role)
 	userID := s.getRequestOwner(r)
 	if userID == "" {

@@ -460,6 +460,25 @@ func TestS3Proxy_DeleteObject_SystemBucketForbidden(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 }
 
+func TestUpdateBucket_SystemBucketForbidden(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Attempt to update system bucket replication factor
+	reqBody := `{"replication_factor": 1}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/s3/buckets/"+auth.SystemBucket, bytes.NewReader([]byte(reqBody)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+
+	// Verify error message
+	var resp proto.ErrorResponse
+	err := json.NewDecoder(rec.Body).Decode(&resp)
+	require.NoError(t, err)
+	assert.Contains(t, resp.Message, "cannot modify system bucket")
+}
+
 func TestS3Proxy_HeadObject(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 
