@@ -246,22 +246,23 @@ func TestWorkloadGenerator_AuthorJoinLeave(t *testing.T) {
 	}
 
 	// Bob joins at 2h and leaves at 8h
-	// Verify no tasks from Bob before 2h or after 8h
+	// Verify no write tasks from Bob before 2h or after 8h
+	// (download tasks are excluded since they're reads that can happen anytime)
 	for _, task := range tasks {
-		if task.Author.ID == "bob" {
+		if task.Author.ID == "bob" && task.Operation != "download" {
 			if task.StoryTime < 2*time.Hour {
-				t.Errorf("Bob task at %v (before join time 2h)", task.StoryTime)
+				t.Errorf("Bob %s task at %v (before join time 2h)", task.Operation, task.StoryTime)
 			}
 			if task.StoryTime >= 8*time.Hour {
-				t.Errorf("Bob task at %v (after leave time 8h)", task.StoryTime)
+				t.Errorf("Bob %s task at %v (after leave time 8h)", task.Operation, task.StoryTime)
 			}
 		}
 	}
 
-	// Verify Alice (who stays entire scenario) has tasks throughout
+	// Verify Alice (who stays entire scenario) has write tasks throughout
 	aliceTasks := 0
 	for _, task := range tasks {
-		if task.Author.ID == "alice" {
+		if task.Author.ID == "alice" && task.Operation != "download" {
 			aliceTasks++
 		}
 	}
@@ -279,41 +280,42 @@ func TestWorkloadGenerator_Versioning(t *testing.T) {
 		t.Fatalf("GenerateWorkload() error = %v", err)
 	}
 
-	// Find sitrep documents (which have 2 versions)
+	// Find sitrep upload/update tasks (which have 2 versions)
+	// Exclude download tasks which are randomly generated
 	sitrepsByFilename := make(map[string][]WorkloadTask)
 	for _, task := range tasks {
-		if task.DocType == "sitrep" {
+		if task.DocType == "sitrep" && (task.Operation == "upload" || task.Operation == "update") {
 			sitrepsByFilename[task.Filename] = append(sitrepsByFilename[task.Filename], task)
 		}
 	}
 
 	// Each sitrep should have 2 tasks (upload + update)
-	for filename, tasks := range sitrepsByFilename {
-		if len(tasks) != 2 {
-			t.Errorf("Sitrep %s has %d tasks, want 2 (upload + update)", filename, len(tasks))
+	for filename, fileTasks := range sitrepsByFilename {
+		if len(fileTasks) != 2 {
+			t.Errorf("Sitrep %s has %d upload/update tasks, want 2", filename, len(fileTasks))
 			continue
 		}
 
 		// First should be upload
-		if tasks[0].Operation != "upload" {
-			t.Errorf("Sitrep %s first operation = %s, want upload", filename, tasks[0].Operation)
+		if fileTasks[0].Operation != "upload" {
+			t.Errorf("Sitrep %s first operation = %s, want upload", filename, fileTasks[0].Operation)
 		}
-		if tasks[0].VersionNum != 1 {
-			t.Errorf("Sitrep %s first version = %d, want 1", filename, tasks[0].VersionNum)
+		if fileTasks[0].VersionNum != 1 {
+			t.Errorf("Sitrep %s first version = %d, want 1", filename, fileTasks[0].VersionNum)
 		}
 
 		// Second should be update
-		if tasks[1].Operation != "update" {
-			t.Errorf("Sitrep %s second operation = %s, want update", filename, tasks[1].Operation)
+		if fileTasks[1].Operation != "update" {
+			t.Errorf("Sitrep %s second operation = %s, want update", filename, fileTasks[1].Operation)
 		}
-		if tasks[1].VersionNum != 2 {
-			t.Errorf("Sitrep %s second version = %d, want 2", filename, tasks[1].VersionNum)
+		if fileTasks[1].VersionNum != 2 {
+			t.Errorf("Sitrep %s second version = %d, want 2", filename, fileTasks[1].VersionNum)
 		}
 
 		// Update should be after upload
-		if tasks[1].RealTime <= tasks[0].RealTime {
+		if fileTasks[1].RealTime <= fileTasks[0].RealTime {
 			t.Errorf("Sitrep %s update time %v not after upload time %v",
-				filename, tasks[1].RealTime, tasks[0].RealTime)
+				filename, fileTasks[1].RealTime, fileTasks[0].RealTime)
 		}
 	}
 }
@@ -327,36 +329,37 @@ func TestWorkloadGenerator_Deletion(t *testing.T) {
 		t.Fatalf("GenerateWorkload() error = %v", err)
 	}
 
-	// Find evacuation_order documents (which have DeleteAfter=2h)
+	// Find evacuation_order upload/delete tasks (which have DeleteAfter=2h)
+	// Exclude download tasks which are randomly generated and don't affect the upload+delete pairing
 	evacOrdersByFilename := make(map[string][]WorkloadTask)
 	for _, task := range tasks {
-		if task.DocType == "evacuation_order" {
+		if task.DocType == "evacuation_order" && (task.Operation == "upload" || task.Operation == "delete") {
 			evacOrdersByFilename[task.Filename] = append(evacOrdersByFilename[task.Filename], task)
 		}
 	}
 
 	// Each evacuation_order should have 2 tasks (upload + delete)
-	for filename, tasks := range evacOrdersByFilename {
-		if len(tasks) != 2 {
-			t.Errorf("Evacuation order %s has %d tasks, want 2 (upload + delete)", filename, len(tasks))
+	for filename, fileTasks := range evacOrdersByFilename {
+		if len(fileTasks) != 2 {
+			t.Errorf("Evacuation order %s has %d upload/delete tasks, want 2", filename, len(fileTasks))
 			continue
 		}
 
 		// First should be upload
-		if tasks[0].Operation != "upload" {
-			t.Errorf("Evacuation order %s first operation = %s, want upload", filename, tasks[0].Operation)
+		if fileTasks[0].Operation != "upload" {
+			t.Errorf("Evacuation order %s first operation = %s, want upload", filename, fileTasks[0].Operation)
 		}
 
 		// Second should be delete
-		if tasks[1].Operation != "delete" {
-			t.Errorf("Evacuation order %s second operation = %s, want delete", filename, tasks[1].Operation)
+		if fileTasks[1].Operation != "delete" {
+			t.Errorf("Evacuation order %s second operation = %s, want delete", filename, fileTasks[1].Operation)
 		}
 
 		// Delete should be 2h after upload
-		expectedDeleteTime := tasks[0].StoryTime + 2*time.Hour
-		if tasks[1].StoryTime != expectedDeleteTime {
+		expectedDeleteTime := fileTasks[0].StoryTime + 2*time.Hour
+		if fileTasks[1].StoryTime != expectedDeleteTime {
 			t.Errorf("Evacuation order %s delete time = %v, want %v (2h after upload)",
-				filename, tasks[1].StoryTime, expectedDeleteTime)
+				filename, fileTasks[1].StoryTime, expectedDeleteTime)
 		}
 	}
 }
