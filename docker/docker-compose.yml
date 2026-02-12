@@ -1,8 +1,8 @@
 # TESTING ENVIRONMENT ONLY - DO NOT USE IN PRODUCTION
 #
 # This docker-compose setup is designed for local development and testing of
-# TunnelMesh's chunk-level replication features. It uses ephemeral storage
-# (tmpfs) for both S3 data and SSH keys, meaning all data is lost on restart.
+# TunnelMesh's chunk-level replication features. Coordinator data (S3 store
+# and SSH keys) is persisted in named Docker volumes across restarts.
 #
 # Coordinator services:
 # - coord-1: Primary coordinator exposed on port 8081 (localhost:8081)
@@ -16,8 +16,7 @@
 # Coordinators discover each other automatically via the mesh and replicate
 # S3 data in real-time using the chunk-level replication protocol.
 #
-# ⚠️  WARNING: Ephemeral storage (tmpfs) means all data is lost on restart.
-#             For production deployments, use persistent volumes.
+# To wipe all coordinator data: docker compose down -v
 
 services:
   # Coordinator 1 - Primary (exposed to host)
@@ -31,12 +30,8 @@ services:
     volumes:
       - ./config/coordinator.yaml.template:/etc/tunnelmesh/coordinator.yaml.template:ro
       - ./scripts/coordinator-entrypoint.sh:/scripts/coordinator-entrypoint.sh:ro
-      - type: tmpfs
-        target: /var/lib/tunnelmesh
-        tmpfs:
-          size: 268435456  # 256MB
-      - type: tmpfs
-        target: /root/.tunnelmesh
+      - coord-1-data:/var/lib/tunnelmesh
+      - coord-1-keys:/root/.tunnelmesh
       - /var/run/docker.sock:/var/run/docker.sock:ro
     cap_add:
       - NET_ADMIN
@@ -66,12 +61,8 @@ services:
     volumes:
       - ./config/coordinator.yaml.template:/etc/tunnelmesh/coordinator.yaml.template:ro
       - ./scripts/coordinator-entrypoint.sh:/scripts/coordinator-entrypoint.sh:ro
-      - type: tmpfs
-        target: /var/lib/tunnelmesh
-        tmpfs:
-          size: 268435456
-      - type: tmpfs
-        target: /root/.tunnelmesh
+      - coord-2-data:/var/lib/tunnelmesh
+      - coord-2-keys:/root/.tunnelmesh
       - /var/run/docker.sock:/var/run/docker.sock:ro
     cap_add:
       - NET_ADMIN
@@ -104,12 +95,8 @@ services:
     volumes:
       - ./config/coordinator.yaml.template:/etc/tunnelmesh/coordinator.yaml.template:ro
       - ./scripts/coordinator-entrypoint.sh:/scripts/coordinator-entrypoint.sh:ro
-      - type: tmpfs
-        target: /var/lib/tunnelmesh
-        tmpfs:
-          size: 268435456
-      - type: tmpfs
-        target: /root/.tunnelmesh
+      - coord-3-data:/var/lib/tunnelmesh
+      - coord-3-keys:/root/.tunnelmesh
       - /var/run/docker.sock:/var/run/docker.sock:ro
     cap_add:
       - NET_ADMIN
@@ -313,6 +300,12 @@ networks:
         - subnet: 172.28.0.0/24
 
 volumes:
+  coord-1-data:
+  coord-1-keys:
+  coord-2-data:
+  coord-2-keys:
+  coord-3-data:
+  coord-3-keys:
   prometheus-data:
   grafana-data:
   loki-data:
