@@ -1152,10 +1152,10 @@
                         ? ''
                         : `<td>${item.quota ? formatBytes(item.quota) : '-'}</td>`;
                     // Only show replication column for bucket list (not when inside a bucket)
-                    const replicationFactor = item.replication_factor || 2;
+                    const replication_factor = item.replication_factor || 2;
                     const replicationCell = state.currentBucket
                         ? ''
-                        : `<td>${replicationFactor}x</td>`;
+                        : `<td>${replication_factor}x</td>`;
                     // Only show owner column when inside a bucket (not for bucket list)
                     const ownerCell = state.currentBucket ? `<td>${escapeHtml(item.owner || '-')}</td>` : '';
                     // Actions column: show properties button for buckets (admin-only)
