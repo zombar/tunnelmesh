@@ -25,7 +25,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    hostname: coord-1
+    hostname: coordinator-1
     container_name: tunnelmesh-coord-1
     entrypoint: ["/bin/bash", "/scripts/coordinator-entrypoint.sh"]
     volumes:
@@ -60,7 +60,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    hostname: coord-2
+    hostname: coordinator-2
     container_name: tunnelmesh-coord-2
     entrypoint: ["/bin/bash", "/scripts/coordinator-entrypoint.sh"]
     volumes:
@@ -98,7 +98,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    hostname: coord-3
+    hostname: coordinator-3
     container_name: tunnelmesh-coord-3
     entrypoint: ["/bin/bash", "/scripts/coordinator-entrypoint.sh"]
     volumes:
@@ -151,8 +151,9 @@ services:
     networks:
       - mesh-control
     environment:
-      - SERVER_URL=http://coord-1:8080
+      - SERVER_URL=http://coordinator-1:8080
       - AUTH_TOKEN=${TUNNELMESH_TOKEN}
+      - TUNNELMESH_ALLOW_HTTP=true
       - PING_INTERVAL=2
       - DISCOVERY_INTERVAL=20
 

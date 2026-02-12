@@ -8,7 +8,7 @@ private_key: "/root/.tunnelmesh/id_ed25519"
 coordinator:
   enabled: true
   listen: ":8080"
-  admin_peers: ["coordinator-coord-*", "mynode"]  # Pattern matching for all coordinators
+  admin_peers: ["coordinator-*", "mynode"]  # Pattern matching for all coordinators
   service_ports: [9443, 3100]    # Allow metrics and Loki access
   locations: true                # Enable map panel
   monitoring:
