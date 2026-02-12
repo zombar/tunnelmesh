@@ -134,7 +134,7 @@ When a peer joins the mesh, the coordinator performs the following steps:
    - Network functionality works normally
    - Admin features are denied
 
-**Implementation location**: `/Users/gurgeh/Documents/tunnelmesh/internal/coord/server.go:1547-1573`
+**Implementation location**: `internal/coord/server.go:1547-1573`
 
 ## What Works Without Admin Access
 
