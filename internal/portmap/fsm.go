@@ -438,6 +438,11 @@ func (pm *PortMapper) handleNetworkChange() {
 func (pm *PortMapper) transitionTo(newState State) {
 	pm.mu.Lock()
 	oldState := pm.state
+	// If already stopped, ignore transition attempts from background goroutines
+	if oldState == StateStopped {
+		pm.mu.Unlock()
+		return
+	}
 	if oldState == newState {
 		pm.mu.Unlock()
 		return
