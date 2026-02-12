@@ -197,7 +197,7 @@ docker-build:
 docker-up: docker-build
 	@TUNNELMESH_TOKEN=$$(openssl rand -hex 32); \
 	echo "Generated auth token: $${TUNNELMESH_TOKEN:0:16}... (truncated)"; \
-	echo "$$TUNNELMESH_TOKEN" > /tmp/tunnelmesh-docker-token; \
+	printf "%s" "$$TUNNELMESH_TOKEN" > /tmp/tunnelmesh-docker-token; \
 	chmod 600 /tmp/tunnelmesh-docker-token; \
 	TUNNELMESH_TOKEN=$$TUNNELMESH_TOKEN $(DOCKER_COMPOSE) up -d; \
 	echo "TunnelMesh Docker environment started"; \
@@ -209,19 +209,14 @@ docker-up: docker-build
 	if [ "$$answer" != "n" ] && [ "$$answer" != "N" ]; then \
 		sudo tunnelmesh context rm docker 2>/dev/null || true; \
 		echo "Joining mesh with coordinator at http://localhost:8081..."; \
-		sudo env TUNNELMESH_TOKEN=$$(cat /tmp/tunnelmesh-docker-token) tunnelmesh join http://localhost:8081 --context docker; \
+		sudo env "TUNNELMESH_TOKEN=$$(cat /tmp/tunnelmesh-docker-token)" tunnelmesh join http://localhost:8081 --context docker; \
 		echo ""; \
 		echo "Admin interface should open at https://this.tm"; \
 	fi
 
-# Scale coordinators to N replicas
-docker-scale-coords:
-	@read -p "Number of coordinators (current: 2): " replicas; \
-	cd docker && docker compose up -d --scale coordinator=$$replicas
-
 # View coordinator logs
 docker-logs-coords:
-	$(DOCKER_COMPOSE) logs -f coordinator
+	$(DOCKER_COMPOSE) logs -f coord-1 coord-2 coord-3
 
 docker-down:
 	$(DOCKER_COMPOSE) down
