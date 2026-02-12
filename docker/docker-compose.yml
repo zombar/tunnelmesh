@@ -4,47 +4,126 @@
 # TunnelMesh's chunk-level replication features. It uses ephemeral storage
 # (tmpfs) for both S3 data and SSH keys, meaning all data is lost on restart.
 #
-# SSH keys are regenerated on each container restart using deterministic key
-# generation (--keygen-seed) based on the container hostname. This ensures
-# each coordinator replica gets a unique, reproducible peer identity without
-# needing persistent storage, which is ideal for testing replication scenarios.
+# Coordinator services:
+# - coord-1: Primary coordinator exposed on port 8081 (localhost:8081)
+# - coord-2: Secondary coordinator exposed on port 8082 (localhost:8082)
+# - coord-3: Tertiary coordinator exposed on port 8083 (localhost:8083)
 #
-# ⚠️  WARNING: Deterministic key generation REDUCES SECURITY and should NEVER
-#             be used in production. For production deployments, use persistent
-#             volumes and cryptographically secure random key generation.
+# For testing, coordinators use HTTP (not HTTPS) via TUNNELMESH_ALLOW_HTTP=true.
+# This is INSECURE and should NEVER be used in production.
 #
-# For production setups, see docs/DOCKER.md for proper configuration with
-# persistent storage and secure key management.
+# All three coordinators start by default to test multi-coordinator replication.
+# Coordinators discover each other automatically via the mesh and replicate
+# S3 data in real-time using the chunk-level replication protocol.
+#
+# ⚠️  WARNING: Ephemeral storage (tmpfs) means all data is lost on restart.
+#             For production deployments, use persistent volumes.
 
 services:
-  coordinator:
+  # Coordinator 1 - Primary (exposed to host)
+  coord-1:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    hostname: coordinator
-    deploy:
-      replicas: 2  # Default to 2 coordinators for replication testing
+    hostname: coordinator-1
+    container_name: tunnelmesh-coord-1
     entrypoint: ["/bin/bash", "/scripts/coordinator-entrypoint.sh"]
     volumes:
       - ./config/coordinator.yaml.template:/etc/tunnelmesh/coordinator.yaml.template:ro
       - ./scripts/coordinator-entrypoint.sh:/scripts/coordinator-entrypoint.sh:ro
-      # Ephemeral storage (testing only) - all data lost on restart
       - type: tmpfs
         target: /var/lib/tunnelmesh
         tmpfs:
           size: 268435456  # 256MB
       - type: tmpfs
-        target: /root/.tunnelmesh  # SSH keys regenerated deterministically
-      - /var/run/docker.sock:/var/run/docker.sock:ro  # Docker socket for container management
+        target: /root/.tunnelmesh
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     cap_add:
       - NET_ADMIN
     devices:
       - /dev/net/tun:/dev/net/tun
     networks:
       - mesh-control
-      # Remove static IP - let docker assign IPs dynamically for scaling
+    ports:
+      - "8081:8080"  # Exposed to host for joining from host machine
     environment:
       - TUNNELMESH_TOKEN=${TUNNELMESH_TOKEN}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  # Coordinator 2 - Secondary (optional, for replication testing)
+  coord-2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: coordinator-2
+    container_name: tunnelmesh-coord-2
+    entrypoint: ["/bin/bash", "/scripts/coordinator-entrypoint.sh"]
+    volumes:
+      - ./config/coordinator.yaml.template:/etc/tunnelmesh/coordinator.yaml.template:ro
+      - ./scripts/coordinator-entrypoint.sh:/scripts/coordinator-entrypoint.sh:ro
+      - type: tmpfs
+        target: /var/lib/tunnelmesh
+        tmpfs:
+          size: 268435456
+      - type: tmpfs
+        target: /root/.tunnelmesh
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      - mesh-control
+    ports:
+      - "8082:8080"  # Different port for coordinator 2
+    environment:
+      - TUNNELMESH_TOKEN=${TUNNELMESH_TOKEN}
+    depends_on:
+      coord-1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  # Coordinator 3 - Tertiary
+  coord-3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: coordinator-3
+    container_name: tunnelmesh-coord-3
+    entrypoint: ["/bin/bash", "/scripts/coordinator-entrypoint.sh"]
+    volumes:
+      - ./config/coordinator.yaml.template:/etc/tunnelmesh/coordinator.yaml.template:ro
+      - ./scripts/coordinator-entrypoint.sh:/scripts/coordinator-entrypoint.sh:ro
+      - type: tmpfs
+        target: /var/lib/tunnelmesh
+        tmpfs:
+          size: 268435456
+      - type: tmpfs
+        target: /root/.tunnelmesh
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      - mesh-control
+    ports:
+      - "8083:8080"  # Different port for coordinator 3
+    environment:
+      - TUNNELMESH_TOKEN=${TUNNELMESH_TOKEN}
+    depends_on:
+      coord-1:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 5s
@@ -67,25 +146,26 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     depends_on:
-      coordinator:
+      coord-1:
         condition: service_started
     networks:
       - mesh-control
     environment:
-      - SERVER_URL=http://coordinator:8080  # DNS round-robin across all coordinators
+      - SERVER_URL=http://coordinator-1:8080
       - AUTH_TOKEN=${TUNNELMESH_TOKEN}
+      - TUNNELMESH_ALLOW_HTTP=true
       - PING_INTERVAL=2
       - DISCOVERY_INTERVAL=20
 
-  # Monitoring stack - shares coordinator's network namespace for mesh access
-  # Note: These use network_mode: "service:coordinator" which binds to coordinator's container.
-  # The restart: true ensures they restart when coordinator restarts/recreates.
-  # Each coordinator replica runs its own monitoring stack.
+  # Monitoring stack - shares coord-1's network namespace for mesh access
+  # Note: These use network_mode: "service:coord-1" which binds to coord-1's container.
+  # The restart: true ensures they restart when coord-1 restarts/recreates.
+  # Monitoring stack is centralized on coord-1 but can scrape metrics from all coordinators.
   prometheus:
     image: prom/prometheus:latest
     container_name: tunnelmesh-prometheus
-    # Share coordinator's network namespace to access mesh IPs via TUN
-    network_mode: "service:coordinator"
+    # Share coord-1's network namespace to access mesh IPs via TUN
+    network_mode: "service:coord-1"
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -106,7 +186,7 @@ services:
       retries: 3
       start_period: 10s
     depends_on:
-      coordinator:
+      coord-1:
         condition: service_healthy
         restart: true
     restart: unless-stopped
@@ -116,8 +196,8 @@ services:
       context: ..
       dockerfile: monitoring/sd_generator/Dockerfile
     container_name: tunnelmesh-sd-generator
-    # Share coordinator's network to reach coord API and resolve mesh DNS
-    network_mode: "service:coordinator"
+    # Share coord-1's network to reach coord API and resolve mesh DNS
+    network_mode: "service:coord-1"
     environment:
       - COORD_SERVER_URL=http://localhost:8080
       - AUTH_TOKEN=${TUNNELMESH_TOKEN}
@@ -134,7 +214,7 @@ services:
       retries: 3
       start_period: 5s
     depends_on:
-      coordinator:
+      coord-1:
         condition: service_healthy
         restart: true
     restart: unless-stopped
@@ -142,8 +222,8 @@ services:
   grafana:
     image: grafana/grafana:latest
     container_name: tunnelmesh-grafana
-    # Share coordinator's network namespace
-    network_mode: "service:coordinator"
+    # Share coord-1's network namespace
+    network_mode: "service:coord-1"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -166,7 +246,7 @@ services:
       retries: 3
       start_period: 15s
     depends_on:
-      coordinator:
+      coord-1:
         condition: service_healthy
         restart: true
       prometheus:
@@ -178,8 +258,8 @@ services:
   loki:
     image: grafana/loki:latest
     container_name: tunnelmesh-loki
-    # Share coordinator's network namespace to receive logs from mesh peers
-    network_mode: "service:coordinator"
+    # Share coord-1's network namespace to receive logs from mesh peers
+    network_mode: "service:coord-1"
     command: -config.file=/etc/loki/local-config.yaml
     volumes:
       - ../monitoring/loki/config.yaml:/etc/loki/local-config.yaml:ro
@@ -192,7 +272,7 @@ services:
       retries: 3
       start_period: 10s
     depends_on:
-      coordinator:
+      coord-1:
         condition: service_healthy
         restart: true
     restart: unless-stopped
@@ -202,8 +282,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.benchmarker
     container_name: tunnelmesh-benchmarker
-    # Share coordinator's network namespace to access mesh IPs via TUN
-    network_mode: "service:coordinator"
+    # Share coord-1's network namespace to access mesh IPs via TUN
+    network_mode: "service:coord-1"
     environment:
       - COORD_SERVER_URL=http://localhost:8080
       - AUTH_TOKEN=${TUNNELMESH_TOKEN}
@@ -220,7 +300,7 @@ services:
     volumes:
       - benchmark-results:/results
     depends_on:
-      coordinator:
+      coord-1:
         condition: service_healthy
         restart: true
     restart: unless-stopped

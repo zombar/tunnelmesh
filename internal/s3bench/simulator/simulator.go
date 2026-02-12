@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
+	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/mesh"
 	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/story"
 )
 
@@ -43,6 +44,10 @@ type SimulatorConfig struct {
 
 	// S3 components (optional, for actual operations)
 	UserManager *UserManager // User session manager with S3 access
+
+	// Mesh integration (Phase 2: Coordinator API)
+	UseMesh    bool                    // Enable mesh integration
+	MeshClient *mesh.CoordinatorClient // Coordinator API client (nil = standalone)
 }
 
 // DefaultConfig returns a simulator config with sensible defaults.
@@ -77,8 +82,9 @@ type Simulator struct {
 	meshOrch     *MeshOrchestrator
 
 	// S3 components (for actual operations)
-	userMgr    *UserManager // User session management
-	httpClient *http.Client // HTTP client for network testing
+	userMgr    *UserManager            // User session management
+	httpClient *http.Client            // HTTP client for network testing
+	meshClient *mesh.CoordinatorClient // Coordinator mesh API client
 
 	// Execution state
 	startTime time.Time
@@ -164,7 +170,8 @@ func NewSimulator(config SimulatorConfig) (*Simulator, error) {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		attempts: make(map[string][]AdversaryAttempt),
+		meshClient: config.MeshClient,
+		attempts:   make(map[string][]AdversaryAttempt),
 		metrics: &SimulatorMetrics{
 			StoryDuration: config.Story.Duration(),
 		},
@@ -494,6 +501,11 @@ func (s *Simulator) executeTask(ctx context.Context, task *WorkloadTask) error {
 
 // executeUpload performs an S3 upload operation.
 func (s *Simulator) executeUpload(ctx context.Context, store *s3.Store, session *UserSession, bucket string, task *WorkloadTask) error {
+	// Route to mesh mode if enabled (highest priority)
+	if s.meshClient != nil {
+		return s.executeUploadMesh(ctx, bucket, task)
+	}
+
 	// Route to HTTP or direct store access
 	if s.config.UseHTTP {
 		return s.executeUploadHTTP(ctx, session, bucket, task)
@@ -565,6 +577,32 @@ func (s *Simulator) executeUploadHTTP(ctx context.Context, session *UserSession,
 			return fmt.Errorf("HTTP PUT %s failed: %d (error reading response body: %w)", url, resp.StatusCode, readErr)
 		}
 		return fmt.Errorf("HTTP PUT %s failed: %d %s", url, resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// executeUploadMesh performs an S3 upload to the coordinator via mesh API.
+func (s *Simulator) executeUploadMesh(ctx context.Context, bucket string, task *WorkloadTask) error {
+	// Build object metadata
+	metadata := map[string]string{
+		"author":    task.Author.Name,
+		"author_id": task.Author.ID,
+		"doc_type":  task.DocType,
+		"phase":     fmt.Sprintf("%d", task.Phase),
+		"clearance": fmt.Sprintf("%d", task.Author.Clearance),
+		"version":   fmt.Sprintf("%d", task.VersionNum),
+	}
+
+	// Add expiration if specified
+	if task.ExpiresAt != nil {
+		metadata["expires_at"] = task.ExpiresAt.Format(time.RFC3339)
+	}
+
+	// Upload to coordinator via mesh API
+	err := s.meshClient.PutObject(ctx, bucket, task.Filename, task.Content, task.ContentType, metadata)
+	if err != nil {
+		return fmt.Errorf("mesh upload %s/%s: %w", bucket, task.Filename, err)
 	}
 
 	return nil

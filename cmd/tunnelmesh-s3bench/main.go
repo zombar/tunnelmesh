@@ -9,11 +9,13 @@ import (
 	"syscall"
 	"time"
 
+	"encoding/json"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
+	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/mesh"
 	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/simulator"
 	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/story"
 	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/story/scenarios"
@@ -28,7 +30,7 @@ var (
 // Global flags
 var (
 	logLevel    string
-	outputJSON  string
+	jsonOutput  string
 	verbose     bool
 	storageRoot string
 	endpoint    string
@@ -50,6 +52,11 @@ var (
 	expiryOverride       time.Duration
 	adversaryAttempts    int
 	maxConcurrentUploads int
+
+	// Mesh integration flags
+	coordinatorURL string
+	sshKeyPath     string
+	insecureTLS    bool
 )
 
 func main() {
@@ -74,7 +81,7 @@ versioning, RBAC, file shares, and mesh dynamics.`,
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
-	rootCmd.PersistentFlags().StringVar(&outputJSON, "output-json", "", "Write results to JSON file")
+	rootCmd.PersistentFlags().StringVar(&jsonOutput, "json", "", "Write results to JSON file")
 	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "Verbose output")
 	rootCmd.PersistentFlags().StringVar(&storageRoot, "storage-root", "", "Storage root directory (default: temp dir)")
 	rootCmd.PersistentFlags().StringVar(&endpoint, "endpoint", "http://localhost:8080", "S3 endpoint URL")
@@ -99,6 +106,11 @@ func init() {
 	runCmd.Flags().DurationVar(&expiryOverride, "expiry-override", 0, "Override document expiries (0=use story defaults)")
 	runCmd.Flags().IntVar(&adversaryAttempts, "adversary-attempts", 50, "Number of adversary attempts to generate")
 	runCmd.Flags().IntVar(&maxConcurrentUploads, "max-concurrent-uploads", 10, "Maximum concurrent uploads")
+
+	// Mesh integration flags
+	runCmd.Flags().StringVar(&coordinatorURL, "coordinator", "", "Coordinator URL (enables mesh mode, e.g., https://coordinator.example.com:8443)")
+	runCmd.Flags().StringVar(&sshKeyPath, "ssh-key", "", "SSH private key path (default: ~/.tunnelmesh/s3bench_key)")
+	runCmd.Flags().BoolVar(&insecureTLS, "insecure-tls", true, "Skip TLS certificate verification (default: true for self-signed certs)")
 }
 
 var runCmd = &cobra.Command{
@@ -252,6 +264,72 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
+	// Mesh integration (optional)
+	var meshClient *mesh.CoordinatorClient
+	if coordinatorURL != "" {
+		log.Info().Str("coordinator", coordinatorURL).Msg("Mesh integration enabled")
+
+		// Load or generate SSH credentials
+		log.Info().Str("key_path", sshKeyPath).Msg("Loading SSH key")
+		creds, err := mesh.LoadOrGenerateCredentials(sshKeyPath)
+		if err != nil {
+			return fmt.Errorf("loading credentials: %w", err)
+		}
+
+		// Register with coordinator
+		log.Info().Msg("Registering with coordinator...")
+		meshInfo, err := mesh.RegisterWithCoordinator(ctx, coordinatorURL, creds, insecureTLS)
+		if err != nil {
+			return fmt.Errorf("registration failed: %w", err)
+		}
+
+		log.Info().
+			Str("peer_id", meshInfo.PeerID).
+			Str("mesh_ip", meshInfo.MeshIP).
+			Str("coord_mesh_ip", meshInfo.CoordMeshIP).
+			Bool("is_admin", meshInfo.IsAdmin).
+			Msg("Registration successful")
+
+		// Derive S3 credentials
+		log.Info().Str("access_key", creds.AccessKey).Msg("Derived S3 credentials")
+
+		// Create mesh client targeting coordinator's mesh IP
+		log.Info().
+			Str("s3_endpoint", fmt.Sprintf("https://%s:443", meshInfo.CoordMeshIP)).
+			Msg("Creating buckets on coordinator mesh IP")
+		meshClient = mesh.NewCoordinatorClient(meshInfo.CoordMeshIP, creds, insecureTLS)
+
+		// Create buckets for each department
+		for _, dept := range st.Departments() {
+			bucketName := s3.FileShareBucketPrefix + dept.FileShare
+			quotaMB := dept.QuotaMB
+			if quotaOverrideMB > 0 {
+				quotaMB = quotaOverrideMB
+			}
+
+			// Check if bucket exists
+			exists, err := meshClient.BucketExists(ctx, bucketName)
+			if err != nil {
+				log.Warn().Err(err).Str("bucket", bucketName).Msg("Failed to check bucket existence")
+			}
+
+			if exists {
+				log.Info().Str("bucket", bucketName).Msg("Bucket already exists, skipping creation")
+				continue
+			}
+
+			// Create bucket
+			err = meshClient.CreateBucket(ctx, bucketName, "s3bench", quotaMB)
+			if err != nil {
+				return fmt.Errorf("creating bucket %s: %w", bucketName, err)
+			}
+			log.Info().
+				Str("bucket", bucketName).
+				Int64("quota_mb", quotaMB).
+				Msg("Created bucket")
+		}
+	}
+
 	// Configure simulator
 	config := simulator.SimulatorConfig{
 		Story:                st,
@@ -264,6 +342,8 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		AdversaryAttempts:    adversaryAttempts,
 		MaxConcurrentUploads: maxConcurrentUploads,
 		UserManager:          userMgr, // Pass user manager for actual S3 operations
+		UseMesh:              meshClient != nil,
+		MeshClient:           meshClient, // Pass mesh client for coordinator integration
 		WorkflowTestsEnabled: map[simulator.WorkflowType]bool{
 			simulator.WorkflowDeletion:    testDeletion,
 			simulator.WorkflowExpiration:  testExpiration,
@@ -307,10 +387,22 @@ func runScenario(cmd *cobra.Command, args []string) error {
 	// Print final report
 	printFinalReport(metrics)
 
+	// Show coordinator info if using mesh mode
+	if meshClient != nil {
+		fmt.Println()
+		log.Info().Msg("Documents uploaded to coordinator and viewable in Objects browser")
+		if !insecureTLS {
+			log.Info().Str("url", fmt.Sprintf("%s/#/data/s3", coordinatorURL)).Msg("Access web UI")
+		}
+	}
+
 	// Write JSON output if requested
-	if outputJSON != "" {
-		// TODO: Implement JSON output
-		log.Info().Str("file", outputJSON).Msg("JSON output not yet implemented")
+	if jsonOutput != "" {
+		if err := writeJSONOutput(jsonOutput, metrics, st, meshClient != nil, coordinatorURL); err != nil {
+			log.Error().Err(err).Str("file", jsonOutput).Msg("Failed to write JSON output")
+			return fmt.Errorf("writing JSON output: %w", err)
+		}
+		log.Info().Str("file", jsonOutput).Msg("Results written to JSON file")
 	}
 
 	return nil
@@ -445,4 +537,189 @@ func printFinalReport(metrics *simulator.SimulatorMetrics) {
 	}
 
 	fmt.Println("═══════════════════════════════════════════════════════════")
+}
+
+// JSONOutput represents the JSON output format for results.
+type JSONOutput struct {
+	// Metadata
+	Scenario       string  `json:"scenario"`
+	Description    string  `json:"description"`
+	TimeScale      float64 `json:"time_scale"`
+	MeshMode       bool    `json:"mesh_mode,omitempty"`
+	CoordinatorURL string  `json:"coordinator_url,omitempty"`
+
+	// Timing
+	StartTime     time.Time `json:"start_time"`
+	EndTime       time.Time `json:"end_time"`
+	Duration      string    `json:"duration"`
+	StoryDuration string    `json:"story_duration"`
+
+	// Operations
+	Operations struct {
+		TasksGenerated int `json:"tasks_generated"`
+		TasksCompleted int `json:"tasks_completed"`
+		TasksFailed    int `json:"tasks_failed"`
+		Uploads        int `json:"uploads"`
+		Downloads      int `json:"downloads"`
+		Updates        int `json:"updates"`
+		Deletes        int `json:"deletes"`
+	} `json:"operations"`
+
+	// Data
+	Data struct {
+		BytesUploaded    int64 `json:"bytes_uploaded"`
+		BytesDownloaded  int64 `json:"bytes_downloaded"`
+		DocumentsCreated int   `json:"documents_created"`
+		VersionsCreated  int   `json:"versions_created"`
+	} `json:"data"`
+
+	// Performance
+	Performance struct {
+		AvgUploadLatency   string `json:"avg_upload_latency"`
+		AvgDownloadLatency string `json:"avg_download_latency"`
+		P95UploadLatency   string `json:"p95_upload_latency"`
+		P99UploadLatency   string `json:"p99_upload_latency"`
+	} `json:"performance"`
+
+	// Storage Efficiency
+	StorageEfficiency *struct {
+		LogicalBytes       int64   `json:"logical_bytes"`
+		PhysicalBytes      int64   `json:"physical_bytes"`
+		DeduplicationRatio float64 `json:"deduplication_ratio"`
+		CompressionRatio   float64 `json:"compression_ratio"`
+	} `json:"storage_efficiency,omitempty"`
+
+	// Security
+	Security *struct {
+		AdversaryAttempts   int     `json:"adversary_attempts"`
+		AdversaryDenials    int     `json:"adversary_denials"`
+		AdversaryDenialRate float64 `json:"adversary_denial_rate"`
+	} `json:"security,omitempty"`
+
+	// Workflows
+	Workflows *struct {
+		TestsRun    int `json:"tests_run"`
+		TestsPassed int `json:"tests_passed"`
+		TestsFailed int `json:"tests_failed"`
+	} `json:"workflows,omitempty"`
+
+	// Mesh
+	Mesh *struct {
+		PeerJoins    int    `json:"peer_joins"`
+		PeerLeaves   int    `json:"peer_leaves"`
+		MeshDowntime string `json:"mesh_downtime,omitempty"`
+	} `json:"mesh,omitempty"`
+
+	// Errors
+	Errors []string `json:"errors,omitempty"`
+}
+
+// writeJSONOutput writes metrics to a JSON file.
+func writeJSONOutput(filename string, metrics *simulator.SimulatorMetrics, st story.Story, meshMode bool, coordinatorURL string) error {
+	output := JSONOutput{
+		Scenario:       st.Name(),
+		Description:    st.Description(),
+		TimeScale:      timeScale,
+		MeshMode:       meshMode,
+		CoordinatorURL: coordinatorURL,
+		StartTime:      metrics.StartTime,
+		EndTime:        metrics.EndTime,
+		Duration:       metrics.Duration.String(),
+		StoryDuration:  metrics.StoryDuration.String(),
+	}
+
+	// Operations
+	output.Operations.TasksGenerated = metrics.TasksGenerated
+	output.Operations.TasksCompleted = metrics.TasksCompleted
+	output.Operations.TasksFailed = metrics.TasksFailed
+	output.Operations.Uploads = metrics.UploadCount
+	output.Operations.Downloads = metrics.DownloadCount
+	output.Operations.Updates = metrics.UpdateCount
+	output.Operations.Deletes = metrics.DeleteCount
+
+	// Data
+	output.Data.BytesUploaded = metrics.BytesUploaded
+	output.Data.BytesDownloaded = metrics.BytesDownloaded
+	output.Data.DocumentsCreated = metrics.DocumentsCreated
+	output.Data.VersionsCreated = metrics.VersionsCreated
+
+	// Performance
+	output.Performance.AvgUploadLatency = metrics.AvgUploadLatency.String()
+	output.Performance.AvgDownloadLatency = metrics.AvgDownloadLatency.String()
+	output.Performance.P95UploadLatency = metrics.P95UploadLatency.String()
+	output.Performance.P99UploadLatency = metrics.P99UploadLatency.String()
+
+	// Storage Efficiency (optional)
+	if metrics.PhysicalBytes > 0 {
+		output.StorageEfficiency = &struct {
+			LogicalBytes       int64   `json:"logical_bytes"`
+			PhysicalBytes      int64   `json:"physical_bytes"`
+			DeduplicationRatio float64 `json:"deduplication_ratio"`
+			CompressionRatio   float64 `json:"compression_ratio"`
+		}{
+			LogicalBytes:       metrics.LogicalBytes,
+			PhysicalBytes:      metrics.PhysicalBytes,
+			DeduplicationRatio: metrics.DeduplicationRatio,
+			CompressionRatio:   metrics.CompressionRatio,
+		}
+	}
+
+	// Security (optional)
+	if metrics.AdversaryAttempts > 0 {
+		output.Security = &struct {
+			AdversaryAttempts   int     `json:"adversary_attempts"`
+			AdversaryDenials    int     `json:"adversary_denials"`
+			AdversaryDenialRate float64 `json:"adversary_denial_rate"`
+		}{
+			AdversaryAttempts:   metrics.AdversaryAttempts,
+			AdversaryDenials:    metrics.AdversaryDenials,
+			AdversaryDenialRate: metrics.AdversaryDenialRate,
+		}
+	}
+
+	// Workflows (optional)
+	if metrics.WorkflowTestsRun > 0 {
+		output.Workflows = &struct {
+			TestsRun    int `json:"tests_run"`
+			TestsPassed int `json:"tests_passed"`
+			TestsFailed int `json:"tests_failed"`
+		}{
+			TestsRun:    metrics.WorkflowTestsRun,
+			TestsPassed: metrics.WorkflowTestsPassed,
+			TestsFailed: metrics.WorkflowTestsFailed,
+		}
+	}
+
+	// Mesh (optional)
+	if metrics.PeerJoins > 0 || metrics.PeerLeaves > 0 {
+		output.Mesh = &struct {
+			PeerJoins    int    `json:"peer_joins"`
+			PeerLeaves   int    `json:"peer_leaves"`
+			MeshDowntime string `json:"mesh_downtime,omitempty"`
+		}{
+			PeerJoins:  metrics.PeerJoins,
+			PeerLeaves: metrics.PeerLeaves,
+		}
+		if metrics.MeshDowntime > 0 {
+			output.Mesh.MeshDowntime = metrics.MeshDowntime.String()
+		}
+	}
+
+	// Errors
+	if len(metrics.Errors) > 0 {
+		output.Errors = metrics.Errors
+	}
+
+	// Marshal to JSON with indentation
+	data, err := json.MarshalIndent(output, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal JSON: %w", err)
+	}
+
+	// Write to file
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+
+	return nil
 }
