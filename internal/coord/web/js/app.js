@@ -1,12 +1,6 @@
 // Import constants from TM.utils (loaded via lib/utils.js)
-const {
-    POLL_INTERVAL_MS,
-    SSE_RETRY_DELAY_MS,
-    MAX_SSE_RETRIES,
-    ROWS_PER_PAGE,
-    TOAST_DURATION_MS,
-    TOAST_FADE_MS,
-} = TM.utils.CONSTANTS;
+const { POLL_INTERVAL_MS, SSE_RETRY_DELAY_MS, MAX_SSE_RETRIES, ROWS_PER_PAGE, TOAST_DURATION_MS, TOAST_FADE_MS } =
+    TM.utils.CONSTANTS;
 
 // Import utilities from TM modules
 const { escapeHtml } = TM.utils;
