@@ -195,3 +195,35 @@ func (r *byteReader) Read(p []byte) (int, error) {
 	r.pos += n
 	return n, nil
 }
+
+// StreamingChunker wraps the existing Chunker and adds hash computation.
+// It processes data in a streaming fashion, never buffering entire files in memory.
+// For a 1GB file, peak memory usage is ~64KB (single chunk).
+type StreamingChunker struct {
+	chunker *Chunker
+}
+
+// NewStreamingChunker creates a new streaming chunker that computes hashes.
+func NewStreamingChunker(r io.Reader) *StreamingChunker {
+	return &StreamingChunker{
+		chunker: NewChunker(r),
+	}
+}
+
+// NextChunk reads and returns the next chunk along with its SHA-256 hash.
+// Returns (nil, "", io.EOF) when all data has been processed.
+// Returns (nil, "", err) on read errors.
+func (sc *StreamingChunker) NextChunk() ([]byte, string, error) {
+	chunk, err := sc.chunker.Next()
+	if err != nil {
+		return nil, "", err
+	}
+	if chunk == nil {
+		return nil, "", io.EOF
+	}
+
+	// Compute SHA-256 hash of chunk
+	hash := ContentHash(chunk)
+
+	return chunk, hash, nil
+}

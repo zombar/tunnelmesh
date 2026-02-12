@@ -25,6 +25,26 @@ const (
 
 	// MessageTypeSyncResponse contains the full state snapshot in response to a sync request
 	MessageTypeSyncResponse MessageType = "sync_response"
+
+	// Chunk-level replication message types (added in Phase 2)
+
+	// MessageTypeChunkOwnershipUpdate is broadcast when a coordinator adds/removes chunk ownership
+	MessageTypeChunkOwnershipUpdate MessageType = "chunk_ownership_update"
+
+	// MessageTypeChunkRegistrySync is sent to synchronize chunk registry state
+	MessageTypeChunkRegistrySync MessageType = "chunk_registry_sync"
+
+	// MessageTypeQueryChunkLocation requests the list of coordinators that have a specific chunk
+	MessageTypeQueryChunkLocation MessageType = "query_chunk_location"
+
+	// MessageTypeChunkLocationResponse responds with the list of chunk owners
+	MessageTypeChunkLocationResponse MessageType = "chunk_location_response"
+
+	// MessageTypeReplicateChunk is sent to replicate an individual chunk (not a full object)
+	MessageTypeReplicateChunk MessageType = "replicate_chunk"
+
+	// MessageTypeChunkAck acknowledges successful chunk replication
+	MessageTypeChunkAck MessageType = "chunk_ack"
 )
 
 // Message is the envelope for all replication protocol messages.
@@ -73,6 +93,59 @@ type SyncObjectEntry struct {
 	VersionVector VersionVector     `json:"version_vector"`
 	ContentType   string            `json:"content_type,omitempty"`
 	Metadata      map[string]string `json:"metadata,omitempty"`
+}
+
+// Chunk-level replication payloads (added in Phase 2)
+
+// ChunkOwnershipUpdatePayload is broadcast when chunk ownership changes.
+type ChunkOwnershipUpdatePayload struct {
+	ChunkHash     string        `json:"chunk_hash"`
+	CoordinatorID string        `json:"coordinator_id"`
+	Action        string        `json:"action"`    // "add" or "remove"
+	Timestamp     int64         `json:"timestamp"` // Unix timestamp
+	VersionVector VersionVector `json:"version_vector"`
+	Size          int64         `json:"size,omitempty"` // Chunk size (for "add" action)
+}
+
+// ChunkRegistrySyncPayload contains the full chunk registry state.
+type ChunkRegistrySyncPayload struct {
+	RegistryState []byte `json:"registry_state"` // Serialized ChunkOwnership records
+	Checksum      string `json:"checksum"`       // SHA-256 of registry_state for integrity
+}
+
+// QueryChunkLocationPayload requests the location of a specific chunk.
+type QueryChunkLocationPayload struct {
+	ChunkHash string `json:"chunk_hash"`
+	RequestID string `json:"request_id"` // For matching response
+}
+
+// ChunkLocationResponsePayload responds with chunk owner information.
+type ChunkLocationResponsePayload struct {
+	ChunkHash string   `json:"chunk_hash"`
+	Owners    []string `json:"owners"`     // List of coordinator IDs that have this chunk
+	RequestID string   `json:"request_id"` // Matches QueryChunkLocationPayload.RequestID
+}
+
+// ReplicateChunkPayload contains data for chunk-level replication.
+type ReplicateChunkPayload struct {
+	Bucket        string        `json:"bucket"`         // File this chunk belongs to
+	Key           string        `json:"key"`            // File key
+	ChunkHash     string        `json:"chunk_hash"`     // SHA-256 of chunk plaintext
+	ChunkData     []byte        `json:"chunk_data"`     // Compressed + encrypted chunk
+	ChunkIndex    int           `json:"chunk_index"`    // Position in file (for ordering)
+	TotalChunks   int           `json:"total_chunks"`   // Total number of chunks in file
+	ChunkSize     int64         `json:"chunk_size"`     // Uncompressed chunk size
+	VersionVector VersionVector `json:"version_vector"` // Per-chunk version vector
+}
+
+// ChunkAckPayload acknowledges chunk replication.
+type ChunkAckPayload struct {
+	Bucket     string `json:"bucket"`
+	Key        string `json:"key"`
+	ChunkHash  string `json:"chunk_hash"`
+	ChunkIndex int    `json:"chunk_index"`
+	Success    bool   `json:"success"`
+	Error      string `json:"error,omitempty"`
 }
 
 // NewReplicateMessage creates a new replication message.

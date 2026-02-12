@@ -84,16 +84,34 @@ type VersionRetentionPolicy struct {
 	MonthlyMonths int // Then keep one version per month for N months
 }
 
+// ChunkRegistryInterface defines operations for tracking chunk ownership across coordinators.
+// This interface allows the Store to integrate with the distributed chunk registry
+// without creating a circular dependency with the replication package.
+type ChunkRegistryInterface interface {
+	// RegisterChunk registers a chunk as owned by the local coordinator
+	RegisterChunk(hash string, size int64) error
+
+	// UnregisterChunk removes the local coordinator as an owner of the chunk
+	UnregisterChunk(hash string) error
+
+	// GetOwners returns the list of coordinator IDs that own the chunk
+	GetOwners(hash string) ([]string, error)
+
+	// GetChunksOwnedBy returns all chunk hashes owned by the specified coordinator
+	GetChunksOwnedBy(coordID string) ([]string, error)
+}
+
 // Store provides S3 storage with content-addressable chunks and versioning.
 type Store struct {
 	dataDir                 string
 	cas                     *CAS // Content-addressable storage for chunks
 	quota                   *QuotaManager
-	defaultObjectExpiryDays int // Days until objects expire (0 = never)
-	defaultShareExpiryDays  int // Days until file shares expire (0 = never)
-	tombstoneRetentionDays  int // Days to retain tombstoned objects before purging (0 = never purge)
-	versionRetentionDays    int // Days to retain object versions (0 = forever)
-	maxVersionsPerObject    int // Max versions to keep per object (0 = unlimited)
+	chunkRegistry           ChunkRegistryInterface // Optional distributed chunk ownership tracking
+	defaultObjectExpiryDays int                    // Days until objects expire (0 = never)
+	defaultShareExpiryDays  int                    // Days until file shares expire (0 = never)
+	tombstoneRetentionDays  int                    // Days to retain tombstoned objects before purging (0 = never purge)
+	versionRetentionDays    int                    // Days to retain object versions (0 = forever)
+	maxVersionsPerObject    int                    // Max versions to keep per object (0 = unlimited)
 	versionRetentionPolicy  VersionRetentionPolicy
 	mu                      sync.RWMutex
 }
@@ -173,6 +191,14 @@ func NewStoreWithCAS(dataDir string, quota *QuotaManager, masterKey [32]byte) (*
 // DataDir returns the data directory path.
 func (s *Store) DataDir() string {
 	return s.dataDir
+}
+
+// SetChunkRegistry sets the distributed chunk registry for tracking ownership.
+// This is optional and only used when replication is enabled.
+func (s *Store) SetChunkRegistry(registry ChunkRegistryInterface) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.chunkRegistry = registry
 }
 
 // SetDefaultObjectExpiryDays sets the default expiry for new objects in days.
@@ -599,32 +625,47 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		return nil, fmt.Errorf("create meta dir: %w", err)
 	}
 
-	// Read all data for CDC chunking
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, fmt.Errorf("read object data: %w", err)
-	}
-	written := int64(len(data))
+	// Stream data through CDC chunker (memory-efficient)
+	// For a 1GB file, this uses ~64KB peak memory instead of 1GB
+	streamChunker := NewStreamingChunker(reader)
 
-	// CDC split into chunks
-	chunkData, err := ChunkData(data)
-	if err != nil {
-		return nil, fmt.Errorf("chunk data: %w", err)
-	}
+	var chunks []string
+	var written int64
+	md5Hasher := md5.New()
 
-	// Store each chunk in CAS
-	chunks := make([]string, 0, len(chunkData))
-	for _, chunk := range chunkData {
-		hash, err := s.cas.WriteChunk(ctx, chunk)
-		if err != nil {
-			return nil, fmt.Errorf("write chunk: %w", err)
+	for {
+		chunk, chunkHash, err := streamChunker.NextChunk()
+		if errors.Is(err, io.EOF) {
+			break
 		}
-		chunks = append(chunks, hash)
+		if err != nil {
+			return nil, fmt.Errorf("read chunk: %w", err)
+		}
+
+		// Write chunk to CAS immediately (don't accumulate in memory)
+		if _, err := s.cas.WriteChunk(ctx, chunk); err != nil {
+			return nil, fmt.Errorf("write chunk %s: %w", chunkHash, err)
+		}
+
+		// Register chunk ownership in distributed registry (if configured)
+		if s.chunkRegistry != nil {
+			if err := s.chunkRegistry.RegisterChunk(chunkHash, int64(len(chunk))); err != nil {
+				// Log warning but don't fail upload - registry is eventually consistent
+				// TODO: Add proper logging when logger is available
+				_ = err
+			}
+		}
+
+		// Update MD5 for ETag
+		md5Hasher.Write(chunk)
+
+		chunks = append(chunks, chunkHash)
+		written += int64(len(chunk))
 	}
 
 	// Generate ETag from MD5 hash of all data (S3-compatible format)
-	hash := md5.Sum(data)
-	etag := fmt.Sprintf("\"%s\"", hex.EncodeToString(hash[:]))
+	hash := md5Hasher.Sum(nil)
+	etag := fmt.Sprintf("\"%s\"", hex.EncodeToString(hash))
 
 	// Update quota tracking
 	var quotaUpdated bool
@@ -1776,6 +1817,13 @@ func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, refere
 			// CAS.DeleteChunk has its own locking
 			if s.cas.DeleteChunk(ctx, hash) == nil {
 				stats.ChunksDeleted++
+
+				// Unregister from chunk registry (if configured)
+				// Note: In Phase 6, we'll make GC registry-aware to check if
+				// chunks are owned by other coordinators before deleting
+				if s.chunkRegistry != nil {
+					_ = s.chunkRegistry.UnregisterChunk(hash)
+				}
 			}
 		}
 		return nil
