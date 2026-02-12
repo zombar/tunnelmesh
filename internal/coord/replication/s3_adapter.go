@@ -116,3 +116,55 @@ func (a *S3StoreAdapter) ListBuckets(ctx context.Context) ([]string, error) {
 
 	return names, nil
 }
+
+// GetObjectMeta retrieves object metadata without loading chunk data (Phase 4).
+func (a *S3StoreAdapter) GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectMeta, error) {
+	meta, err := a.store.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return nil, fmt.Errorf("get object meta: %w", err)
+	}
+
+	// Convert s3.ObjectMeta to replication.ObjectMeta
+	result := &ObjectMeta{
+		Key:           meta.Key,
+		Size:          meta.Size,
+		ContentType:   meta.ContentType,
+		Metadata:      meta.Metadata,
+		Chunks:        meta.Chunks,
+		VersionVector: meta.VersionVector,
+	}
+
+	// Convert chunk metadata
+	if meta.ChunkMetadata != nil {
+		result.ChunkMetadata = make(map[string]*ChunkMetadata, len(meta.ChunkMetadata))
+		for hash, chunkMeta := range meta.ChunkMetadata {
+			result.ChunkMetadata[hash] = &ChunkMetadata{
+				Hash:          chunkMeta.Hash,
+				Size:          chunkMeta.Size,
+				VersionVector: chunkMeta.VersionVector,
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// ReadChunk reads a chunk from CAS by hash (Phase 4).
+func (a *S3StoreAdapter) ReadChunk(ctx context.Context, hash string) ([]byte, error) {
+	data, err := a.store.ReadChunk(ctx, hash)
+	if err != nil {
+		return nil, fmt.Errorf("read chunk: %w", err)
+	}
+
+	return data, nil
+}
+
+// WriteChunkDirect writes chunk data directly to CAS (Phase 4).
+func (a *S3StoreAdapter) WriteChunkDirect(ctx context.Context, hash string, data []byte) error {
+	err := a.store.WriteChunkDirect(ctx, hash, data)
+	if err != nil {
+		return fmt.Errorf("write chunk direct: %w", err)
+	}
+
+	return nil
+}

@@ -140,12 +140,13 @@ type ReplicateChunkPayload struct {
 
 // ChunkAckPayload acknowledges chunk replication.
 type ChunkAckPayload struct {
-	Bucket     string `json:"bucket"`
-	Key        string `json:"key"`
-	ChunkHash  string `json:"chunk_hash"`
-	ChunkIndex int    `json:"chunk_index"`
-	Success    bool   `json:"success"`
-	Error      string `json:"error,omitempty"`
+	ReplicateID string `json:"replicate_id"` // ID of the chunk replicate message being acked
+	Bucket      string `json:"bucket"`
+	Key         string `json:"key"`
+	ChunkHash   string `json:"chunk_hash"`
+	ChunkIndex  int    `json:"chunk_index"`
+	Success     bool   `json:"success"`
+	Error       string `json:"error,omitempty"`
 }
 
 // NewReplicateMessage creates a new replication message.

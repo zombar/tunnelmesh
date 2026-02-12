@@ -24,6 +24,25 @@ type Transport interface {
 	RegisterHandler(handler func(from string, data []byte) error)
 }
 
+// ObjectMeta represents S3 object metadata including chunk information.
+// This is a minimal representation used by replication - full definition in s3 package.
+type ObjectMeta struct {
+	Key           string
+	Size          int64
+	ContentType   string
+	Metadata      map[string]string
+	Chunks        []string                  // Ordered list of chunk hashes
+	ChunkMetadata map[string]*ChunkMetadata // Per-chunk metadata
+	VersionVector map[string]uint64         // File-level version vector
+}
+
+// ChunkMetadata represents metadata for a single chunk.
+type ChunkMetadata struct {
+	Hash          string
+	Size          int64
+	VersionVector map[string]uint64
+}
+
 // S3Store defines the interface for S3 storage operations.
 type S3Store interface {
 	// Get retrieves an object from S3
@@ -40,6 +59,26 @@ type S3Store interface {
 
 	// ListBuckets lists all buckets
 	ListBuckets(ctx context.Context) ([]string, error)
+
+	// Chunk-level operations (added in Phase 4)
+
+	// GetObjectMeta retrieves object metadata without loading chunk data
+	GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectMeta, error)
+
+	// ReadChunk reads a chunk from CAS by hash
+	ReadChunk(ctx context.Context, hash string) ([]byte, error)
+
+	// WriteChunkDirect writes chunk data directly to CAS (for replication receiver)
+	WriteChunkDirect(ctx context.Context, hash string, data []byte) error
+}
+
+// ChunkRegistryInterface defines operations for chunk ownership tracking.
+type ChunkRegistryInterface interface {
+	RegisterChunk(hash string, size int64) error
+	UnregisterChunk(hash string) error
+	GetOwners(hash string) ([]string, error)
+	GetChunksOwnedBy(coordID string) ([]string, error)
+	AddOwner(hash string, coordID string) error
 }
 
 // Replicator manages replication of S3 data between coordinators.
@@ -48,6 +87,7 @@ type Replicator struct {
 	transport            Transport
 	s3                   S3Store
 	state                *State
+	chunkRegistry        ChunkRegistryInterface // Distributed chunk ownership tracking (Phase 4)
 	logger               zerolog.Logger
 	maxPendingOperations int // Maximum pending ACKs (0 = unlimited)
 
@@ -57,14 +97,19 @@ type Replicator struct {
 	ackSendTimeout      time.Duration
 	syncRequestTimeout  time.Duration
 	syncResponseTimeout time.Duration
+	chunkAckTimeout     time.Duration // Timeout for chunk-level ACKs (Phase 4)
 
 	// Peer coordinators
 	mu    sync.RWMutex
 	peers map[string]bool // map[coordMeshIP]true
 
-	// Pending ACKs
+	// Pending ACKs (file-level)
 	pendingMu sync.RWMutex
 	pending   map[string]*pendingReplication // map[messageID]*pendingReplication
+
+	// Pending chunk ACKs (chunk-level, Phase 4)
+	pendingChunksMu sync.RWMutex
+	pendingChunks   map[string]*pendingChunkReplication // map[messageID]*pendingChunkReplication
 
 	// Rate limiting
 	rateLimiter *rate.Limiter // Limits incoming replication messages per second
@@ -92,11 +137,23 @@ type pendingReplication struct {
 	timeout *time.Timer
 }
 
+// pendingChunkReplication tracks a chunk replication operation awaiting ACK (Phase 4).
+type pendingChunkReplication struct {
+	bucket     string
+	key        string
+	chunkHash  string
+	chunkIndex int
+	sentAt     time.Time
+	ackChan    chan *ChunkAckPayload
+	timeout    *time.Timer
+}
+
 // Config contains configuration for the replicator.
 type Config struct {
 	NodeID               string
 	Transport            Transport
 	S3Store              S3Store
+	ChunkRegistry        ChunkRegistryInterface // Optional: distributed chunk ownership tracking (Phase 4)
 	Logger               zerolog.Logger
 	AckTimeout           time.Duration   // How long to wait for ACK before retrying (default: 10s)
 	RetryInterval        time.Duration   // How long to wait before retrying failed replication (default: 30s)
@@ -107,6 +164,7 @@ type Config struct {
 	AckSendTimeout       time.Duration   // Timeout for sending ACK messages (default: 5s)
 	SyncRequestTimeout   time.Duration   // Timeout for handling sync requests (default: 5min)
 	SyncResponseTimeout  time.Duration   // Timeout for handling sync responses (default: 10min)
+	ChunkAckTimeout      time.Duration   // Timeout for chunk-level ACKs (default: 30s, Phase 4)
 	Context              context.Context // SECURITY FIX #3: Parent context for proper cancellation propagation
 }
 
@@ -139,6 +197,9 @@ func NewReplicator(config Config) *Replicator {
 	if config.SyncResponseTimeout == 0 {
 		config.SyncResponseTimeout = 10 * time.Minute
 	}
+	if config.ChunkAckTimeout == 0 {
+		config.ChunkAckTimeout = 30 * time.Second // Default: 30s for chunk ACKs
+	}
 
 	// SECURITY FIX #3: Use provided context or create a new one
 	// This allows proper context propagation and cancellation from parent
@@ -153,6 +214,7 @@ func NewReplicator(config Config) *Replicator {
 		transport:            config.Transport,
 		s3:                   config.S3Store,
 		state:                NewState(config.NodeID),
+		chunkRegistry:        config.ChunkRegistry, // Optional (nil if not using chunk-level replication)
 		logger:               config.Logger.With().Str("component", "replicator").Logger(),
 		maxPendingOperations: config.MaxPendingOperations,
 		ackTimeout:           config.AckTimeout,
@@ -160,9 +222,11 @@ func NewReplicator(config Config) *Replicator {
 		ackSendTimeout:       config.AckSendTimeout,
 		syncRequestTimeout:   config.SyncRequestTimeout,
 		syncResponseTimeout:  config.SyncResponseTimeout,
+		chunkAckTimeout:      config.ChunkAckTimeout,
 		rateLimiter:          rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst),
 		peers:                make(map[string]bool),
 		pending:              make(map[string]*pendingReplication),
+		pendingChunks:        make(map[string]*pendingChunkReplication),
 		ctx:                  ctx,
 		cancel:               cancel,
 	}
@@ -470,6 +534,10 @@ func (r *Replicator) handleIncomingMessage(from string, data []byte) error {
 		return r.handleSyncRequest(msg)
 	case MessageTypeSyncResponse:
 		return r.handleSyncResponse(msg)
+	case MessageTypeReplicateChunk:
+		return r.handleReplicateChunk(msg)
+	case MessageTypeChunkAck:
+		return r.handleChunkAck(msg)
 	default:
 		r.logger.Warn().Str("type", string(msg.Type)).Msg("Unknown message type")
 		return fmt.Errorf("unknown message type: %s", msg.Type)
@@ -997,4 +1065,373 @@ func (r *Replicator) incrementRateLimitedCount() {
 // GetState returns the replication state tracker.
 func (r *Replicator) GetState() *State {
 	return r.state
+}
+
+// ==== Phase 4: Chunk-Level Replication Functions ====
+
+// ReplicateObject replicates a file to a specific peer by sending individual chunks.
+// Only chunks not already owned by the peer are sent (bandwidth optimization).
+// Enables resume capability: failed transfers can be resumed from the last successful chunk.
+func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID string) error {
+	// Chunk registry required for chunk-level replication
+	if r.chunkRegistry == nil {
+		r.logger.Warn().Msg("Chunk registry not configured, falling back to file-level replication")
+		// Fall back to file-level replication
+		data, metadata, err := r.s3.Get(ctx, bucket, key)
+		if err != nil {
+			return fmt.Errorf("get object for replication: %w", err)
+		}
+		contentType := ""
+		if metadata != nil {
+			contentType = metadata["content-type"]
+		}
+		return r.ReplicateOperation(ctx, bucket, key, data, contentType, metadata)
+	}
+
+	// Get file metadata (includes chunk list)
+	meta, err := r.s3.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return fmt.Errorf("get object metadata: %w", err)
+	}
+
+	// Query which chunks the remote peer already has
+	remoteChunks, err := r.chunkRegistry.GetChunksOwnedBy(peerID)
+	if err != nil {
+		r.logger.Warn().Err(err).Str("peer", peerID).Msg("Failed to query remote chunks, replicating all")
+		remoteChunks = []string{} // Fallback: replicate everything
+	}
+
+	// Build set for fast lookup
+	remoteChunkSet := make(map[string]bool, len(remoteChunks))
+	for _, hash := range remoteChunks {
+		remoteChunkSet[hash] = true
+	}
+
+	// Determine which chunks need replication
+	var chunksToReplicate []string
+	for _, chunkHash := range meta.Chunks {
+		if !remoteChunkSet[chunkHash] {
+			chunksToReplicate = append(chunksToReplicate, chunkHash)
+		}
+	}
+
+	if len(chunksToReplicate) == 0 {
+		r.logger.Info().
+			Str("bucket", bucket).
+			Str("key", key).
+			Str("peer", peerID).
+			Int("total_chunks", len(meta.Chunks)).
+			Msg("All chunks already replicated, skipping")
+		return nil
+	}
+
+	r.logger.Info().
+		Str("bucket", bucket).
+		Str("key", key).
+		Str("peer", peerID).
+		Int("chunks_to_replicate", len(chunksToReplicate)).
+		Int("total_chunks", len(meta.Chunks)).
+		Int("already_replicated", len(meta.Chunks)-len(chunksToReplicate)).
+		Msg("Starting chunk-level replication")
+
+	// Replicate each missing chunk
+	for i, chunkHash := range chunksToReplicate {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("replication canceled: %w", ctx.Err())
+		default:
+		}
+
+		// Read chunk data from local CAS
+		chunkData, err := r.s3.ReadChunk(ctx, chunkHash)
+		if err != nil {
+			return fmt.Errorf("read chunk %s: %w", chunkHash, err)
+		}
+
+		// Get chunk metadata
+		chunkMeta := meta.ChunkMetadata[chunkHash]
+		if chunkMeta == nil {
+			// Fallback: create minimal metadata if not present
+			chunkMeta = &ChunkMetadata{
+				Hash: chunkHash,
+				Size: int64(len(chunkData)),
+			}
+		}
+
+		// Find chunk index in file (for ordering)
+		chunkIndex := -1
+		for idx, hash := range meta.Chunks {
+			if hash == chunkHash {
+				chunkIndex = idx
+				break
+			}
+		}
+
+		// Create chunk replication payload
+		payload := ReplicateChunkPayload{
+			Bucket:        bucket,
+			Key:           key,
+			ChunkHash:     chunkHash,
+			ChunkData:     chunkData,
+			ChunkIndex:    chunkIndex,
+			TotalChunks:   len(meta.Chunks),
+			ChunkSize:     chunkMeta.Size,
+			VersionVector: VersionVector(chunkMeta.VersionVector),
+		}
+
+		// Send chunk to peer
+		if err := r.sendReplicateChunk(ctx, peerID, payload); err != nil {
+			return fmt.Errorf("send chunk %s (%d/%d): %w", chunkHash, i+1, len(chunksToReplicate), err)
+		}
+
+		r.logger.Debug().
+			Str("bucket", bucket).
+			Str("key", key).
+			Str("chunk", truncateHashForLog(chunkHash)).
+			Int("progress", i+1).
+			Int("total", len(chunksToReplicate)).
+			Msg("Replicated chunk")
+	}
+
+	r.logger.Info().
+		Str("bucket", bucket).
+		Str("key", key).
+		Str("peer", peerID).
+		Int("chunks_replicated", len(chunksToReplicate)).
+		Msg("Completed chunk-level replication")
+
+	return nil
+}
+
+// sendReplicateChunk sends a chunk replication message and waits for ACK.
+func (r *Replicator) sendReplicateChunk(ctx context.Context, peerID string, payload ReplicateChunkPayload) error {
+	msgID := uuid.New().String()
+
+	// Create message
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal chunk payload: %w", err)
+	}
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeReplicateChunk,
+		ID:      msgID,
+		From:    r.nodeID,
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal message: %w", err)
+	}
+
+	// Track pending ACK
+	if !r.trackPendingChunkACK(msgID, payload.Bucket, payload.Key, payload.ChunkHash, payload.ChunkIndex) {
+		return fmt.Errorf("dropped: pending chunk operations limit reached")
+	}
+
+	// Send via transport
+	if err := r.transport.SendToCoordinator(ctx, peerID, data); err != nil {
+		r.removePendingChunkACK(msgID)
+		return fmt.Errorf("send to coordinator: %w", err)
+	}
+
+	// Wait for ACK with timeout
+	ack, err := r.waitForChunkAck(ctx, msgID)
+	if err != nil {
+		return fmt.Errorf("wait for chunk ack: %w", err)
+	}
+
+	if !ack.Success {
+		return fmt.Errorf("chunk replication failed: %s", ack.Error)
+	}
+
+	return nil
+}
+
+// truncateHash returns first 8 chars of hash for logging, or full hash if shorter.
+func truncateHashForLog(hash string) string {
+	if len(hash) > 8 {
+		return hash[:8]
+	}
+	return hash
+}
+
+// handleReplicateChunk processes an incoming chunk replication message.
+func (r *Replicator) handleReplicateChunk(msg *Message) error {
+	var payload ReplicateChunkPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal chunk payload: %w", err)
+	}
+
+	r.logger.Debug().
+		Str("bucket", payload.Bucket).
+		Str("key", payload.Key).
+		Str("chunk", truncateHashForLog(payload.ChunkHash)).
+		Int("index", payload.ChunkIndex).
+		Int("total", payload.TotalChunks).
+		Str("from", msg.From).
+		Msg("Received chunk replication")
+
+	// Store chunk in local CAS
+	if err := r.s3.WriteChunkDirect(r.ctx, payload.ChunkHash, payload.ChunkData); err != nil {
+		r.logger.Error().Err(err).Str("chunk", truncateHashForLog(payload.ChunkHash)).Msg("Failed to write chunk")
+		return r.sendChunkAck(msg.ID, msg.From, payload.Bucket, payload.Key, payload.ChunkHash, payload.ChunkIndex, false, err.Error())
+	}
+
+	// Update chunk registry (mark us as owner)
+	if r.chunkRegistry != nil {
+		if err := r.chunkRegistry.AddOwner(payload.ChunkHash, r.nodeID); err != nil {
+			// Non-fatal: log warning but still send success ACK
+			r.logger.Warn().Err(err).Str("chunk", truncateHashForLog(payload.ChunkHash)).Msg("Failed to update chunk registry")
+		}
+	}
+
+	// Send success ACK
+	return r.sendChunkAck(msg.ID, msg.From, payload.Bucket, payload.Key, payload.ChunkHash, payload.ChunkIndex, true, "")
+}
+
+// sendChunkAck sends a chunk ACK message.
+func (r *Replicator) sendChunkAck(replicateID, to, bucket, key, chunkHash string, chunkIndex int, success bool, errorMsg string) error {
+	payload := ChunkAckPayload{
+		ReplicateID: replicateID,
+		Bucket:      bucket,
+		Key:         key,
+		ChunkHash:   chunkHash,
+		ChunkIndex:  chunkIndex,
+		Success:     success,
+		Error:       errorMsg,
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal chunk ack: %w", err)
+	}
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeChunkAck,
+		ID:      uuid.New().String(),
+		From:    r.nodeID,
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal ack message: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(r.ctx, r.ackSendTimeout)
+	defer cancel()
+
+	if err := r.transport.SendToCoordinator(ctx, to, data); err != nil {
+		r.logger.Error().Err(err).Str("to", to).Msg("Failed to send chunk ACK")
+		return fmt.Errorf("send chunk ack: %w", err)
+	}
+
+	return nil
+}
+
+// handleChunkAck processes an incoming chunk ACK message.
+func (r *Replicator) handleChunkAck(msg *Message) error {
+	var payload ChunkAckPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal chunk ack: %w", err)
+	}
+
+	r.logger.Debug().
+		Str("chunk", truncateHashForLog(payload.ChunkHash)).
+		Bool("success", payload.Success).
+		Msg("Received chunk ACK")
+
+	// Find pending chunk operation using the replicate message ID
+	r.pendingChunksMu.RLock()
+	pending, exists := r.pendingChunks[payload.ReplicateID]
+	r.pendingChunksMu.RUnlock()
+
+	if !exists {
+		// ACK for unknown message (probably timed out already)
+		r.logger.Warn().Str("replicate_id", payload.ReplicateID).Msg("Received ACK for unknown chunk message")
+		return nil
+	}
+
+	// Deliver ACK to waiting goroutine (non-blocking)
+	select {
+	case pending.ackChan <- &payload:
+		// ACK delivered successfully
+		// Don't remove pending entry here - waitForChunkAck will clean it up
+	default:
+		// Channel full or closed (timeout fired or waitForChunkAck not called yet)
+		// This can happen if ACK arrives after timeout
+	}
+
+	return nil
+}
+
+// trackPendingChunkACK tracks a pending chunk ACK.
+func (r *Replicator) trackPendingChunkACK(msgID, bucket, key, chunkHash string, chunkIndex int) bool {
+	r.pendingChunksMu.Lock()
+	defer r.pendingChunksMu.Unlock()
+
+	// Check pending limit (reuse maxPendingOperations)
+	if len(r.pendingChunks) >= r.maxPendingOperations {
+		r.logger.Warn().
+			Int("pending", len(r.pendingChunks)).
+			Int("limit", r.maxPendingOperations).
+			Str("chunk", truncateHashForLog(chunkHash)).
+			Msg("Dropping chunk replication: pending limit reached")
+		r.incrementDroppedCount()
+		return false
+	}
+
+	r.pendingChunks[msgID] = &pendingChunkReplication{
+		bucket:     bucket,
+		key:        key,
+		chunkHash:  chunkHash,
+		chunkIndex: chunkIndex,
+		sentAt:     time.Now(),
+		ackChan:    make(chan *ChunkAckPayload, 1),
+		timeout: time.AfterFunc(r.chunkAckTimeout, func() {
+			r.removePendingChunkACK(msgID)
+		}),
+	}
+
+	return true
+}
+
+// removePendingChunkACK removes a pending chunk ACK entry.
+func (r *Replicator) removePendingChunkACK(msgID string) {
+	r.pendingChunksMu.Lock()
+	defer r.pendingChunksMu.Unlock()
+
+	if pending, exists := r.pendingChunks[msgID]; exists {
+		pending.timeout.Stop()
+		close(pending.ackChan)
+		delete(r.pendingChunks, msgID)
+	}
+}
+
+// waitForChunkAck waits for a chunk ACK with timeout.
+func (r *Replicator) waitForChunkAck(ctx context.Context, msgID string) (*ChunkAckPayload, error) {
+	r.pendingChunksMu.RLock()
+	pending, exists := r.pendingChunks[msgID]
+	r.pendingChunksMu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("no pending chunk operation for message %s", msgID)
+	}
+
+	// Always clean up when we're done (defer to ensure cleanup even on early return)
+	defer r.removePendingChunkACK(msgID)
+
+	// Wait for ACK or timeout
+	select {
+	case ack := <-pending.ackChan:
+		return ack, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("context canceled: %w", ctx.Err())
+	case <-time.After(r.chunkAckTimeout):
+		return nil, fmt.Errorf("chunk ack timeout after %v", r.chunkAckTimeout)
+	}
 }
