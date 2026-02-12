@@ -20,6 +20,16 @@ import (
 	"time"
 )
 
+// GCGracePeriod is the minimum age of a chunk before it can be garbage collected.
+// This prevents deleting chunks that are being replicated or uploaded.
+//
+// IMPORTANT: This assumes file uploads complete within this duration. For very large
+// files or slow networks, increase this value to prevent premature chunk deletion.
+//
+// Default: 1 hour (suitable for typical replication lag and upload durations)
+// For large file uploads: Consider 24 hours or more
+const GCGracePeriod = 1 * time.Hour
+
 // BucketMeta contains bucket metadata.
 type BucketMeta struct {
 	Name         string     `json:"name"`
@@ -1965,10 +1975,11 @@ func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, refere
 			return nil
 		}
 
-		// Grace period: Only delete chunks older than 1 hour (Phase 6)
-		// This prevents deleting chunks that are being replicated
-		const gracePeriod = 1 * time.Hour
-		if time.Since(info.ModTime()) < gracePeriod {
+		// Grace period: Only delete chunks older than GCGracePeriod (Phase 6)
+		// This prevents deleting chunks that are being replicated or uploaded.
+		//
+		// See GCGracePeriod constant documentation for tuning guidance.
+		if time.Since(info.ModTime()) < GCGracePeriod {
 			stats.ChunksSkippedGracePeriod++
 			return nil
 		}
