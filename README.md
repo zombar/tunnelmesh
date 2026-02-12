@@ -33,6 +33,35 @@ routing.
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
 - **Internal Packet Filter** - Port-based firewall with per-peer rules, configurable via config, CLI, or admin UI
 
+### What Requires Admin Access?
+
+TunnelMesh separates **network functionality** (no admin required) from **configuration operations** (admin only):
+
+**Works Without Admin** (all peers):
+- Join mesh and establish encrypted tunnels
+- Route traffic through the mesh
+- Use mesh DNS resolution
+- Access services on other peers
+- Speed test other peers
+- Use exit peers for VPN
+- Access S3 buckets (with RBAC permissions)
+
+**Requires Admin Access**:
+- View peer stats and connection details
+- Configure packet filter rules
+- Manage WireGuard clients
+- Create/delete S3 buckets and file shares
+- Manage users, groups, and RBAC bindings
+- Control Docker containers (if enabled)
+
+**Admin Configuration**:
+```yaml
+coordinator:
+  admin_peers: ["alice", "a1b2c3d4e5f6g7h8"]  # Names or peer IDs (16 hex chars)
+```
+
+See [Admin Guide](docs/ADMIN.md) for complete details.
+
 ## Getting Started
 
 For a complete step-by-step setup guide including downloading releases, configuring servers and peers, and installing as
@@ -422,7 +451,16 @@ sudo chown root:root /etc/tunnelmesh
 # Coordinator setup
 tunnelmesh init --peer              # Generate config with coordinator.enabled: true
 tunnelmesh join                     # Start as coordinator + peer
-# First admin peer to join gets full admin permissions automatically
+# Admin access requires coordinator configuration
+
+# Configure admin peers in coordinator.yaml:
+# coordinator:
+#   admin_peers: ["alice", "bob"]  # Match by peer name OR peer ID
+#
+# Peer IDs are preferred (more secure, immutable):
+#   admin_peers: ["a1b2c3d4e5f6g7h8"]  # SHA256 of SSH key (first 8 bytes = 16 hex chars)
+#
+# View your peer ID: tunnelmesh status
 
 # Peer setup (joining existing mesh)
 export TUNNELMESH_TOKEN="your-token"

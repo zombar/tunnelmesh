@@ -9,7 +9,7 @@ private_key: "/root/.tunnelmesh/id_ed25519"
 coordinator:
   enabled: true
   listen: ":8080"
-  admin_peers: ["server", "mynode"]  # These peers are admins
+  admin_peers: ["server", "mynode"]  # Peer names OR peer IDs (16 hex chars, recommended)
   service_ports: [9443, 3100]    # Allow metrics and Loki access
   locations: true          # Enable map panel and location tracking
   monitoring:

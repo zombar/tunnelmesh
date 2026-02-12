@@ -41,6 +41,12 @@ dns:
 #   enabled: true
 #   listen: ":8443"  # HTTPS listen address for peer registrations
 #
+#   # Admin peers (grant full admin access)
+#   # Supports peer names OR peer IDs (SHA256 of SSH key, first 8 bytes = 16 hex chars)
+#   # Peer IDs are preferred for security (immutable)
+#   admin_peers: ["coordinator", "alice"]  # Example with names
+#   # admin_peers: ["a1b2c3d4e5f6g7h8", "i9j0k1l2m3n4o5p6"]  # Example with peer IDs (recommended)
+#
 #   # Monitoring reverse proxy (optional)
 #   # Requires Prometheus/Grafana configured with sub-path support
 #   monitoring:

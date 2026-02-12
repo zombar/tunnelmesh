@@ -7,7 +7,7 @@ TunnelMesh provides automatic identity management with Kubernetes-style RBAC for
 Your user identity is **derived from your peer's SSH key** - the same key used for mesh networking. This means:
 
 - **Automatic Identity**: No separate user setup needed - just `join` the mesh
-- **First User = Admin**: The first peer to join becomes admin automatically
+- **Admin Authorization**: Admins are configured via coordinator's admin_peers list (peer ID or name)
 - **Share Across Devices**: Copy `~/.tunnelmesh/id_ed25519` to use the same identity on multiple machines
 - **RBAC Authorization**: Fine-grained access control for S3 buckets and dashboard panels
 
@@ -18,7 +18,7 @@ When you run `tunnelmesh join`, your identity is automatically created:
 1. **SSH Key Generated**: On first join, an ED25519 keypair is created at `~/.tunnelmesh/id_ed25519`
 2. **User ID Derived**: `SHA256(public_key)[:8]` as hex (16 characters)
 3. **Auto-Registered**: Added to the "everyone" group with default permissions
-4. **First User = Admin**: If you're the first to join, you get admin privileges
+4. **Admin Authorization**: If your peer is in coordinator's admin_peers list, you get admin privileges
 
 ```bash
 # Join the mesh - identity is automatic
@@ -27,6 +27,31 @@ tunnelmesh join coord.example.com --token <token> --context work
 # View your identity
 tunnelmesh status
 ```
+
+### Admin Peer Configuration
+
+Admin privileges are granted via the coordinator's `admin_peers` configuration:
+
+```yaml
+# coordinator.yaml
+coordinator:
+  enabled: true
+  admin_peers:
+    - "a1b2c3d4e5f6g7h8"  # Peer ID (preferred - derived from SSH key, 16 hex chars)
+    - "alice"             # Peer name (fallback - can change)
+```
+
+**Recommended**: Use Peer IDs for security:
+
+- Peer IDs are immutable (SHA256 of SSH public key)
+- Peer names can be changed by users
+- View your peer ID: `tunnelmesh status`
+
+**On first join**, peers matching admin_peers are automatically:
+
+- Added to the "admins" group
+- Granted full admin role with panel access
+- Can manage buckets, users, groups, filter rules, and Docker containers
 
 ## Sharing Identity Across Devices
 

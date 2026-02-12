@@ -141,7 +141,7 @@ QUICK START - Join an existing mesh:
   tunnelmesh join coord.example.com:8443 --context work
 
   # Identity is automatic - derived from your SSH key
-  # First user to join becomes admin
+  # Admin access: configure admin_peers in coordinator.yaml
 
   # Install as system service (optional):
   tunnelmesh service install
@@ -555,7 +555,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Println("\nNext steps:")
 		fmt.Println("  1. Edit server.yaml with your settings")
 		fmt.Println("  2. tunnelmesh serve --config server.yaml")
-		fmt.Println("  3. First peer to join becomes admin automatically")
+		fmt.Println("  3. Configure admin_peers field with peer names or IDs for admin access")
 	} else if genPeer {
 		fmt.Println("\nNext steps:")
 		fmt.Println("  1. Edit peer.yaml with server URL and token")
