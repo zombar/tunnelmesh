@@ -2034,9 +2034,22 @@ func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, refere
 						stats.ChunksSkippedShared++
 						return nil
 					}
+				} else {
+					// Registry returned empty or error - chunk might be orphaned
+					// Self-healing: re-register ourselves as owner to prevent premature deletion
+					if coordID != "" {
+						if err := registry.RegisterChunk(hash, info.Size()); err != nil {
+							s.logger.Warn().Err(err).Str("chunk_hash", hash[:8]+"...").
+								Msg("Failed to re-register orphaned chunk during GC")
+						} else {
+							s.logger.Debug().Str("chunk_hash", hash[:8]+"...").
+								Msg("Re-registered orphaned chunk in registry (self-healing GC)")
+							stats.ChunksSkippedShared++
+							return nil // Don't delete - we just claimed ownership
+						}
+					}
+					// If re-registration fails or coordID is empty, proceed with deletion (fail-safe)
 				}
-				// If GetOwners returns error or empty list, proceed with deletion
-				// (chunk not in registry or registry is unavailable - fail-safe)
 			}
 
 			// Safe to delete: not referenced locally and no other owners

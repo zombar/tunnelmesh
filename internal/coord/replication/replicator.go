@@ -14,6 +14,12 @@ import (
 	"golang.org/x/time/rate"
 )
 
+const (
+	// maxPendingFetchRequests is the maximum number of concurrent chunk fetch requests
+	// to prevent unbounded memory growth from DoS attacks
+	maxPendingFetchRequests = 10000
+)
+
 // Transport defines the interface for sending replication messages.
 // This will be implemented by the mesh transport layer (UDP/SSH/Relay).
 type Transport interface {
@@ -108,9 +114,10 @@ type Replicator struct {
 	pending   map[string]*pendingReplication // map[messageID]*pendingReplication
 
 	// Pending chunk ACKs (chunk-level, Phase 4)
-	pendingChunksMu      sync.RWMutex
-	pendingChunks        map[string]*pendingChunkReplication        // map[messageID]*pendingChunkReplication
-	pendingFetchRequests map[string]chan *FetchChunkResponsePayload // map[requestID]chan (Phase 5)
+	pendingChunksMu        sync.RWMutex
+	pendingChunks          map[string]*pendingChunkReplication        // map[messageID]*pendingChunkReplication
+	pendingFetchRequests   map[string]chan *FetchChunkResponsePayload // map[requestID]chan (Phase 5)
+	pendingFetchTimestamps map[string]time.Time                       // map[requestID]timestamp for TTL cleanup
 
 	// Rate limiting
 	rateLimiter *rate.Limiter // Limits incoming replication messages per second
@@ -211,26 +218,27 @@ func NewReplicator(config Config) *Replicator {
 	ctx, cancel := context.WithCancel(parentCtx)
 
 	r := &Replicator{
-		nodeID:               config.NodeID,
-		transport:            config.Transport,
-		s3:                   config.S3Store,
-		state:                NewState(config.NodeID),
-		chunkRegistry:        config.ChunkRegistry, // Optional (nil if not using chunk-level replication)
-		logger:               config.Logger.With().Str("component", "replicator").Logger(),
-		maxPendingOperations: config.MaxPendingOperations,
-		ackTimeout:           config.AckTimeout,
-		applyTimeout:         config.ApplyTimeout,
-		ackSendTimeout:       config.AckSendTimeout,
-		syncRequestTimeout:   config.SyncRequestTimeout,
-		syncResponseTimeout:  config.SyncResponseTimeout,
-		chunkAckTimeout:      config.ChunkAckTimeout,
-		rateLimiter:          rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst),
-		peers:                make(map[string]bool),
-		pending:              make(map[string]*pendingReplication),
-		pendingChunks:        make(map[string]*pendingChunkReplication),
-		pendingFetchRequests: make(map[string]chan *FetchChunkResponsePayload),
-		ctx:                  ctx,
-		cancel:               cancel,
+		nodeID:                 config.NodeID,
+		transport:              config.Transport,
+		s3:                     config.S3Store,
+		state:                  NewState(config.NodeID),
+		chunkRegistry:          config.ChunkRegistry, // Optional (nil if not using chunk-level replication)
+		logger:                 config.Logger.With().Str("component", "replicator").Logger(),
+		maxPendingOperations:   config.MaxPendingOperations,
+		ackTimeout:             config.AckTimeout,
+		applyTimeout:           config.ApplyTimeout,
+		ackSendTimeout:         config.AckSendTimeout,
+		syncRequestTimeout:     config.SyncRequestTimeout,
+		syncResponseTimeout:    config.SyncResponseTimeout,
+		chunkAckTimeout:        config.ChunkAckTimeout,
+		rateLimiter:            rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst),
+		peers:                  make(map[string]bool),
+		pending:                make(map[string]*pendingReplication),
+		pendingChunks:          make(map[string]*pendingChunkReplication),
+		pendingFetchRequests:   make(map[string]chan *FetchChunkResponsePayload),
+		pendingFetchTimestamps: make(map[string]time.Time),
+		ctx:                    ctx,
+		cancel:                 cancel,
 	}
 
 	// Register message handler
@@ -246,6 +254,10 @@ func (r *Replicator) Start() error {
 	// Start ACK timeout cleanup goroutine
 	r.wg.Add(1)
 	go r.ackTimeoutWorker()
+
+	// Start fetch request TTL cleanup goroutine
+	r.wg.Add(1)
+	go r.fetchRequestCleanupWorker()
 
 	return nil
 }
@@ -996,6 +1008,44 @@ func (r *Replicator) ackTimeoutWorker() {
 	}
 }
 
+// fetchRequestCleanupWorker periodically removes stale fetch requests (TTL-based cleanup).
+func (r *Replicator) fetchRequestCleanupWorker() {
+	defer r.wg.Done()
+
+	ticker := time.NewTicker(30 * time.Second) // Cleanup every 30 seconds
+	defer ticker.Stop()
+
+	const fetchRequestTTL = 2 * time.Minute // Remove requests older than 2 minutes
+
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			r.pendingChunksMu.Lock()
+
+			var cleaned int
+			for requestID, timestamp := range r.pendingFetchTimestamps {
+				if now.Sub(timestamp) > fetchRequestTTL {
+					delete(r.pendingFetchRequests, requestID)
+					delete(r.pendingFetchTimestamps, requestID)
+					cleaned++
+				}
+			}
+
+			r.pendingChunksMu.Unlock()
+
+			if cleaned > 0 {
+				r.logger.Debug().
+					Int("count", cleaned).
+					Dur("ttl", fetchRequestTTL).
+					Msg("Cleaned up stale fetch requests")
+			}
+		}
+	}
+}
+
 // GetStats returns replication statistics.
 type Stats struct {
 	SentCount     uint64 `json:"sent_count"`
@@ -1445,6 +1495,14 @@ func (r *Replicator) FetchChunk(ctx context.Context, peerID, chunkHash string) (
 	requestID := uuid.New().String()
 	msgID := uuid.New().String()
 
+	// Check request count limit (DoS prevention)
+	r.pendingChunksMu.Lock()
+	if len(r.pendingFetchRequests) >= maxPendingFetchRequests {
+		r.pendingChunksMu.Unlock()
+		return nil, fmt.Errorf("too many pending fetch requests (%d), try again later", maxPendingFetchRequests)
+	}
+	r.pendingChunksMu.Unlock()
+
 	// Create fetch request payload
 	payload := FetchChunkPayload{
 		ChunkHash: chunkHash,
@@ -1469,17 +1527,18 @@ func (r *Replicator) FetchChunk(ctx context.Context, peerID, chunkHash string) (
 		return nil, fmt.Errorf("marshal message: %w", err)
 	}
 
-	// Track pending fetch request
+	// Track pending fetch request with timestamp
 	responseChan := make(chan *FetchChunkResponsePayload, 1)
 	r.pendingChunksMu.Lock()
 	r.pendingFetchRequests[requestID] = responseChan
+	r.pendingFetchTimestamps[requestID] = time.Now()
 	r.pendingChunksMu.Unlock()
 
-	// Clean up on return
+	// Clean up on return (don't close channel to avoid race - will be GC'd)
 	defer func() {
 		r.pendingChunksMu.Lock()
 		delete(r.pendingFetchRequests, requestID)
-		close(responseChan)
+		delete(r.pendingFetchTimestamps, requestID)
 		r.pendingChunksMu.Unlock()
 	}()
 
