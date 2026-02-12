@@ -667,10 +667,9 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	md5Hasher := md5.New()
 	now := time.Now().UTC()
 
-	// Read coordinatorID once under lock to avoid race conditions
-	s.mu.RLock()
+	// Read coordinatorID once to avoid repeated field access
+	// Safe because s.mu.Lock() is already held (line 626)
 	coordID := s.coordinatorID
-	s.mu.RUnlock()
 
 	for {
 		// Check for context cancellation to allow interrupting long uploads
