@@ -34,18 +34,31 @@ func (bm *BucketMeta) IsTombstoned() bool {
 	return bm.TombstonedAt != nil
 }
 
+// ChunkMetadata contains per-chunk metadata for distributed replication.
+type ChunkMetadata struct {
+	Hash           string            `json:"hash"`                      // SHA-256 of chunk plaintext
+	Size           int64             `json:"size"`                      // Uncompressed size
+	CompressedSize int64             `json:"compressed_size,omitempty"` // Compressed size (if known)
+	VersionVector  map[string]uint64 `json:"version_vector"`            // Causality tracking (coordinatorID -> counter)
+	Owners         []string          `json:"owners,omitempty"`          // Coordinators that have this chunk
+	FirstSeen      time.Time         `json:"first_seen"`                // When chunk was first created
+	LastModified   time.Time         `json:"last_modified"`             // When chunk metadata was last updated
+}
+
 // ObjectMeta contains object metadata.
 type ObjectMeta struct {
-	Key          string            `json:"key"`
-	Size         int64             `json:"size"`
-	ContentType  string            `json:"content_type"`
-	ETag         string            `json:"etag"` // MD5 hash of content
-	LastModified time.Time         `json:"last_modified"`
-	Expires      *time.Time        `json:"expires,omitempty"`       // Optional expiration date
-	TombstonedAt *time.Time        `json:"tombstoned_at,omitempty"` // When object was soft-deleted
-	Metadata     map[string]string `json:"metadata,omitempty"`      // User-defined metadata
-	VersionID    string            `json:"version_id,omitempty"`    // Version identifier
-	Chunks       []string          `json:"chunks,omitempty"`        // Ordered list of chunk hashes (CAS)
+	Key           string                    `json:"key"`
+	Size          int64                     `json:"size"`
+	ContentType   string                    `json:"content_type"`
+	ETag          string                    `json:"etag"` // MD5 hash of content
+	LastModified  time.Time                 `json:"last_modified"`
+	Expires       *time.Time                `json:"expires,omitempty"`        // Optional expiration date
+	TombstonedAt  *time.Time                `json:"tombstoned_at,omitempty"`  // When object was soft-deleted
+	Metadata      map[string]string         `json:"metadata,omitempty"`       // User-defined metadata
+	VersionID     string                    `json:"version_id,omitempty"`     // Version identifier
+	Chunks        []string                  `json:"chunks,omitempty"`         // Ordered list of chunk hashes (CAS)
+	ChunkMetadata map[string]*ChunkMetadata `json:"chunk_metadata,omitempty"` // Per-chunk metadata with version vectors
+	VersionVector map[string]uint64         `json:"version_vector,omitempty"` // File-level version vector
 }
 
 // VersionInfo contains version information for listing.
@@ -107,6 +120,7 @@ type Store struct {
 	cas                     *CAS // Content-addressable storage for chunks
 	quota                   *QuotaManager
 	chunkRegistry           ChunkRegistryInterface // Optional distributed chunk ownership tracking
+	coordinatorID           string                 // Local coordinator ID for version vectors (optional)
 	defaultObjectExpiryDays int                    // Days until objects expire (0 = never)
 	defaultShareExpiryDays  int                    // Days until file shares expire (0 = never)
 	tombstoneRetentionDays  int                    // Days to retain tombstoned objects before purging (0 = never purge)
@@ -199,6 +213,14 @@ func (s *Store) SetChunkRegistry(registry ChunkRegistryInterface) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.chunkRegistry = registry
+}
+
+// SetCoordinatorID sets the coordinator ID for version vector tracking.
+// This is optional and only used when replication is enabled.
+func (s *Store) SetCoordinatorID(coordID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.coordinatorID = coordID
 }
 
 // SetDefaultObjectExpiryDays sets the default expiry for new objects in days.
@@ -640,8 +662,10 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	streamChunker := NewStreamingChunker(reader)
 
 	var chunks []string
+	chunkMetadata := make(map[string]*ChunkMetadata)
 	var written int64
 	md5Hasher := md5.New()
+	now := time.Now().UTC()
 
 	for {
 		// Check for context cancellation to allow interrupting long uploads
@@ -678,6 +702,21 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		// Update MD5 for ETag
 		md5Hasher.Write(chunk)
 
+		// Create per-chunk metadata with version vector
+		versionVector := make(map[string]uint64)
+		if s.coordinatorID != "" {
+			versionVector[s.coordinatorID] = 1 // Initial version
+		}
+
+		chunkMetadata[chunkHash] = &ChunkMetadata{
+			Hash:          chunkHash,
+			Size:          int64(len(chunk)),
+			VersionVector: versionVector,
+			Owners:        []string{s.coordinatorID},
+			FirstSeen:     now,
+			LastModified:  now,
+		}
+
 		chunks = append(chunks, chunkHash)
 		written += int64(len(chunk))
 	}
@@ -697,17 +736,24 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		quotaUpdated = true
 	}
 
+	// Create file-level version vector
+	fileVersionVector := make(map[string]uint64)
+	if s.coordinatorID != "" {
+		fileVersionVector[s.coordinatorID] = 1 // Initial version
+	}
+
 	// Write object metadata
-	now := time.Now().UTC()
 	objMeta := ObjectMeta{
-		Key:          key,
-		Size:         written,
-		ContentType:  contentType,
-		ETag:         etag,
-		LastModified: now,
-		Metadata:     metadata,
-		VersionID:    generateVersionID(),
-		Chunks:       chunks,
+		Key:           key,
+		Size:          written,
+		ContentType:   contentType,
+		ETag:          etag,
+		LastModified:  now,
+		Metadata:      metadata,
+		VersionID:     generateVersionID(),
+		Chunks:        chunks,
+		ChunkMetadata: chunkMetadata,
+		VersionVector: fileVersionVector,
 	}
 
 	// Set expiry if configured (skip for system bucket - internal data doesn't expire)

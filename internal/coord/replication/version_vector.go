@@ -196,3 +196,36 @@ func (vv *VersionVector) UnmarshalJSON(data []byte) error {
 	*vv = VersionVector(m)
 	return nil
 }
+
+// CompareVersionVectorMaps compares two version vector maps (used by s3.ChunkMetadata).
+// Returns the relationship between them.
+func CompareVersionVectorMaps(vv1, vv2 map[string]uint64) VectorRelationship {
+	return VersionVector(vv1).Compare(VersionVector(vv2))
+}
+
+// MergeVersionVectorMaps merges two version vector maps, taking the maximum value for each key.
+// Returns the merged version vector.
+func MergeVersionVectorMaps(vv1, vv2 map[string]uint64) map[string]uint64 {
+	merged := make(map[string]uint64)
+
+	// Copy vv1
+	for k, v := range vv1 {
+		merged[k] = v
+	}
+
+	// Merge vv2 (taking max)
+	for k, v := range vv2 {
+		if v > merged[k] {
+			merged[k] = v
+		}
+	}
+
+	return merged
+}
+
+// ResolveConflictMaps resolves a conflict between two version vector maps.
+// Returns the winner version vector.
+func ResolveConflictMaps(vv1, vv2 map[string]uint64) map[string]uint64 {
+	winner := ResolveConflict(VersionVector(vv1), VersionVector(vv2))
+	return map[string]uint64(winner)
+}
