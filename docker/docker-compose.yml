@@ -9,6 +9,9 @@
 # - coord-2: Secondary coordinator exposed on port 8082 (localhost:8082)
 # - coord-3: Tertiary coordinator exposed on port 8083 (localhost:8083)
 #
+# For testing, coordinators use HTTP (not HTTPS) via TUNNELMESH_ALLOW_HTTP=true.
+# This is INSECURE and should NEVER be used in production.
+#
 # All three coordinators start by default to test multi-coordinator replication.
 # Coordinators discover each other automatically via the mesh and replicate
 # S3 data in real-time using the chunk-level replication protocol.

@@ -52,6 +52,9 @@ else
         sleep 2
     done
     echo "coord-1 is ready! Joining mesh..."
+
+    # Allow HTTP for Docker testing environment
+    export TUNNELMESH_ALLOW_HTTP=true
     CMD="tunnelmesh join http://coord-1:8080 --config /etc/tunnelmesh/coordinator.yaml --log-level $LOG_LEVEL"
 fi
 
