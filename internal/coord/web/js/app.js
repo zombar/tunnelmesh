@@ -2005,7 +2005,7 @@ function openShareModal() {
     document.getElementById('share-name').value = '';
     document.getElementById('share-description').value = '';
     document.getElementById('share-quota').value = '';
-    document.getElementById('share-replication').value = '2';  // Default to 2
+    document.getElementById('share-replication').value = '2'; // Default to 2
     document.getElementById('share-expires').value = '';
     document.getElementById('share-guest-read').checked = true;
     document.getElementById('share-name').focus();
@@ -2023,7 +2023,7 @@ async function createShare() {
     const quotaValue = document.getElementById('share-quota').value.trim();
     const expiresValue = document.getElementById('share-expires').value;
     const guestRead = document.getElementById('share-guest-read').checked;
-    const replicationFactor = parseInt(document.getElementById('share-replication').value);
+    const replicationFactor = parseInt(document.getElementById('share-replication').value, 10);
     // Default to 100 MB if empty, but allow explicit 0 for unlimited
     const quotaMB = quotaValue === '' ? 100 : parseInt(quotaValue, 10) || 0;
 
@@ -2041,7 +2041,7 @@ async function createShare() {
         description,
         quota_bytes,
         guest_read: guestRead,
-        replication_factor: replicationFactor
+        replication_factor: replicationFactor,
     };
     if (expiresValue) {
         body.expires_at = expiresValue; // Send as YYYY-MM-DD, backend will parse
@@ -2380,7 +2380,7 @@ window.createBinding = createBinding;
 function openBucketModal() {
     document.getElementById('bucket-modal').style.display = 'flex';
     document.getElementById('bucket-name').value = '';
-    document.getElementById('bucket-replication').value = '2';  // Default
+    document.getElementById('bucket-replication').value = '2'; // Default
     document.getElementById('bucket-quota').value = '';
     document.getElementById('bucket-name').focus();
 }
@@ -2393,8 +2393,8 @@ window.closeBucketModal = closeBucketModal;
 
 async function createBucket() {
     const name = document.getElementById('bucket-name').value.trim();
-    const replicationFactor = parseInt(document.getElementById('bucket-replication').value);
-    const quotaMB = parseInt(document.getElementById('bucket-quota').value) || 0;
+    const replicationFactor = parseInt(document.getElementById('bucket-replication').value, 10);
+    const quotaMB = parseInt(document.getElementById('bucket-quota').value, 10) || 0;
 
     // Validate bucket name
     if (!name) {
@@ -2415,8 +2415,8 @@ async function createBucket() {
             body: JSON.stringify({
                 name: name,
                 replication_factor: replicationFactor,
-                quota_bytes: quotaMB > 0 ? quotaMB * 1024 * 1024 : 0
-            })
+                quota_bytes: quotaMB > 0 ? quotaMB * 1024 * 1024 : 0,
+            }),
         });
 
         if (!response.ok) {
@@ -2475,15 +2475,15 @@ window.closeBucketPropertiesModal = closeBucketPropertiesModal;
 
 async function saveBucketProperties() {
     const bucketName = document.getElementById('bucket-properties-modal').dataset.bucketName;
-    const replicationFactor = parseInt(document.getElementById('prop-bucket-replication').value);
+    const replicationFactor = parseInt(document.getElementById('prop-bucket-replication').value, 10);
 
     try {
         const response = await fetch(`/api/s3/buckets/${encodeURIComponent(bucketName)}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                replication_factor: replicationFactor
-            })
+                replication_factor: replicationFactor,
+            }),
         });
 
         if (!response.ok) {

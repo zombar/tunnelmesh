@@ -277,8 +277,17 @@ func (s *Server) setupAdminRoutes() {
 	})
 	s.adminMux.HandleFunc("/api/s3/buckets/", func(w http.ResponseWriter, r *http.Request) {
 		// Extract bucket name from path
-		bucket := strings.TrimPrefix(r.URL.Path, "/api/s3/buckets/")
-		bucket = strings.TrimSuffix(bucket, "/")
+		path := strings.TrimPrefix(r.URL.Path, "/api/s3/buckets/")
+		path = strings.TrimSuffix(path, "/")
+
+		// If path contains additional segments (e.g., "mybucket/objects"),
+		// delegate to S3 proxy handler instead of bucket management
+		if strings.Contains(path, "/") {
+			s.handleS3Proxy(w, r)
+			return
+		}
+
+		bucket := path
 
 		switch r.Method {
 		case http.MethodGet:
@@ -1836,6 +1845,12 @@ func (s *Server) handleCreateBucket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate quota (if specified)
+	if req.QuotaBytes < 0 {
+		s.jsonError(w, "quota bytes cannot be negative", http.StatusBadRequest)
+		return
+	}
+
 	// Check authorization
 	userID := s.getRequestOwner(r)
 	if userID == "" {
@@ -1869,6 +1884,19 @@ func (s *Server) handleGetBucket(w http.ResponseWriter, r *http.Request, bucket 
 	// Validate bucket name
 	if err := validateS3Name(bucket); err != nil {
 		s.jsonError(w, "invalid bucket name: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Check authorization
+	userID := s.getRequestOwner(r)
+	if userID == "" {
+		s.jsonError(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	// User must have read access to the bucket
+	if !s.s3Authorizer.Authorize(userID, "get", "buckets", bucket, "") {
+		s.jsonError(w, "access denied", http.StatusForbidden)
 		return
 	}
 
