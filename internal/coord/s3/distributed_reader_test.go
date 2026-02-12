@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,6 +85,7 @@ func TestDistributedChunkReader_AllChunksLocal(t *testing.T) {
 	reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
 		Chunks:   []string{hash1, hash2},
 		LocalCAS: cas,
+		Logger:   zerolog.Nop(),
 	})
 
 	// Read all data
@@ -140,6 +142,7 @@ func TestDistributedChunkReader_FetchFromRemote(t *testing.T) {
 		LocalCAS:   cas,
 		Registry:   mockReg,
 		Replicator: mockRepl,
+		Logger:     zerolog.Nop(),
 		TotalSize:  int64(len(chunk1) + len(chunk2) + len(chunk3)),
 	})
 
@@ -184,6 +187,7 @@ func TestDistributedChunkReader_ChunkNotFound(t *testing.T) {
 		Chunks:   []string{missingHash},
 		LocalCAS: cas,
 		Registry: mockReg,
+		Logger:   zerolog.Nop(),
 	})
 
 	// Read should fail
@@ -206,6 +210,7 @@ func TestDistributedChunkReader_EmptyFile(t *testing.T) {
 	reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
 		Chunks:   []string{},
 		LocalCAS: cas,
+		Logger:   zerolog.Nop(),
 	})
 
 	// Read should return empty data
@@ -242,6 +247,7 @@ func TestDistributedChunkReader_PartialReads(t *testing.T) {
 	reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
 		Chunks:   []string{hash1, hash2, hash3},
 		LocalCAS: cas,
+		Logger:   zerolog.Nop(),
 	})
 
 	// Read in small chunks to test partial reads across chunk boundaries
@@ -280,6 +286,7 @@ func TestDistributedChunkReader_NoRegistry(t *testing.T) {
 		Chunks:   []string{missingHash},
 		LocalCAS: cas,
 		Registry: nil, // No registry
+		Logger:   zerolog.Nop(),
 	})
 
 	// Read should fail with appropriate error

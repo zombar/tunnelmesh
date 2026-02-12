@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 // DistributedChunkReader reads chunks from local storage or remote coordinators.
@@ -18,6 +20,7 @@ type DistributedChunkReader struct {
 	localCAS     *CAS                   // Local chunk storage
 	registry     ChunkRegistryInterface // Global chunk ownership index
 	replicator   ReplicatorInterface    // For fetching from remote peers
+	logger       zerolog.Logger         // Structured logger
 	timeout      time.Duration
 	totalSize    int64 // Total file size (for progress tracking)
 	bytesRead    int64 // Bytes read so far
@@ -29,6 +32,7 @@ type DistributedChunkReaderConfig struct {
 	LocalCAS   *CAS                   // Local chunk storage
 	Registry   ChunkRegistryInterface // Chunk ownership registry
 	Replicator ReplicatorInterface    // For remote chunk fetching
+	Logger     zerolog.Logger         // Structured logger (optional)
 	Timeout    time.Duration          // Timeout for remote chunk fetches
 	TotalSize  int64                  // Total file size
 }
@@ -40,12 +44,16 @@ func NewDistributedChunkReader(ctx context.Context, config DistributedChunkReade
 		timeout = 30 * time.Second // Default timeout
 	}
 
+	logger := config.Logger
+	// Note: Logger is required in config. Callers should pass zerolog.Nop() if no logging desired.
+
 	return &DistributedChunkReader{
 		ctx:        ctx,
 		chunks:     config.Chunks,
 		localCAS:   config.LocalCAS,
 		registry:   config.Registry,
 		replicator: config.Replicator,
+		logger:     logger,
 		timeout:    timeout,
 		totalSize:  config.TotalSize,
 	}
@@ -114,15 +122,22 @@ func (r *DistributedChunkReader) loadNextChunk() error {
 		if _, err := r.localCAS.WriteChunk(r.ctx, chunkData); err != nil {
 			// Log but don't fail - we have the data in memory and can still serve it
 			// This is expected if disk is full or permissions are insufficient
-			// TODO: Add structured logging when logger is added to DistributedChunkReader
-			_ = err // Suppress unused variable warning for now
+			r.logger.Warn().
+				Err(err).
+				Str("chunk_hash", chunkHash[:8]+"...").
+				Int("chunk_size", len(chunkData)).
+				Msg("Failed to cache chunk locally after remote fetch")
 		}
+		// Note: No debug logging on success to avoid hot-path overhead
 
 		// Register ownership locally (we now have the chunk)
 		if r.registry != nil {
 			if err := r.registry.RegisterChunk(chunkHash, int64(len(chunkData))); err != nil {
 				// Log but don't fail - chunk is cached even if registry update fails
-				_ = err
+				r.logger.Warn().
+					Err(err).
+					Str("chunk_hash", chunkHash[:8]+"...").
+					Msg("Failed to register chunk ownership in registry")
 			}
 		}
 

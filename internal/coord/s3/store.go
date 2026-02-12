@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 // GCGracePeriod is the minimum age of a chunk before it can be garbage collected.
@@ -137,6 +139,7 @@ type Store struct {
 	chunkRegistry           ChunkRegistryInterface // Optional distributed chunk ownership tracking
 	replicator              ReplicatorInterface    // Optional replicator for fetching remote chunks (Phase 5)
 	coordinatorID           string                 // Local coordinator ID for version vectors (optional)
+	logger                  zerolog.Logger         // Structured logger
 	defaultObjectExpiryDays int                    // Days until objects expire (0 = never)
 	defaultShareExpiryDays  int                    // Days until file shares expire (0 = never)
 	tombstoneRetentionDays  int                    // Days to retain tombstoned objects before purging (0 = never purge)
@@ -157,6 +160,7 @@ func NewStore(dataDir string, quota *QuotaManager) (*Store, error) {
 	store := &Store{
 		dataDir: dataDir,
 		quota:   quota,
+		logger:  zerolog.Nop(), // Default to no-op logger
 	}
 
 	// Calculate initial quota usage from existing objects
@@ -244,6 +248,13 @@ func (s *Store) SetCoordinatorID(coordID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.coordinatorID = coordID
+}
+
+// SetLogger sets the logger for the store.
+func (s *Store) SetLogger(logger zerolog.Logger) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logger = logger
 }
 
 // SetDefaultObjectExpiryDays sets the default expiry for new objects in days.
@@ -2235,11 +2246,16 @@ func (s *Store) getObjectContent(ctx context.Context, bucket, key string, meta *
 	// set once during initialization and never modified after that
 	if s.replicator != nil && s.chunkRegistry != nil {
 		// Distributed reads: can fetch chunks from remote peers
+		s.mu.RLock()
+		logger := s.logger
+		s.mu.RUnlock()
+
 		reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
 			Chunks:     meta.Chunks,
 			LocalCAS:   s.cas,
 			Registry:   s.chunkRegistry,
 			Replicator: s.replicator,
+			Logger:     logger,
 			TotalSize:  meta.Size,
 		})
 		return io.NopCloser(reader), meta, nil
