@@ -19,9 +19,7 @@ func GenerateMarkdownDocument(docType string, ctx story.Context) ([]byte, error)
 
 	// Classification banner for clearance levels
 	if ctx.Author.Clearance >= 3 {
-		doc.WriteString("```\n")
-		doc.WriteString(FormatClassification(ctx.Author.Clearance))
-		doc.WriteString("\n```\n\n")
+		doc.WriteString(fmt.Sprintf("**%s**\n\n", FormatClassification(ctx.Author.Clearance)))
 	}
 
 	// Document header with markdown formatting
@@ -66,9 +64,7 @@ func GenerateMarkdownDocument(docType string, ctx story.Context) ([]byte, error)
 	doc.WriteString(fmt.Sprintf("*Document generated: %s*\n", time.Now().Format(time.RFC3339)))
 
 	if ctx.Author.Clearance >= 3 {
-		doc.WriteString("\n```\n")
-		doc.WriteString(FormatClassification(ctx.Author.Clearance))
-		doc.WriteString("\n```\n")
+		doc.WriteString(fmt.Sprintf("\n\n**%s**\n", FormatClassification(ctx.Author.Clearance)))
 	}
 
 	return []byte(doc.String()), nil

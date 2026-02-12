@@ -151,6 +151,35 @@ func (c *CoordinatorClient) PutObject(ctx context.Context, bucket, key string, b
 	return nil
 }
 
+// DeleteObject deletes an object from the coordinator S3 API.
+func (c *CoordinatorClient) DeleteObject(ctx context.Context, bucket, key string) error {
+	url := fmt.Sprintf("%s/api/s3/buckets/%s/objects/%s", c.baseURL, bucket, key)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	c.setBasicAuth(req)
+
+	// Execute request
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("HTTP DELETE %s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// Check response
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("object not found")
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete object failed: %d %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
+}
+
 // setBasicAuth sets HTTP Basic Auth header using S3 credentials.
 func (c *CoordinatorClient) setBasicAuth(req *http.Request) {
 	auth := c.accessKey + ":" + c.secretKey

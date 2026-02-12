@@ -165,9 +165,10 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{2000, 8000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    4, // Multiple updates during crisis
+			Versions:    4,             // Multiple updates during crisis
+			DeleteAfter: 6 * time.Hour, // Old traffic data deleted
 		},
-		// Council meetings - rare, very large
+		// Council meetings - rare, very large, classified
 		{
 			Type:        "council_meeting",
 			Frequency:   18 * time.Hour, // 4 major meetings
@@ -175,6 +176,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			Authors:     []string{"commander"},
 			DataPattern: "realistic",
 			Versions:    4, // Multiple updates during crisis
+			FileShare:   "alien-classified",
 		},
 		// Phone transcripts - frequent
 		{
@@ -212,7 +214,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			DataPattern: "compressible",
 			Versions:    6, // Updated frequently as supplies deplete
 		},
-		// Intel briefs - periodic
+		// Intel briefs - periodic, classified
 		{
 			Type:        "intel_brief",
 			Frequency:   6 * time.Hour,
@@ -220,6 +222,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			Authors:     []string{"commander"},
 			DataPattern: "realistic",
 			Versions:    4, // Multiple updates during crisis
+			FileShare:   "alien-classified",
 		},
 		// Radio logs - frequent, dramatic
 		{
@@ -230,7 +233,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			DataPattern: "realistic",
 			Versions:    4, // Multiple updates during crisis
 		},
-		// Press releases - periodic
+		// Press releases - periodic, public
 		{
 			Type:        "press_release",
 			Frequency:   8 * time.Hour,
@@ -238,6 +241,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
 			Versions:    4, // Multiple updates during crisis
+			FileShare:   "alien-public",
 		},
 		// Private diaries - frequent, personal
 		{
@@ -291,7 +295,8 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{500, 3000},
 			Authors:     []string{"commander", "scientist"},
 			DataPattern: "compressible",
-			Versions:    4, // Multiple updates during crisis
+			Versions:    4,              // Multiple updates during crisis
+			DeleteAfter: 24 * time.Hour, // Old status cleaned up daily
 		},
 		// Incident reports - frequent
 		{
@@ -311,7 +316,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			DataPattern: "compressible",
 			Versions:    4, // Multiple updates during crisis
 		},
-		// Social media posts - extremely frequent
+		// Social media posts - extremely frequent, public
 		{
 			Type:        "social_media",
 			Frequency:   8 * time.Minute, // Even more frequent
@@ -319,6 +324,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			Authors:     []string{"eve"},
 			DataPattern: "realistic",
 			Versions:    4, // Multiple updates during crisis
+			FileShare:   "alien-public",
 		},
 		// Email messages - extremely frequent
 		{
@@ -338,7 +344,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			DataPattern: "compressible",
 			Versions:    4, // Multiple updates during crisis
 		},
-		// News bulletins - frequent
+		// News bulletins - frequent, public
 		{
 			Type:        "news_bulletin",
 			Frequency:   30 * time.Minute,
@@ -346,6 +352,7 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
 			Versions:    4, // Multiple updates during crisis
+			FileShare:   "alien-public",
 		},
 		// Logistics reports - frequent
 		{
@@ -390,8 +397,9 @@ func (a *AlienInvasion) DocumentRules() []story.DocumentRule {
 			SizeRange:   [2]int64{2000, 7000},
 			Authors:     []string{"commander"},
 			DataPattern: "compressible",
-			Versions:    4,             // Multiple updates during crisis
-			ExpiresIn:   6 * time.Hour, // Orders expire after 6h
+			Versions:    4,              // Multiple updates during crisis
+			ExpiresIn:   6 * time.Hour,  // Orders expire after 6h
+			DeleteAfter: 12 * time.Hour, // Deleted after superseded
 		},
 	}
 }

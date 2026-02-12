@@ -127,20 +127,37 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 			}
 
 			// Generate document content
-			content, err := w.generator.Generate(rule, ctx)
+			content, format, err := w.generator.Generate(rule, ctx)
 			if err != nil {
 				return nil, fmt.Errorf("generating document %s #%d: %w", rule.Type, docNum, err)
 			}
 
-			// Generate filename with random suffix
-			filename := fmt.Sprintf("%s_%s.txt", rule.Type, generateRandomID(8))
-
-			// Determine file share (use author's department)
-			dept, ok := deptMap[author.Department]
-			if !ok {
-				return nil, fmt.Errorf("department %s not found for author %s", author.Department, author.ID)
+			// Generate filename with random suffix and correct extension
+			var ext string
+			var contentType string
+			switch format {
+			case "markdown":
+				ext = ".md"
+				contentType = "text/markdown"
+			case "json":
+				ext = ".json"
+				contentType = "application/json"
+			default:
+				ext = ".txt"
+				contentType = "text/plain"
 			}
-			fileShare := dept.FileShare
+			filename := fmt.Sprintf("%s_%s%s", rule.Type, generateRandomID(8), ext)
+
+			// Determine file share (use explicit FileShare or author's department)
+			fileShare := rule.FileShare
+			if fileShare == "" {
+				// Default to author's department
+				dept, ok := deptMap[author.Department]
+				if !ok {
+					return nil, fmt.Errorf("department %s not found for author %s", author.Department, author.ID)
+				}
+				fileShare = dept.FileShare
+			}
 
 			// Calculate expiration if specified
 			var expiresAt *time.Time
@@ -158,7 +175,7 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 				DocNumber:   docNum,
 				Filename:    filename,
 				Content:     content,
-				ContentType: "text/plain",
+				ContentType: contentType,
 				Author:      author,
 				Phase:       documents.GetPhase(storyTime),
 				Context:     ctx,
@@ -195,7 +212,7 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 				versionCtx.Data["DocumentNumber"] = docNum
 				versionCtx.Data["Version"] = v
 
-				versionContent, err := w.generator.Generate(rule, versionCtx)
+				versionContent, _, err := w.generator.Generate(rule, versionCtx)
 				if err != nil {
 					return nil, fmt.Errorf("generating document version %s #%d v%d: %w", rule.Type, docNum, v, err)
 				}
@@ -208,7 +225,7 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 					DocNumber:   docNum,
 					Filename:    filename, // Same filename, new version
 					Content:     versionContent,
-					ContentType: "text/plain",
+					ContentType: contentType, // Use same content type as original
 					Author:      author,
 					Phase:       documents.GetPhase(versionTime),
 					Context:     versionCtx,

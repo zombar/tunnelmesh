@@ -618,7 +618,10 @@ func (s *Simulator) executeDownloadMesh(ctx context.Context, bucket string, task
 
 // executeDelete performs an S3 delete operation.
 func (s *Simulator) executeDelete(ctx context.Context, store *s3.Store, session *UserSession, bucket string, task *WorkloadTask) error {
-	// Route to HTTP or direct store access
+	// Route to mesh, HTTP, or direct store access
+	if s.meshClient != nil {
+		return s.executeDeleteMesh(ctx, bucket, task)
+	}
 	if s.config.UseHTTP {
 		return s.executeDeleteHTTP(ctx, session, bucket, task)
 	}
@@ -629,6 +632,15 @@ func (s *Simulator) executeDelete(ctx context.Context, store *s3.Store, session 
 		return fmt.Errorf("deleting object %s/%s: %w", bucket, task.Filename, err)
 	}
 
+	return nil
+}
+
+// executeDeleteMesh performs an S3 delete via mesh coordinator.
+func (s *Simulator) executeDeleteMesh(ctx context.Context, bucket string, task *WorkloadTask) error {
+	err := s.meshClient.DeleteObject(ctx, bucket, task.Filename)
+	if err != nil {
+		return fmt.Errorf("deleting object %s/%s: %w", bucket, task.Filename, err)
+	}
 	return nil
 }
 
