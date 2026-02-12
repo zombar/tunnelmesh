@@ -133,6 +133,9 @@ type DocumentRule struct {
 
 	// ShareWith are character IDs to request file share access with
 	ShareWith []string
+
+	// FileShare explicitly specifies which file share to write to (optional, defaults to author's department)
+	FileShare string
 }
 
 // Config holds configuration for running a story scenario.

@@ -313,6 +313,87 @@ docker_container_info{peer, container_id, container_name, image, status, network
 - TDD approach: tests written before implementation
 - 100% coverage on core Docker manager functionality
 
+## S3Bench - Story-Driven S3 Testing Tool
+
+`tunnelmesh-s3bench` is a narrative-driven S3 stress testing tool that generates realistic workloads based on story scenarios.
+
+### Modes
+
+**Standalone Mode (default):**
+- Documents stored locally in temporary directory
+- Tests S3 store, deduplication, versioning, RBAC without network
+
+**Mesh Mode (opt-in via `--coordinator`):**
+- Registers as lightweight peer with coordinator
+- Uploads documents to coordinator's S3 API via mesh network
+- Documents viewable in Objects browser web UI
+- No TUN device, SSH server, or UDP transport needed
+
+### Common Commands
+
+```bash
+# List available scenarios
+tunnelmesh-s3bench list
+
+# Describe scenario details
+tunnelmesh-s3bench describe alien_invasion
+
+# Run scenario (standalone mode)
+tunnelmesh-s3bench run alien_invasion --time-scale 100
+
+# Run scenario (mesh mode)
+tunnelmesh-s3bench run alien_invasion \
+  --coordinator https://localhost:8443 \
+  --time-scale 100 \
+  --json results.json
+
+# Quick test (1 minute)
+tunnelmesh-s3bench run alien_invasion --time-scale 4320
+
+# Stress test (5 minutes)
+tunnelmesh-s3bench run alien_invasion --time-scale 864 --enable-adversary
+
+# Realistic demo (2 hours)
+tunnelmesh-s3bench run alien_invasion --time-scale 36
+```
+
+### Key Flags
+
+- `--coordinator <url>` - Enable mesh mode, upload to coordinator (e.g., `https://coord.example.com:8443`)
+- `--ssh-key <path>` - SSH key for peer identity (default: `~/.tunnelmesh/s3bench_key`)
+- `--insecure-tls` - Skip TLS verification (default: true for self-signed certs)
+- `--time-scale <N>` - Time scaling factor (1.0=realtime, 100.0=100x faster)
+- `--concurrency <N>` - Number of parallel users (default: 3)
+- `--json <file>` - Write results to JSON file
+- `--enable-adversary` - Enable adversarial simulation (default: true)
+- `--enable-workflows` - Enable workflow tests (default: true)
+
+### Mesh Integration Architecture
+
+1. **Registration** - s3bench calls `/api/v1/register` (public endpoint)
+   - Sends: name, public key, IPs (not listening on any ports)
+   - Receives: mesh IP, coordinator mesh IP, peer ID
+
+2. **Credential Derivation** - S3 credentials derived from SSH public key using HKDF
+   - Access key: 20 character hex string
+   - Secret key: 40 character hex string
+
+3. **Bucket Creation** - Creates buckets on coordinator for each story department
+   - Endpoint: `POST https://{coord_mesh_ip}:443/api/s3/buckets`
+   - Auth: HTTP Basic Auth with derived credentials
+
+4. **Document Upload** - Uploads documents with metadata preservation
+   - Endpoint: `PUT https://{coord_mesh_ip}:443/api/s3/buckets/{bucket}/objects/{key}`
+   - Metadata: author, doc_type, phase, clearance, version (as `x-amz-meta-*` headers)
+
+### Implementation Files
+
+- `cmd/tunnelmesh-s3bench/` - CLI entrypoint
+- `internal/s3bench/mesh/` - Mesh integration (registration, credentials, API client)
+- `internal/s3bench/simulator/` - Workload generation and execution
+- `internal/s3bench/story/` - Story scenarios and characters
+- `internal/s3bench/documents/` - Document generation
+
 ## Skills
 
 Three specialized skill files are available in `.claude/skills/`:

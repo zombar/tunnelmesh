@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math"
+	mrand "math/rand"
 	"strings"
 	"text/template"
 	"time"
@@ -19,39 +20,6 @@ type Generator struct {
 	docCounts map[string]int // Track document counts per type
 }
 
-// documentGenerators maps document types to their generator functions.
-var documentGenerators = map[string]func(story.Context) ([]byte, error){
-	"battle_report":        GenerateBattleReport,
-	"sitrep":               GenerateSITREP,
-	"scientific_analysis":  GenerateScientificAnalysis,
-	"traffic_report":       GenerateTrafficReport,
-	"council_meeting":      GenerateCouncilMeeting,
-	"telephone":            GenerateTelephone,
-	"im_transcript":        GenerateIMTranscript,
-	"casualty_list":        GenerateCasualtyList,
-	"supply_manifest":      GenerateSupplyManifest,
-	"intel_brief":          GenerateIntelBrief,
-	"radio_log":            GenerateRadioLog,
-	"press_release":        GeneratePressRelease,
-	"private_diary":        GeneratePrivateDiary,
-	"hospital_records":     GenerateHospitalRecords,
-	"lab_results":          GenerateLabResults,
-	"field_notes":          GenerateFieldNotes,
-	"drone_footage":        GenerateDroneFootage,
-	"intercepted_comms":    GenerateInterceptedComms,
-	"evacuation_order":     GenerateEvacuationOrder,
-	"status_update":        GenerateStatusUpdate,
-	"incident_report":      GenerateIncidentReport,
-	"sensor_reading":       GenerateSensorReading,
-	"social_media":         GenerateSocialMedia,
-	"news_bulletin":        GenerateNewsBulletin,
-	"logistics_report":     GenerateLogisticsReport,
-	"personnel_status":     GeneratePersonnelStatus,
-	"environmental_report": GenerateEnvironmentalReport,
-	"email":                GenerateEmail,
-	"alert_message":        GenerateAlertMessage,
-}
-
 // NewGenerator creates a new document generator for the given story.
 func NewGenerator(s story.Story) *Generator {
 	return &Generator{
@@ -61,7 +29,9 @@ func NewGenerator(s story.Story) *Generator {
 }
 
 // Generate creates a document based on the rule and context.
-func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte, error) {
+// Randomly selects between markdown and JSON formats (unless format is already set in context).
+// Returns content, format ("markdown" or "json"), and error.
+func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte, string, error) {
 	g.docCounts[rule.Type]++
 
 	// Add document count to context
@@ -71,28 +41,59 @@ func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte
 	ctx.Data["DocumentNumber"] = g.docCounts[rule.Type]
 	ctx.Data["Rule"] = rule
 
-	// Select generator function based on document type
-	generatorFunc, ok := documentGenerators[rule.Type]
-	if !ok {
-		return nil, fmt.Errorf("unknown document type: %s", rule.Type)
+	// Use format from context if set (for version consistency), otherwise randomly select
+	var format string
+	if f, ok := ctx.Data["Format"].(string); ok {
+		format = f
+	} else {
+		// Randomly select document format (60% markdown, 40% JSON)
+		format = selectDocumentFormat()
 	}
 
-	content, err := generatorFunc(ctx)
+	var content []byte
+	var err error
+
+	switch format {
+	case "markdown":
+		content, err = GenerateMarkdownDocument(rule.Type, ctx)
+	case "json":
+		content, err = GenerateJSONDocument(rule.Type, ctx)
+	default: // fallback to markdown
+		content, err = GenerateMarkdownDocument(rule.Type, ctx)
+		format = "markdown"
+	}
+
 	if err != nil {
-		return nil, fmt.Errorf("generating %s: %w", rule.Type, err)
+		return nil, "", fmt.Errorf("generating %s (%s format): %w", rule.Type, format, err)
 	}
 
 	// Apply data pattern transformation
-	content = ApplyDataPattern(content, rule.DataPattern, rule.SizeRange)
+	content = ApplyDataPattern(content, rule.DataPattern, rule.SizeRange, format)
 
 	// Ensure size is within range
-	content = EnsureSizeRange(content, rule.SizeRange)
+	content = EnsureSizeRange(content, rule.SizeRange, format)
 
-	return content, nil
+	return content, format, nil
+}
+
+// selectDocumentFormat randomly selects a document format.
+// Returns either "markdown" (60%) or "json" (40%).
+func selectDocumentFormat() string {
+	r := mrand.Intn(100)
+	if r < 60 {
+		return "markdown"
+	}
+	return "json"
 }
 
 // ApplyDataPattern applies a data pattern to the content.
-func ApplyDataPattern(content []byte, pattern string, sizeRange [2]int64) []byte {
+// For JSON files, pattern application is skipped to maintain valid JSON.
+func ApplyDataPattern(content []byte, pattern string, sizeRange [2]int64, format string) []byte {
+	// Don't manipulate JSON files - they must remain valid JSON
+	if format == "json" {
+		return content
+	}
+
 	switch pattern {
 	case "random":
 		// Replace part of the content with random bytes for worst-case dedup
@@ -123,7 +124,13 @@ func ApplyDataPattern(content []byte, pattern string, sizeRange [2]int64) []byte
 }
 
 // EnsureSizeRange pads or truncates content to fit within size range.
-func EnsureSizeRange(content []byte, sizeRange [2]int64) []byte {
+// For JSON files, size enforcement is skipped to maintain valid JSON.
+func EnsureSizeRange(content []byte, sizeRange [2]int64, format string) []byte {
+	// Don't manipulate JSON files - they must remain valid JSON
+	if format == "json" {
+		return content
+	}
+
 	minSize := int(sizeRange[0])
 	maxSize := int(sizeRange[1])
 
@@ -171,15 +178,15 @@ func FormatTimestamp(t time.Time) string {
 func FormatClassification(clearance int) string {
 	switch clearance {
 	case 5:
-		return "╔════════════════════════════════════════════════════════════╗\n║                  TOP SECRET // SI // NOFORN                 ║\n╚════════════════════════════════════════════════════════════╝"
+		return "TOP SECRET // SI // NOFORN"
 	case 4:
-		return "╔════════════════════════════════════════════════════════════╗\n║                        SECRET // NOFORN                     ║\n╚════════════════════════════════════════════════════════════╝"
+		return "SECRET // NOFORN"
 	case 3:
-		return "═══════════════════════════════════════════════════════════\n                    CONFIDENTIAL\n═══════════════════════════════════════════════════════════"
+		return "CONFIDENTIAL"
 	case 2:
-		return "═══════════════════════════════════════════════════════════\n                FOR OFFICIAL USE ONLY\n═══════════════════════════════════════════════════════════"
+		return "FOR OFFICIAL USE ONLY"
 	default:
-		return "═══════════════════════════════════════════════════════════\n                    UNCLASSIFIED\n═══════════════════════════════════════════════════════════"
+		return "UNCLASSIFIED"
 	}
 }
 

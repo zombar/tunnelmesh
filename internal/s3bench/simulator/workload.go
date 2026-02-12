@@ -127,20 +127,40 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 			}
 
 			// Generate document content
-			content, err := w.generator.Generate(rule, ctx)
+			content, format, err := w.generator.Generate(rule, ctx)
 			if err != nil {
 				return nil, fmt.Errorf("generating document %s #%d: %w", rule.Type, docNum, err)
 			}
 
-			// Generate filename with random suffix
-			filename := fmt.Sprintf("%s_%s.txt", rule.Type, generateRandomID(8))
+			// Store format in context for version consistency
+			ctx.Data["Format"] = format
 
-			// Determine file share (use author's department)
-			dept, ok := deptMap[author.Department]
-			if !ok {
-				return nil, fmt.Errorf("department %s not found for author %s", author.Department, author.ID)
+			// Generate filename with random suffix and correct extension
+			var ext string
+			var contentType string
+			switch format {
+			case "markdown":
+				ext = ".md"
+				contentType = "text/markdown"
+			case "json":
+				ext = ".json"
+				contentType = "application/json"
+			default:
+				ext = ".txt"
+				contentType = "text/plain"
 			}
-			fileShare := dept.FileShare
+			filename := fmt.Sprintf("%s_%s%s", rule.Type, generateRandomID(8), ext)
+
+			// Determine file share (use explicit FileShare or author's department)
+			fileShare := rule.FileShare
+			if fileShare == "" {
+				// Default to author's department
+				dept, ok := deptMap[author.Department]
+				if !ok {
+					return nil, fmt.Errorf("department %s not found for author %s", author.Department, author.ID)
+				}
+				fileShare = dept.FileShare
+			}
 
 			// Calculate expiration if specified
 			var expiresAt *time.Time
@@ -158,7 +178,7 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 				DocNumber:   docNum,
 				Filename:    filename,
 				Content:     content,
-				ContentType: "text/plain",
+				ContentType: contentType,
 				Author:      author,
 				Phase:       documents.GetPhase(storyTime),
 				Context:     ctx,
@@ -188,14 +208,15 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 					break
 				}
 
-				// Generate updated content
+				// Generate updated content (preserve format from original)
 				versionCtx := ctx
 				versionCtx.Timestamp = time.Now().Add(versionTime)
 				versionCtx.StoryElapsed = versionTime
 				versionCtx.Data["DocumentNumber"] = docNum
 				versionCtx.Data["Version"] = v
+				// Format is already in ctx.Data["Format"] and will be reused
 
-				versionContent, err := w.generator.Generate(rule, versionCtx)
+				versionContent, _, err := w.generator.Generate(rule, versionCtx)
 				if err != nil {
 					return nil, fmt.Errorf("generating document version %s #%d v%d: %w", rule.Type, docNum, v, err)
 				}
@@ -208,7 +229,7 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 					DocNumber:   docNum,
 					Filename:    filename, // Same filename, new version
 					Content:     versionContent,
-					ContentType: "text/plain",
+					ContentType: contentType, // Use same content type as original
 					Author:      author,
 					Phase:       documents.GetPhase(versionTime),
 					Context:     versionCtx,
@@ -249,10 +270,57 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 		}
 	}
 
+	// Generate download operations (20% of uploads get downloaded)
+	downloadTasks := w.generateDownloadTasks(tasks)
+	tasks = append(tasks, downloadTasks...)
+
 	// Sort tasks by real time
 	sortTasksByTime(tasks)
 
 	return tasks, nil
+}
+
+// generateDownloadTasks creates download tasks for some uploaded documents.
+func (w *WorkloadGenerator) generateDownloadTasks(uploadTasks []WorkloadTask) []WorkloadTask {
+	var downloads []WorkloadTask
+
+	// Track uploaded documents by filename
+	uploadedDocs := make(map[string]WorkloadTask)
+	for _, task := range uploadTasks {
+		if task.Operation == "upload" || task.Operation == "update" {
+			uploadedDocs[task.Filename] = task
+		}
+	}
+
+	// Generate downloads for ~20% of uploaded documents
+	for filename, uploadTask := range uploadedDocs {
+		// 20% chance to download this document
+		if rand.Intn(100) < 20 {
+			// Download some time after upload (30-90% through story)
+			downloadTime := uploadTask.StoryTime + time.Duration(float64(w.story.Duration())*0.3*(1+rand.Float64()))
+			if downloadTime > w.story.Duration() {
+				downloadTime = w.story.Duration() - 1*time.Minute
+			}
+
+			downloadTask := WorkloadTask{
+				TaskID:      w.nextTaskID(),
+				StoryTime:   downloadTime,
+				RealTime:    story.ScaledDuration(downloadTime, w.timeScale),
+				DocType:     uploadTask.DocType,
+				DocNumber:   uploadTask.DocNumber,
+				Filename:    filename,
+				ContentType: uploadTask.ContentType,
+				Author:      uploadTask.Author,
+				Phase:       uploadTask.Phase,
+				Context:     uploadTask.Context,
+				Operation:   "download",
+				FileShare:   uploadTask.FileShare,
+			}
+			downloads = append(downloads, downloadTask)
+		}
+	}
+
+	return downloads
 }
 
 // nextTaskID generates a unique task ID.
