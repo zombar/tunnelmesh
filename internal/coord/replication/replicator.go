@@ -1392,9 +1392,7 @@ func (r *Replicator) trackPendingChunkACK(msgID, bucket, key, chunkHash string, 
 		chunkIndex: chunkIndex,
 		sentAt:     time.Now(),
 		ackChan:    make(chan *ChunkAckPayload, 1),
-		timeout: time.AfterFunc(r.chunkAckTimeout, func() {
-			r.removePendingChunkACK(msgID)
-		}),
+		timeout:    time.NewTimer(r.chunkAckTimeout),
 	}
 
 	return true
@@ -1425,13 +1423,13 @@ func (r *Replicator) waitForChunkAck(ctx context.Context, msgID string) (*ChunkA
 	// Always clean up when we're done (defer to ensure cleanup even on early return)
 	defer r.removePendingChunkACK(msgID)
 
-	// Wait for ACK or timeout
+	// Wait for ACK or timeout (use timer from pending struct to avoid double timeout)
 	select {
 	case ack := <-pending.ackChan:
 		return ack, nil
 	case <-ctx.Done():
 		return nil, fmt.Errorf("context canceled: %w", ctx.Err())
-	case <-time.After(r.chunkAckTimeout):
+	case <-pending.timeout.C:
 		return nil, fmt.Errorf("chunk ack timeout after %v", r.chunkAckTimeout)
 	}
 }
