@@ -22,10 +22,8 @@
         MAX_SSE_RETRIES: 3, // Max SSE reconnection attempts
         ROWS_PER_PAGE: 7, // Default pagination size
         MAX_HISTORY_POINTS: 20, // Max sparkline history points per peer
-        MAX_CHART_POINTS: 360, // 1 hour at 10-second intervals
         TOAST_DURATION_MS: 4000, // Toast notification duration
         TOAST_FADE_MS: 300, // Toast fade-out animation duration
-        QUANTIZE_INTERVAL_MS: 10000, // Timestamp quantization interval
     };
 
     // =========================================================================

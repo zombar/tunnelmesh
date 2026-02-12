@@ -108,29 +108,6 @@ func TestSystemStoreSaveLoadBindings(t *testing.T) {
 	assert.Equal(t, "my-bucket", loaded[1].BucketScope)
 }
 
-func TestSystemStoreSaveLoadStatsHistory(t *testing.T) {
-	store := newTestStoreWithCAS(t)
-	ss, err := NewSystemStore(store, "svc:coordinator")
-	require.NoError(t, err)
-
-	// Use a simple map for stats
-	stats := map[string][]map[string]interface{}{
-		"peer1": {
-			{"ts": "2024-01-01T00:00:00Z", "tx": 100},
-			{"ts": "2024-01-01T00:00:10Z", "tx": 200},
-		},
-	}
-
-	err = ss.SaveStatsHistory(context.Background(), stats)
-	require.NoError(t, err)
-
-	var loaded map[string][]map[string]interface{}
-	err = ss.LoadStatsHistory(context.Background(), &loaded)
-	require.NoError(t, err)
-	require.Contains(t, loaded, "peer1")
-	assert.Len(t, loaded["peer1"], 2)
-}
-
 func TestSystemStoreSaveLoadWireGuardClients(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ss, err := NewSystemStore(store, "svc:coordinator")

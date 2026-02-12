@@ -8,8 +8,6 @@
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <!-- TunnelMesh utility libraries (loaded before main app) -->
     <script src="js/lib/utils.js"></script>
     <script src="js/lib/format.js"></script>
@@ -310,23 +308,6 @@
                 <div id="node-map" class="map-container"></div>
             </div>
         </div>
-    </section>
-
-    <!-- Charts as individual floating panels -->
-    <section id="charts-section" data-tab="mesh" style="display: none;">
-        <section id="throughput-chart-section">
-            <div class="chart-card">
-                <h3 class="chart-title">Throughput</h3>
-                <canvas id="throughput-chart"></canvas>
-            </div>
-        </section>
-
-        <section id="packets-chart-section">
-            <div class="chart-card">
-                <h3 class="chart-title">Packets/s</h3>
-                <canvas id="packets-chart"></canvas>
-            </div>
-        </section>
     </section>
 
         <section id="peers-section" data-tab="mesh" style="display: none;">

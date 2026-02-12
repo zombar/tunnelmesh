@@ -57,11 +57,6 @@ const (
 	PanelsPath        = "auth/panels.json"
 )
 
-// Stats paths
-const (
-	StatsHistoryPath = "stats/history.json"
-)
-
 // WireGuard paths
 const (
 	WireGuardClientsPath = "wireguard/clients.json"
@@ -239,18 +234,6 @@ func (ss *SystemStore) LoadFileShares(ctx context.Context) ([]*FileShare, error)
 		return nil, err
 	}
 	return shares, nil
-}
-
-// --- Stats History ---
-
-// SaveStatsHistory saves stats history to S3 with checksum validation.
-func (ss *SystemStore) SaveStatsHistory(ctx context.Context, data interface{}) error {
-	return ss.saveJSONWithChecksum(ctx, StatsHistoryPath, data)
-}
-
-// LoadStatsHistory loads stats history from S3 with automatic rollback on corruption.
-func (ss *SystemStore) LoadStatsHistory(ctx context.Context, target interface{}) error {
-	return ss.loadJSONWithChecksum(ctx, StatsHistoryPath, target, 3)
 }
 
 // SaveJSON saves arbitrary JSON data to a specified path in the system bucket with checksum validation.

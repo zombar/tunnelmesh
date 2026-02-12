@@ -162,7 +162,8 @@ describe('formatExpiry', () => {
     });
 
     test('formats days in future', () => {
-        const fiveDaysFromNow = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+        // Add 1 hour buffer to avoid flakiness at day boundaries
+        const fiveDaysFromNow = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000 + 60 * 60 * 1000);
         expect(formatExpiry(fiveDaysFromNow.toISOString())).toBe('in 5d');
     });
 
