@@ -111,12 +111,19 @@ func (r *DistributedChunkReader) loadNextChunk() error {
 		}
 
 		// Success - cache locally for future reads
-		// Ignore write errors - we have the data in memory
-		_, _ = r.localCAS.WriteChunk(r.ctx, chunkData)
+		if _, err := r.localCAS.WriteChunk(r.ctx, chunkData); err != nil {
+			// Log but don't fail - we have the data in memory and can still serve it
+			// This is expected if disk is full or permissions are insufficient
+			// TODO: Add structured logging when logger is added to DistributedChunkReader
+			_ = err // Suppress unused variable warning for now
+		}
 
 		// Register ownership locally (we now have the chunk)
 		if r.registry != nil {
-			_ = r.registry.RegisterChunk(chunkHash, int64(len(chunkData)))
+			if err := r.registry.RegisterChunk(chunkHash, int64(len(chunkData))); err != nil {
+				// Log but don't fail - chunk is cached even if registry update fails
+				_ = err
+			}
 		}
 
 		r.currentChunk = chunkData
@@ -146,6 +153,13 @@ func (r *DistributedChunkReader) fetchChunkFromPeer(peerID, chunkHash string) ([
 	chunkData, err := r.replicator.FetchChunk(ctx, peerID, chunkHash)
 	if err != nil {
 		return nil, fmt.Errorf("fetch chunk from %s: %w", peerID, err)
+	}
+
+	// Validate chunk integrity after receiving from remote peer
+	actualHash := ContentHash(chunkData)
+	if actualHash != chunkHash {
+		return nil, fmt.Errorf("chunk integrity check failed: expected hash %s, got %s (possible corruption or malicious peer)",
+			chunkHash, actualHash)
 	}
 
 	return chunkData, nil

@@ -228,6 +228,7 @@ func NewReplicator(config Config) *Replicator {
 		peers:                make(map[string]bool),
 		pending:              make(map[string]*pendingReplication),
 		pendingChunks:        make(map[string]*pendingChunkReplication),
+		pendingFetchRequests: make(map[string]chan *FetchChunkResponsePayload),
 		ctx:                  ctx,
 		cancel:               cancel,
 	}
@@ -1471,9 +1472,6 @@ func (r *Replicator) FetchChunk(ctx context.Context, peerID, chunkHash string) (
 	// Track pending fetch request
 	responseChan := make(chan *FetchChunkResponsePayload, 1)
 	r.pendingChunksMu.Lock()
-	if r.pendingFetchRequests == nil {
-		r.pendingFetchRequests = make(map[string]chan *FetchChunkResponsePayload)
-	}
 	r.pendingFetchRequests[requestID] = responseChan
 	r.pendingChunksMu.Unlock()
 
@@ -1535,7 +1533,19 @@ func (r *Replicator) handleFetchChunk(msg *Message) error {
 			Err(err).
 			Msg("Failed to read chunk for fetch request")
 	} else {
-		response.ChunkData = chunkData
+		// Validate chunk integrity before sending
+		h := sha256.Sum256(chunkData)
+		actualHash := hex.EncodeToString(h[:])
+		if actualHash != payload.ChunkHash {
+			response.Success = false
+			response.Error = "chunk integrity check failed: hash mismatch"
+			r.logger.Error().
+				Str("expected", truncateHashForLog(payload.ChunkHash)).
+				Str("actual", truncateHashForLog(actualHash)).
+				Msg("Chunk hash mismatch when serving fetch request")
+		} else {
+			response.ChunkData = chunkData
+		}
 	}
 
 	// Send response
@@ -1547,6 +1557,20 @@ func (r *Replicator) handleFetchChunkResponse(msg *Message) error {
 	var payload FetchChunkResponsePayload
 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 		return fmt.Errorf("unmarshal fetch chunk response: %w", err)
+	}
+
+	// Validate chunk size to prevent resource exhaustion attacks
+	const maxChunkSize = 65536 // 64KB (matches s3.MaxChunkSize)
+	if len(payload.ChunkData) > maxChunkSize {
+		r.logger.Warn().
+			Str("chunk", truncateHashForLog(payload.ChunkHash)).
+			Int("size", len(payload.ChunkData)).
+			Int("max", maxChunkSize).
+			Msg("Received chunk larger than maximum allowed size")
+		// Convert to error response
+		payload.Success = false
+		payload.Error = fmt.Sprintf("chunk size %d exceeds maximum %d", len(payload.ChunkData), maxChunkSize)
+		payload.ChunkData = nil
 	}
 
 	r.logger.Debug().
