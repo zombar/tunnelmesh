@@ -18,7 +18,19 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog"
 )
+
+// GCGracePeriod is the minimum age of a chunk before it can be garbage collected.
+// This prevents deleting chunks that are being replicated or uploaded.
+//
+// IMPORTANT: This assumes file uploads complete within this duration. For very large
+// files or slow networks, increase this value to prevent premature chunk deletion.
+//
+// Default: 1 hour (suitable for typical replication lag and upload durations)
+// For large file uploads: Consider 24 hours or more
+const GCGracePeriod = 1 * time.Hour
 
 // BucketMeta contains bucket metadata.
 type BucketMeta struct {
@@ -115,12 +127,19 @@ type ChunkRegistryInterface interface {
 }
 
 // Store provides S3 storage with content-addressable chunks and versioning.
+// ReplicatorInterface defines the interface for chunk replication (to avoid import cycle).
+type ReplicatorInterface interface {
+	FetchChunk(ctx context.Context, peerID, chunkHash string) ([]byte, error)
+}
+
 type Store struct {
 	dataDir                 string
 	cas                     *CAS // Content-addressable storage for chunks
 	quota                   *QuotaManager
 	chunkRegistry           ChunkRegistryInterface // Optional distributed chunk ownership tracking
+	replicator              ReplicatorInterface    // Optional replicator for fetching remote chunks (Phase 5)
 	coordinatorID           string                 // Local coordinator ID for version vectors (optional)
+	logger                  zerolog.Logger         // Structured logger
 	defaultObjectExpiryDays int                    // Days until objects expire (0 = never)
 	defaultShareExpiryDays  int                    // Days until file shares expire (0 = never)
 	tombstoneRetentionDays  int                    // Days to retain tombstoned objects before purging (0 = never purge)
@@ -141,6 +160,7 @@ func NewStore(dataDir string, quota *QuotaManager) (*Store, error) {
 	store := &Store{
 		dataDir: dataDir,
 		quota:   quota,
+		logger:  zerolog.Nop(), // Default to no-op logger
 	}
 
 	// Calculate initial quota usage from existing objects
@@ -215,12 +235,26 @@ func (s *Store) SetChunkRegistry(registry ChunkRegistryInterface) {
 	s.chunkRegistry = registry
 }
 
+// SetReplicator sets the replicator for fetching remote chunks (Phase 5).
+func (s *Store) SetReplicator(replicator ReplicatorInterface) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.replicator = replicator
+}
+
 // SetCoordinatorID sets the coordinator ID for version vector tracking.
 // This is optional and only used when replication is enabled.
 func (s *Store) SetCoordinatorID(coordID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.coordinatorID = coordID
+}
+
+// SetLogger sets the logger for the store.
+func (s *Store) SetLogger(logger zerolog.Logger) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logger = logger
 }
 
 // SetDefaultObjectExpiryDays sets the default expiry for new objects in days.
@@ -1771,11 +1805,13 @@ func (s *Store) GetCASStats() CASStats {
 
 // GCStats holds statistics from a garbage collection run.
 type GCStats struct {
-	VersionsPruned   int   // Number of version metadata files deleted
-	ChunksDeleted    int   // Number of orphaned chunks deleted
-	BytesReclaimed   int64 // Approximate bytes reclaimed from chunk deletion
-	ObjectsScanned   int   // Number of objects scanned
-	BucketsProcessed int   // Number of buckets processed
+	VersionsPruned           int   // Number of version metadata files deleted
+	ChunksDeleted            int   // Number of orphaned chunks deleted
+	BytesReclaimed           int64 // Approximate bytes reclaimed from chunk deletion
+	ObjectsScanned           int   // Number of objects scanned
+	BucketsProcessed         int   // Number of buckets processed
+	ChunksSkippedShared      int   // Chunks skipped because owned by other coordinators (Phase 6)
+	ChunksSkippedGracePeriod int   // Chunks skipped due to grace period (Phase 6)
 }
 
 // RunGarbageCollection performs a full garbage collection pass.
@@ -1950,19 +1986,82 @@ func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, refere
 			return nil
 		}
 
+		// Grace period: Only delete chunks older than GCGracePeriod (Phase 6)
+		// This prevents deleting chunks that are being replicated or uploaded.
+		//
+		// See GCGracePeriod constant documentation for tuning guidance.
+		if time.Since(info.ModTime()) < GCGracePeriod {
+			stats.ChunksSkippedGracePeriod++
+			return nil
+		}
+
 		// Extract hash from path (chunks are stored as chunks/ab/abcdef...)
 		hash := filepath.Base(path)
 		if _, referenced := referencedChunks[hash]; !referenced {
+			// Chunk is not referenced locally - check if it's safe to delete
+
+			// Phase 6: Registry-aware deletion
+			// Query registry to see if other coordinators still own this chunk
+			s.mu.RLock()
+			registry := s.chunkRegistry
+			coordID := s.coordinatorID
+			s.mu.RUnlock()
+
+			if registry != nil {
+				owners, err := registry.GetOwners(hash)
+				if err == nil && len(owners) > 0 {
+					// Fast path: sole owner check
+					if len(owners) == 1 && owners[0] == coordID {
+						// We're the sole owner - safe to delete
+					} else {
+						// Check if any other coordinator owns this chunk
+						hasOtherOwners := false
+						for _, owner := range owners {
+							if owner != coordID {
+								hasOtherOwners = true
+								break
+							}
+						}
+
+						if hasOtherOwners {
+							// Other coordinators still own this chunk - don't delete locally
+							stats.ChunksSkippedShared++
+							return nil
+						}
+
+						// Owners list exists but doesn't include us - registry might be out of sync
+						// Don't delete to be safe
+						stats.ChunksSkippedShared++
+						return nil
+					}
+				} else {
+					// Registry returned empty or error - chunk might be orphaned
+					// Self-healing: re-register ourselves as owner to prevent premature deletion
+					if coordID != "" {
+						if err := registry.RegisterChunk(hash, info.Size()); err != nil {
+							s.logger.Warn().Err(err).Str("chunk_hash", hash[:8]+"...").
+								Msg("Failed to re-register orphaned chunk during GC")
+						} else {
+							s.logger.Debug().Str("chunk_hash", hash[:8]+"...").
+								Msg("Re-registered orphaned chunk in registry (self-healing GC)")
+							stats.ChunksSkippedShared++
+							return nil // Don't delete - we just claimed ownership
+						}
+					}
+					// If re-registration fails or coordID is empty, proceed with deletion (fail-safe)
+				}
+			}
+
+			// Safe to delete: not referenced locally and no other owners
 			stats.BytesReclaimed += info.Size()
+
 			// CAS.DeleteChunk has its own locking
 			if s.cas.DeleteChunk(ctx, hash) == nil {
 				stats.ChunksDeleted++
 
-				// Unregister from chunk registry (if configured)
-				// Note: In Phase 6, we'll make GC registry-aware to check if
-				// chunks are owned by other coordinators before deleting
-				if s.chunkRegistry != nil {
-					_ = s.chunkRegistry.UnregisterChunk(hash)
+				// Unregister from chunk registry
+				if registry != nil {
+					_ = registry.UnregisterChunk(hash)
 				}
 			}
 		}
@@ -2154,6 +2253,28 @@ func (s *Store) getObjectContent(ctx context.Context, bucket, key string, meta *
 		return io.NopCloser(bytes.NewReader(nil)), meta, nil
 	}
 
+	// Use distributed chunk reader if replicator is configured (Phase 5)
+	// This enables fetching missing chunks from remote coordinators
+	// Note: Reading these pointers doesn't require locking as they're only
+	// set once during initialization and never modified after that
+	if s.replicator != nil && s.chunkRegistry != nil {
+		// Distributed reads: can fetch chunks from remote peers
+		s.mu.RLock()
+		logger := s.logger
+		s.mu.RUnlock()
+
+		reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
+			Chunks:     meta.Chunks,
+			LocalCAS:   s.cas,
+			Registry:   s.chunkRegistry,
+			Replicator: s.replicator,
+			Logger:     logger,
+			TotalSize:  meta.Size,
+		})
+		return io.NopCloser(reader), meta, nil
+	}
+
+	// Local-only reads: all chunks must be local
 	return newChunkReader(ctx, s.cas, meta.Chunks), meta, nil
 }
 

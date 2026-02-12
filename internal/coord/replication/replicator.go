@@ -14,6 +14,12 @@ import (
 	"golang.org/x/time/rate"
 )
 
+const (
+	// maxPendingFetchRequests is the maximum number of concurrent chunk fetch requests
+	// to prevent unbounded memory growth from DoS attacks
+	maxPendingFetchRequests = 10000
+)
+
 // Transport defines the interface for sending replication messages.
 // This will be implemented by the mesh transport layer (UDP/SSH/Relay).
 type Transport interface {
@@ -108,8 +114,10 @@ type Replicator struct {
 	pending   map[string]*pendingReplication // map[messageID]*pendingReplication
 
 	// Pending chunk ACKs (chunk-level, Phase 4)
-	pendingChunksMu sync.RWMutex
-	pendingChunks   map[string]*pendingChunkReplication // map[messageID]*pendingChunkReplication
+	pendingChunksMu        sync.RWMutex
+	pendingChunks          map[string]*pendingChunkReplication        // map[messageID]*pendingChunkReplication
+	pendingFetchRequests   map[string]chan *FetchChunkResponsePayload // map[requestID]chan (Phase 5)
+	pendingFetchTimestamps map[string]time.Time                       // map[requestID]timestamp for TTL cleanup
 
 	// Rate limiting
 	rateLimiter *rate.Limiter // Limits incoming replication messages per second
@@ -210,25 +218,27 @@ func NewReplicator(config Config) *Replicator {
 	ctx, cancel := context.WithCancel(parentCtx)
 
 	r := &Replicator{
-		nodeID:               config.NodeID,
-		transport:            config.Transport,
-		s3:                   config.S3Store,
-		state:                NewState(config.NodeID),
-		chunkRegistry:        config.ChunkRegistry, // Optional (nil if not using chunk-level replication)
-		logger:               config.Logger.With().Str("component", "replicator").Logger(),
-		maxPendingOperations: config.MaxPendingOperations,
-		ackTimeout:           config.AckTimeout,
-		applyTimeout:         config.ApplyTimeout,
-		ackSendTimeout:       config.AckSendTimeout,
-		syncRequestTimeout:   config.SyncRequestTimeout,
-		syncResponseTimeout:  config.SyncResponseTimeout,
-		chunkAckTimeout:      config.ChunkAckTimeout,
-		rateLimiter:          rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst),
-		peers:                make(map[string]bool),
-		pending:              make(map[string]*pendingReplication),
-		pendingChunks:        make(map[string]*pendingChunkReplication),
-		ctx:                  ctx,
-		cancel:               cancel,
+		nodeID:                 config.NodeID,
+		transport:              config.Transport,
+		s3:                     config.S3Store,
+		state:                  NewState(config.NodeID),
+		chunkRegistry:          config.ChunkRegistry, // Optional (nil if not using chunk-level replication)
+		logger:                 config.Logger.With().Str("component", "replicator").Logger(),
+		maxPendingOperations:   config.MaxPendingOperations,
+		ackTimeout:             config.AckTimeout,
+		applyTimeout:           config.ApplyTimeout,
+		ackSendTimeout:         config.AckSendTimeout,
+		syncRequestTimeout:     config.SyncRequestTimeout,
+		syncResponseTimeout:    config.SyncResponseTimeout,
+		chunkAckTimeout:        config.ChunkAckTimeout,
+		rateLimiter:            rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst),
+		peers:                  make(map[string]bool),
+		pending:                make(map[string]*pendingReplication),
+		pendingChunks:          make(map[string]*pendingChunkReplication),
+		pendingFetchRequests:   make(map[string]chan *FetchChunkResponsePayload),
+		pendingFetchTimestamps: make(map[string]time.Time),
+		ctx:                    ctx,
+		cancel:                 cancel,
 	}
 
 	// Register message handler
@@ -244,6 +254,10 @@ func (r *Replicator) Start() error {
 	// Start ACK timeout cleanup goroutine
 	r.wg.Add(1)
 	go r.ackTimeoutWorker()
+
+	// Start fetch request TTL cleanup goroutine
+	r.wg.Add(1)
+	go r.fetchRequestCleanupWorker()
 
 	return nil
 }
@@ -538,6 +552,10 @@ func (r *Replicator) handleIncomingMessage(from string, data []byte) error {
 		return r.handleReplicateChunk(msg)
 	case MessageTypeChunkAck:
 		return r.handleChunkAck(msg)
+	case MessageTypeFetchChunk:
+		return r.handleFetchChunk(msg)
+	case MessageTypeFetchChunkResponse:
+		return r.handleFetchChunkResponse(msg)
 	default:
 		r.logger.Warn().Str("type", string(msg.Type)).Msg("Unknown message type")
 		return fmt.Errorf("unknown message type: %s", msg.Type)
@@ -990,6 +1008,44 @@ func (r *Replicator) ackTimeoutWorker() {
 	}
 }
 
+// fetchRequestCleanupWorker periodically removes stale fetch requests (TTL-based cleanup).
+func (r *Replicator) fetchRequestCleanupWorker() {
+	defer r.wg.Done()
+
+	ticker := time.NewTicker(30 * time.Second) // Cleanup every 30 seconds
+	defer ticker.Stop()
+
+	const fetchRequestTTL = 2 * time.Minute // Remove requests older than 2 minutes
+
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			r.pendingChunksMu.Lock()
+
+			var cleaned int
+			for requestID, timestamp := range r.pendingFetchTimestamps {
+				if now.Sub(timestamp) > fetchRequestTTL {
+					delete(r.pendingFetchRequests, requestID)
+					delete(r.pendingFetchTimestamps, requestID)
+					cleaned++
+				}
+			}
+
+			r.pendingChunksMu.Unlock()
+
+			if cleaned > 0 {
+				r.logger.Debug().
+					Int("count", cleaned).
+					Dur("ttl", fetchRequestTTL).
+					Msg("Cleaned up stale fetch requests")
+			}
+		}
+	}
+}
+
 // GetStats returns replication statistics.
 type Stats struct {
 	SentCount     uint64 `json:"sent_count"`
@@ -1432,4 +1488,209 @@ func (r *Replicator) waitForChunkAck(ctx context.Context, msgID string) (*ChunkA
 	case <-pending.timeout.C:
 		return nil, fmt.Errorf("chunk ack timeout after %v", r.chunkAckTimeout)
 	}
+}
+
+// FetchChunk requests a chunk from a remote peer (for distributed reads).
+func (r *Replicator) FetchChunk(ctx context.Context, peerID, chunkHash string) ([]byte, error) {
+	requestID := uuid.New().String()
+	msgID := uuid.New().String()
+
+	// Check request count limit (DoS prevention)
+	r.pendingChunksMu.Lock()
+	if len(r.pendingFetchRequests) >= maxPendingFetchRequests {
+		r.pendingChunksMu.Unlock()
+		return nil, fmt.Errorf("too many pending fetch requests (%d), try again later", maxPendingFetchRequests)
+	}
+	r.pendingChunksMu.Unlock()
+
+	// Create fetch request payload
+	payload := FetchChunkPayload{
+		ChunkHash: chunkHash,
+		RequestID: requestID,
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal fetch payload: %w", err)
+	}
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeFetchChunk,
+		ID:      msgID,
+		From:    r.nodeID,
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("marshal message: %w", err)
+	}
+
+	// Track pending fetch request with timestamp
+	responseChan := make(chan *FetchChunkResponsePayload, 1)
+	r.pendingChunksMu.Lock()
+	r.pendingFetchRequests[requestID] = responseChan
+	r.pendingFetchTimestamps[requestID] = time.Now()
+	r.pendingChunksMu.Unlock()
+
+	// Clean up on return (don't close channel to avoid race - will be GC'd)
+	defer func() {
+		r.pendingChunksMu.Lock()
+		delete(r.pendingFetchRequests, requestID)
+		delete(r.pendingFetchTimestamps, requestID)
+		r.pendingChunksMu.Unlock()
+	}()
+
+	// Send via transport
+	if err := r.transport.SendToCoordinator(ctx, peerID, data); err != nil {
+		return nil, fmt.Errorf("send to coordinator: %w", err)
+	}
+
+	// Wait for response with timeout (use context for proper timeout handling)
+	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	select {
+	case response := <-responseChan:
+		if !response.Success {
+			return nil, fmt.Errorf("fetch chunk failed: %s", response.Error)
+		}
+		return response.ChunkData, nil
+	case <-fetchCtx.Done():
+		return nil, fmt.Errorf("fetch chunk timeout or canceled: %w", fetchCtx.Err())
+	}
+}
+
+// handleFetchChunk processes an incoming chunk fetch request.
+func (r *Replicator) handleFetchChunk(msg *Message) error {
+	var payload FetchChunkPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal fetch chunk: %w", err)
+	}
+
+	r.logger.Debug().
+		Str("chunk", truncateHashForLog(payload.ChunkHash)).
+		Str("request_id", payload.RequestID).
+		Str("from", msg.From).
+		Msg("Received chunk fetch request")
+
+	// Read chunk from local storage
+	chunkData, err := r.s3.ReadChunk(context.Background(), payload.ChunkHash)
+
+	// Create response
+	response := FetchChunkResponsePayload{
+		ChunkHash: payload.ChunkHash,
+		RequestID: payload.RequestID,
+		Success:   err == nil,
+	}
+
+	if err != nil {
+		response.Error = fmt.Sprintf("chunk not found: %v", err)
+		r.logger.Warn().
+			Str("chunk", truncateHashForLog(payload.ChunkHash)).
+			Err(err).
+			Msg("Failed to read chunk for fetch request")
+	} else {
+		// Validate chunk integrity before sending
+		h := sha256.Sum256(chunkData)
+		actualHash := hex.EncodeToString(h[:])
+		if actualHash != payload.ChunkHash {
+			response.Success = false
+			response.Error = "chunk integrity check failed: hash mismatch"
+			r.logger.Error().
+				Str("expected", truncateHashForLog(payload.ChunkHash)).
+				Str("actual", truncateHashForLog(actualHash)).
+				Msg("Chunk hash mismatch when serving fetch request")
+		} else {
+			response.ChunkData = chunkData
+		}
+	}
+
+	// Send response
+	return r.sendFetchChunkResponse(msg.From, response)
+}
+
+// handleFetchChunkResponse processes an incoming chunk fetch response.
+func (r *Replicator) handleFetchChunkResponse(msg *Message) error {
+	var payload FetchChunkResponsePayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal fetch chunk response: %w", err)
+	}
+
+	// Validate chunk size to prevent resource exhaustion attacks
+	const maxChunkSize = 65536 // 64KB (matches s3.MaxChunkSize)
+	if len(payload.ChunkData) > maxChunkSize {
+		r.logger.Warn().
+			Str("chunk", truncateHashForLog(payload.ChunkHash)).
+			Int("size", len(payload.ChunkData)).
+			Int("max", maxChunkSize).
+			Msg("Received chunk larger than maximum allowed size")
+		// Convert to error response
+		payload.Success = false
+		payload.Error = fmt.Sprintf("chunk size %d exceeds maximum %d", len(payload.ChunkData), maxChunkSize)
+		payload.ChunkData = nil
+	}
+
+	r.logger.Debug().
+		Str("chunk", truncateHashForLog(payload.ChunkHash)).
+		Str("request_id", payload.RequestID).
+		Bool("success", payload.Success).
+		Msg("Received chunk fetch response")
+
+	// Find pending fetch request
+	r.pendingChunksMu.RLock()
+	responseChan, exists := r.pendingFetchRequests[payload.RequestID]
+	r.pendingChunksMu.RUnlock()
+
+	if !exists {
+		// Response for unknown request (probably timed out already)
+		r.logger.Warn().
+			Str("request_id", payload.RequestID).
+			Msg("Received fetch response for unknown request")
+		return nil
+	}
+
+	// Deliver response to waiting goroutine (non-blocking)
+	select {
+	case responseChan <- &payload:
+		// Response delivered successfully
+	default:
+		// Channel full or closed (timeout fired or FetchChunk not waiting)
+	}
+
+	return nil
+}
+
+// sendFetchChunkResponse sends a chunk fetch response to a peer.
+func (r *Replicator) sendFetchChunkResponse(peerID string, payload FetchChunkResponsePayload) error {
+	msgID := uuid.New().String()
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal fetch response: %w", err)
+	}
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeFetchChunkResponse,
+		ID:      msgID,
+		From:    r.nodeID,
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal message: %w", err)
+	}
+
+	// Send via transport (use background context since this is a response)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := r.transport.SendToCoordinator(ctx, peerID, data); err != nil {
+		return fmt.Errorf("send to coordinator: %w", err)
+	}
+
+	return nil
 }
