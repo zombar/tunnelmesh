@@ -2220,18 +2220,15 @@ func (s *Store) getObjectContent(ctx context.Context, bucket, key string, meta *
 
 	// Use distributed chunk reader if replicator is configured (Phase 5)
 	// This enables fetching missing chunks from remote coordinators
-	s.mu.RLock()
-	replicator := s.replicator
-	registry := s.chunkRegistry
-	s.mu.RUnlock()
-
-	if replicator != nil && registry != nil {
+	// Note: Reading these pointers doesn't require locking as they're only
+	// set once during initialization and never modified after that
+	if s.replicator != nil && s.chunkRegistry != nil {
 		// Distributed reads: can fetch chunks from remote peers
 		reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
 			Chunks:     meta.Chunks,
 			LocalCAS:   s.cas,
-			Registry:   registry,
-			Replicator: replicator,
+			Registry:   s.chunkRegistry,
+			Replicator: s.replicator,
 			TotalSize:  meta.Size,
 		})
 		return io.NopCloser(reader), meta, nil
