@@ -3,6 +3,8 @@ package coord
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +21,7 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/pkg/bytesize"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
+	"golang.org/x/crypto/ssh"
 )
 
 // newTestConfig creates a test configuration with proper S3 setup
@@ -1470,4 +1473,126 @@ func TestCoordMeshIPs_CallbackAndGetter(t *testing.T) {
 	srv.SetCoordMeshIP("10.42.0.1")
 	assert.Equal(t, []string{"10.42.0.1"}, srv.GetCoordMeshIPs())
 	assert.Equal(t, []string{"10.42.0.1"}, received)
+}
+
+// generateTestSSHPubKey generates a valid ed25519 SSH public key in base64 wire format
+// (as expected by config.DecodePublicKey / config.EncodePublicKey) and returns the raw ed25519 key.
+func generateTestSSHPubKey(t *testing.T) (string, ed25519.PublicKey) {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	sshPub, err := ssh.NewPublicKey(pub)
+	require.NoError(t, err)
+	return config.EncodePublicKey(sshPub), pub
+}
+
+func TestServer_AdminPeers_GlobPatterns(t *testing.T) {
+	tests := []struct {
+		name        string
+		adminPeers  []string
+		peerName    string
+		usePeerID   bool // if true, also add the peer ID to adminPeers
+		expectAdmin bool
+	}{
+		{
+			name:        "exact name match",
+			adminPeers:  []string{"mynode"},
+			peerName:    "mynode",
+			expectAdmin: true,
+		},
+		{
+			name:        "wildcard suffix",
+			adminPeers:  []string{"coordinator-*"},
+			peerName:    "coordinator-prod",
+			expectAdmin: true,
+		},
+		{
+			name:        "wildcard prefix",
+			adminPeers:  []string{"*-coordinator"},
+			peerName:    "prod-coordinator",
+			expectAdmin: true,
+		},
+		{
+			name:        "question mark",
+			adminPeers:  []string{"node-?"},
+			peerName:    "node-a",
+			expectAdmin: true,
+		},
+		{
+			name:        "question mark no match (too long)",
+			adminPeers:  []string{"node-?"},
+			peerName:    "node-ab",
+			expectAdmin: false,
+		},
+		{
+			name:        "no match",
+			adminPeers:  []string{"coordinator-*"},
+			peerName:    "peer-xyz",
+			expectAdmin: false,
+		},
+		{
+			name:        "peer ID match preferred",
+			adminPeers:  nil, // will be filled with peer ID
+			peerName:    "wrong-name",
+			usePeerID:   true,
+			expectAdmin: true,
+		},
+		{
+			name:        "invalid pattern does not crash",
+			adminPeers:  []string{"coordinator-[*"},
+			peerName:    "coordinator-1",
+			expectAdmin: false,
+		},
+		{
+			name:        "empty admin_peers",
+			adminPeers:  []string{},
+			peerName:    "anynode",
+			expectAdmin: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := newTestConfig(t)
+			cfg.Coordinator.Enabled = true
+
+			// Generate a valid ed25519 SSH key so peerID is derived
+			sshPubKeyStr, edPub := generateTestSSHPubKey(t)
+
+			if tt.usePeerID {
+				peerID := auth.ComputePeerID(edPub)
+				tt.adminPeers = []string{peerID}
+			}
+			cfg.Coordinator.AdminPeers = tt.adminPeers
+
+			srv, err := NewServer(context.Background(), cfg)
+			require.NoError(t, err)
+			t.Cleanup(func() { cleanupServer(t, srv) })
+
+			regReq := proto.RegisterRequest{
+				Name:       tt.peerName,
+				PublicKey:  sshPubKeyStr,
+				PublicIPs:  []string{"1.2.3.4"},
+				PrivateIPs: []string{"192.168.1.100"},
+				SSHPort:    2222,
+			}
+			body, err := json.Marshal(regReq)
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer test-token")
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			srv.ServeHTTP(w, req)
+			require.Equal(t, http.StatusOK, w.Code)
+
+			var resp proto.RegisterResponse
+			err = json.Unmarshal(w.Body.Bytes(), &resp)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expectAdmin, resp.IsAdmin,
+				"expected IsAdmin=%v for peer %q with admin_peers=%v", tt.expectAdmin, tt.peerName, tt.adminPeers)
+		})
+	}
 }

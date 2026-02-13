@@ -19,7 +19,7 @@ const (
 	PanelDNS        = "dns"
 	PanelS3         = "s3"
 	PanelShares     = "shares"
-	PanelPeerMgmt   = "peer-mgmt"
+	PanelPeerMgmt   = "peers-mgmt"
 	PanelGroups     = "groups"
 	PanelBindings   = "bindings"
 	PanelDocker     = "docker"
