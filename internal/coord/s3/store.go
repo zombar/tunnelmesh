@@ -740,6 +740,70 @@ func (s *Store) updateBucketSize(bucketName string, delta int64) error {
 	return s.writeBucketMeta(bucketName, bucketMeta)
 }
 
+// truncHash safely truncates a hash string for logging.
+func truncHash(hash string) string {
+	if len(hash) >= 8 {
+		return hash[:8]
+	}
+	return hash
+}
+
+// fetchChunkDistributed tries local CAS first, then fetches from remote
+// coordinators via the chunk registry and replicator.
+func (s *Store) fetchChunkDistributed(ctx context.Context, chunkHash string) ([]byte, error) {
+	// 1. Try local CAS (fast path)
+	data, err := s.cas.ReadChunk(ctx, chunkHash)
+	if err == nil {
+		return data, nil
+	}
+
+	// 2. No distributed fetch possible without registry + replicator
+	if s.chunkRegistry == nil || s.replicator == nil {
+		return nil, fmt.Errorf("chunk %s not found locally and distributed fetch unavailable", truncHash(chunkHash))
+	}
+
+	// 3. Query registry for owners
+	owners, regErr := s.chunkRegistry.GetOwners(chunkHash)
+	if regErr != nil || len(owners) == 0 {
+		return nil, fmt.Errorf("chunk %s: no remote owners found", truncHash(chunkHash))
+	}
+
+	// 4. Try each owner
+	var lastErr error
+	for _, ownerID := range owners {
+		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		data, lastErr = s.replicator.FetchChunk(fetchCtx, ownerID, chunkHash)
+		cancel()
+		if lastErr != nil {
+			continue
+		}
+
+		// 5. Validate hash integrity
+		if actualHash := ContentHash(data); actualHash != chunkHash {
+			s.logger.Warn().
+				Str("expected", truncHash(chunkHash)).
+				Str("actual", truncHash(actualHash)).
+				Str("owner", ownerID).
+				Msg("remote chunk hash mismatch, skipping")
+			lastErr = fmt.Errorf("hash mismatch from owner %s", ownerID)
+			continue
+		}
+
+		// 6. Cache locally and register ownership (best-effort)
+		if _, werr := s.cas.WriteChunk(ctx, data); werr != nil {
+			s.logger.Warn().Err(werr).Str("hash", truncHash(chunkHash)).Msg("failed to cache remote chunk locally")
+		} else if s.chunkRegistry != nil {
+			if rerr := s.chunkRegistry.RegisterChunk(chunkHash, int64(len(data))); rerr != nil {
+				s.logger.Warn().Err(rerr).Str("hash", truncHash(chunkHash)).Msg("failed to register chunk ownership")
+			}
+		}
+
+		return data, nil
+	}
+
+	return nil, fmt.Errorf("chunk %s: failed to fetch from %d remote owners: %w", truncHash(chunkHash), len(owners), lastErr)
+}
+
 // getObjectContentWithErasureCoding reads an erasure-coded object and reconstructs
 // missing data shards if necessary. Returns a reader for the reconstructed file.
 //
@@ -775,29 +839,17 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 
 		chunkMeta, exists := meta.ChunkMetadata[chunkHash]
 		if !exists {
-			hashStr := chunkHash
-			if len(chunkHash) >= 8 {
-				hashStr = chunkHash[:8]
-			}
-			return nil, nil, fmt.Errorf("missing chunk metadata for data chunk %s (versionID=%s)", hashStr, meta.VersionID)
+			return nil, nil, fmt.Errorf("missing chunk metadata for data chunk %s (versionID=%s)", truncHash(chunkHash), meta.VersionID)
 		}
 		if chunkMeta.ShardType != "data" {
-			hashStr := chunkHash
-			if len(chunkHash) >= 8 {
-				hashStr = chunkHash[:8]
-			}
-			return nil, nil, fmt.Errorf("expected data shard chunk, got %s for chunk %s (versionID=%s)", chunkMeta.ShardType, hashStr, meta.VersionID)
+			return nil, nil, fmt.Errorf("expected data shard chunk, got %s for chunk %s (versionID=%s)", chunkMeta.ShardType, truncHash(chunkHash), meta.VersionID)
 		}
 
-		// Fetch chunk from CAS
-		chunk, err := s.cas.ReadChunk(ctx, chunkHash)
+		// Fetch chunk from CAS (or remote coordinator)
+		chunk, err := s.fetchChunkDistributed(ctx, chunkHash)
 		if err != nil {
-			// Chunk missing locally - entire shard will need reconstruction
-			hashStr := chunkHash
-			if len(chunkHash) >= 8 {
-				hashStr = chunkHash[:8]
-			}
-			s.logger.Debug().Str("hash", hashStr).Int("shard", chunkMeta.ShardIndex).Msg("data chunk missing locally")
+			// Chunk missing locally and remotely - entire shard will need reconstruction
+			s.logger.Debug().Str("hash", truncHash(chunkHash)).Int("shard", chunkMeta.ShardIndex).Msg("data chunk unavailable")
 			incompleteShard[chunkMeta.ShardIndex] = true
 			continue
 		}
@@ -881,14 +933,10 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 
 	parityShards := make([][]byte, m)
 	for i, parityHash := range ec.ParityHashes {
-		chunk, err := s.cas.ReadChunk(ctx, parityHash)
+		chunk, err := s.fetchChunkDistributed(ctx, parityHash)
 		if err != nil {
-			// Parity shard missing
-			hashStr := parityHash
-			if len(parityHash) >= 8 {
-				hashStr = parityHash[:8]
-			}
-			s.logger.Debug().Str("hash", hashStr).Int("shard", i).Msg("parity shard missing locally")
+			// Parity shard unavailable locally and remotely
+			s.logger.Debug().Str("hash", truncHash(parityHash)).Int("shard", i).Msg("parity shard unavailable")
 			parityShards[i] = nil
 			continue
 		}
