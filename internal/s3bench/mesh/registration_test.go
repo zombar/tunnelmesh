@@ -158,13 +158,6 @@ func TestRegisterWithCoordinator(t *testing.T) {
 				if meshInfo.MeshIP != tt.serverResponse.MeshIP {
 					t.Errorf("Expected MeshIP=%s, got %s", tt.serverResponse.MeshIP, meshInfo.MeshIP)
 				}
-				expectedCoordIP := ""
-				if len(tt.serverResponse.CoordMeshIPs) > 0 {
-					expectedCoordIP = tt.serverResponse.CoordMeshIPs[0]
-				}
-				if meshInfo.CoordMeshIP != expectedCoordIP {
-					t.Errorf("Expected CoordMeshIP=%s, got %s", expectedCoordIP, meshInfo.CoordMeshIP)
-				}
 				if meshInfo.PeerID != tt.serverResponse.PeerID {
 					t.Errorf("Expected PeerID=%s, got %s", tt.serverResponse.PeerID, meshInfo.PeerID)
 				}

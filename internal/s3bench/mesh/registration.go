@@ -14,11 +14,10 @@ import (
 
 // MeshInfo contains mesh connectivity information returned by registration.
 type MeshInfo struct {
-	MeshIP      string // This peer's assigned mesh IP
-	CoordMeshIP string // Coordinator's mesh IP (for S3 API access)
-	PeerID      string // Peer ID for RBAC
-	PeerName    string // Assigned peer name (may differ if renamed)
-	IsAdmin     bool   // Whether peer has admin access
+	MeshIP   string // This peer's assigned mesh IP
+	PeerID   string // Peer ID for RBAC
+	PeerName string // Assigned peer name (may differ if renamed)
+	IsAdmin  bool   // Whether peer has admin access
 }
 
 // RegisterWithCoordinator registers s3bench as a peer with the coordinator.
@@ -91,18 +90,11 @@ func RegisterWithCoordinator(ctx context.Context, coordinatorURL string, creds *
 		return nil, fmt.Errorf("decode registration response: %w", err)
 	}
 
-	// Extract mesh info - use first coordinator IP for S3 API access
-	var coordMeshIP string
-	if len(regResp.CoordMeshIPs) > 0 {
-		coordMeshIP = regResp.CoordMeshIPs[0]
-	}
-
 	meshInfo := &MeshInfo{
-		MeshIP:      regResp.MeshIP,
-		CoordMeshIP: coordMeshIP,
-		PeerID:      regResp.PeerID,
-		PeerName:    regResp.PeerName,
-		IsAdmin:     regResp.IsAdmin,
+		MeshIP:   regResp.MeshIP,
+		PeerID:   regResp.PeerID,
+		PeerName: regResp.PeerName,
+		IsAdmin:  regResp.IsAdmin,
 	}
 
 	return meshInfo, nil
