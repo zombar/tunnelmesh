@@ -2000,7 +2000,7 @@ func (s *Server) handleCreateBucket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create bucket via S3 store
-	if err := s.s3Store.CreateBucket(r.Context(), req.Name, userID, req.ReplicationFactor); err != nil {
+	if err := s.s3Store.CreateBucket(r.Context(), req.Name, userID, req.ReplicationFactor, nil); err != nil {
 		if errors.Is(err, s3.ErrBucketExists) {
 			s.jsonError(w, "bucket already exists", http.StatusConflict)
 			return

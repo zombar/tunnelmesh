@@ -32,14 +32,22 @@ import (
 // For large file uploads: Consider 24 hours or more
 const GCGracePeriod = 1 * time.Hour
 
+// ErasureCodingPolicy defines the erasure coding configuration for a bucket.
+type ErasureCodingPolicy struct {
+	Enabled      bool `json:"enabled"`       // Whether erasure coding is enabled for new objects
+	DataShards   int  `json:"data_shards"`   // k: number of data shards (must be >= 1)
+	ParityShards int  `json:"parity_shards"` // m: number of parity shards (must be >= 1)
+}
+
 // BucketMeta contains bucket metadata.
 type BucketMeta struct {
-	Name              string     `json:"name"`
-	CreatedAt         time.Time  `json:"created_at"`
-	Owner             string     `json:"owner"`                   // User ID who created the bucket
-	TombstonedAt      *time.Time `json:"tombstoned_at,omitempty"` // When bucket was soft-deleted
-	SizeBytes         int64      `json:"size_bytes"`              // Total size of non-tombstoned objects (updated incrementally)
-	ReplicationFactor int        `json:"replication_factor"`      // Number of replicas (1-3)
+	Name              string               `json:"name"`
+	CreatedAt         time.Time            `json:"created_at"`
+	Owner             string               `json:"owner"`                   // User ID who created the bucket
+	TombstonedAt      *time.Time           `json:"tombstoned_at,omitempty"` // When bucket was soft-deleted
+	SizeBytes         int64                `json:"size_bytes"`              // Total size of non-tombstoned objects (updated incrementally)
+	ReplicationFactor int                  `json:"replication_factor"`      // Number of replicas (1-3)
+	ErasureCoding     *ErasureCodingPolicy `json:"erasure_coding,omitempty"` // Erasure coding policy for new objects
 }
 
 // IsTombstoned returns true if the bucket has been soft-deleted.
@@ -49,7 +57,8 @@ func (bm *BucketMeta) IsTombstoned() bool {
 
 // BucketMetadataUpdate contains mutable bucket metadata fields (admin-only).
 type BucketMetadataUpdate struct {
-	ReplicationFactor *int `json:"replication_factor,omitempty"` // Update replication factor (1-3)
+	ReplicationFactor *int                 `json:"replication_factor,omitempty"` // Update replication factor (1-3)
+	ErasureCoding     *ErasureCodingPolicy `json:"erasure_coding,omitempty"`     // Update erasure coding policy
 }
 
 // ChunkMetadata contains per-chunk metadata for distributed replication.
@@ -61,6 +70,19 @@ type ChunkMetadata struct {
 	Owners         []string          `json:"owners,omitempty"`          // Coordinators that have this chunk
 	FirstSeen      time.Time         `json:"first_seen"`                // When chunk was first created
 	LastModified   time.Time         `json:"last_modified"`             // When chunk metadata was last updated
+	ShardType      string            `json:"shard_type,omitempty"`      // "data" or "parity" (for erasure-coded files)
+	ShardIndex     int               `json:"shard_index,omitempty"`     // Position in RS matrix (0-based)
+	ParentFileID   string            `json:"parent_file_id,omitempty"`  // Link to parent file VersionID
+}
+
+// ErasureCodingInfo contains erasure coding metadata for a specific object version.
+type ErasureCodingInfo struct {
+	Enabled      bool     `json:"enabled"`                // Whether this object uses erasure coding
+	DataShards   int      `json:"data_shards"`            // k: number of data shards
+	ParityShards int      `json:"parity_shards"`          // m: number of parity shards
+	ShardSize    int64    `json:"shard_size"`             // Bytes per shard (before padding)
+	DataHashes   []string `json:"data_hashes,omitempty"`  // Original CDC chunk hashes (data shards)
+	ParityHashes []string `json:"parity_hashes,omitempty"` // Parity shard hashes (parity-*)
 }
 
 // ObjectMeta contains object metadata.
@@ -77,6 +99,7 @@ type ObjectMeta struct {
 	Chunks        []string                  `json:"chunks,omitempty"`         // Ordered list of chunk hashes (CAS)
 	ChunkMetadata map[string]*ChunkMetadata `json:"chunk_metadata,omitempty"` // Per-chunk metadata with version vectors
 	VersionVector map[string]uint64         `json:"version_vector,omitempty"` // File-level version vector
+	ErasureCoding *ErasureCodingInfo        `json:"erasure_coding,omitempty"` // Erasure coding info (if enabled)
 }
 
 // VersionInfo contains version information for listing.
@@ -378,7 +401,7 @@ func (s *Store) objectMetaPath(bucket, key string) string {
 }
 
 // CreateBucket creates a new bucket with specified replication factor.
-func (s *Store) CreateBucket(ctx context.Context, bucket, owner string, replicationFactor int) error {
+func (s *Store) CreateBucket(ctx context.Context, bucket, owner string, replicationFactor int, erasureCoding *ErasureCodingPolicy) error {
 	// Validate bucket name (defense in depth)
 	if err := validateName(bucket); err != nil {
 		return fmt.Errorf("invalid bucket name: %w", err)
@@ -387,6 +410,13 @@ func (s *Store) CreateBucket(ctx context.Context, bucket, owner string, replicat
 	// Validate replication factor
 	if replicationFactor < 1 || replicationFactor > 3 {
 		return fmt.Errorf("replication factor must be 1-3, got %d", replicationFactor)
+	}
+
+	// Validate erasure coding policy if provided
+	if erasureCoding != nil {
+		if err := validateErasureCodingPolicy(erasureCoding); err != nil {
+			return fmt.Errorf("invalid erasure coding policy: %w", err)
+		}
 	}
 
 	s.mu.Lock()
@@ -410,6 +440,7 @@ func (s *Store) CreateBucket(ctx context.Context, bucket, owner string, replicat
 		CreatedAt:         time.Now().UTC(),
 		Owner:             owner,
 		ReplicationFactor: replicationFactor,
+		ErasureCoding:     erasureCoding,
 	}
 
 	metaPath := s.bucketMetaPath(bucket)
@@ -426,7 +457,7 @@ func (s *Store) CreateBucket(ctx context.Context, bucket, owner string, replicat
 }
 
 // UpdateBucketMetadata updates mutable bucket metadata (admin-only operation).
-// Currently only replication factor can be updated.
+// Can update replication factor and erasure coding policy.
 func (s *Store) UpdateBucketMetadata(ctx context.Context, bucket string, updates BucketMetadataUpdate) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -445,8 +476,36 @@ func (s *Store) UpdateBucketMetadata(ctx context.Context, bucket string, updates
 		meta.ReplicationFactor = rf
 	}
 
+	// Validate and apply erasure coding policy update
+	if updates.ErasureCoding != nil {
+		if err := validateErasureCodingPolicy(updates.ErasureCoding); err != nil {
+			return fmt.Errorf("invalid erasure coding policy: %w", err)
+		}
+		meta.ErasureCoding = updates.ErasureCoding
+	}
+
 	// Save updated metadata
 	return s.writeBucketMeta(bucket, meta)
+}
+
+// validateErasureCodingPolicy validates erasure coding policy parameters.
+func validateErasureCodingPolicy(policy *ErasureCodingPolicy) error {
+	if !policy.Enabled {
+		// If disabled, don't validate k and m values
+		return nil
+	}
+
+	if policy.DataShards < 1 {
+		return fmt.Errorf("data shards (k) must be >= 1, got %d", policy.DataShards)
+	}
+	if policy.ParityShards < 1 {
+		return fmt.Errorf("parity shards (m) must be >= 1, got %d", policy.ParityShards)
+	}
+	if policy.DataShards+policy.ParityShards > 256 {
+		return fmt.Errorf("total shards (k+m) must be <= 256, got %d", policy.DataShards+policy.ParityShards)
+	}
+
+	return nil
 }
 
 // DeleteBucket removes an empty bucket.

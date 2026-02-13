@@ -75,7 +75,7 @@ func (m *FileShareManager) Create(ctx context.Context, name, description, ownerI
 		if opts != nil && opts.ReplicationFactor > 0 {
 			replicationFactor = opts.ReplicationFactor
 		}
-		if err := m.store.CreateBucket(ctx, bucketName, ownerID, replicationFactor); err != nil {
+		if err := m.store.CreateBucket(ctx, bucketName, ownerID, replicationFactor, nil); err != nil {
 			return nil, fmt.Errorf("create bucket: %w", err)
 		}
 	}

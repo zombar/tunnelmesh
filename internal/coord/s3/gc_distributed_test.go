@@ -122,7 +122,7 @@ func TestGC_GracePeriod(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create bucket
-	err = store.CreateBucket(ctx, "test-bucket", "test-user", 2)
+	err = store.CreateBucket(ctx, "test-bucket", "test-user", 2, nil)
 	require.NoError(t, err)
 
 	// Upload file

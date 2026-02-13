@@ -71,8 +71,8 @@ func TestListBuckets(t *testing.T) {
 	server, store := newTestServer(t)
 
 	// Create some buckets
-	require.NoError(t, store.CreateBucket(context.Background(), "bucket-a", "alice", 2))
-	require.NoError(t, store.CreateBucket(context.Background(), "bucket-b", "bob", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "bucket-a", "alice", 2, nil))
+	require.NoError(t, store.CreateBucket(context.Background(), "bucket-b", "bob", 2, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
@@ -121,7 +121,7 @@ func TestCreateBucket(t *testing.T) {
 
 func TestCreateBucketAlreadyExists(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	req := httptest.NewRequest(http.MethodPut, "/my-bucket", nil)
 	w := httptest.NewRecorder()
@@ -137,7 +137,7 @@ func TestCreateBucketAlreadyExists(t *testing.T) {
 
 func TestDeleteBucket(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	req := httptest.NewRequest(http.MethodDelete, "/my-bucket", nil)
 	w := httptest.NewRecorder()
@@ -168,7 +168,7 @@ func TestDeleteBucketNotFound(t *testing.T) {
 
 func TestDeleteBucketNotEmpty(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 	_, err := store.PutObject(context.Background(), "my-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
 	require.NoError(t, err)
 
@@ -186,7 +186,7 @@ func TestDeleteBucketNotEmpty(t *testing.T) {
 
 func TestHeadBucket(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	req := httptest.NewRequest(http.MethodHead, "/my-bucket", nil)
 	w := httptest.NewRecorder()
@@ -209,7 +209,7 @@ func TestHeadBucketNotFound(t *testing.T) {
 
 func TestPutObject(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	content := []byte("hello world")
 	req := httptest.NewRequest(http.MethodPut, "/my-bucket/greeting.txt", bytes.NewReader(content))
@@ -244,7 +244,7 @@ func TestPutObjectBucketNotFound(t *testing.T) {
 
 func TestPutObjectWithMetadata(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	req := httptest.NewRequest(http.MethodPut, "/my-bucket/doc.txt", bytes.NewReader([]byte("data")))
 	req.Header.Set("X-Amz-Meta-Author", "alice")
@@ -262,7 +262,7 @@ func TestPutObjectWithMetadata(t *testing.T) {
 
 func TestGetObject(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 	content := []byte("hello world")
 	_, err := store.PutObject(context.Background(), "my-bucket", "greeting.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
@@ -281,7 +281,7 @@ func TestGetObject(t *testing.T) {
 
 func TestGetObjectNotFound(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/my-bucket/nonexistent.txt", nil)
 	w := httptest.NewRecorder()
@@ -297,7 +297,7 @@ func TestGetObjectNotFound(t *testing.T) {
 
 func TestDeleteObject(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 	_, err := store.PutObject(context.Background(), "my-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
 	require.NoError(t, err)
 
@@ -316,7 +316,7 @@ func TestDeleteObject(t *testing.T) {
 
 func TestDeleteObjectNotFound(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	// S3 returns 204 even for non-existent objects
 	req := httptest.NewRequest(http.MethodDelete, "/my-bucket/nonexistent.txt", nil)
@@ -329,7 +329,7 @@ func TestDeleteObjectNotFound(t *testing.T) {
 
 func TestHeadObject(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 	content := []byte("hello world")
 	_, err := store.PutObject(context.Background(), "my-bucket", "greeting.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
@@ -348,7 +348,7 @@ func TestHeadObject(t *testing.T) {
 
 func TestHeadObjectNotFound(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	req := httptest.NewRequest(http.MethodHead, "/my-bucket/nonexistent.txt", nil)
 	w := httptest.NewRecorder()
@@ -372,7 +372,7 @@ type listObjectsTestCase struct {
 func runListObjectsTest(t *testing.T, tc listObjectsTestCase) {
 	t.Helper()
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	// Add test objects
 	for _, key := range tc.objectKeys {
@@ -417,7 +417,7 @@ func TestListObjectsWithPrefix(t *testing.T) {
 
 func TestListObjectsV2(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	// Add some objects
 	for _, key := range []string{"a.txt", "b.txt"} {
@@ -473,7 +473,7 @@ func TestAccessDenied(t *testing.T) {
 
 func TestNestedObjectKey(t *testing.T) {
 	server, store := newTestServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	content := []byte("nested content")
 	req := httptest.NewRequest(http.MethodPut, "/my-bucket/path/to/deep/file.txt", bytes.NewReader(content))
@@ -495,7 +495,7 @@ func TestNestedObjectKey(t *testing.T) {
 
 func TestListObjects_PrefixFiltered(t *testing.T) {
 	store := newTestStoreWithCASForServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	// Create objects in different prefixes
 	_, _ = store.PutObject(context.Background(), "my-bucket", "teamA/doc1.txt", bytes.NewReader([]byte("a1")), 2, "text/plain", nil)
@@ -533,7 +533,7 @@ func TestListObjects_PrefixFiltered(t *testing.T) {
 
 func TestListObjects_MultiplePrefixesFiltered(t *testing.T) {
 	store := newTestStoreWithCASForServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	_, _ = store.PutObject(context.Background(), "my-bucket", "teamA/doc.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
 	_, _ = store.PutObject(context.Background(), "my-bucket", "teamB/doc.txt", bytes.NewReader([]byte("b")), 1, "text/plain", nil)
@@ -567,7 +567,7 @@ func TestListObjects_MultiplePrefixesFiltered(t *testing.T) {
 
 func TestListObjects_UnrestrictedAccess(t *testing.T) {
 	store := newTestStoreWithCASForServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	_, _ = store.PutObject(context.Background(), "my-bucket", "teamA/doc.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
 	_, _ = store.PutObject(context.Background(), "my-bucket", "teamB/doc.txt", bytes.NewReader([]byte("b")), 1, "text/plain", nil)
@@ -597,7 +597,7 @@ func TestListObjects_UnrestrictedAccess(t *testing.T) {
 
 func TestListObjectsV2_PrefixFiltered(t *testing.T) {
 	store := newTestStoreWithCASForServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	_, _ = store.PutObject(context.Background(), "my-bucket", "projects/teamA/doc.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
 	_, _ = store.PutObject(context.Background(), "my-bucket", "projects/teamB/doc.txt", bytes.NewReader([]byte("b")), 1, "text/plain", nil)
@@ -628,7 +628,7 @@ func TestListObjectsV2_PrefixFiltered(t *testing.T) {
 
 func TestListObjects_EmptyPrefixesNoAccess(t *testing.T) {
 	store := newTestStoreWithCASForServer(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2))
+	require.NoError(t, store.CreateBucket(context.Background(), "my-bucket", "alice", 2, nil))
 
 	_, _ = store.PutObject(context.Background(), "my-bucket", "doc.txt", bytes.NewReader([]byte("a")), 1, "text/plain", nil)
 
