@@ -490,11 +490,7 @@ func (s *Store) UpdateBucketMetadata(ctx context.Context, bucket string, updates
 
 // validateErasureCodingPolicy validates erasure coding policy parameters.
 func validateErasureCodingPolicy(policy *ErasureCodingPolicy) error {
-	if !policy.Enabled {
-		// If disabled, don't validate k and m values
-		return nil
-	}
-
+	// Always validate k and m values, even if disabled (prevents surprises when enabling later)
 	if policy.DataShards < 1 {
 		return fmt.Errorf("data shards (k) must be >= 1, got %d", policy.DataShards)
 	}
