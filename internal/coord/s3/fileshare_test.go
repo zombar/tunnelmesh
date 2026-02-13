@@ -420,6 +420,57 @@ func TestFileShareManager_TombstoneExpiredShareContents(t *testing.T) {
 	assert.True(t, obj.IsTombstoned())
 }
 
+func TestFileShareManager_RecreatesMissingBucketsOnLoad(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create shares that persist to system store
+	_, err = mgr.Create(context.Background(), "photos", "Photos share", "alice", 0, nil)
+	require.NoError(t, err)
+	_, err = mgr.Create(context.Background(), "docs", "Documents share", "bob", 0, nil)
+	require.NoError(t, err)
+
+	// Verify buckets exist
+	_, err = store.HeadBucket(context.Background(), FileShareBucketPrefix+"photos")
+	require.NoError(t, err)
+	_, err = store.HeadBucket(context.Background(), FileShareBucketPrefix+"docs")
+	require.NoError(t, err)
+
+	// Delete the bucket directories to simulate a coordinator that received
+	// share metadata via replication but never had the buckets created locally
+	err = store.DeleteBucket(context.Background(), FileShareBucketPrefix+"photos")
+	require.NoError(t, err)
+	err = store.DeleteBucket(context.Background(), FileShareBucketPrefix+"docs")
+	require.NoError(t, err)
+
+	// Verify buckets are gone
+	_, err = store.HeadBucket(context.Background(), FileShareBucketPrefix+"photos")
+	assert.ErrorIs(t, err, ErrBucketNotFound)
+
+	// Recreate the file share manager — this simulates coordinator restart
+	// The constructor should detect missing buckets and recreate them
+	mgr2 := NewFileShareManager(store, systemStore, authorizer)
+
+	// Verify shares are still loaded
+	assert.Len(t, mgr2.List(), 2)
+
+	// Verify buckets were recreated
+	_, err = store.HeadBucket(context.Background(), FileShareBucketPrefix+"photos")
+	assert.NoError(t, err, "photos bucket should be recreated on load")
+	_, err = store.HeadBucket(context.Background(), FileShareBucketPrefix+"docs")
+	assert.NoError(t, err, "docs bucket should be recreated on load")
+
+	// Verify we can write to the recreated buckets
+	content := []byte("test data")
+	_, err = store.PutObject(context.Background(), FileShareBucketPrefix+"photos", "test.txt",
+		bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	assert.NoError(t, err, "should be able to write to recreated bucket")
+}
+
 func TestFileShareManager_IsProtectedBinding(t *testing.T) {
 	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")

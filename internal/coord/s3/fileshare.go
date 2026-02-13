@@ -21,7 +21,9 @@ type FileShareManager struct {
 }
 
 // NewFileShareManager creates a new file share manager.
-// It loads existing shares from the system store.
+// It loads existing shares from the system store and ensures their underlying
+// S3 buckets exist on disk. Buckets may be missing if share metadata was
+// replicated from another coordinator but the bucket directories were not.
 func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *auth.Authorizer) *FileShareManager {
 	mgr := &FileShareManager{
 		store:       store,
@@ -33,6 +35,22 @@ func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *aut
 	if systemStore != nil {
 		shares, _ := systemStore.LoadFileShares(context.Background())
 		mgr.shares = shares
+
+		// Ensure buckets exist for all loaded shares.
+		// Share metadata may have been replicated from another coordinator
+		// (via system store replication) without the corresponding bucket
+		// directories being created locally.
+		for _, share := range shares {
+			bucketName := FileShareBucketPrefix + share.Name
+			if _, err := store.HeadBucket(context.Background(), bucketName); err != nil {
+				// Bucket missing — recreate it
+				if createErr := store.CreateBucket(context.Background(), bucketName, share.Owner, 2, nil); createErr == nil {
+					log.Info().Str("share", share.Name).Str("bucket", bucketName).Msg("recreated missing bucket for share")
+				} else {
+					log.Warn().Err(createErr).Str("share", share.Name).Str("bucket", bucketName).Msg("failed to recreate missing bucket for share")
+				}
+			}
+		}
 	}
 
 	return mgr

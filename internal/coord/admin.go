@@ -2314,11 +2314,14 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	meta, err := s.s3Store.PutObject(r.Context(), bucket, key, r.Body, r.ContentLength, contentType, nil)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
+		switch {
+		case errors.As(err, &maxBytesErr):
 			s.jsonError(w, "object too large (max 10MB)", http.StatusRequestEntityTooLarge)
-			return
+		case errors.Is(err, s3.ErrBucketNotFound):
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		default:
+			s.jsonError(w, "failed to store object: "+err.Error(), http.StatusInternalServerError)
 		}
-		s.jsonError(w, "failed to store object: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
