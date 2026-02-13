@@ -2,6 +2,7 @@ package s3
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -233,6 +234,40 @@ func (m *FileShareManager) Get(name string) *FileShare {
 		}
 	}
 	return nil
+}
+
+// EnsureBucketForShare recreates a missing bucket for an existing share.
+// This handles the case where _meta.json was corrupted (e.g. disk-full truncation)
+// but the share metadata still exists in the system store.
+// Returns nil if the bucket is not a share bucket, no share exists, or the bucket already exists.
+func (m *FileShareManager) EnsureBucketForShare(ctx context.Context, bucketName string) error {
+	if !strings.HasPrefix(bucketName, FileShareBucketPrefix) {
+		return nil
+	}
+
+	shareName := strings.TrimPrefix(bucketName, FileShareBucketPrefix)
+	share := m.Get(shareName)
+	if share == nil {
+		return nil
+	}
+
+	if _, err := m.store.HeadBucket(ctx, bucketName); err == nil {
+		return nil // bucket exists
+	}
+
+	rf := share.ReplicationFactor
+	if rf < 1 || rf > 3 {
+		rf = 2
+	}
+
+	err := m.store.CreateBucket(ctx, bucketName, share.Owner, rf, nil)
+	if err != nil && errors.Is(err, ErrBucketExists) {
+		return nil // concurrent creation, fine
+	}
+	if err == nil {
+		log.Info().Str("share", shareName).Str("bucket", bucketName).Msg("recreated missing bucket for share on demand")
+	}
+	return err
 }
 
 // List returns all file shares.

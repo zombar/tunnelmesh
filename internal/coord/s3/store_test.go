@@ -1987,3 +1987,94 @@ func TestDeleteChunk_NonExistent(t *testing.T) {
 	err := store.DeleteChunk(ctx, "nonexistent-hash")
 	assert.NoError(t, err)
 }
+
+func TestSyncedWriteFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.json")
+
+	// Write initial content
+	original := []byte(`{"name":"original"}`)
+	err := syncedWriteFile(path, original, 0644)
+	require.NoError(t, err)
+
+	// Verify initial content
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, original, data)
+
+	// Overwrite with new content
+	updated := []byte(`{"name":"updated","extra":"field"}`)
+	err = syncedWriteFile(path, updated, 0644)
+	require.NoError(t, err)
+
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, updated, data)
+
+	// Verify no temp files left behind
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "no temp files should remain after successful write")
+}
+
+func TestSyncedWriteFileAtomic_ReadOnlyDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.json")
+
+	// Write initial content
+	original := []byte(`{"name":"original"}`)
+	err := syncedWriteFile(path, original, 0644)
+	require.NoError(t, err)
+
+	// Make directory read-only to simulate write failure
+	require.NoError(t, os.Chmod(dir, 0555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
+
+	// Attempt to overwrite — should fail, but original file should remain
+	err = syncedWriteFile(path, []byte(`{"name":"corrupted"}`), 0644)
+	assert.Error(t, err)
+
+	// Restore permissions and verify original content is intact
+	require.NoError(t, os.Chmod(dir, 0755))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, original, data, "original file should be untouched after failed write")
+}
+
+func TestGetBucketMeta_EmptyMetadata(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Create a valid bucket first
+	err := store.CreateBucket(ctx, "test-bucket", "alice", 2, nil)
+	require.NoError(t, err)
+
+	// Verify it exists
+	_, err = store.HeadBucket(ctx, "test-bucket")
+	require.NoError(t, err)
+
+	// Overwrite _meta.json with empty content (simulates disk-full truncation)
+	metaPath := filepath.Join(store.DataDir(), "buckets", "test-bucket", "_meta.json")
+	require.NoError(t, os.WriteFile(metaPath, []byte{}, 0644))
+
+	// Should return ErrBucketNotFound, not a generic error
+	_, err = store.HeadBucket(ctx, "test-bucket")
+	assert.ErrorIs(t, err, ErrBucketNotFound)
+}
+
+func TestGetBucketMeta_CorruptedJSON(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Create a valid bucket first
+	err := store.CreateBucket(ctx, "test-bucket", "alice", 2, nil)
+	require.NoError(t, err)
+
+	// Overwrite _meta.json with invalid JSON
+	metaPath := filepath.Join(store.DataDir(), "buckets", "test-bucket", "_meta.json")
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{invalid json`), 0644))
+
+	// Should return ErrBucketNotFound, not a generic unmarshal error
+	_, err = store.HeadBucket(ctx, "test-bucket")
+	assert.ErrorIs(t, err, ErrBucketNotFound)
+}

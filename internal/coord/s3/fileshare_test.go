@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -618,4 +620,88 @@ func TestFileShareManager_IsProtectedBinding(t *testing.T) {
 			assert.Equal(t, tt.protected, result)
 		})
 	}
+}
+
+func TestEnsureBucketForShare(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a share (which creates the bucket)
+	_, err = mgr.Create(context.Background(), "docs", "Documentation", "alice", 0, nil)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + "docs"
+
+	// Verify bucket exists
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	require.NoError(t, err)
+
+	// Delete the bucket directory to simulate corruption/missing bucket
+	bucketDir := filepath.Join(store.DataDir(), "buckets", bucketName)
+	require.NoError(t, os.RemoveAll(bucketDir))
+
+	// Verify bucket is gone
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	require.ErrorIs(t, err, ErrBucketNotFound)
+
+	// EnsureBucketForShare should recreate it
+	err = mgr.EnsureBucketForShare(context.Background(), bucketName)
+	require.NoError(t, err)
+
+	// Bucket should exist again
+	meta, err := store.HeadBucket(context.Background(), bucketName)
+	require.NoError(t, err)
+	assert.Equal(t, bucketName, meta.Name)
+	assert.Equal(t, "alice", meta.Owner)
+}
+
+func TestEnsureBucketForShare_Idempotent(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	_, err = mgr.Create(context.Background(), "docs", "Documentation", "alice", 0, nil)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + "docs"
+
+	// Call twice — both should succeed (bucket already exists)
+	err = mgr.EnsureBucketForShare(context.Background(), bucketName)
+	assert.NoError(t, err)
+
+	err = mgr.EnsureBucketForShare(context.Background(), bucketName)
+	assert.NoError(t, err)
+}
+
+func TestEnsureBucketForShare_NonShareBucket(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Non-fs+ bucket should be a no-op
+	err = mgr.EnsureBucketForShare(context.Background(), "regular-bucket")
+	assert.NoError(t, err)
+}
+
+func TestEnsureBucketForShare_NoMatchingShare(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// fs+ prefix but no share exists for it — should be a no-op
+	err = mgr.EnsureBucketForShare(context.Background(), FileShareBucketPrefix+"nonexistent")
+	assert.NoError(t, err)
 }

@@ -2308,6 +2308,11 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// Limit request body size to prevent DoS
 	r.Body = http.MaxBytesReader(w, r.Body, MaxS3ObjectSize)
 
+	// Attempt to recover missing bucket for share (no-op if bucket exists)
+	if s.fileShareMgr != nil {
+		_ = s.fileShareMgr.EnsureBucketForShare(r.Context(), bucket)
+	}
+
 	// Stream body directly to PutObject — avoids buffering the entire object in memory.
 	// PutObject uses StreamingChunker internally (~64KB peak memory per upload).
 	// r.ContentLength is used for early quota checks; -1 if chunked (quota still enforced post-write).

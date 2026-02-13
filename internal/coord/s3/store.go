@@ -221,33 +221,60 @@ func NewStore(dataDir string, quota *QuotaManager) (*Store, error) {
 	return store, nil
 }
 
-// syncedWriteFile writes data to a file and calls fsync to ensure durability.
-// This prevents data loss in case of sudden power loss or system crash.
-// Use this instead of os.WriteFile for critical metadata.
+// syncedWriteFile atomically writes data to a file using write-to-temp + rename.
+// This prevents data loss from disk-full (ENOSPC) or crash during write:
+// data is written to a temp file in the same directory, fsynced, then renamed
+// over the target. If any step fails, the original file is untouched.
 //
 // During tests, fsync is skipped (detected via TUNNELMESH_TEST=1 env var) since:
 // - Tests use temp directories that are discarded anyway
 // - fsync is very slow on Windows (100-500ms per call)
 // - 179 S3 tests × fsync = 7+ minutes on Windows CI
 func syncedWriteFile(path string, data []byte, perm os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	dir := filepath.Dir(path)
+
+	// Write to a temp file in the same directory (same filesystem for atomic rename)
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
+	tmpName := tmp.Name()
 
-	if _, err := f.Write(data); err != nil {
+	// Clean up temp file on any failure
+	success := false
+	defer func() {
+		if !success {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if err := tmp.Chmod(perm); err != nil {
+		return err
+	}
+
+	if _, err := tmp.Write(data); err != nil {
 		return err
 	}
 
 	// Skip fsync during tests to avoid 7+ minute test times on Windows
 	// Production code always fsyncs for durability
 	if os.Getenv("TUNNELMESH_TEST") == "" {
-		if err := f.Sync(); err != nil {
+		if err := tmp.Sync(); err != nil {
 			return err
 		}
 	}
 
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+
+	// Atomic rename — on POSIX, rename within same filesystem is atomic
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+
+	success = true
 	return nil
 }
 
@@ -636,9 +663,16 @@ func (s *Store) getBucketMeta(bucket string) (*BucketMeta, error) {
 		return nil, fmt.Errorf("read bucket meta: %w", err)
 	}
 
+	// Handle corrupted metadata (e.g. from past disk-full truncation)
+	if len(data) == 0 {
+		s.logger.Warn().Str("bucket", bucket).Str("path", metaPath).Msg("bucket metadata file is empty (possible disk-full corruption)")
+		return nil, ErrBucketNotFound
+	}
+
 	var meta BucketMeta
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, fmt.Errorf("unmarshal bucket meta: %w", err)
+		s.logger.Warn().Err(err).Str("bucket", bucket).Str("path", metaPath).Msg("bucket metadata file is corrupted")
+		return nil, ErrBucketNotFound
 	}
 
 	return &meta, nil

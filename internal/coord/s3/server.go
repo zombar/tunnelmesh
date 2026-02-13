@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -80,6 +81,7 @@ type Server struct {
 	store      *Store
 	authorizer Authorizer
 	metrics    *S3Metrics
+	recoverer  BucketRecoverer
 }
 
 // Authorizer is the interface for checking S3 permissions.
@@ -93,6 +95,16 @@ type Authorizer interface {
 	// Returns nil if user has unrestricted access (no filtering needed).
 	// Returns empty slice if user has no access to the bucket.
 	GetAllowedPrefixes(userID, bucket string) []string
+}
+
+// BucketRecoverer can recreate missing buckets for existing shares.
+type BucketRecoverer interface {
+	EnsureBucketForShare(ctx context.Context, bucketName string) error
+}
+
+// SetBucketRecoverer sets the bucket recoverer for on-demand bucket recreation.
+func (s *Server) SetBucketRecoverer(r BucketRecoverer) {
+	s.recoverer = r
 }
 
 // NewServer creates a new S3 server.
@@ -496,6 +508,11 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 		if strings.HasPrefix(strings.ToLower(k), "x-amz-meta-") && len(v) > 0 {
 			metadata[k] = v[0]
 		}
+	}
+
+	// Attempt to recover missing bucket for share (no-op if bucket exists)
+	if s.recoverer != nil {
+		_ = s.recoverer.EnsureBucketForShare(r.Context(), bucket)
 	}
 
 	meta, err := s.store.PutObject(r.Context(), bucket, key, r.Body, r.ContentLength, contentType, metadata)
