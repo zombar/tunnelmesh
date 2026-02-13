@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -651,8 +652,11 @@ func TestObjectLifecycle_PurgeCancellation(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
 
-	// Create and tombstone many objects (10000 objects to ensure cancellation occurs mid-operation)
+	// Create and tombstone many objects to ensure cancellation occurs mid-operation
 	totalObjects := 10000
+	if testing.Short() {
+		totalObjects = 2000
+	}
 	for i := 0; i < totalObjects; i++ {
 		key := fmt.Sprintf("file-%04d.txt", i)
 		_, err := store.PutObject(context.Background(), "test-bucket", key, bytes.NewReader([]byte("data")), 4, "text/plain", nil)
@@ -1610,4 +1614,261 @@ func TestCalculatePrefixSize_IncludesTombstoned(t *testing.T) {
 	sizeAfterDelete, err := store.CalculatePrefixSize(context.Background(), bucket, "folder/")
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(content)), sizeAfterDelete, "tombstoned objects should still count toward size")
+}
+
+// TestConcurrent_PurgeObjectNoDeadlock verifies that PurgeObject doesn't deadlock
+// when called concurrently with read operations. Before the fix, PurgeObject held
+// s.mu.Lock() while calling isChunkReferencedGlobally() which did a full filesystem
+// scan, blocking all other S3 operations and causing dashboard hangs.
+func TestConcurrent_PurgeObjectNoDeadlock(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create multiple objects to purge
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("file-%d.txt", i)
+		content := []byte(fmt.Sprintf("content-%d-%s", i, strings.Repeat("x", 500)))
+		_, err := store.PutObject(context.Background(), "test-bucket", key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+		// Tombstone so it can be purged
+		require.NoError(t, store.DeleteObject(context.Background(), "test-bucket", key))
+	}
+
+	// Use timeout context to detect deadlock
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	// Concurrent purges
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			key := fmt.Sprintf("file-%d.txt", id)
+			_ = store.PurgeObject(ctx, "test-bucket", key)
+		}(i)
+	}
+
+	// Concurrent reads (these should NOT be blocked by purge)
+	for i := 5; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			// ListObjects and HeadObject require s.mu.RLock()
+			// They would deadlock if PurgeObject holds s.mu.Lock() too long
+			for j := 0; j < 5; j++ {
+				_, _, _, _ = store.ListObjects(ctx, "test-bucket", "", "", 100)
+				_, _ = store.HeadObject(ctx, "test-bucket", fmt.Sprintf("file-%d.txt", id))
+			}
+		}(i)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success - no deadlock
+	case <-ctx.Done():
+		t.Fatal("deadlock detected: concurrent PurgeObject + reads timed out after 10s")
+	}
+}
+
+// TestConcurrent_GCAndPurgeNoDeadlock verifies that GC and PurgeObject running
+// concurrently with reads don't deadlock. This simulates the production scenario
+// where the hourly GC ticker fires while HTTP handlers are serving requests.
+func TestConcurrent_GCAndPurgeNoDeadlock(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create objects with multiple versions
+	for i := 0; i < 5; i++ {
+		for v := 0; v < 3; v++ {
+			content := []byte(fmt.Sprintf("v%d-%s", v, strings.Repeat("x", 500+i*100)))
+			_, err := store.PutObject(context.Background(), "test-bucket", fmt.Sprintf("obj-%d.txt", i), bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+			require.NoError(t, err)
+		}
+	}
+
+	// Tombstone some for purging
+	for i := 0; i < 3; i++ {
+		require.NoError(t, store.DeleteObject(context.Background(), "test-bucket", fmt.Sprintf("obj-%d.txt", i)))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	// Run GC concurrently
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 3; i++ {
+			store.RunGarbageCollection(ctx)
+		}
+	}()
+
+	// Run purges concurrently
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			_ = store.PurgeObject(ctx, "test-bucket", fmt.Sprintf("obj-%d.txt", id))
+		}(i)
+	}
+
+	// Concurrent reads (simulate dashboard API calls)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			_, _, _, _ = store.ListObjects(ctx, "test-bucket", "", "", 100)
+			_, _ = store.ListBuckets(ctx)
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success - no deadlock
+	case <-ctx.Done():
+		t.Fatal("deadlock detected: concurrent GC + Purge + reads timed out after 15s")
+	}
+}
+
+// TestBuildChunkReferenceSet_SubdirectoryMeta verifies that buildChunkReferenceSet
+// finds chunks referenced by metadata files in subdirectories (e.g., system bucket
+// stores metadata in meta/auth/, meta/dns/, meta/filter/).
+func TestBuildChunkReferenceSet_SubdirectoryMeta(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create a regular object (top-level meta)
+	topContent := []byte("top-level-object")
+	_, err := store.PutObject(context.Background(), "test-bucket", "top.txt", bytes.NewReader(topContent), int64(len(topContent)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Manually create a metadata file in a subdirectory to simulate system bucket layout
+	subDir := filepath.Join(store.dataDir, "buckets", "test-bucket", "meta", "auth")
+	require.NoError(t, os.MkdirAll(subDir, 0o700))
+
+	subMeta := ObjectMeta{
+		Key:          "auth/users.json",
+		Chunks:       []string{"subdir-chunk-hash-abc123"},
+		Size:         100,
+		ContentType:  "application/json",
+		LastModified: time.Now().UTC(),
+		VersionID:    "v1",
+	}
+	data, err := json.Marshal(subMeta)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(subDir, "users.json"), data, 0o600))
+
+	// Build reference set
+	refs := store.buildChunkReferenceSet()
+
+	// Should find the chunk from the subdirectory metadata
+	_, found := refs["subdir-chunk-hash-abc123"]
+	assert.True(t, found, "buildChunkReferenceSet should find chunks in meta subdirectories")
+
+	// Should also find chunks from top-level metadata
+	topMeta, err := store.HeadObject(context.Background(), "test-bucket", "top.txt")
+	require.NoError(t, err)
+	for _, chunk := range topMeta.Chunks {
+		_, found := refs[chunk]
+		assert.True(t, found, "buildChunkReferenceSet should find chunks from top-level metadata")
+	}
+}
+
+// TestIsChunkReferencedGlobally_SubdirectoryMeta verifies that isChunkReferencedGlobally
+// correctly finds chunk references in subdirectory metadata files.
+func TestIsChunkReferencedGlobally_SubdirectoryMeta(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create subdirectory metadata with a known chunk hash
+	subDir := filepath.Join(store.dataDir, "buckets", "test-bucket", "meta", "dns")
+	require.NoError(t, os.MkdirAll(subDir, 0o700))
+
+	subMeta := ObjectMeta{
+		Key:          "dns/records.json",
+		Chunks:       []string{"dns-chunk-hash-xyz789"},
+		Size:         50,
+		ContentType:  "application/json",
+		LastModified: time.Now().UTC(),
+		VersionID:    "v1",
+	}
+	data, err := json.Marshal(subMeta)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(subDir, "records.json"), data, 0o600))
+
+	// Should find the chunk in subdirectory
+	ctx := context.Background()
+	assert.True(t, store.isChunkReferencedGlobally(ctx, "dns-chunk-hash-xyz789"),
+		"isChunkReferencedGlobally should find chunks referenced in meta subdirectories")
+
+	// Should NOT find a non-existent chunk
+	assert.False(t, store.isChunkReferencedGlobally(ctx, "nonexistent-chunk-hash"),
+		"isChunkReferencedGlobally should return false for unreferenced chunks")
+}
+
+// TestPruneAllExpiredVersionsSimple_SubdirectoryMeta verifies that
+// pruneAllExpiredVersionsSimple scans objects in subdirectories too.
+func TestPruneAllExpiredVersionsSimple_SubdirectoryMeta(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	store.versionRetentionDays = 1 // Expire after 1 day
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create an object in a subdirectory (key="filter/rules", file="meta/filter/rules.json")
+	subDir := filepath.Join(store.dataDir, "buckets", "test-bucket", "meta", "filter")
+	require.NoError(t, os.MkdirAll(subDir, 0o700))
+
+	subMeta := ObjectMeta{
+		Key:          "filter/rules",
+		Size:         100,
+		ContentType:  "application/json",
+		LastModified: time.Now().UTC(),
+		VersionID:    "current",
+	}
+	data, err := json.Marshal(subMeta)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(subDir, "rules.json"), data, 0o600))
+
+	// Create an expired version for this subdirectory object
+	// Key "filter/rules" → version dir at "versions/filter/rules/"
+	versionDir := filepath.Join(store.dataDir, "buckets", "test-bucket", "versions", "filter", "rules")
+	require.NoError(t, os.MkdirAll(versionDir, 0o700))
+
+	expiredVersion := ObjectMeta{
+		Key:          "filter/rules",
+		Size:         80,
+		ContentType:  "application/json",
+		LastModified: time.Now().UTC().AddDate(0, 0, -30), // 30 days old
+		VersionID:    "old-version",
+	}
+	vData, err := json.Marshal(expiredVersion)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(versionDir, "old-version.json"), vData, 0o600))
+
+	// Run GC pruning
+	stats := GCStats{}
+	store.pruneAllExpiredVersionsSimple(context.Background(), &stats)
+
+	// Should have scanned the subdirectory object
+	assert.Greater(t, stats.ObjectsScanned, 0, "pruneAllExpiredVersionsSimple should scan objects in subdirectories")
+	assert.Greater(t, stats.VersionsPruned, 0, "pruneAllExpiredVersionsSimple should prune expired versions in subdirectories")
+
+	// The expired version file should be deleted
+	_, err = os.Stat(filepath.Join(versionDir, "old-version.json"))
+	assert.True(t, os.IsNotExist(err), "expired version should be deleted")
 }
