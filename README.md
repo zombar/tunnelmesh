@@ -17,17 +17,15 @@ routing.
 ## Features
 
 - **P2P Encrypted Tunnels** - Direct connections between peers using pluggable transports
-- **Pluggable Transport Layer** - Supports SSH, UDP (WireGuard-like), and WebSocket relay transports with automatic
-  fallback
-- **Coordinator Peers** - Admin peers that provide discovery, IP allocation, and NAT traversal coordination (not traffic routers)
-- **Exit Peers** - Split-tunnel VPN routing: route internet traffic through designated peers while keeping mesh traffic
-  direct
+- **Pluggable Transport Layer** - Supports SSH, UDP, and WebSocket relay transports with fallback
+- **Coordinator Peers** - Admin peers that provide discovery, IP allocation, and NAT traversal coordination
+- **Exit Peers** - Split-tunnel routing: route internet traffic through peers and keep mesh traffic direct
 - **TUN Interface** - Virtual network interface for transparent IP routing
 - **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh`)
 - **Network Monitoring** - Automatic detection of network changes with re-connection
 - **NAT Traversal** - UDP hole-punching with STUN-like endpoint discovery, plus relay fallback
 - **Multi-Platform** - Linux, macOS, and Windows support
-- **Admin Dashboard** - Web interface showing mesh status, peers, traffic statistics, and per-peer transport controls
+- **Admin Dashboard** - Web UI for mesh status, peers, traffic statistics, and per-peer transport controls
 - **Node Location Map** - Optional geographic visualization of mesh peers (requires `--locations` flag)
 - **Unified Architecture** - All nodes are peers; coordinators are peers with admin services enabled
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
@@ -168,7 +166,7 @@ through the admin panel with QR codes for easy mobile setup.
 ### Admin Interface
 
 The admin interface is **only accessible from within the mesh** via HTTPS on the coordinator's mesh IP. Access it at
-`https://this.tm/` from any mesh peer.
+https://this.tm/ from any mesh peer.
 
 When you run `tunnelmesh join`, the mesh CA certificate is automatically fetched and you'll be prompted to install it in
 your system trust store. This allows HTTPS connections to mesh services without browser warnings.
