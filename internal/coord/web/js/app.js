@@ -142,7 +142,7 @@ function showToast(message, type = 'error', duration = TOAST_DURATION_MS) {
 // Fetch and update dashboard
 async function fetchData() {
     try {
-        const resp = await fetch('api/overview');
+        const resp = await fetch('/api/overview');
         if (resp.status === 401) {
             // Browser will show Basic Auth prompt on page load
             // If we get 401 during polling, credentials were rejected
@@ -177,7 +177,7 @@ function setupSSE() {
     }
 
     // EventSource with credentials for authenticated endpoints
-    state.eventSource = new EventSource('api/events', { withCredentials: true });
+    state.eventSource = new EventSource('/api/events', { withCredentials: true });
 
     state.eventSource.addEventListener('connected', () => {
         console.log('SSE connected - dashboard will update in real-time');
@@ -603,7 +603,7 @@ function renderDnsTable() {
 
 async function checkWireGuardStatus() {
     try {
-        const resp = await fetch('api/wireguard/clients');
+        const resp = await fetch('/api/wireguard/clients');
         document.getElementById('wireguard-section').style.display = 'block';
 
         if (resp.ok) {
@@ -633,7 +633,7 @@ async function fetchWGClients() {
     if (!state.wgEnabled) return;
 
     try {
-        const resp = await fetch('api/wireguard/clients');
+        const resp = await fetch('/api/wireguard/clients');
         if (resp.ok) {
             state.wgConcentratorConnected = true;
             const data = await resp.json();
@@ -979,7 +979,7 @@ async function _createWGClient() {
     }
 
     try {
-        const resp = await fetch('api/wireguard/clients', {
+        const resp = await fetch('/api/wireguard/clients', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name }),
@@ -1030,7 +1030,7 @@ window.downloadWGConfig = _downloadWGConfig;
 
 async function _toggleWGClient(id, enabled) {
     try {
-        const resp = await fetch(`api/wireguard/clients/${id}`, {
+        const resp = await fetch(`/api/wireguard/clients/${id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled }),
@@ -1055,7 +1055,7 @@ async function _deleteWGClient(id, name) {
     }
 
     try {
-        const resp = await fetch(`api/wireguard/clients/${id}`, {
+        const resp = await fetch(`/api/wireguard/clients/${id}`, {
             method: 'DELETE',
         });
 
@@ -1122,7 +1122,7 @@ async function loadFilterRules() {
     }
 
     try {
-        const resp = await fetch(`api/filter/rules?peer=${encodeURIComponent(peerName)}`);
+        const resp = await fetch(`/api/filter/rules?peer=${encodeURIComponent(peerName)}`);
         if (!resp.ok) {
             showToast('Failed to load filter rules', 'error');
             return;
@@ -1299,7 +1299,7 @@ async function addFilterRule() {
     }
 
     try {
-        const resp = await fetch('api/filter/rules', {
+        const resp = await fetch('/api/filter/rules', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ peer: destPeer, port, protocol, action, source_peer: sourcePeer, ttl }),
@@ -1335,7 +1335,7 @@ async function removeFilterRule(peerName, port, protocol, sourcePeer) {
     }
 
     try {
-        const resp = await fetch('api/filter/rules', {
+        const resp = await fetch('/api/filter/rules', {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ peer: peerName, port, protocol, source_peer: sourcePeer || '' }),
@@ -1774,7 +1774,7 @@ async function checkPeerManagement() {
     // Panel visibility is managed by the panel system, not here
     // Data loading is handled by refresh coordinator when data tab is accessed
     try {
-        const resp = await fetch('api/users');
+        const resp = await fetch('/api/users');
         if (!resp.ok) {
             // S3 not enabled - panels will be hidden by panel system
         }
@@ -1785,7 +1785,7 @@ async function checkPeerManagement() {
 
 async function fetchPeersMgmt() {
     try {
-        const resp = await fetch('api/users');
+        const resp = await fetch('/api/users');
         if (resp.ok) {
             const peers = await resp.json();
             state.currentPeersMgmt = peers || [];
@@ -1836,7 +1836,7 @@ function _updatePeersMgmtTable(peers) {
 
 async function fetchGroups() {
     try {
-        const resp = await fetch('api/groups');
+        const resp = await fetch('/api/groups');
         if (resp.ok) {
             const groups = await resp.json();
             state.currentGroups = groups || [];
@@ -1907,7 +1907,7 @@ async function createGroup() {
     }
 
     try {
-        const resp = await fetch('api/groups', {
+        const resp = await fetch('/api/groups', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, description }),
@@ -1932,7 +1932,7 @@ async function deleteGroup(name) {
     if (!confirm(`Delete group "${name}"?`)) return;
 
     try {
-        const resp = await fetch(`api/groups/${name}`, { method: 'DELETE' });
+        const resp = await fetch(`/api/groups/${name}`, { method: 'DELETE' });
         if (resp.ok) {
             showToast(`Group "${name}" deleted`, 'success');
             TM.refresh.trigger('groups');
@@ -1949,7 +1949,7 @@ window.deleteGroup = deleteGroup;
 
 async function fetchShares() {
     try {
-        const resp = await fetch('api/shares');
+        const resp = await fetch('/api/shares');
         if (resp.ok) {
             const shares = await resp.json();
             state.currentShares = shares || [];
@@ -2048,7 +2048,7 @@ async function createShare() {
     }
 
     try {
-        const resp = await fetch('api/shares', {
+        const resp = await fetch('/api/shares', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -2074,7 +2074,7 @@ async function deleteShare(name) {
     if (!confirm(`Delete file share "${name}"? All files will be deleted.`)) return;
 
     try {
-        const resp = await fetch(`api/shares/${name}`, { method: 'DELETE' });
+        const resp = await fetch(`/api/shares/${name}`, { method: 'DELETE' });
         if (resp.ok) {
             showToast(`File share "${name}" deleted`, 'success');
             // Trigger refresh for shares panel (will cascade to bindings and S3)
@@ -2239,7 +2239,7 @@ window.switchTab = switchTab;
 
 async function fetchBindings() {
     try {
-        const resp = await fetch('api/bindings');
+        const resp = await fetch('/api/bindings');
         if (!resp.ok) return;
         const bindings = await resp.json();
         // Sort by user/group name
@@ -2315,7 +2315,7 @@ async function populateBindingPeers() {
     select.innerHTML = '<option value="">Select a peer...</option>';
 
     try {
-        const resp = await fetch('api/users');
+        const resp = await fetch('/api/users');
         if (resp.ok) {
             const peers = await resp.json();
             peers.forEach((p) => {
@@ -2347,7 +2347,7 @@ async function createBinding() {
     }
 
     try {
-        const resp = await fetch('api/bindings', {
+        const resp = await fetch('/api/bindings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2509,7 +2509,7 @@ async function deleteBinding(name) {
     if (!confirm('Delete this role binding?')) return;
 
     try {
-        const resp = await fetch(`api/bindings/${name}`, { method: 'DELETE' });
+        const resp = await fetch(`/api/bindings/${name}`, { method: 'DELETE' });
         if (resp.ok) {
             showToast('Role binding deleted', 'success');
             TM.refresh.trigger('bindings');
@@ -2538,7 +2538,7 @@ async function initS3Explorer() {
 
     // Check if S3 is available
     try {
-        const resp = await fetch('api/s3/buckets');
+        const resp = await fetch('/api/s3/buckets');
         if (resp.ok) {
             document.getElementById('s3-section').style.display = 'block';
             if (typeof TM !== 'undefined' && TM.s3explorer) {

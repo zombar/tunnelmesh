@@ -802,7 +802,7 @@
 
     async function fetchBuckets() {
         try {
-            const resp = await fetch('api/s3/buckets');
+            const resp = await fetch('/api/s3/buckets');
             if (!resp.ok) return { buckets: [], quota: null };
             const data = await resp.json();
             // Store quota info in state
@@ -817,7 +817,7 @@
     async function fetchObjects(bucket, prefix = '') {
         try {
             const params = new URLSearchParams({ prefix, delimiter: '/' });
-            const resp = await fetch(`api/s3/buckets/${encodeURIComponent(bucket)}/objects?${params}`);
+            const resp = await fetch(`/api/s3/buckets/${encodeURIComponent(bucket)}/objects?${params}`);
             if (!resp.ok) return [];
             return await resp.json();
         } catch (err) {
@@ -827,7 +827,7 @@
     }
 
     async function getObject(bucket, key) {
-        const resp = await fetch(`api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}`);
+        const resp = await fetch(`/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}`);
         if (!resp.ok) throw new Error(`Failed to get object: ${resp.status}`);
         return {
             content: await resp.text(),
@@ -837,7 +837,7 @@
     }
 
     async function putObject(bucket, key, content, contentType) {
-        const resp = await fetch(`api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}`, {
+        const resp = await fetch(`/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}`, {
             method: 'PUT',
             headers: { 'Content-Type': contentType },
             body: content,
@@ -847,7 +847,7 @@
     }
 
     async function deleteObject(bucket, key) {
-        const resp = await fetch(`api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}`, {
+        const resp = await fetch(`/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}`, {
             method: 'DELETE',
         });
         return resp.ok || resp.status === 204;
@@ -855,7 +855,7 @@
 
     async function untombstoneObject(bucket, key) {
         const resp = await fetch(
-            `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/undelete`,
+            `/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/undelete`,
             {
                 method: 'POST',
             },
@@ -870,7 +870,7 @@
     async function fetchVersions(bucket, key) {
         try {
             const resp = await fetch(
-                `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/versions`,
+                `/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/versions`,
             );
             if (!resp.ok) return [];
             return await resp.json();
@@ -882,7 +882,7 @@
 
     async function restoreVersion(bucket, key, versionId) {
         const resp = await fetch(
-            `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/restore`,
+            `/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/restore`,
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1341,7 +1341,7 @@
             if (viewer) viewer.style.display = 'none';
             if (preview) {
                 preview.style.display = 'flex';
-                preview.innerHTML = `<img src="api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}" alt="${escapeHtml(fileName)}">`;
+                preview.innerHTML = `<img src="/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}" alt="${escapeHtml(fileName)}">`;
             }
             if (fileActions) fileActions.style.display = 'flex';
             if (saveBtn) saveBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
@@ -2038,7 +2038,7 @@
     function downloadFile() {
         if (!state.currentFile) return;
 
-        const url = `api/s3/buckets/${encodeURIComponent(state.currentFile.bucket)}/objects/${encodeURIComponent(state.currentFile.key)}`;
+        const url = `/api/s3/buckets/${encodeURIComponent(state.currentFile.bucket)}/objects/${encodeURIComponent(state.currentFile.key)}`;
         const a = document.createElement('a');
         a.href = url;
         a.download = state.currentFile.key.split('/').pop();
@@ -2270,7 +2270,7 @@
         if (!state.currentFile) return;
 
         const { bucket, key } = state.currentFile;
-        const url = `api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}?versionId=${encodeURIComponent(versionId)}`;
+        const url = `/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}?versionId=${encodeURIComponent(versionId)}`;
         const a = document.createElement('a');
         a.href = url;
         a.download = `${key.split('/').pop()}.${versionId.slice(0, 10)}`;
@@ -2309,7 +2309,7 @@
             try {
                 const content = await file.arrayBuffer();
                 await fetch(
-                    `api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(key)}`,
+                    `/api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(key)}`,
                     {
                         method: 'PUT',
                         headers: { 'Content-Type': file.type || 'application/octet-stream' },
@@ -2473,7 +2473,7 @@
             // S3 rename = GET + PUT + DELETE (no native copy support)
             // First get the file content
             const getResp = await fetch(
-                `api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(oldKey)}`,
+                `/api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(oldKey)}`,
             );
             if (!getResp.ok) {
                 throw new Error(`Failed to read file: ${getResp.status}`);
@@ -2482,7 +2482,7 @@
 
             // Put to new key
             const putResp = await fetch(
-                `api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(newKey)}`,
+                `/api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(newKey)}`,
                 {
                     method: 'PUT',
                     body: content,
@@ -2494,7 +2494,7 @@
 
             // Delete old key
             const deleteResp = await fetch(
-                `api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(oldKey)}`,
+                `/api/s3/buckets/${encodeURIComponent(state.currentBucket)}/objects/${encodeURIComponent(oldKey)}`,
                 {
                     method: 'DELETE',
                 },
