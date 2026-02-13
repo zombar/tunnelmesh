@@ -942,6 +942,18 @@
                     }
                 }
             }
+
+            // Add [LINK] shortcut for file share buckets
+            if (state.currentBucket.startsWith('fs+')) {
+                const shareName = state.currentBucket.substring(3);
+                const idx = shareName.indexOf('_');
+                if (idx > 0) {
+                    const peerName = shareName.substring(0, idx);
+                    const share = shareName.substring(idx + 1);
+                    const sitePath = `/peers/${encodeURIComponent(peerName)}/${encodeURIComponent(share)}/${state.currentPath || ''}`;
+                    html += `<a href="${sitePath}" target="_blank" class="s3-breadcrumb-link" title="Open in web view"><sub>LINK</sub></a>`;
+                }
+            }
         }
 
         container.innerHTML = html;
