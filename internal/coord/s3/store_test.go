@@ -1872,3 +1872,118 @@ func TestPruneAllExpiredVersionsSimple_SubdirectoryMeta(t *testing.T) {
 	_, err = os.Stat(filepath.Join(versionDir, "old-version.json"))
 	assert.True(t, os.IsNotExist(err), "expired version should be deleted")
 }
+
+// ==== ImportObjectMeta Tests ====
+
+func TestImportObjectMeta_NewBucket(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Import metadata for a bucket that doesn't exist yet
+	meta := ObjectMeta{
+		Key:         "report.pdf",
+		Size:        5000,
+		ContentType: "application/pdf",
+		Chunks:      []string{"hash1", "hash2"},
+	}
+	metaJSON, err := json.Marshal(meta)
+	require.NoError(t, err)
+
+	err = store.ImportObjectMeta(ctx, "newbucket", "report.pdf", metaJSON, "alice")
+	require.NoError(t, err)
+
+	// Verify the metadata is readable
+	got, err := store.GetObjectMeta(ctx, "newbucket", "report.pdf")
+	require.NoError(t, err)
+	assert.Equal(t, "report.pdf", got.Key)
+	assert.Equal(t, int64(5000), got.Size)
+	assert.Equal(t, "application/pdf", got.ContentType)
+	assert.Equal(t, []string{"hash1", "hash2"}, got.Chunks)
+
+	// Verify bucket was created with correct owner
+	buckets, err := store.ListBuckets(ctx)
+	require.NoError(t, err)
+	require.Len(t, buckets, 1)
+	assert.Equal(t, "alice", buckets[0].Owner)
+}
+
+func TestImportObjectMeta_ExistingBucket(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Create bucket first
+	require.NoError(t, store.CreateBucket(ctx, "mybucket", "alice", 1, nil))
+
+	meta := ObjectMeta{
+		Key:         "doc.txt",
+		Size:        100,
+		ContentType: "text/plain",
+		Chunks:      []string{"abc"},
+	}
+	metaJSON, err := json.Marshal(meta)
+	require.NoError(t, err)
+
+	err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
+	require.NoError(t, err)
+
+	got, err := store.GetObjectMeta(ctx, "mybucket", "doc.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "doc.txt", got.Key)
+}
+
+func TestImportObjectMeta_InvalidJSON(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	err := store.ImportObjectMeta(ctx, "bucket", "key", []byte("not json"), "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid object meta JSON")
+}
+
+func TestImportObjectMeta_InvalidBucketName(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	meta := ObjectMeta{Key: "test"}
+	metaJSON, _ := json.Marshal(meta)
+
+	err := store.ImportObjectMeta(ctx, "../escape", "test", metaJSON, "")
+	assert.Error(t, err)
+}
+
+// ==== DeleteChunk Tests ====
+
+func TestDeleteChunk(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Write a chunk first
+	data := []byte("test chunk data")
+	hash := ContentHash(data)
+	err := store.WriteChunkDirect(ctx, hash, data)
+	require.NoError(t, err)
+
+	// Verify chunk exists
+	readData, err := store.ReadChunk(ctx, hash)
+	require.NoError(t, err)
+	assert.Equal(t, data, readData)
+
+	// Delete the chunk
+	err = store.DeleteChunk(ctx, hash)
+	require.NoError(t, err)
+
+	// Verify chunk is gone
+	_, err = store.ReadChunk(ctx, hash)
+	assert.Error(t, err)
+}
+
+func TestDeleteChunk_NonExistent(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Deleting a non-existent chunk should not error (idempotent behavior).
+	// This is important because cleanup may run after a chunk was already
+	// garbage collected or deleted by another process.
+	err := store.DeleteChunk(ctx, "nonexistent-hash")
+	assert.NoError(t, err)
+}

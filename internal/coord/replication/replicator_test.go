@@ -226,6 +226,54 @@ func (m *mockS3Store) WriteChunkDirect(ctx context.Context, hash string, data []
 	return nil
 }
 
+// ImportObjectMeta writes object metadata directly.
+func (m *mockS3Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.putErr != nil {
+		return m.putErr
+	}
+
+	// Decode meta to get basic info
+	var meta struct {
+		Key         string            `json:"key"`
+		Size        int64             `json:"size"`
+		ContentType string            `json:"content_type"`
+		Metadata    map[string]string `json:"metadata,omitempty"`
+		Chunks      []string          `json:"chunks,omitempty"`
+	}
+	if err := json.Unmarshal(metaJSON, &meta); err != nil {
+		return fmt.Errorf("unmarshal meta: %w", err)
+	}
+
+	m.objects[m.makeKey(bucket, key)] = mockS3Object{
+		data:        nil, // No data — chunks arrive separately
+		contentType: meta.ContentType,
+		metadata:    meta.Metadata,
+		chunks:      meta.Chunks,
+	}
+	return nil
+}
+
+// GetBucketReplicationFactor returns the replication factor for a bucket.
+func (m *mockS3Store) GetBucketReplicationFactor(_ context.Context, _ string) int {
+	return 2 // Default for tests
+}
+
+// DeleteChunk removes a chunk from CAS.
+func (m *mockS3Store) DeleteChunk(ctx context.Context, hash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.chunkErr != nil {
+		return m.chunkErr
+	}
+
+	delete(m.chunks, hash)
+	return nil
+}
+
 // addObjectWithChunks adds an object with chunk-level metadata (helper for tests).
 func (m *mockS3Store) addObjectWithChunks(bucket, key string, chunks []string, chunkData map[string][]byte) {
 	m.mu.Lock()
@@ -426,52 +474,6 @@ func TestReplicator_AddRemovePeer(t *testing.T) {
 	assert.Len(t, r.GetPeers(), 1)
 }
 
-func TestReplicator_ReplicateOperation_NoPeers(t *testing.T) {
-	r := createTestReplicator(t)
-
-	// Replicate with no peers should succeed
-	err := r.ReplicateOperation(context.Background(), "system", "test.json", []byte("data"), "text/plain", nil)
-	assert.NoError(t, err)
-
-	// Should still update local version vector
-	vv := r.state.Get("system", "test.json")
-	assert.Equal(t, uint64(1), vv.Get("coord1.tunnelmesh:8443"))
-}
-
-func TestReplicator_ReplicateOperation_WithPeers(t *testing.T) {
-	transport := newMockTransport()
-	s3 := newMockS3Store()
-	r := createTestReplicatorWithMocks(t, transport, s3)
-
-	r.AddPeer("coord2.mesh")
-	r.AddPeer("coord3.mesh")
-
-	// Replicate operation
-	data := []byte(`{"key":"value"}`)
-	err := r.ReplicateOperation(context.Background(), "system", "config.json", data, "application/json", nil)
-	assert.NoError(t, err)
-
-	// Verify messages were sent to both peers
-	msg2 := transport.getLastSent("coord2.mesh")
-	msg3 := transport.getLastSent("coord3.mesh")
-
-	assert.NotNil(t, msg2)
-	assert.NotNil(t, msg3)
-
-	// Verify message content
-	parsed2, err := UnmarshalMessage(msg2)
-	require.NoError(t, err)
-	assert.Equal(t, MessageTypeReplicate, parsed2.Type)
-	assert.Equal(t, "coord1.tunnelmesh:8443", parsed2.From)
-
-	payload2, err := parsed2.DecodeReplicatePayload()
-	require.NoError(t, err)
-	assert.Equal(t, "system", payload2.Bucket)
-	assert.Equal(t, "config.json", payload2.Key)
-	assert.Equal(t, data, payload2.Data)
-	assert.Equal(t, uint64(1), payload2.VersionVector.Get("coord1.tunnelmesh:8443"))
-}
-
 func TestReplicator_HandleReplicate(t *testing.T) {
 	transport := newMockTransport()
 	s3 := newMockS3Store()
@@ -658,8 +660,8 @@ func TestReplicator_TransportError(t *testing.T) {
 
 	r.AddPeer("coord2.mesh")
 
-	// Replicate should return error
-	err := r.ReplicateOperation(context.Background(), "system", "test.json", []byte("data"), "text/plain", nil)
+	// ReplicateDelete should return error when transport fails
+	err := r.ReplicateDelete(context.Background(), "system", "test.json")
 	assert.Error(t, err)
 
 	// Error count should be incremented
@@ -882,24 +884,17 @@ func TestReplicateObject_NoChunkRegistry(t *testing.T) {
 	s3 := newMockS3Store()
 	transport := newMockTransport()
 
-	// Create simple object (no chunk metadata)
-	_ = s3.Put(ctx, "bucket1", "file.txt", []byte("data"), "text/plain", nil)
-
-	// No chunk registry (should fall back to file-level replication)
+	// No chunk registry — should return error
 	replicator := NewReplicator(Config{
 		NodeID:    "coord-local",
 		Transport: transport,
 		S3Store:   s3,
 		Logger:    zerolog.Nop(),
 	})
-	replicator.AddPeer("coord-peer")
 
-	// Should not panic or error (falls back to file-level)
 	err := replicator.ReplicateObject(ctx, "bucket1", "file.txt", "coord-peer")
-
-	// The fallback calls ReplicateOperation which will send to all peers
-	// We just verify it doesn't crash
-	assert.NoError(t, err, "Fallback to file-level replication should work")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "chunk registry not configured")
 }
 
 // ==== Striping Policy Tests ====
@@ -1363,5 +1358,254 @@ func TestShardDistributionSeparation(t *testing.T) {
 		if len(data) == 10 {
 			assert.Less(t, len(parity), 3, "peer %s has all data shards, so should not have all parity shards", peer)
 		}
+	}
+}
+
+// ==== Object Metadata Replication Tests ====
+
+func TestReplicateObjectMeta_SendReceive(t *testing.T) {
+	// Setup two coordinators connected via broker transport
+	broker := newTestTransportBroker()
+	s3a := newMockS3Store()
+	s3b := newMockS3Store()
+	registryA := newMockChunkRegistry()
+	registryB := newMockChunkRegistry()
+
+	rA := NewReplicator(Config{
+		NodeID:        "coord-a",
+		Transport:     broker.newTransportFor("coord-a"),
+		S3Store:       s3a,
+		ChunkRegistry: registryA,
+		Logger:        zerolog.Nop(),
+	})
+	_ = rA.Start()
+	defer func() { _ = rA.Stop() }()
+
+	rB := NewReplicator(Config{
+		NodeID:        "coord-b",
+		Transport:     broker.newTransportFor("coord-b"),
+		S3Store:       s3b,
+		ChunkRegistry: registryB,
+		Logger:        zerolog.Nop(),
+	})
+	_ = rB.Start()
+	defer func() { _ = rB.Stop() }()
+
+	// Send metadata from A to B
+	metaJSON := []byte(`{"key":"test.txt","size":100,"content_type":"text/plain","chunks":["hash1","hash2"]}`)
+	err := rA.sendReplicateObjectMeta(context.Background(), "coord-b", "mybucket", "test.txt", metaJSON)
+	require.NoError(t, err)
+
+	// Wait briefly for async processing
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify B received the metadata
+	obj, exists := s3b.objects[s3b.makeKey("mybucket", "test.txt")]
+	assert.True(t, exists, "Object metadata should exist on coord-b")
+	assert.Equal(t, "text/plain", obj.contentType)
+	assert.Equal(t, []string{"hash1", "hash2"}, obj.chunks)
+}
+
+func TestHandleReplicateObjectMeta_InvalidPayload(t *testing.T) {
+	transport := newMockTransport()
+	s3 := newMockS3Store()
+
+	r := NewReplicator(Config{
+		NodeID:    "coord-a",
+		Transport: transport,
+		S3Store:   s3,
+		Logger:    zerolog.Nop(),
+	})
+
+	// Send message with invalid JSON payload
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeReplicateObjectMeta,
+		ID:      "test-1",
+		From:    "coord-b",
+		Payload: json.RawMessage(`invalid json`),
+	}
+
+	err := r.handleReplicateObjectMeta(msg)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal")
+}
+
+// ==== Chunk Cleanup Tests ====
+
+func TestCleanupNonAssignedChunks_ThreeCoordinators(t *testing.T) {
+	ctx := context.Background()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+	transport := newMockTransport()
+
+	// Create object with 6 chunks
+	chunks := []string{"c0", "c1", "c2", "c3", "c4", "c5"}
+	chunkData := map[string][]byte{
+		"c0": []byte("data0"),
+		"c1": []byte("data1"),
+		"c2": []byte("data2"),
+		"c3": []byte("data3"),
+		"c4": []byte("data4"),
+		"c5": []byte("data5"),
+	}
+	s3Store.addObjectWithChunks("bucket", "file.bin", chunks, chunkData)
+
+	r := NewReplicator(Config{
+		NodeID:        "coord-a",
+		Transport:     transport,
+		S3Store:       s3Store,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+
+	// Add peers (3 coordinators total: coord-a, coord-b, coord-c)
+	r.AddPeer("coord-b")
+	r.AddPeer("coord-c")
+
+	// Verify all chunks exist before cleanup
+	for _, hash := range chunks {
+		_, exists := s3Store.chunks[hash]
+		assert.True(t, exists, "chunk %s should exist before cleanup", hash)
+	}
+
+	// Run cleanup
+	err := r.CleanupNonAssignedChunks(ctx, "bucket", "file.bin")
+	require.NoError(t, err)
+
+	// Determine which chunks should remain (assigned to coord-a)
+	sp := NewStripingPolicy([]string{"coord-a", "coord-b", "coord-c"})
+	assignedIndices := sp.ChunksForPeer("coord-a", 6, 2) // RF=2
+
+	assignedSet := make(map[int]bool)
+	for _, idx := range assignedIndices {
+		assignedSet[idx] = true
+	}
+
+	// Verify only assigned chunks remain
+	for idx, hash := range chunks {
+		_, exists := s3Store.chunks[hash]
+		if assignedSet[idx] {
+			assert.True(t, exists, "assigned chunk %s (idx %d) should still exist", hash, idx)
+		} else {
+			assert.False(t, exists, "non-assigned chunk %s (idx %d) should be deleted", hash, idx)
+		}
+	}
+
+	// Verify some chunks were actually deleted (not all assigned to one coordinator)
+	remainingCount := 0
+	for _, hash := range chunks {
+		if _, exists := s3Store.chunks[hash]; exists {
+			remainingCount++
+		}
+	}
+	assert.Less(t, remainingCount, 6, "Some chunks should have been cleaned up")
+	assert.Greater(t, remainingCount, 0, "Some chunks should remain")
+}
+
+func TestCleanupNonAssignedChunks_NoPeers(t *testing.T) {
+	ctx := context.Background()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+	transport := newMockTransport()
+
+	chunks := []string{"c0", "c1", "c2"}
+	chunkData := map[string][]byte{
+		"c0": []byte("data0"),
+		"c1": []byte("data1"),
+		"c2": []byte("data2"),
+	}
+	s3Store.addObjectWithChunks("bucket", "file.bin", chunks, chunkData)
+
+	r := NewReplicator(Config{
+		NodeID:        "coord-a",
+		Transport:     transport,
+		S3Store:       s3Store,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+
+	// No peers added — should keep everything
+	err := r.CleanupNonAssignedChunks(ctx, "bucket", "file.bin")
+	require.NoError(t, err)
+
+	// All chunks should remain
+	for _, hash := range chunks {
+		_, exists := s3Store.chunks[hash]
+		assert.True(t, exists, "chunk %s should remain when no peers", hash)
+	}
+}
+
+func TestCleanupNonAssignedChunks_NoChunkRegistry(t *testing.T) {
+	ctx := context.Background()
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+
+	r := NewReplicator(Config{
+		NodeID:    "coord-a",
+		Transport: transport,
+		S3Store:   s3Store,
+		Logger:    zerolog.Nop(),
+		// No ChunkRegistry
+	})
+
+	err := r.CleanupNonAssignedChunks(ctx, "bucket", "file.bin")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "chunk registry not configured")
+}
+
+func TestReplicateObject_SendsMetadata(t *testing.T) {
+	// Test that ReplicateObject sends object metadata to the peer
+	broker := newTestTransportBroker()
+	s3a := newMockS3Store()
+	s3b := newMockS3Store()
+	registryA := newMockChunkRegistry()
+	registryB := newMockChunkRegistry()
+
+	rA := NewReplicator(Config{
+		NodeID:        "coord-a",
+		Transport:     broker.newTransportFor("coord-a"),
+		S3Store:       s3a,
+		ChunkRegistry: registryA,
+		Logger:        zerolog.Nop(),
+	})
+	_ = rA.Start()
+	defer func() { _ = rA.Stop() }()
+
+	rB := NewReplicator(Config{
+		NodeID:        "coord-b",
+		Transport:     broker.newTransportFor("coord-b"),
+		S3Store:       s3b,
+		ChunkRegistry: registryB,
+		Logger:        zerolog.Nop(),
+	})
+	_ = rB.Start()
+	defer func() { _ = rB.Stop() }()
+
+	rA.AddPeer("coord-b")
+
+	// Create object on coordinator A with chunks
+	chunks := []string{"hash-a", "hash-b"}
+	chunkData := map[string][]byte{
+		"hash-a": []byte("data-a"),
+		"hash-b": []byte("data-b"),
+	}
+	s3a.addObjectWithChunks("mybucket", "doc.txt", chunks, chunkData)
+
+	// Replicate to coord-b
+	err := rA.ReplicateObject(context.Background(), "mybucket", "doc.txt", "coord-b")
+	require.NoError(t, err)
+
+	// Wait for async processing
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify metadata was received by coord-b
+	_, exists := s3b.objects[s3b.makeKey("mybucket", "doc.txt")]
+	assert.True(t, exists, "Object metadata should have been replicated to coord-b")
+
+	// Verify chunks were replicated
+	for _, hash := range chunks {
+		_, exists := s3b.chunks[hash]
+		assert.True(t, exists, "Chunk %s should have been replicated to coord-b", hash)
 	}
 }

@@ -1,6 +1,7 @@
 package replication
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -283,17 +284,75 @@ func TestSyncObjectEntry_CompleteRoundTrip(t *testing.T) {
 func TestMessageType_Constants(t *testing.T) {
 	// Verify message type constants are distinct
 	types := map[MessageType]bool{
-		MessageTypeReplicate:    true,
-		MessageTypeAck:          true,
-		MessageTypeSyncRequest:  true,
-		MessageTypeSyncResponse: true,
+		MessageTypeReplicate:           true,
+		MessageTypeAck:                 true,
+		MessageTypeSyncRequest:         true,
+		MessageTypeSyncResponse:        true,
+		MessageTypeReplicateObjectMeta: true,
 	}
 
-	assert.Len(t, types, 4, "All message types should be distinct")
+	assert.Len(t, types, 5, "All message types should be distinct")
 
 	// Verify string values
 	assert.Equal(t, MessageType("replicate"), MessageTypeReplicate)
 	assert.Equal(t, MessageType("ack"), MessageTypeAck)
 	assert.Equal(t, MessageType("sync_request"), MessageTypeSyncRequest)
 	assert.Equal(t, MessageType("sync_response"), MessageTypeSyncResponse)
+	assert.Equal(t, MessageType("replicate_object_meta"), MessageTypeReplicateObjectMeta)
+}
+
+func TestReplicateObjectMetaPayload_MarshalUnmarshal(t *testing.T) {
+	payload := ReplicateObjectMetaPayload{
+		Bucket:   "mybucket",
+		Key:      "documents/report.pdf",
+		MetaJSON: []byte(`{"key":"report.pdf","size":12345,"content_type":"application/pdf","chunks":["abc","def"]}`),
+	}
+
+	// Marshal to JSON
+	data, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	// Unmarshal back
+	var decoded ReplicateObjectMetaPayload
+	err = json.Unmarshal(data, &decoded)
+	require.NoError(t, err)
+
+	assert.Equal(t, payload.Bucket, decoded.Bucket)
+	assert.Equal(t, payload.Key, decoded.Key)
+	assert.JSONEq(t, string(payload.MetaJSON), string(decoded.MetaJSON))
+}
+
+func TestReplicateObjectMetaPayload_InMessage(t *testing.T) {
+	payload := ReplicateObjectMetaPayload{
+		Bucket:   "system",
+		Key:      "config.json",
+		MetaJSON: []byte(`{"key":"config.json","size":42}`),
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeReplicateObjectMeta,
+		ID:      "meta-001",
+		From:    "coord1.tunnelmesh:8443",
+		Payload: payloadJSON,
+	}
+
+	// Round-trip via marshal/unmarshal
+	data, err := msg.Marshal()
+	require.NoError(t, err)
+
+	parsed, err := UnmarshalMessage(data)
+	require.NoError(t, err)
+	assert.Equal(t, MessageTypeReplicateObjectMeta, parsed.Type)
+	assert.Equal(t, "meta-001", parsed.ID)
+
+	// Decode payload
+	var decodedPayload ReplicateObjectMetaPayload
+	err = json.Unmarshal(parsed.Payload, &decodedPayload)
+	require.NoError(t, err)
+	assert.Equal(t, "system", decodedPayload.Bucket)
+	assert.Equal(t, "config.json", decodedPayload.Key)
 }

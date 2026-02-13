@@ -2325,17 +2325,73 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// Replicate to other coordinators asynchronously using chunk-level replication.
 	// Chunks are already stored by PutObject above — ReplicateObject reads them from CAS
 	// and only sends chunks the remote peer doesn't already have.
+	//
+	// Uses context.Background() intentionally: replication must complete even if the
+	// HTTP client disconnects, since partial replication would leave the cluster inconsistent.
+	// 60s timeout accounts for chunk transfer + metadata send + cleanup across all peers.
 	if s.replicator != nil {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			for _, peerID := range s.replicator.GetPeers() {
-				if err := s.replicator.ReplicateObject(ctx, bucket, key, peerID); err != nil {
-					log.Error().Err(err).
-						Str("peer", peerID).
+
+			peers := s.replicator.GetPeers()
+			if len(peers) == 0 {
+				return
+			}
+
+			// Replicate to all peers in parallel with bounded concurrency.
+			// Semaphore acquisition and result collection both respect context
+			// cancellation to prevent goroutine leaks on timeout.
+			type result struct {
+				peerID string
+				err    error
+			}
+			results := make(chan result, len(peers))
+			sem := make(chan struct{}, 3)
+
+			for _, peerID := range peers {
+				go func(pid string) {
+					// Acquire semaphore, bail out if context expires while waiting
+					select {
+					case sem <- struct{}{}:
+						defer func() { <-sem }()
+					case <-ctx.Done():
+						results <- result{pid, ctx.Err()}
+						return
+					}
+					results <- result{pid, s.replicator.ReplicateObject(ctx, bucket, key, pid)}
+				}(peerID)
+			}
+
+			allSucceeded := true
+			for range peers {
+				select {
+				case res := <-results:
+					if res.err != nil {
+						log.Error().Err(res.err).
+							Str("peer", res.peerID).
+							Str("bucket", bucket).
+							Str("key", key).
+							Msg("Failed to replicate S3 PUT operation")
+						allSucceeded = false
+					}
+				case <-ctx.Done():
+					log.Warn().
 						Str("bucket", bucket).
 						Str("key", key).
-						Msg("Failed to replicate S3 PUT operation")
+						Msg("Replication timed out, skipping cleanup")
+					allSucceeded = false
+				}
+			}
+
+			// Only cleanup non-assigned chunks if ALL peers received their chunks.
+			// If any peer failed, keep all chunks locally so a retry can succeed.
+			if allSucceeded {
+				if err := s.replicator.CleanupNonAssignedChunks(ctx, bucket, key); err != nil {
+					log.Error().Err(err).
+						Str("bucket", bucket).
+						Str("key", key).
+						Msg("Failed to cleanup non-assigned chunks")
 				}
 			}
 		}()

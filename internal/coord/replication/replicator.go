@@ -77,6 +77,16 @@ type S3Store interface {
 
 	// WriteChunkDirect writes chunk data directly to CAS (for replication receiver)
 	WriteChunkDirect(ctx context.Context, hash string, data []byte) error
+
+	// ImportObjectMeta writes object metadata directly (for replication receiver).
+	// bucketOwner is used when auto-creating the bucket (empty = "system").
+	ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) error
+
+	// DeleteChunk removes a chunk from CAS by hash (for cleanup after replication)
+	DeleteChunk(ctx context.Context, hash string) error
+
+	// GetBucketReplicationFactor returns the replication factor for a bucket (0 if unknown)
+	GetBucketReplicationFactor(ctx context.Context, bucket string) int
 }
 
 // ChunkRegistryInterface defines operations for chunk ownership tracking.
@@ -366,67 +376,6 @@ func (r *Replicator) RequestSyncFromAll(ctx context.Context, buckets []string) e
 	return lastErr
 }
 
-// ReplicateOperation replicates an S3 operation to all coordinator peers.
-// This should be called after successfully writing to local S3.
-func (r *Replicator) ReplicateOperation(ctx context.Context, bucket, key string, data []byte, contentType string, metadata map[string]string) error {
-	// Update local version vector
-	vv := r.state.Update(bucket, key)
-
-	r.logger.Debug().
-		Str("bucket", bucket).
-		Str("key", key).
-		Str("version_vector", vv.String()).
-		Msg("Replicating operation")
-
-	// Get peers to replicate to
-	peers := r.GetPeers()
-	if len(peers) == 0 {
-		r.logger.Debug().Msg("No peers to replicate to")
-		return nil
-	}
-
-	// Create replicate payload
-	payload := ReplicatePayload{
-		Bucket:        bucket,
-		Key:           key,
-		Data:          data,
-		VersionVector: vv,
-		ContentType:   contentType,
-		Metadata:      metadata,
-	}
-
-	// Send to all peers in parallel to avoid one slow peer blocking others
-	// Use semaphore to limit concurrency to 10 concurrent sends
-	semaphore := make(chan struct{}, 10)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var lastErr error
-
-	for _, peer := range peers {
-		wg.Add(1)
-		go func(p string) {
-			defer wg.Done()
-
-			// Acquire semaphore
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			if err := r.sendReplicateMessage(ctx, p, payload); err != nil {
-				r.logger.Error().Err(err).Str("peer", p).Msg("Failed to send replicate message")
-				mu.Lock()
-				lastErr = err
-				mu.Unlock()
-				r.incrementErrorCount()
-			} else {
-				r.incrementSentCount()
-			}
-		}(peer)
-	}
-
-	wg.Wait()
-	return lastErr
-}
-
 // ReplicateDelete replicates a delete operation to all coordinator peers.
 // Deletes are represented as tombstones (empty data with delete marker).
 func (r *Replicator) ReplicateDelete(ctx context.Context, bucket, key string) error {
@@ -557,6 +506,8 @@ func (r *Replicator) handleIncomingMessage(from string, data []byte) error {
 		return r.handleFetchChunk(msg)
 	case MessageTypeFetchChunkResponse:
 		return r.handleFetchChunkResponse(msg)
+	case MessageTypeReplicateObjectMeta:
+		return r.handleReplicateObjectMeta(msg)
 	default:
 		r.logger.Warn().Str("type", string(msg.Type)).Msg("Unknown message type")
 		return fmt.Errorf("unknown message type: %s", msg.Type)
@@ -1293,19 +1244,9 @@ func (sp *StripingPolicy) GetShardOwner(shardIndex int, isParityShard bool, data
 // coordinators hold different primary chunks, enabling parallel reads.
 // Enables resume capability: failed transfers can be resumed from the last successful chunk.
 func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID string) error {
-	// Chunk registry required for chunk-level replication
+	// Chunk registry is required for chunk-level replication
 	if r.chunkRegistry == nil {
-		r.logger.Warn().Msg("Chunk registry not configured, falling back to file-level replication")
-		// Fall back to file-level replication
-		data, metadata, err := r.s3.Get(ctx, bucket, key)
-		if err != nil {
-			return fmt.Errorf("get object for replication: %w", err)
-		}
-		contentType := ""
-		if metadata != nil {
-			contentType = metadata["content-type"]
-		}
-		return r.ReplicateOperation(ctx, bucket, key, data, contentType, metadata)
+		return fmt.Errorf("chunk registry not configured: chunk-level replication requires a chunk registry")
 	}
 
 	// Get file metadata (includes chunk list)
@@ -1339,9 +1280,11 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 	var chunksToReplicate []string
 
 	if len(allCoords) > 1 {
-		// Multi-coordinator: use striping policy
-		// Default replication factor of 2 (each chunk on primary + 1 replica)
-		replicationFactor := 2
+		// Multi-coordinator: use striping policy with bucket's replication factor
+		replicationFactor := r.s3.GetBucketReplicationFactor(ctx, bucket)
+		if replicationFactor < 1 {
+			replicationFactor = 2 // Fallback if bucket RF is unknown
+		}
 
 		sp := NewStripingPolicy(allCoords)
 		assignedIndices := sp.ChunksForPeer(peerID, len(meta.Chunks), replicationFactor)
@@ -1375,12 +1318,23 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 	}
 
 	if len(chunksToReplicate) == 0 {
+		// Still send metadata even if all chunks were already there
+		metaJSON, err := json.Marshal(meta)
+		if err != nil {
+			return fmt.Errorf("marshal object metadata: %w", err)
+		}
+		if err := r.sendReplicateObjectMeta(ctx, peerID, bucket, key, metaJSON); err != nil {
+			r.logger.Warn().Err(err).
+				Str("peer", peerID).
+				Msg("Failed to send object metadata")
+		}
+
 		r.logger.Info().
 			Str("bucket", bucket).
 			Str("key", key).
 			Str("peer", peerID).
 			Int("total_chunks", len(meta.Chunks)).
-			Msg("All chunks already replicated, skipping")
+			Msg("All chunks already replicated, sent metadata only")
 		return nil
 	}
 
@@ -1452,12 +1406,27 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 			Msg("Replicated chunk")
 	}
 
+	// Send object metadata so the remote peer can serve reads
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal object metadata: %w", err)
+	}
+
+	if err := r.sendReplicateObjectMeta(ctx, peerID, bucket, key, metaJSON); err != nil {
+		r.logger.Warn().Err(err).
+			Str("peer", peerID).
+			Str("bucket", bucket).
+			Str("key", key).
+			Msg("Failed to send object metadata (chunks were sent successfully)")
+		// Don't fail the whole operation — chunks are there, metadata can be retried
+	}
+
 	r.logger.Info().
 		Str("bucket", bucket).
 		Str("key", key).
 		Str("peer", peerID).
 		Int("chunks_replicated", len(chunksToReplicate)).
-		Msg("Completed chunk-level replication")
+		Msg("Completed chunk-level replication with metadata")
 
 	return nil
 }
@@ -1894,6 +1863,169 @@ func (r *Replicator) sendFetchChunkResponse(peerID string, payload FetchChunkRes
 	if err := r.transport.SendToCoordinator(ctx, peerID, data); err != nil {
 		return fmt.Errorf("send to coordinator: %w", err)
 	}
+
+	return nil
+}
+
+// ==== Object Metadata Replication ====
+
+// sendReplicateObjectMeta sends object metadata to a peer so it can serve reads.
+// This is fire-and-forget (no ACK needed) since metadata is idempotent.
+func (r *Replicator) sendReplicateObjectMeta(ctx context.Context, peerID, bucket, key string, metaJSON []byte) error {
+	payload := ReplicateObjectMetaPayload{
+		Bucket:      bucket,
+		Key:         key,
+		MetaJSON:    json.RawMessage(metaJSON),
+		BucketOwner: r.nodeID, // Preserve ownership: sender is the original bucket owner
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal object meta payload: %w", err)
+	}
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeReplicateObjectMeta,
+		ID:      uuid.New().String(),
+		From:    r.nodeID,
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal message: %w", err)
+	}
+
+	if err := r.transport.SendToCoordinator(ctx, peerID, data); err != nil {
+		return fmt.Errorf("send object meta to %s: %w", peerID, err)
+	}
+
+	r.logger.Debug().
+		Str("bucket", bucket).
+		Str("key", key).
+		Str("peer", peerID).
+		Msg("Sent object metadata to peer")
+
+	return nil
+}
+
+// handleReplicateObjectMeta processes an incoming object metadata replication message.
+func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
+	var payload ReplicateObjectMetaPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal object meta payload: %w", err)
+	}
+
+	r.logger.Debug().
+		Str("bucket", payload.Bucket).
+		Str("key", payload.Key).
+		Str("from", msg.From).
+		Msg("Received object metadata replication")
+
+	ctx, cancel := context.WithTimeout(r.ctx, r.applyTimeout)
+	defer cancel()
+
+	if err := r.s3.ImportObjectMeta(ctx, payload.Bucket, payload.Key, payload.MetaJSON, payload.BucketOwner); err != nil {
+		r.logger.Error().Err(err).
+			Str("bucket", payload.Bucket).
+			Str("key", payload.Key).
+			Msg("Failed to import object metadata")
+		r.incrementErrorCount()
+		return fmt.Errorf("import object meta: %w", err)
+	}
+
+	r.logger.Info().
+		Str("bucket", payload.Bucket).
+		Str("key", payload.Key).
+		Str("from", msg.From).
+		Msg("Successfully imported object metadata")
+
+	r.incrementReceivedCount()
+	return nil
+}
+
+// ==== Chunk Cleanup After Replication ====
+
+// CleanupNonAssignedChunks removes chunks that are not assigned to this coordinator
+// according to the striping policy. This should only be called after all peers have
+// successfully received their chunks via ReplicateObject.
+func (r *Replicator) CleanupNonAssignedChunks(ctx context.Context, bucket, key string) error {
+	if r.chunkRegistry == nil {
+		return fmt.Errorf("chunk registry not configured")
+	}
+
+	// Get object metadata
+	meta, err := r.s3.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return fmt.Errorf("get object metadata: %w", err)
+	}
+
+	if len(meta.Chunks) == 0 {
+		return nil
+	}
+
+	// Build striping policy from all coordinators
+	peers := r.GetPeers()
+	allCoords := make([]string, 0, len(peers)+1)
+	allCoords = append(allCoords, r.nodeID)
+	allCoords = append(allCoords, peers...)
+
+	if len(allCoords) <= 1 {
+		// No peers — keep everything
+		return nil
+	}
+
+	// Use bucket's replication factor for consistent assignment
+	replicationFactor := r.s3.GetBucketReplicationFactor(ctx, bucket)
+	if replicationFactor < 1 {
+		replicationFactor = 2 // Fallback if bucket RF is unknown
+	}
+
+	sp := NewStripingPolicy(allCoords)
+	assignedIndices := sp.ChunksForPeer(r.nodeID, len(meta.Chunks), replicationFactor)
+
+	// Build set of assigned indices
+	assignedSet := make(map[int]bool, len(assignedIndices))
+	for _, idx := range assignedIndices {
+		assignedSet[idx] = true
+	}
+
+	// Delete non-assigned chunks
+	var deleted, kept int
+	for idx, chunkHash := range meta.Chunks {
+		if assignedSet[idx] {
+			kept++
+			continue
+		}
+
+		// Delete from local CAS
+		if err := r.s3.DeleteChunk(ctx, chunkHash); err != nil {
+			r.logger.Warn().Err(err).
+				Str("chunk", truncateHashForLog(chunkHash)).
+				Int("index", idx).
+				Msg("Failed to delete non-assigned chunk")
+			continue
+		}
+
+		// Unregister from chunk registry
+		if err := r.chunkRegistry.UnregisterChunk(chunkHash); err != nil {
+			r.logger.Warn().Err(err).
+				Str("chunk", truncateHashForLog(chunkHash)).
+				Msg("Failed to unregister chunk from registry")
+		}
+
+		deleted++
+	}
+
+	r.logger.Info().
+		Str("bucket", bucket).
+		Str("key", key).
+		Int("deleted", deleted).
+		Int("kept", kept).
+		Int("total", len(meta.Chunks)).
+		Int("peers", len(peers)).
+		Msg("Cleaned up non-assigned chunks")
 
 	return nil
 }

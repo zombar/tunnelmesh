@@ -1996,6 +1996,101 @@ func (s *Store) WriteChunkDirect(ctx context.Context, hash string, data []byte) 
 	return nil
 }
 
+// ImportObjectMeta writes object metadata directly without processing chunks.
+// This is used by the replication receiver to create the metadata file so the
+// remote coordinator can serve reads for objects whose chunks arrive separately.
+// bucketOwner is used when auto-creating the bucket (empty string defaults to "system").
+func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) error {
+	// Validate names
+	if err := validateName(bucket); err != nil {
+		return fmt.Errorf("invalid bucket name: %w", err)
+	}
+	if err := validateName(key); err != nil {
+		return fmt.Errorf("invalid key: %w", err)
+	}
+
+	// Validate that metaJSON is valid ObjectMeta
+	var meta ObjectMeta
+	if err := json.Unmarshal(metaJSON, &meta); err != nil {
+		return fmt.Errorf("invalid object meta JSON: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Ensure bucket exists — create bucket meta if needed
+	bucketMeta, err := s.getBucketMeta(bucket)
+	if err != nil {
+		// Bucket doesn't exist — create minimal bucket meta
+		if bucketOwner == "" {
+			bucketOwner = "system"
+		}
+		bucketMeta = &BucketMeta{
+			Name:              bucket,
+			CreatedAt:         time.Now(),
+			Owner:             bucketOwner,
+			ReplicationFactor: 2, // Auto-created during replication → multi-coordinator setup
+		}
+		bucketDir := s.bucketPath(bucket)
+		if mkErr := os.MkdirAll(filepath.Join(bucketDir, "meta"), 0755); mkErr != nil {
+			return fmt.Errorf("create bucket directories: %w", mkErr)
+		}
+		bmData, marshalErr := json.Marshal(bucketMeta)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal bucket meta: %w", marshalErr)
+		}
+		if writeErr := syncedWriteFile(s.bucketMetaPath(bucket), bmData, 0644); writeErr != nil {
+			return fmt.Errorf("write bucket meta: %w", writeErr)
+		}
+	}
+
+	// Ensure meta directory exists
+	metaDir := filepath.Join(s.bucketPath(bucket), "meta")
+	if mkErr := os.MkdirAll(metaDir, 0755); mkErr != nil {
+		return fmt.Errorf("create meta directory: %w", mkErr)
+	}
+
+	// Write the object metadata file
+	metaPath := s.objectMetaPath(bucket, key)
+
+	// Ensure parent directory exists (for nested keys like "dir/file.txt")
+	if mkErr := os.MkdirAll(filepath.Dir(metaPath), 0755); mkErr != nil {
+		return fmt.Errorf("create meta parent directory: %w", mkErr)
+	}
+
+	// Check if object already exists (for idempotent retries)
+	// Subtract old size before adding new to prevent double-counting
+	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
+		bucketMeta.SizeBytes -= oldMeta.Size
+	}
+
+	if writeErr := syncedWriteFile(metaPath, metaJSON, 0644); writeErr != nil {
+		return fmt.Errorf("write object meta: %w", writeErr)
+	}
+
+	// Update bucket size tracking (idempotent: old size subtracted above)
+	bucketMeta.SizeBytes += meta.Size
+	bmData, marshalErr := json.Marshal(bucketMeta)
+	if marshalErr != nil {
+		return fmt.Errorf("marshal bucket meta: %w", marshalErr)
+	}
+	if writeErr := syncedWriteFile(s.bucketMetaPath(bucket), bmData, 0644); writeErr != nil {
+		return fmt.Errorf("update bucket meta: %w", writeErr)
+	}
+
+	return nil
+}
+
+// DeleteChunk removes a chunk from CAS by its hash.
+// This is used by the replicator to clean up non-assigned chunks after replication.
+func (s *Store) DeleteChunk(ctx context.Context, hash string) error {
+	if s.cas == nil {
+		return fmt.Errorf("CAS not initialized")
+	}
+
+	return s.cas.DeleteChunk(ctx, hash)
+}
+
 // ListObjects lists objects in a bucket with optional prefix filter and pagination.
 // marker is the key to start after (exclusive) for pagination.
 // Returns (objects, isTruncated, nextMarker, error).
