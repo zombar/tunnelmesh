@@ -1288,7 +1288,7 @@ func TestObjectPrimaryCoordinator(t *testing.T) {
 	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	// Simulate 3 coordinators: self=10.0.0.1, others=10.0.0.2, 10.0.0.3
-	srv.coordMeshIPs.Store([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"})
+	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"})
 
 	// Same bucket+key always maps to the same coordinator (deterministic)
 	first := srv.objectPrimaryCoordinator("bucket-a", "file.txt")
@@ -1318,11 +1318,11 @@ func TestObjectPrimaryCoordinator_SingleCoord(t *testing.T) {
 	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	// Single coordinator — no forwarding
-	srv.coordMeshIPs.Store([]string{"10.0.0.1"})
+	srv.storeCoordIPs([]string{"10.0.0.1"})
 	assert.Equal(t, "", srv.objectPrimaryCoordinator("bucket", "key"))
 
 	// Empty list — no forwarding
-	srv.coordMeshIPs.Store([]string{})
+	srv.storeCoordIPs([]string{})
 	assert.Equal(t, "", srv.objectPrimaryCoordinator("bucket", "key"))
 }
 
@@ -1334,7 +1334,7 @@ func TestObjectPrimaryCoordinator_Self(t *testing.T) {
 	t.Cleanup(func() { cleanupServer(t, srv) })
 
 	// With enough coordinators, self should be primary for some keys
-	srv.coordMeshIPs.Store([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"})
+	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"})
 
 	selfCount := 0
 	for i := 0; i < 100; i++ {
@@ -1353,7 +1353,7 @@ func TestForwardS3Write_LoopPrevention(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { cleanupServer(t, srv) })
 
-	srv.coordMeshIPs.Store([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"})
+	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"})
 
 	// Request with X-TunnelMesh-Forwarded header should not be forwarded
 	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/b/objects/k", nil)

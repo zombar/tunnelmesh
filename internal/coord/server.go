@@ -15,6 +15,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,29 +69,31 @@ type serverStats struct {
 // This separation ensures the admin interface (dashboards, monitoring, config) is never
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
-	cancel          context.CancelFunc // Cancel function for server lifecycle (stops background operations)
-	wg              sync.WaitGroup     // Tracks background goroutines for clean shutdown
-	cfg             *config.PeerConfig
-	mux             *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
-	adminMux        *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
-	adminServer     *http.Server   // HTTPS server for adminMux, bound to mesh IP only
-	peers           map[string]*peerInfo
-	coordinators    map[string]*peerInfo // Subset of peers that are coordinators, for O(1) lookups
-	peersMu         sync.RWMutex
-	ipAlloc         *ipAllocator
-	dnsCache        map[string]string // hostname -> mesh IP
-	aliasOwner      map[string]string // alias -> peer name (reverse lookup for ownership)
-	serverStats     serverStats
-	relay           *relayManager
-	holePunch       *holePunchManager
-	wgStore         *wireguard.Store      // WireGuard client storage
-	ca              *CertificateAuthority // Internal CA for mesh TLS certs
-	version         string                // Server version for admin display
-	sseHub          *sseHub               // SSE hub for real-time dashboard updates
-	ipGeoCache      *IPGeoCache           // IP geolocation cache for location fallback
-	coordMeshIPs    atomic.Value          // All coordinator mesh IPs ([]string) for "this.tunnelmesh" round-robin
-	coordMetrics    *CoordMetrics         // Prometheus metrics for coordinator
-	metricsRegistry prometheus.Registerer // Prometheus registry for metrics (shared with peer metrics)
+	cancel             context.CancelFunc // Cancel function for server lifecycle (stops background operations)
+	wg                 sync.WaitGroup     // Tracks background goroutines for clean shutdown
+	cfg                *config.PeerConfig
+	mux                *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
+	adminMux           *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
+	adminServer        *http.Server   // HTTPS server for adminMux, bound to mesh IP only
+	peers              map[string]*peerInfo
+	coordinators       map[string]*peerInfo // Subset of peers that are coordinators, for O(1) lookups
+	peersMu            sync.RWMutex
+	ipAlloc            *ipAllocator
+	dnsCache           map[string]string // hostname -> mesh IP
+	aliasOwner         map[string]string // alias -> peer name (reverse lookup for ownership)
+	serverStats        serverStats
+	relay              *relayManager
+	holePunch          *holePunchManager
+	wgStore            *wireguard.Store      // WireGuard client storage
+	ca                 *CertificateAuthority // Internal CA for mesh TLS certs
+	version            string                // Server version for admin display
+	sseHub             *sseHub               // SSE hub for real-time dashboard updates
+	ipGeoCache         *IPGeoCache           // IP geolocation cache for location fallback
+	coordMeshIPs       atomic.Value          // All coordinator mesh IPs ([]string) for "this.tunnelmesh" round-robin
+	sortedCoordIPs     atomic.Value          // Sorted copy of coordMeshIPs for deterministic hashing
+	s3ForwardTransport *http.Transport       // Shared transport for S3 write forwarding (reuses connections)
+	coordMetrics       *CoordMetrics         // Prometheus metrics for coordinator
+	metricsRegistry    prometheus.Registerer // Prometheus registry for metrics (shared with peer metrics)
 	// S3 storage
 	s3Store             *s3.Store            // S3 file-based storage
 	s3Server            *s3.Server           // S3 HTTP server
@@ -323,6 +326,14 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	if cfg.Coordinator.WireGuardServer.Enabled {
 		srv.wgStore = wireguard.NewStore(mesh.CIDR)
 		log.Info().Msg("WireGuard client management enabled")
+	}
+
+	// Shared transport for forwarding S3 writes to other coordinators (reuses connections)
+	srv.s3ForwardTransport = &http.Transport{
+		TLSClientConfig:    &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // mesh-internal traffic
+		MaxIdleConns:       100,
+		IdleConnTimeout:    90 * time.Second,
+		DisableCompression: true, // S3 objects are often already compressed
 	}
 
 	// Initialize S3 storage (always enabled, must be before IP allocator)
@@ -2036,6 +2047,21 @@ func (s *Server) GetCoordMeshIPs() []string {
 	return ips
 }
 
+// getSortedCoordIPs returns the cached sorted coordinator IP list for deterministic hashing.
+func (s *Server) getSortedCoordIPs() []string {
+	ips, _ := s.sortedCoordIPs.Load().([]string)
+	return ips
+}
+
+// storeCoordIPs stores both the original and sorted coordinator IP lists atomically.
+func (s *Server) storeCoordIPs(ips []string) {
+	s.coordMeshIPs.Store(ips)
+	sorted := make([]string, len(ips))
+	copy(sorted, ips)
+	sort.Strings(sorted)
+	s.sortedCoordIPs.Store(sorted)
+}
+
 // OnCoordIPsChanged registers a callback that fires whenever the coordinator IP list changes.
 // Used to keep the local DNS resolver in sync.
 func (s *Server) OnCoordIPsChanged(fn func([]string)) {
@@ -2055,7 +2081,7 @@ func (s *Server) SetCoordMeshIP(ip string) {
 		}
 	}
 	s.peersMu.RUnlock()
-	s.coordMeshIPs.Store(ips)
+	s.storeCoordIPs(ips)
 	log.Info().Strs("ips", ips).Msg("coordinator mesh IPs set for 'this.tunnelmesh' resolution")
 	if s.coordIPsCb != nil {
 		s.coordIPsCb(ips)
@@ -2081,7 +2107,7 @@ func (s *Server) broadcastCoordinatorList() {
 		ips = append(ips, ci.peer.MeshIP)
 	}
 	if len(ips) > 0 {
-		s.coordMeshIPs.Store(ips)
+		s.storeCoordIPs(ips)
 	}
 	s.peersMu.RUnlock()
 

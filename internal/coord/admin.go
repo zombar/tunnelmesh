@@ -2319,7 +2319,9 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 
 	// Attempt to recover missing bucket for share (no-op if bucket exists)
 	if s.fileShareMgr != nil {
-		_ = s.fileShareMgr.EnsureBucketForShare(r.Context(), bucket)
+		if err := s.fileShareMgr.EnsureBucketForShare(r.Context(), bucket); err != nil {
+			log.Warn().Err(err).Str("bucket", bucket).Msg("bucket recovery attempt failed")
+		}
 	}
 
 	// Stream body directly to PutObject — avoids buffering the entire object in memory.
@@ -2988,12 +2990,13 @@ func (s *Server) objectPrimaryCoordinator(bucket, key string) string {
 		return ""
 	}
 
-	selfIP := ips[0] // Self is always first
+	selfIP := ips[0] // Self is always first (invariant of GetCoordMeshIPs)
 
-	// Sort for deterministic assignment across all coordinators
-	sorted := make([]string, len(ips))
-	copy(sorted, ips)
-	sort.Strings(sorted)
+	// Use cached sorted list (updated when coordinator list changes)
+	sorted := s.getSortedCoordIPs()
+	if len(sorted) <= 1 {
+		return ""
+	}
 
 	// FNV-1a hash of bucket/key
 	h := fnv.New32a()
@@ -3016,9 +3019,7 @@ func (s *Server) forwardS3Write(w http.ResponseWriter, r *http.Request, targetIP
 			req.Host = targetIP
 			req.Header.Set("X-TunnelMesh-Forwarded", "true")
 		},
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // mesh-internal traffic
-		},
+		Transport: s.s3ForwardTransport,
 	}
 	proxy.ServeHTTP(w, r)
 }
