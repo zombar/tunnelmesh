@@ -1239,7 +1239,8 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
 
-	// Prune expired versions (lazy cleanup)
+	// Prune expired versions (lazy cleanup).
+	// Chunk GC for pruned versions is deferred to the periodic GC pass.
 	s.pruneExpiredVersions(ctx, bucket, key)
 
 	// Update bucket size
@@ -1473,7 +1474,8 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
 
-	// Prune expired versions (lazy cleanup)
+	// Prune expired versions (lazy cleanup).
+	// Chunk GC for pruned versions is deferred to the periodic GC pass.
 	s.pruneExpiredVersions(ctx, bucket, key)
 
 	// Update bucket size (new object adds to size, replacement adjusts delta)
@@ -1674,37 +1676,36 @@ func (s *Store) UntombstoneObject(ctx context.Context, bucket, key string) error
 
 // PurgeObject permanently removes an object and all its versions from a bucket.
 // This is used by the cleanup process for tombstoned objects past retention.
+// Uses a two-phase approach: collect metadata and remove files under lock,
+// then check and delete chunks outside the lock to avoid holding the mutex
+// during expensive global filesystem scans.
 func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
+	// Phase 1: Hold lock briefly to collect chunk info and remove metadata
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// Check bucket exists
 	if _, err := s.getBucketMeta(bucket); err != nil {
+		s.mu.Unlock()
 		return err
 	}
 
 	// Get current object metadata for quota release and chunk cleanup
 	meta, err := s.getObjectMeta(bucket, key)
 	if err != nil {
+		s.mu.Unlock()
 		return err
 	}
 
-	metaPath := s.objectMetaPath(bucket, key)
+	// Collect version chunks and remove version files
+	versionChunks := s.collectAndDeleteAllVersions(bucket, key)
 
-	// Delete all versions first (this also collects chunks for GC)
-	s.deleteAllVersions(ctx, bucket, key)
-
-	// Delete current version's chunks
-	if s.cas != nil && len(meta.Chunks) > 0 {
-		for _, hash := range meta.Chunks {
-			// Check if chunk is still referenced by other objects
-			if !s.isChunkReferenced(hash, bucket, key, meta.VersionID) {
-				_ = s.cas.DeleteChunk(ctx, hash)
-			}
-		}
-	}
+	// Preallocate for current + version chunks
+	chunksToCheck := make([]string, 0, len(meta.Chunks)+len(versionChunks))
+	chunksToCheck = append(chunksToCheck, meta.Chunks...)
+	chunksToCheck = append(chunksToCheck, versionChunks...)
 
 	// Remove current metadata
+	metaPath := s.objectMetaPath(bucket, key)
 	_ = os.Remove(metaPath)
 
 	// Release quota
@@ -1714,9 +1715,24 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 
 	// Decrement bucket size (object is actually being removed now)
 	if meta.Size > 0 {
-		if err := s.updateBucketSize(bucket, -meta.Size); err != nil {
-			// Log error but don't fail the purge operation
-			_ = err
+		_ = s.updateBucketSize(bucket, -meta.Size)
+	}
+
+	s.mu.Unlock()
+
+	// Phase 2: Delete unreferenced chunks WITHOUT holding the lock.
+	// This is best-effort: the object is already purged (metadata removed in Phase 1).
+	// If context is cancelled, orphaned chunks will be cleaned by the next GC cycle.
+	if s.cas != nil {
+		for _, hash := range chunksToCheck {
+			select {
+			case <-ctx.Done():
+				return nil // Object already purged; chunk cleanup deferred to GC
+			default:
+			}
+			if !s.isChunkReferencedGlobally(ctx, hash) {
+				_ = s.cas.DeleteChunk(ctx, hash)
+			}
 		}
 	}
 
@@ -2091,11 +2107,11 @@ func (s *Store) archiveCurrentVersion(bucket, key string) error {
 //
 // Returns the number of versions pruned.
 // nolint:gocyclo // Version pruning has complex retention logic
-func (s *Store) pruneExpiredVersions(ctx context.Context, bucket, key string) int {
+func (s *Store) pruneExpiredVersions(ctx context.Context, bucket, key string) (int, []string) {
 	versionDir := s.versionDir(bucket, key)
 	entries, err := os.ReadDir(versionDir)
 	if err != nil {
-		return 0
+		return 0, nil
 	}
 
 	// Load all versions with metadata
@@ -2130,7 +2146,7 @@ func (s *Store) pruneExpiredVersions(ctx context.Context, bucket, key string) in
 	}
 
 	if len(versions) == 0 {
-		return 0
+		return 0, nil
 	}
 
 	// Sort by modified time (newest first)
@@ -2219,8 +2235,10 @@ func (s *Store) pruneExpiredVersions(ctx context.Context, bucket, key string) in
 		}
 	}
 
-	// Delete versions not in keep set
+	// Delete versions not in keep set, collect chunks for deferred GC
 	prunedCount := 0
+	chunksToCheck := make([]string, 0, len(versions))
+	seen := make(map[string]struct{})
 	for i, v := range versions {
 		if keep[i] {
 			continue
@@ -2230,18 +2248,16 @@ func (s *Store) pruneExpiredVersions(ctx context.Context, bucket, key string) in
 		_ = os.Remove(v.path)
 		prunedCount++
 
-		// Garbage collect chunks if using CAS
-		if s.cas != nil && len(v.meta.Chunks) > 0 {
-			for _, hash := range v.meta.Chunks {
-				// Use global check to ensure chunk isn't used elsewhere
-				if !s.isChunkReferencedGlobally(ctx, hash) {
-					_ = s.cas.DeleteChunk(ctx, hash)
-				}
+		// Collect chunks for deferred GC (done outside the lock by caller)
+		for _, hash := range v.meta.Chunks {
+			if _, ok := seen[hash]; !ok {
+				seen[hash] = struct{}{}
+				chunksToCheck = append(chunksToCheck, hash)
 			}
 		}
 	}
 
-	return prunedCount
+	return prunedCount, chunksToCheck
 }
 
 // isChunkReferencedGlobally checks if a chunk is referenced by ANY object in ANY bucket.
@@ -2259,44 +2275,51 @@ func (s *Store) isChunkReferencedGlobally(ctx context.Context, hash string) bool
 		}
 		bucket := bucketEntry.Name()
 
-		// Check all current objects in this bucket
+		// Check all current objects in this bucket (walk to include subdirectories)
 		metaDir := filepath.Join(bucketsDir, bucket, "meta")
-		metaEntries, _ := os.ReadDir(metaDir)
-		for _, metaEntry := range metaEntries {
-			if metaEntry.IsDir() || filepath.Ext(metaEntry.Name()) != ".json" {
-				continue
-			}
-			metaPath := filepath.Join(metaDir, metaEntry.Name())
-			data, err := os.ReadFile(metaPath)
-			if err != nil {
-				return true // Assume referenced on read error to prevent data loss
-			}
-			var meta ObjectMeta
-			if err := json.Unmarshal(data, &meta); err != nil {
-				return true // Assume referenced on parse error to prevent data loss
-			}
-			for _, h := range meta.Chunks {
-				if h == hash {
-					return true
-				}
-			}
-		}
-
-		// Check all versions directory
-		versionsDir := filepath.Join(bucketsDir, bucket, "versions")
 		found := false
 		parseError := false
-		_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
+		_ = filepath.Walk(metaDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
 				return nil
 			}
-			data, err := os.ReadFile(path)
-			if err != nil {
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
 				parseError = true
 				return filepath.SkipAll
 			}
 			var meta ObjectMeta
-			if err := json.Unmarshal(data, &meta); err != nil {
+			if unmarshalErr := json.Unmarshal(data, &meta); unmarshalErr != nil {
+				parseError = true
+				return filepath.SkipAll
+			}
+			for _, h := range meta.Chunks {
+				if h == hash {
+					found = true
+					return filepath.SkipAll
+				}
+			}
+			return nil
+		})
+		if found || parseError {
+			return true
+		}
+
+		// Check all versions directory
+		versionsDir := filepath.Join(bucketsDir, bucket, "versions")
+		found = false
+		parseError = false
+		_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
+			}
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				parseError = true
+				return filepath.SkipAll
+			}
+			var meta ObjectMeta
+			if unmarshalErr := json.Unmarshal(data, &meta); unmarshalErr != nil {
 				parseError = true
 				return filepath.SkipAll
 			}
@@ -2310,58 +2333,6 @@ func (s *Store) isChunkReferencedGlobally(ctx context.Context, hash string) bool
 		})
 		if found || parseError {
 			return true // Found or error - assume referenced
-		}
-	}
-
-	return false
-}
-
-// isChunkReferenced checks if a chunk is referenced by any version other than the excluded one.
-// For single-object operations. Use isChunkReferencedGlobally for deletion safety.
-func (s *Store) isChunkReferenced(hash, bucket, key, excludeVersionID string) bool {
-	// Check current version
-	if meta, err := s.getObjectMeta(bucket, key); err == nil {
-		if meta.VersionID != excludeVersionID {
-			for _, h := range meta.Chunks {
-				if h == hash {
-					return true
-				}
-			}
-		}
-	}
-
-	// Check all versions of this object
-	versionDir := s.versionDir(bucket, key)
-	entries, err := os.ReadDir(versionDir)
-	if err != nil {
-		return false
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-
-		versionID := strings.TrimSuffix(entry.Name(), ".json")
-		if versionID == excludeVersionID {
-			continue
-		}
-
-		versionPath := filepath.Join(versionDir, entry.Name())
-		data, err := os.ReadFile(versionPath)
-		if err != nil {
-			continue
-		}
-
-		var meta ObjectMeta
-		if err := json.Unmarshal(data, &meta); err != nil {
-			continue
-		}
-
-		for _, h := range meta.Chunks {
-			if h == hash {
-				return true
-			}
 		}
 	}
 
@@ -2517,18 +2488,15 @@ func (s *Store) buildChunkReferenceSet() map[string]struct{} {
 		}
 		bucket := bucketEntry.Name()
 
-		// Scan current objects
+		// Scan current objects (walk to include subdirectories like meta/auth/, meta/dns/)
 		metaDir := filepath.Join(bucketsDir, bucket, "meta")
-		metaEntries, _ := os.ReadDir(metaDir)
-		for _, metaEntry := range metaEntries {
-			if metaEntry.IsDir() || filepath.Ext(metaEntry.Name()) != ".json" {
-				continue
+		_ = filepath.Walk(metaDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
 			}
-
-			metaPath := filepath.Join(metaDir, metaEntry.Name())
-			data, err := os.ReadFile(metaPath)
-			if err != nil {
-				continue
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return nil
 			}
 			var meta ObjectMeta
 			if json.Unmarshal(data, &meta) == nil {
@@ -2536,7 +2504,8 @@ func (s *Store) buildChunkReferenceSet() map[string]struct{} {
 					referencedChunks[h] = struct{}{}
 				}
 			}
-		}
+			return nil
+		})
 
 		// Scan versions
 		versionsDir := filepath.Join(bucketsDir, bucket, "versions")
@@ -2560,13 +2529,17 @@ func (s *Store) buildChunkReferenceSet() map[string]struct{} {
 
 // pruneAllExpiredVersionsSimple prunes expired versions across all buckets.
 // Takes brief write locks per object to minimize contention.
-// Uses the standard pruneExpiredVersions which handles chunk cleanup safely.
+// Chunk reference checks and deletions are done outside the lock to avoid
+// holding the mutex during expensive global filesystem scans.
 func (s *Store) pruneAllExpiredVersionsSimple(ctx context.Context, stats *GCStats) {
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
 	bucketEntries, err := os.ReadDir(bucketsDir)
 	if err != nil {
 		return
 	}
+
+	// Collect all chunks from pruned versions for deferred cleanup
+	var allChunksToCheck []string
 
 	for _, bucketEntry := range bucketEntries {
 		select {
@@ -2580,30 +2553,55 @@ func (s *Store) pruneAllExpiredVersionsSimple(ctx context.Context, stats *GCStat
 		bucket := bucketEntry.Name()
 		stats.BucketsProcessed++
 
-		// Find all objects in this bucket
+		// Find all objects in this bucket (walk to include subdirectories)
 		metaDir := filepath.Join(bucketsDir, bucket, "meta")
-		metaEntries, _ := os.ReadDir(metaDir)
+		var objectKeys []string
+		_ = filepath.Walk(metaDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
+			}
+			// Get key from path relative to metaDir (remove .json suffix)
+			relPath, err := filepath.Rel(metaDir, path)
+			if err != nil || len(relPath) <= 5 {
+				return nil
+			}
+			key := relPath[:len(relPath)-5] // Remove .json
+			objectKeys = append(objectKeys, key)
+			return nil
+		})
 
-		for _, metaEntry := range metaEntries {
+		for _, key := range objectKeys {
 			select {
 			case <-ctx.Done():
 				return
 			default:
 			}
-			if metaEntry.IsDir() || filepath.Ext(metaEntry.Name()) != ".json" {
-				continue
-			}
 			stats.ObjectsScanned++
-
-			// Extract key from filename
-			key := strings.TrimSuffix(metaEntry.Name(), ".json")
 
 			// Brief lock for this object's pruning
 			s.mu.Lock()
-			pruned := s.pruneExpiredVersions(ctx, bucket, key)
+			pruned, chunksToCheck := s.pruneExpiredVersions(ctx, bucket, key)
 			s.mu.Unlock()
 
 			stats.VersionsPruned += pruned
+			allChunksToCheck = append(allChunksToCheck, chunksToCheck...)
+		}
+	}
+
+	// Delete unreferenced chunks WITHOUT holding the lock.
+	// Build the reference set once (single scan) rather than calling
+	// isChunkReferencedGlobally per chunk (which would be O(chunks × buckets × objects)).
+	if s.cas != nil && len(allChunksToCheck) > 0 {
+		referencedChunks := s.buildChunkReferenceSet()
+		for _, hash := range allChunksToCheck {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			if _, ok := referencedChunks[hash]; !ok {
+				_ = s.cas.DeleteChunk(ctx, hash)
+			}
 		}
 	}
 }
@@ -2999,18 +2997,23 @@ func (s *Store) RestoreVersion(ctx context.Context, bucket, key, versionID strin
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
 
-	// Prune expired versions
+	// Prune expired versions.
+	// Chunk GC for pruned versions is deferred to the periodic GC pass.
 	s.pruneExpiredVersions(ctx, bucket, key)
 
 	return &newMeta, nil
 }
 
-// deleteAllVersions removes all versions of an object (used when deleting the object).
-func (s *Store) deleteAllVersions(ctx context.Context, bucket, key string) {
+// collectAndDeleteAllVersions removes all version files for an object and returns
+// the chunk hashes that were referenced by those versions. The caller is responsible
+// for checking global references and deleting unreferenced chunks.
+// Must be called with s.mu held.
+func (s *Store) collectAndDeleteAllVersions(bucket, key string) []string {
 	versionDir := s.versionDir(bucket, key)
 
-	// Collect all chunk hashes from versions for GC
-	chunksToCheck := make(map[string]struct{})
+	// Collect all chunk hashes from versions
+	var chunks []string
+	seen := make(map[string]struct{})
 	entries, err := os.ReadDir(versionDir)
 	if err == nil {
 		for _, entry := range entries {
@@ -3030,7 +3033,10 @@ func (s *Store) deleteAllVersions(ctx context.Context, bucket, key string) {
 			}
 
 			for _, h := range meta.Chunks {
-				chunksToCheck[h] = struct{}{}
+				if _, ok := seen[h]; !ok {
+					seen[h] = struct{}{}
+					chunks = append(chunks, h)
+				}
 			}
 		}
 	}
@@ -3038,15 +3044,7 @@ func (s *Store) deleteAllVersions(ctx context.Context, bucket, key string) {
 	// Remove version directory
 	_ = os.RemoveAll(versionDir)
 
-	// GC chunks that are no longer referenced GLOBALLY
-	// This checks ALL objects in ALL buckets to ensure chunk is truly orphaned
-	if s.cas != nil {
-		for hash := range chunksToCheck {
-			if !s.isChunkReferencedGlobally(ctx, hash) {
-				_ = s.cas.DeleteChunk(ctx, hash)
-			}
-		}
-	}
+	return chunks
 }
 
 // Close flushes any pending operations and syncs the data directory.
