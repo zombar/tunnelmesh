@@ -30,6 +30,7 @@ routing.
 - **Unified Architecture** - All nodes are peers; coordinators are peers with admin services enabled
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
 - **Internal Packet Filter** - Port-based firewall with per-peer rules, configurable via config, CLI, or admin UI
+- **S3 Compatible Storage** - Distributed and replicated across the mesh with erasure coding
 
 ### What Requires Admin Access?
 
