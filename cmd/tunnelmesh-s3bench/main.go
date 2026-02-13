@@ -296,19 +296,16 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		// Derive S3 credentials
 		log.Info().Str("access_key", creds.AccessKey).Msg("Derived S3 credentials")
 
-		// Construct admin mux URLs from all coordinator mesh IPs for round-robin distribution
-		adminURLs := []string{coordinatorURL} // fallback
+		// Construct admin mux URL from coordinator mesh IP
+		adminURL := coordinatorURL // fallback to coordinator URL
 		if len(meshInfo.CoordMeshIPs) > 0 {
-			adminURLs = make([]string, len(meshInfo.CoordMeshIPs))
-			for i, ip := range meshInfo.CoordMeshIPs {
-				adminURLs[i] = fmt.Sprintf("https://%s", ip)
-			}
+			adminURL = fmt.Sprintf("https://%s", meshInfo.CoordMeshIPs[0])
 		}
 
 		log.Info().
-			Strs("s3_endpoints", adminURLs).
+			Str("s3_endpoint", adminURL).
 			Msg("Creating shares on coordinator admin mux")
-		meshClient = mesh.NewCoordinatorClientMulti(adminURLs, creds, insecureTLS)
+		meshClient = mesh.NewCoordinatorClient(adminURL, creds, insecureTLS)
 
 		// Create shares for each department (coordinator auto-prefixes with peer name)
 		for _, dept := range st.Departments() {

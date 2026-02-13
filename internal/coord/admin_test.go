@@ -1279,3 +1279,115 @@ func TestForwardToMonitoringCoordinator_LoopDetection(t *testing.T) {
 	assert.Equal(t, http.StatusLoopDetected, rec.Code)
 	assert.Contains(t, rec.Body.String(), "loop detected")
 }
+
+func TestObjectPrimaryCoordinator(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupServer(t, srv) })
+
+	// Simulate 3 coordinators: self=10.0.0.1, others=10.0.0.2, 10.0.0.3
+	srv.coordMeshIPs.Store([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"})
+
+	// Same bucket+key always maps to the same coordinator (deterministic)
+	first := srv.objectPrimaryCoordinator("bucket-a", "file.txt")
+	for i := 0; i < 100; i++ {
+		assert.Equal(t, first, srv.objectPrimaryCoordinator("bucket-a", "file.txt"))
+	}
+
+	// Different keys should distribute across coordinators
+	// With 3 coordinators and many keys, we should hit at least 2 different targets
+	targets := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		target := srv.objectPrimaryCoordinator("bucket", "key-"+strings.Repeat("x", i))
+		if target != "" {
+			targets[target] = true
+		} else {
+			targets["10.0.0.1"] = true // "" means self
+		}
+	}
+	assert.GreaterOrEqual(t, len(targets), 2, "keys should distribute across coordinators")
+}
+
+func TestObjectPrimaryCoordinator_SingleCoord(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupServer(t, srv) })
+
+	// Single coordinator — no forwarding
+	srv.coordMeshIPs.Store([]string{"10.0.0.1"})
+	assert.Equal(t, "", srv.objectPrimaryCoordinator("bucket", "key"))
+
+	// Empty list — no forwarding
+	srv.coordMeshIPs.Store([]string{})
+	assert.Equal(t, "", srv.objectPrimaryCoordinator("bucket", "key"))
+}
+
+func TestObjectPrimaryCoordinator_Self(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupServer(t, srv) })
+
+	// With enough coordinators, self should be primary for some keys
+	srv.coordMeshIPs.Store([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"})
+
+	selfCount := 0
+	for i := 0; i < 100; i++ {
+		if srv.objectPrimaryCoordinator("b", strings.Repeat("k", i)) == "" {
+			selfCount++
+		}
+	}
+	assert.Greater(t, selfCount, 0, "self should be primary for some keys")
+	assert.Less(t, selfCount, 100, "self should not be primary for all keys")
+}
+
+func TestForwardS3Write_LoopPrevention(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupServer(t, srv) })
+
+	srv.coordMeshIPs.Store([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"})
+
+	// Request with X-TunnelMesh-Forwarded header should not be forwarded
+	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/b/objects/k", nil)
+	req.Header.Set("X-TunnelMesh-Forwarded", "true")
+	rec := httptest.NewRecorder()
+
+	forwarded := srv.ForwardS3Write(rec, req, "b", "k")
+	assert.False(t, forwarded, "forwarded requests should be handled locally")
+}
+
+func TestForwardS3Write_ProxyHeaders(t *testing.T) {
+	// Start a test server to receive the proxied request
+	var receivedReq *http.Request
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedReq = r
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	// Extract host:port from backend URL
+	backendAddr := strings.TrimPrefix(backend.URL, "https://")
+
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupServer(t, srv) })
+
+	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/b/objects/k", bytes.NewReader([]byte("hello")))
+	rec := httptest.NewRecorder()
+
+	srv.forwardS3Write(rec, req, backendAddr)
+
+	require.NotNil(t, receivedReq, "backend should have received the request")
+	assert.Equal(t, "true", receivedReq.Header.Get("X-TunnelMesh-Forwarded"))
+	assert.Equal(t, http.MethodPut, receivedReq.Method)
+}

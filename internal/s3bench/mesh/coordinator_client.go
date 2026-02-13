@@ -11,18 +11,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 )
 
 // CoordinatorClient provides HTTP access to the coordinator's S3 API.
-// When multiple base URLs are provided, requests are round-robined across them
-// to distribute writes (and their metadata/versions) evenly across coordinators.
 type CoordinatorClient struct {
-	baseURLs   []string // Base URLs for coordinators
-	counter    atomic.Uint64
+	baseURL    string // Base URL for coordinator (https://10.42.0.1:443)
 	accessKey  string
 	secretKey  string
 	httpClient *http.Client
@@ -31,17 +27,8 @@ type CoordinatorClient struct {
 // NewCoordinatorClient creates a new coordinator S3 API client.
 // baseURL should be the coordinator's URL (e.g., "http://localhost:8081").
 func NewCoordinatorClient(baseURL string, creds *Credentials, insecureSkipVerify bool) *CoordinatorClient {
-	return NewCoordinatorClientMulti([]string{baseURL}, creds, insecureSkipVerify)
-}
-
-// NewCoordinatorClientMulti creates a client that round-robins across multiple coordinator URLs.
-func NewCoordinatorClientMulti(baseURLs []string, creds *Credentials, insecureSkipVerify bool) *CoordinatorClient {
-	trimmed := make([]string, len(baseURLs))
-	for i, u := range baseURLs {
-		trimmed[i] = strings.TrimRight(u, "/")
-	}
 	return &CoordinatorClient{
-		baseURLs:  trimmed,
+		baseURL:   strings.TrimRight(baseURL, "/"),
 		accessKey: creds.AccessKey,
 		secretKey: creds.SecretKey,
 		httpClient: &http.Client{
@@ -55,15 +42,9 @@ func NewCoordinatorClientMulti(baseURLs []string, creds *Credentials, insecureSk
 	}
 }
 
-// nextBaseURL returns the next base URL in round-robin order.
-func (c *CoordinatorClient) nextBaseURL() string {
-	idx := c.counter.Add(1) - 1
-	return c.baseURLs[idx%uint64(len(c.baseURLs))]
-}
-
 // CreateBucket creates a new S3 bucket on the coordinator.
 func (c *CoordinatorClient) CreateBucket(ctx context.Context, bucketName, ownerID string, quotaMB int64) error {
-	requestURL := fmt.Sprintf("%s/api/s3/buckets", c.nextBaseURL())
+	requestURL := fmt.Sprintf("%s/api/s3/buckets", c.baseURL)
 
 	// Build request payload
 	payload := map[string]interface{}{
@@ -123,7 +104,7 @@ type ShareResponse struct {
 // The coordinator auto-prefixes the share name with the peer name.
 // Returns the actual share name (with prefix) so callers can compute the bucket name.
 func (c *CoordinatorClient) CreateShare(ctx context.Context, name, description string, quotaMB int64) (string, error) {
-	requestURL := fmt.Sprintf("%s/api/shares", c.nextBaseURL())
+	requestURL := fmt.Sprintf("%s/api/shares", c.baseURL)
 
 	payload := map[string]interface{}{
 		"name":        name,
@@ -171,7 +152,7 @@ func (c *CoordinatorClient) CreateShare(ctx context.Context, name, description s
 
 // BucketExists checks if a bucket exists on the coordinator.
 func (c *CoordinatorClient) BucketExists(ctx context.Context, bucketName string) (bool, error) {
-	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s", c.nextBaseURL(), url.PathEscape(bucketName))
+	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s", c.baseURL, url.PathEscape(bucketName))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, requestURL, nil)
 	if err != nil {
@@ -196,9 +177,8 @@ func (c *CoordinatorClient) BucketExists(ctx context.Context, bucketName string)
 }
 
 // PutObject uploads an object to the coordinator S3 API.
-// Uses round-robin to distribute writes across coordinators.
 func (c *CoordinatorClient) PutObject(ctx context.Context, bucket, key string, body []byte, contentType string, metadata map[string]string) error {
-	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s/objects/%s", c.nextBaseURL(), url.PathEscape(bucket), url.PathEscape(key))
+	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s/objects/%s", c.baseURL, url.PathEscape(bucket), url.PathEscape(key))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, requestURL, bytes.NewReader(body))
 	if err != nil {
@@ -232,9 +212,8 @@ func (c *CoordinatorClient) PutObject(ctx context.Context, bucket, key string, b
 }
 
 // DeleteObject deletes an object from the coordinator S3 API.
-// Uses round-robin to distribute across coordinators.
 func (c *CoordinatorClient) DeleteObject(ctx context.Context, bucket, key string) error {
-	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s/objects/%s", c.nextBaseURL(), url.PathEscape(bucket), url.PathEscape(key))
+	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s/objects/%s", c.baseURL, url.PathEscape(bucket), url.PathEscape(key))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, requestURL, nil)
 	if err != nil {
@@ -262,9 +241,8 @@ func (c *CoordinatorClient) DeleteObject(ctx context.Context, bucket, key string
 }
 
 // GetObject downloads an object from the coordinator S3 API.
-// Uses round-robin to distribute reads across coordinators.
 func (c *CoordinatorClient) GetObject(ctx context.Context, bucket, key string) ([]byte, error) {
-	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s/objects/%s", c.nextBaseURL(), url.PathEscape(bucket), url.PathEscape(key))
+	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s/objects/%s", c.baseURL, url.PathEscape(bucket), url.PathEscape(key))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
@@ -306,7 +284,7 @@ func (c *CoordinatorClient) setBasicAuth(req *http.Request) {
 
 // ListBuckets returns all buckets accessible to the authenticated user.
 func (c *CoordinatorClient) ListBuckets(ctx context.Context) ([]s3.BucketMeta, error) {
-	url := fmt.Sprintf("%s/api/s3/buckets", c.nextBaseURL())
+	url := fmt.Sprintf("%s/api/s3/buckets", c.baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

@@ -67,7 +67,7 @@ func TestCoordinatorClient_CreateBucket(t *testing.T) {
 			defer server.Close()
 
 			client := &CoordinatorClient{
-				baseURLs:   []string{server.URL},
+				baseURL:    server.URL,
 				httpClient: server.Client(),
 				accessKey:  "test-access",
 				secretKey:  "test-secret",
@@ -164,7 +164,7 @@ func TestCoordinatorClient_PutObject(t *testing.T) {
 			defer server.Close()
 
 			client := &CoordinatorClient{
-				baseURLs:   []string{server.URL},
+				baseURL:    server.URL,
 				httpClient: server.Client(),
 				accessKey:  "test-access",
 				secretKey:  "test-secret",
@@ -238,7 +238,7 @@ func TestCoordinatorClient_GetObject(t *testing.T) {
 			defer server.Close()
 
 			client := &CoordinatorClient{
-				baseURLs:   []string{server.URL},
+				baseURL:    server.URL,
 				httpClient: server.Client(),
 				accessKey:  "test-access",
 				secretKey:  "test-secret",
@@ -309,7 +309,7 @@ func TestCoordinatorClient_DeleteObject(t *testing.T) {
 			defer server.Close()
 
 			client := &CoordinatorClient{
-				baseURLs:   []string{server.URL},
+				baseURL:    server.URL,
 				httpClient: server.Client(),
 				accessKey:  "test-access",
 				secretKey:  "test-secret",
@@ -375,7 +375,7 @@ func TestCoordinatorClient_BucketExists(t *testing.T) {
 			defer server.Close()
 
 			client := &CoordinatorClient{
-				baseURLs:   []string{server.URL},
+				baseURL:    server.URL,
 				httpClient: server.Client(),
 				accessKey:  "test-access",
 				secretKey:  "test-secret",
@@ -416,7 +416,7 @@ func TestCoordinatorClient_URLEscaping(t *testing.T) {
 	defer server.Close()
 
 	client := &CoordinatorClient{
-		baseURLs:   []string{server.URL},
+		baseURL:    server.URL,
 		httpClient: server.Client(),
 		accessKey:  "test",
 		secretKey:  "test",
@@ -432,43 +432,5 @@ func TestCoordinatorClient_URLEscaping(t *testing.T) {
 	expectedPath := fmt.Sprintf("/api/s3/buckets/%s/objects/%s", bucket, "folder%2Ffile%20with%20spaces.txt")
 	if capturedRawPath != expectedPath {
 		t.Errorf("Expected URL path %q, got %q", expectedPath, capturedRawPath)
-	}
-}
-
-func TestCoordinatorClient_RoundRobin(t *testing.T) {
-	// Track which servers receive requests
-	hits := make([]int, 3)
-
-	servers := make([]*httptest.Server, 3)
-	for i := range servers {
-		idx := i
-		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			hits[idx]++
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer servers[i].Close()
-	}
-
-	urls := make([]string, 3)
-	for i, s := range servers {
-		urls[i] = s.URL
-	}
-
-	creds := &Credentials{AccessKey: "test", SecretKey: "test"}
-	client := NewCoordinatorClientMulti(urls, creds, true)
-	// Override httpClient to allow connections to test servers
-	client.httpClient = servers[0].Client()
-
-	ctx := context.Background()
-
-	// Send 9 PutObject requests — should distribute 3 to each server
-	for i := 0; i < 9; i++ {
-		_ = client.PutObject(ctx, "bucket", fmt.Sprintf("key-%d", i), []byte("data"), "text/plain", nil)
-	}
-
-	for i, h := range hits {
-		if h != 3 {
-			t.Errorf("Server %d received %d requests, expected 3", i, h)
-		}
 	}
 }

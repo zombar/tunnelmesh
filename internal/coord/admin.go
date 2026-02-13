@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"io/fs"
 	"net"
@@ -2300,6 +2301,14 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 		return
 	}
 
+	// Forward to primary coordinator if we're not the owner
+	if r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+		if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
+			s.forwardS3Write(w, r, target)
+			return
+		}
+	}
+
 	contentType := r.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/octet-stream"
@@ -2968,4 +2977,62 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		log.Warn().Err(err).Msg("failed to encode health response")
 	}
+}
+
+// objectPrimaryCoordinator returns the mesh IP of the coordinator that should own
+// the given bucket/key combination. Returns "" if this coordinator is the primary
+// or if there's only one coordinator (no forwarding needed).
+func (s *Server) objectPrimaryCoordinator(bucket, key string) string {
+	ips := s.GetCoordMeshIPs()
+	if len(ips) <= 1 {
+		return ""
+	}
+
+	selfIP := ips[0] // Self is always first
+
+	// Sort for deterministic assignment across all coordinators
+	sorted := make([]string, len(ips))
+	copy(sorted, ips)
+	sort.Strings(sorted)
+
+	// FNV-1a hash of bucket/key
+	h := fnv.New32a()
+	h.Write([]byte(bucket + "/" + key))
+	primaryIdx := int(h.Sum32()) % len(sorted)
+
+	primary := sorted[primaryIdx]
+	if primary == selfIP {
+		return ""
+	}
+	return primary
+}
+
+// forwardS3Write proxies an S3 write request to the target coordinator.
+func (s *Server) forwardS3Write(w http.ResponseWriter, r *http.Request, targetIP string) {
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = "https"
+			req.URL.Host = targetIP
+			req.Host = targetIP
+			req.Header.Set("X-TunnelMesh-Forwarded", "true")
+		},
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // mesh-internal traffic
+		},
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+// ForwardS3Write implements s3.WriteForwarder. It checks if the given bucket/key
+// should be handled by a different coordinator and forwards the request if so.
+func (s *Server) ForwardS3Write(w http.ResponseWriter, r *http.Request, bucket, key string) bool {
+	if r.Header.Get("X-TunnelMesh-Forwarded") != "" {
+		return false
+	}
+	target := s.objectPrimaryCoordinator(bucket, key)
+	if target == "" {
+		return false
+	}
+	s.forwardS3Write(w, r, target)
+	return true
 }

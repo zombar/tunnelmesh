@@ -76,12 +76,20 @@ func classifyS3StatusWithError(httpStatus int, err error) string {
 	return classifyS3Status(httpStatus)
 }
 
+// WriteForwarder can forward S3 write requests to the correct primary coordinator.
+type WriteForwarder interface {
+	// ForwardS3Write forwards the request if this coordinator is not the primary
+	// for the given bucket/key. Returns true if the request was forwarded.
+	ForwardS3Write(w http.ResponseWriter, r *http.Request, bucket, key string) (forwarded bool)
+}
+
 // Server provides an S3-compatible HTTP interface.
 type Server struct {
 	store      *Store
 	authorizer Authorizer
 	metrics    *S3Metrics
 	recoverer  BucketRecoverer
+	forwarder  WriteForwarder
 }
 
 // Authorizer is the interface for checking S3 permissions.
@@ -105,6 +113,11 @@ type BucketRecoverer interface {
 // SetBucketRecoverer sets the bucket recoverer for on-demand bucket recreation.
 func (s *Server) SetBucketRecoverer(r BucketRecoverer) {
 	s.recoverer = r
+}
+
+// SetWriteForwarder sets the write forwarder for distributing writes across coordinators.
+func (s *Server) SetWriteForwarder(f WriteForwarder) {
+	s.forwarder = f
 }
 
 // NewServer creates a new S3 server.
@@ -495,6 +508,13 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 	if err != nil {
 		s.handleAuthError(rec, err)
 		return
+	}
+
+	// Forward to primary coordinator if we're not the owner
+	if s.forwarder != nil {
+		if s.forwarder.ForwardS3Write(w, r, bucket, key) {
+			return
+		}
 	}
 
 	contentType := r.Header.Get("Content-Type")
