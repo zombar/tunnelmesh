@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -2018,6 +2019,9 @@ func TestSyncedWriteFileAtomic(t *testing.T) {
 }
 
 func TestSyncedWriteFileAtomic_ReadOnlyDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce read-only directory permissions via os.Chmod")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.json")
 

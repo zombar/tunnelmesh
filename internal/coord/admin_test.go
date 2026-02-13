@@ -1360,7 +1360,7 @@ func TestForwardS3Write_LoopPrevention(t *testing.T) {
 	req.Header.Set("X-TunnelMesh-Forwarded", "true")
 	rec := httptest.NewRecorder()
 
-	forwarded := srv.ForwardS3Write(rec, req, "b", "k")
+	forwarded := srv.ForwardS3Write(rec, req, "b", "k", "")
 	assert.False(t, forwarded, "forwarded requests should be handled locally")
 }
 

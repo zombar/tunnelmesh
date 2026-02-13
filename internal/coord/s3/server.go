@@ -79,8 +79,10 @@ func classifyS3StatusWithError(httpStatus int, err error) string {
 // WriteForwarder can forward S3 write requests to the correct primary coordinator.
 type WriteForwarder interface {
 	// ForwardS3Write forwards the request if this coordinator is not the primary
-	// for the given bucket/key. Returns true if the request was forwarded.
-	ForwardS3Write(w http.ResponseWriter, r *http.Request, bucket, key string) (forwarded bool)
+	// for the given bucket/key. The port parameter specifies the target port on the
+	// remote coordinator (e.g. "9000" for S3 API, "" for default HTTPS 443).
+	// Returns true if the request was forwarded.
+	ForwardS3Write(w http.ResponseWriter, r *http.Request, bucket, key, port string) (forwarded bool)
 }
 
 // Server provides an S3-compatible HTTP interface.
@@ -510,9 +512,9 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 		return
 	}
 
-	// Forward to primary coordinator if we're not the owner
+	// Forward to primary coordinator if we're not the owner (S3 API on port 9000)
 	if s.forwarder != nil {
-		if s.forwarder.ForwardS3Write(w, r, bucket, key) {
+		if s.forwarder.ForwardS3Write(w, r, bucket, key, "9000") {
 			return
 		}
 	}

@@ -2998,9 +2998,12 @@ func (s *Server) objectPrimaryCoordinator(bucket, key string) string {
 		return ""
 	}
 
-	// FNV-1a hash of bucket/key
+	// FNV-1a hash of bucket+key (null separator prevents ambiguity between
+	// bucket="a", key="b/c" and bucket="a/b", key="c")
 	h := fnv.New32a()
-	h.Write([]byte(bucket + "/" + key))
+	h.Write([]byte(bucket))
+	h.Write([]byte{0})
+	h.Write([]byte(key))
 	primaryIdx := int(h.Sum32()) % len(sorted)
 
 	primary := sorted[primaryIdx]
@@ -3026,13 +3029,17 @@ func (s *Server) forwardS3Write(w http.ResponseWriter, r *http.Request, targetIP
 
 // ForwardS3Write implements s3.WriteForwarder. It checks if the given bucket/key
 // should be handled by a different coordinator and forwards the request if so.
-func (s *Server) ForwardS3Write(w http.ResponseWriter, r *http.Request, bucket, key string) bool {
+// The port parameter specifies the target port (e.g. "9000" for S3 API, "" for default 443).
+func (s *Server) ForwardS3Write(w http.ResponseWriter, r *http.Request, bucket, key, port string) bool {
 	if r.Header.Get("X-TunnelMesh-Forwarded") != "" {
 		return false
 	}
 	target := s.objectPrimaryCoordinator(bucket, key)
 	if target == "" {
 		return false
+	}
+	if port != "" {
+		target = net.JoinHostPort(target, port)
 	}
 	s.forwardS3Write(w, r, target)
 	return true
