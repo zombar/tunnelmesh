@@ -2029,7 +2029,7 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 			Name:              bucket,
 			CreatedAt:         time.Now(),
 			Owner:             bucketOwner,
-			ReplicationFactor: 1,
+			ReplicationFactor: 2, // Auto-created during replication → multi-coordinator setup
 		}
 		bucketDir := s.bucketPath(bucket)
 		if mkErr := os.MkdirAll(filepath.Join(bucketDir, "meta"), 0755); mkErr != nil {
@@ -2058,11 +2058,17 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 		return fmt.Errorf("create meta parent directory: %w", mkErr)
 	}
 
+	// Check if object already exists (for idempotent retries)
+	// Subtract old size before adding new to prevent double-counting
+	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
+		bucketMeta.SizeBytes -= oldMeta.Size
+	}
+
 	if writeErr := syncedWriteFile(metaPath, metaJSON, 0644); writeErr != nil {
 		return fmt.Errorf("write object meta: %w", writeErr)
 	}
 
-	// Update bucket size tracking
+	// Update bucket size tracking (idempotent: old size subtracted above)
 	bucketMeta.SizeBytes += meta.Size
 	bmData, marshalErr := json.Marshal(bucketMeta)
 	if marshalErr != nil {

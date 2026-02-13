@@ -2339,31 +2339,47 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 				return
 			}
 
-			// Replicate to all peers in parallel with bounded concurrency
+			// Replicate to all peers in parallel with bounded concurrency.
+			// Semaphore acquisition and result collection both respect context
+			// cancellation to prevent goroutine leaks on timeout.
 			type result struct {
 				peerID string
 				err    error
 			}
 			results := make(chan result, len(peers))
-			sem := make(chan struct{}, 3) // Limit to 3 concurrent peer replications
+			sem := make(chan struct{}, 3)
 
 			for _, peerID := range peers {
 				go func(pid string) {
-					sem <- struct{}{}
-					defer func() { <-sem }()
+					// Acquire semaphore, bail out if context expires while waiting
+					select {
+					case sem <- struct{}{}:
+						defer func() { <-sem }()
+					case <-ctx.Done():
+						results <- result{pid, ctx.Err()}
+						return
+					}
 					results <- result{pid, s.replicator.ReplicateObject(ctx, bucket, key, pid)}
 				}(peerID)
 			}
 
 			allSucceeded := true
 			for range peers {
-				res := <-results
-				if res.err != nil {
-					log.Error().Err(res.err).
-						Str("peer", res.peerID).
+				select {
+				case res := <-results:
+					if res.err != nil {
+						log.Error().Err(res.err).
+							Str("peer", res.peerID).
+							Str("bucket", bucket).
+							Str("key", key).
+							Msg("Failed to replicate S3 PUT operation")
+						allSucceeded = false
+					}
+				case <-ctx.Done():
+					log.Warn().
 						Str("bucket", bucket).
 						Str("key", key).
-						Msg("Failed to replicate S3 PUT operation")
+						Msg("Replication timed out, skipping cleanup")
 					allSucceeded = false
 				}
 			}
