@@ -297,11 +297,12 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		// Derive S3 credentials
 		log.Info().Str("access_key", creds.AccessKey).Msg("Derived S3 credentials")
 
-		// Create mesh client targeting coordinator's mesh IP
+		// Create mesh client targeting coordinator URL directly
+		// (s3bench has no TUN device, so mesh IPs are not routable)
 		log.Info().
-			Str("s3_endpoint", fmt.Sprintf("https://%s:443", meshInfo.CoordMeshIP)).
-			Msg("Creating shares on coordinator mesh IP")
-		meshClient = mesh.NewCoordinatorClient(meshInfo.CoordMeshIP, creds, insecureTLS)
+			Str("s3_endpoint", coordinatorURL).
+			Msg("Creating shares on coordinator")
+		meshClient = mesh.NewCoordinatorClient(coordinatorURL, creds, insecureTLS)
 
 		// Create shares for each department (coordinator auto-prefixes with peer name)
 		for _, dept := range st.Departments() {
