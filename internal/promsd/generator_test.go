@@ -205,6 +205,7 @@ func TestGenerator_Generate(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.OutputFile = outputFile
+	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 
@@ -232,8 +233,10 @@ func TestGenerator_Generate(t *testing.T) {
 }
 
 func TestGenerator_Generate_FetchError(t *testing.T) {
+	tmpDir := t.TempDir()
 	cfg := DefaultConfig()
-	cfg.OutputFile = filepath.Join(t.TempDir(), "targets.json")
+	cfg.OutputFile = filepath.Join(tmpDir, "targets.json")
+	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 	g.SetFetcher(&mockFetcher{
@@ -260,6 +263,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.OnlineThreshold != 2*time.Minute {
 		t.Errorf("unexpected default OnlineThreshold: %v", cfg.OnlineThreshold)
+	}
+	if cfg.CoordOutputFile != "/targets/coordinators.json" {
+		t.Errorf("unexpected default CoordOutputFile: %s", cfg.CoordOutputFile)
 	}
 }
 
@@ -324,6 +330,7 @@ func TestGenerator_Generate_WriteError(t *testing.T) {
 	cfg := DefaultConfig()
 	// Invalid path that can't be written to
 	cfg.OutputFile = "/nonexistent/dir/targets.json"
+	cfg.CoordOutputFile = "" // disable to isolate peer write error
 
 	g := NewGenerator(cfg)
 	g.SetFetcher(&mockFetcher{
@@ -356,9 +363,11 @@ func TestHTTPFetcher_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
+	tmpDir := t.TempDir()
 	cfg := DefaultConfig()
 	cfg.CoordURL = server.URL
-	cfg.OutputFile = filepath.Join(t.TempDir(), "targets.json")
+	cfg.OutputFile = filepath.Join(tmpDir, "targets.json")
+	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 	count, err := g.Generate()
@@ -379,10 +388,12 @@ func TestHTTPFetcher_WithAuthToken(t *testing.T) {
 	}))
 	defer server.Close()
 
+	tmpDir := t.TempDir()
 	cfg := DefaultConfig()
 	cfg.CoordURL = server.URL
 	cfg.AuthToken = "test-token-123"
-	cfg.OutputFile = filepath.Join(t.TempDir(), "targets.json")
+	cfg.OutputFile = filepath.Join(tmpDir, "targets.json")
+	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 	_, err := g.Generate()
@@ -402,9 +413,11 @@ func TestHTTPFetcher_APIError(t *testing.T) {
 	}))
 	defer server.Close()
 
+	tmpDir := t.TempDir()
 	cfg := DefaultConfig()
 	cfg.CoordURL = server.URL
-	cfg.OutputFile = filepath.Join(t.TempDir(), "targets.json")
+	cfg.OutputFile = filepath.Join(tmpDir, "targets.json")
+	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 	_, err := g.Generate()
@@ -420,9 +433,11 @@ func TestHTTPFetcher_InvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
+	tmpDir := t.TempDir()
 	cfg := DefaultConfig()
 	cfg.CoordURL = server.URL
-	cfg.OutputFile = filepath.Join(t.TempDir(), "targets.json")
+	cfg.OutputFile = filepath.Join(tmpDir, "targets.json")
+	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 	_, err := g.Generate()
@@ -432,13 +447,127 @@ func TestHTTPFetcher_InvalidJSON(t *testing.T) {
 }
 
 func TestHTTPFetcher_ConnectionError(t *testing.T) {
+	tmpDir := t.TempDir()
 	cfg := DefaultConfig()
 	cfg.CoordURL = "http://localhost:99999" // invalid port
-	cfg.OutputFile = filepath.Join(t.TempDir(), "targets.json")
+	cfg.OutputFile = filepath.Join(tmpDir, "targets.json")
+	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 	_, err := g.Generate()
 	if err == nil {
 		t.Error("expected error from connection failure, got nil")
+	}
+}
+
+func TestCoordinatorsToTargets(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name     string
+		peers    []Peer
+		expected int
+	}{
+		{
+			name:     "no peers",
+			peers:    []Peer{},
+			expected: 0,
+		},
+		{
+			name: "no coordinators",
+			peers: []Peer{
+				{Name: "peer1", MeshIP: "10.42.0.1", LastSeen: now},
+			},
+			expected: 0,
+		},
+		{
+			name: "one coordinator",
+			peers: []Peer{
+				{Name: "coord-1", MeshIP: "10.42.0.1", LastSeen: now, IsCoordinator: true},
+				{Name: "peer1", MeshIP: "10.42.0.2", LastSeen: now},
+			},
+			expected: 1,
+		},
+		{
+			name: "offline coordinator still included",
+			peers: []Peer{
+				{Name: "coord-1", MeshIP: "10.42.0.1", LastSeen: now.Add(-5 * time.Minute), IsCoordinator: true},
+			},
+			expected: 1,
+		},
+		{
+			name: "coordinator without mesh IP filtered",
+			peers: []Peer{
+				{Name: "coord-1", MeshIP: "", LastSeen: now, IsCoordinator: true},
+			},
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			targets := CoordinatorsToTargets(tt.peers)
+			if len(targets) != tt.expected {
+				t.Errorf("expected %d targets, got %d", tt.expected, len(targets))
+			}
+		})
+	}
+}
+
+func TestCoordinatorsToTargets_TargetFormat(t *testing.T) {
+	peers := []Peer{
+		{Name: "coord-1", MeshIP: "10.42.0.42", IsCoordinator: true},
+	}
+
+	targets := CoordinatorsToTargets(peers)
+
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(targets))
+	}
+
+	if targets[0].Targets[0] != "10.42.0.42:443" {
+		t.Errorf("expected target '10.42.0.42:443', got '%s'", targets[0].Targets[0])
+	}
+	if targets[0].Labels["peer"] != "coord-1" {
+		t.Errorf("expected peer label 'coord-1', got '%s'", targets[0].Labels["peer"])
+	}
+}
+
+func TestGenerator_Generate_WithCoordinators(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := DefaultConfig()
+	cfg.OutputFile = filepath.Join(tmpDir, "peers.json")
+	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
+
+	g := NewGenerator(cfg)
+
+	now := time.Now()
+	g.SetFetcher(&mockFetcher{
+		peers: []Peer{
+			{Name: "coord-1", MeshIP: "10.42.0.1", LastSeen: now, IsCoordinator: true},
+			{Name: "peer1", MeshIP: "10.42.0.2", LastSeen: now},
+		},
+	})
+
+	count, err := g.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 peer targets, got %d", count)
+	}
+
+	// Verify coordinator file was written with 1 target
+	data, err := os.ReadFile(filepath.Join(tmpDir, "coordinators.json"))
+	if err != nil {
+		t.Fatalf("failed to read coordinator targets: %v", err)
+	}
+	var coordTargets []Target
+	if err := json.Unmarshal(data, &coordTargets); err != nil {
+		t.Fatalf("failed to parse coordinator targets: %v", err)
+	}
+	if len(coordTargets) != 1 {
+		t.Errorf("expected 1 coordinator target, got %d", len(coordTargets))
 	}
 }

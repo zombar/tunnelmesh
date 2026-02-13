@@ -103,6 +103,28 @@ func PeersToTargets(peers []Peer, metricsPort string, onlineThreshold time.Durat
 	return targets
 }
 
+// CoordinatorsToTargets converts coordinator peers to Prometheus targets on port 443.
+// Unlike PeersToTargets, this does NOT filter by online status - coordinators are always
+// included so that Prometheus can detect failures via up==0 and absent() alerts.
+func CoordinatorsToTargets(peers []Peer) []Target {
+	var targets []Target
+	for _, peer := range peers {
+		if !peer.IsCoordinator {
+			continue
+		}
+		if peer.MeshIP == "" {
+			continue
+		}
+		targets = append(targets, Target{
+			Targets: []string{fmt.Sprintf("%s:443", peer.MeshIP)},
+			Labels: map[string]string{
+				"peer": peer.Name,
+			},
+		})
+	}
+	return targets
+}
+
 // WriteTargets writes targets to a file atomically.
 func WriteTargets(targets []Target, outputFile string) error {
 	data, err := json.MarshalIndent(targets, "", "  ")
@@ -125,17 +147,26 @@ func WriteTargets(targets []Target, outputFile string) error {
 	return nil
 }
 
-// Generate fetches peers and writes the targets file.
+// Generate fetches peers and writes both peer and coordinator targets files.
 func (g *Generator) Generate() (int, error) {
 	peers, err := g.fetcher.FetchPeers()
 	if err != nil {
 		return 0, err
 	}
 
-	targets := PeersToTargets(peers, g.config.MetricsPort, g.config.OnlineThreshold, time.Now())
+	now := time.Now()
+	targets := PeersToTargets(peers, g.config.MetricsPort, g.config.OnlineThreshold, now)
 
 	if err := WriteTargets(targets, g.config.OutputFile); err != nil {
 		return 0, err
+	}
+
+	// Write coordinator targets (port 443) if output file is configured
+	if g.config.CoordOutputFile != "" {
+		coordTargets := CoordinatorsToTargets(peers)
+		if err := WriteTargets(coordTargets, g.config.CoordOutputFile); err != nil {
+			return 0, fmt.Errorf("write coordinator targets: %w", err)
+		}
 	}
 
 	return len(targets), nil

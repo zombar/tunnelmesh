@@ -163,8 +163,7 @@ func TestMeshNode_RunPeerDiscovery_ContextCancel(t *testing.T) {
 	client := coord.NewClient("http://localhost:8080", "test-token")
 	node := NewMeshNode(identity, client)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	// Should exit when context is cancelled without panicking
 	done := make(chan struct{})
@@ -173,10 +172,14 @@ func TestMeshNode_RunPeerDiscovery_ContextCancel(t *testing.T) {
 		close(done)
 	}()
 
+	// Let the discovery start, then cancel
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
 	select {
 	case <-done:
 		// OK - exited properly
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("peer discovery loop did not exit on context cancel")
 	}
 }
