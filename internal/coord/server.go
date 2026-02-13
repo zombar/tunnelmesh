@@ -108,6 +108,8 @@ type Server struct {
 	dockerMgr *docker.Manager // Docker manager (nil if Docker not enabled)
 	// Peer name cache for owner display (cached to avoid LoadPeers() on every request)
 	peerNameCache atomic.Pointer[map[string]string] // Peer ID -> name mapping
+	// Callback for coordinator list changes (updates local DNS resolver)
+	coordIPsCb func([]string)
 	// Replication for multi-coordinator setup
 	replicator    *replication.Replicator    // S3 replication engine (nil if not enabled)
 	meshTransport *replication.MeshTransport // Transport for replication messages
@@ -1653,7 +1655,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		go s.lookupPeerLocation(req.Name, geoLookupIP)
 	}
 
-	// Get coordinator mesh IPs safely (uses atomic.Value)
+	// Get coordinator mesh IPs safely (uses atomic.Value).
+	// May be empty during coordinator self-registration at startup — the coordinator's
+	// DNS resolver reads directly from the server's atomic via GetCoordMeshIPs() instead.
 	coordIPs, _ := s.coordMeshIPs.Load().([]string)
 
 	// If registering peer is a coordinator, include list of all known coordinators
@@ -2015,6 +2019,18 @@ func (s *Server) ListenAndServe() error {
 	return http.ListenAndServe(s.cfg.Coordinator.Listen, s)
 }
 
+// GetCoordMeshIPs returns the current list of coordinator mesh IPs.
+func (s *Server) GetCoordMeshIPs() []string {
+	ips, _ := s.coordMeshIPs.Load().([]string)
+	return ips
+}
+
+// OnCoordIPsChanged registers a callback that fires whenever the coordinator IP list changes.
+// Used to keep the local DNS resolver in sync.
+func (s *Server) OnCoordIPsChanged(fn func([]string)) {
+	s.coordIPsCb = fn
+}
+
 // SetCoordMeshIP sets the coordinator's own mesh IP for "this.tunnelmesh" resolution.
 // This is called after join_mesh completes so other peers can resolve "this" to the coordinator.
 // The full list of coordinator IPs is built dynamically from registered coordinators.
@@ -2030,6 +2046,9 @@ func (s *Server) SetCoordMeshIP(ip string) {
 	s.peersMu.RUnlock()
 	s.coordMeshIPs.Store(ips)
 	log.Info().Strs("ips", ips).Msg("coordinator mesh IPs set for 'this.tunnelmesh' resolution")
+	if s.coordIPsCb != nil {
+		s.coordIPsCb(ips)
+	}
 }
 
 // broadcastCoordinatorList sends the updated coordinator IP list to all connected peers.
@@ -2057,6 +2076,11 @@ func (s *Server) broadcastCoordinatorList() {
 
 	// Update our own stored list
 	s.coordMeshIPs.Store(ips)
+
+	// Update local DNS resolver
+	if s.coordIPsCb != nil {
+		s.coordIPsCb(ips)
+	}
 
 	// Broadcast to all connected peers via relay
 	if s.relay != nil {

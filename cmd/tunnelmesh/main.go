@@ -1632,8 +1632,18 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	var dnsConfigured bool
 	// DNS is always enabled for all peers
 	resolver := meshdns.NewResolver(resp.Domain, cfg.DNS.CacheTTL)
-	// Set coordinator mesh IPs for "this.tunnelmesh" round-robin resolution
-	if len(resp.CoordMeshIPs) > 0 {
+	// Set coordinator mesh IPs for "this.tunnelmesh" round-robin resolution.
+	// For coordinators, read the current list from the server (the registration response
+	// may be stale — it was captured before SetCoordMeshIP populated the atomic).
+	if srv != nil {
+		if coordIPs := srv.GetCoordMeshIPs(); len(coordIPs) > 0 {
+			resolver.SetCoordMeshIPs(coordIPs)
+		}
+		// Keep local resolver in sync when coordinators join/leave
+		srv.OnCoordIPsChanged(func(ips []string) {
+			resolver.SetCoordMeshIPs(ips)
+		})
+	} else if len(resp.CoordMeshIPs) > 0 {
 		resolver.SetCoordMeshIPs(resp.CoordMeshIPs)
 	}
 	node.Resolver = resolver

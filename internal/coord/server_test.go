@@ -1451,3 +1451,23 @@ func TestServer_SaveFilterRulesFiltersExpired(t *testing.T) {
 	assert.Len(t, loaded.Temporary, 1, "expired rule should not be saved")
 	assert.Equal(t, uint16(80), loaded.Temporary[0].Port)
 }
+
+func TestCoordMeshIPs_CallbackAndGetter(t *testing.T) {
+	cfg := newTestConfig(t)
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+
+	// Initially empty
+	assert.Empty(t, srv.GetCoordMeshIPs())
+
+	// Set callback
+	var received []string
+	srv.OnCoordIPsChanged(func(ips []string) {
+		received = ips
+	})
+
+	// SetCoordMeshIP triggers callback
+	srv.SetCoordMeshIP("10.42.0.1")
+	assert.Equal(t, []string{"10.42.0.1"}, srv.GetCoordMeshIPs())
+	assert.Equal(t, []string{"10.42.0.1"}, received)
+}
