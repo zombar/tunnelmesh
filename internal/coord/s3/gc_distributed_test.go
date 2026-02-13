@@ -312,3 +312,114 @@ func (f *failingChunkRegistry) GetOwners(hash string) ([]string, error) {
 func (f *failingChunkRegistry) GetChunksOwnedBy(coordinatorID string) ([]string, error) {
 	return nil, assert.AnError
 }
+
+// TestGC_ErasureCodingParityShards tests that GC cleans up both data chunks and parity shards.
+func TestGC_ErasureCodingParityShards(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create store with CAS
+	store, err := NewStore(dir, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	var encryptionKey [32]byte
+	err = store.InitCAS(ctx, encryptionKey)
+	require.NoError(t, err)
+
+	// Manually create orphaned chunks simulating erasure-coded data
+	// Data chunks (simulating CDC-chunked data shards)
+	dataChunk1 := []byte("Data shard 1 chunk 1")
+	dataHash1, err := store.cas.WriteChunk(ctx, dataChunk1)
+	require.NoError(t, err)
+
+	dataChunk2 := []byte("Data shard 2 chunk 1")
+	dataHash2, err := store.cas.WriteChunk(ctx, dataChunk2)
+	require.NoError(t, err)
+
+	// Parity shards (stored whole)
+	parityShard1 := []byte("Parity shard 1 data")
+	parityHash1, err := store.cas.WriteChunk(ctx, parityShard1)
+	require.NoError(t, err)
+
+	parityShard2 := []byte("Parity shard 2 data")
+	parityHash2, err := store.cas.WriteChunk(ctx, parityShard2)
+	require.NoError(t, err)
+
+	// Age all chunks (set mod time to 2 hours ago to pass grace period)
+	twoHoursAgo := time.Now().Add(-2 * time.Hour)
+	for _, chunkHash := range []string{dataHash1, dataHash2, parityHash1, parityHash2} {
+		chunkPath := filepath.Join(store.dataDir, "chunks", chunkHash[:2], chunkHash)
+		err = os.Chtimes(chunkPath, twoHoursAgo, twoHoursAgo)
+		require.NoError(t, err)
+	}
+
+	// Run GC (should delete all orphaned chunks including parity shards)
+	stats := store.RunGarbageCollection(ctx)
+
+	// Verify all chunks (data + parity) were deleted
+	assert.Equal(t, 4, stats.ChunksDeleted, "should delete all orphaned data chunks and parity shards")
+
+	// Verify chunks no longer exist in CAS
+	for _, chunkHash := range []string{dataHash1, dataHash2, parityHash1, parityHash2} {
+		_, err := store.cas.ReadChunk(ctx, chunkHash)
+		assert.Error(t, err, "chunk %s should be deleted", chunkHash[:8])
+	}
+}
+
+// TestGC_ErasureCodingKeepsReferencedShards tests that GC doesn't delete parity shards for live objects.
+func TestGC_ErasureCodingKeepsReferencedShards(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create store with erasure coding enabled
+	store, err := NewStore(dir, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	var encryptionKey [32]byte
+	err = store.InitCAS(ctx, encryptionKey)
+	require.NoError(t, err)
+
+	// Create bucket with erasure coding policy
+	err = store.CreateBucket(ctx, "test-bucket", "test-user", 2, &ErasureCodingPolicy{
+		Enabled:      true,
+		DataShards:   6,
+		ParityShards: 3,
+	})
+	require.NoError(t, err)
+
+	// Upload a file (will be erasure coded)
+	testData := []byte("Test data for erasure coding GC protection. This file should not be deleted by GC.")
+	meta, err := store.PutObject(ctx, "test-bucket", "protected-file.txt", bytes.NewReader(testData), int64(len(testData)), "text/plain", nil)
+	require.NoError(t, err)
+	require.NotNil(t, meta.ErasureCoding)
+	require.True(t, meta.ErasureCoding.Enabled)
+
+	// Verify we have both data chunk hashes and parity shard hashes
+	require.NotEmpty(t, meta.ErasureCoding.DataHashes, "should have data chunk hashes")
+	require.NotEmpty(t, meta.ErasureCoding.ParityHashes, "should have parity shard hashes")
+	require.Equal(t, 3, len(meta.ErasureCoding.ParityHashes), "should have 3 parity shards")
+
+	// Age all chunks (set mod time to 2 hours ago - normally would be GC'd)
+	allChunks := append([]string{}, meta.ErasureCoding.DataHashes...)
+	allChunks = append(allChunks, meta.ErasureCoding.ParityHashes...)
+	twoHoursAgo := time.Now().Add(-2 * time.Hour)
+	for _, chunkHash := range allChunks {
+		chunkPath := filepath.Join(store.dataDir, "chunks", chunkHash[:2], chunkHash)
+		err = os.Chtimes(chunkPath, twoHoursAgo, twoHoursAgo)
+		require.NoError(t, err)
+	}
+
+	// Run GC (should NOT delete any chunks - file still exists)
+	stats := store.RunGarbageCollection(ctx)
+
+	// No chunks should be deleted (file is still referenced)
+	assert.Equal(t, 0, stats.ChunksDeleted, "should not delete chunks for live objects")
+
+	// Verify all chunks still exist in CAS
+	for _, chunkHash := range allChunks {
+		_, err := store.cas.ReadChunk(ctx, chunkHash)
+		assert.NoError(t, err, "chunk %s should still exist", chunkHash[:8])
+	}
+}

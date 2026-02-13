@@ -37,6 +37,10 @@ const GCGracePeriod = 1 * time.Hour
 // Streaming encoder (Phase 6) will remove this limit.
 const MaxErasureCodingFileSize = 100 * 1024 * 1024 // 100 MB
 
+// contextCheckInterval is how often to check for context cancellation during
+// chunk fetching loops (~400KB at average chunk size of 4KB).
+const contextCheckInterval = 100
+
 // ErasureCodingPolicy defines the erasure coding configuration for a bucket.
 type ErasureCodingPolicy struct {
 	Enabled      bool `json:"enabled"`       // Whether erasure coding is enabled for new objects
@@ -77,6 +81,7 @@ type ChunkMetadata struct {
 	LastModified   time.Time         `json:"last_modified"`             // When chunk metadata was last updated
 	ShardType      string            `json:"shard_type,omitempty"`      // "data" or "parity" (for erasure-coded files)
 	ShardIndex     int               `json:"shard_index,omitempty"`     // Position in RS matrix (0-based)
+	ChunkSequence  int               `json:"chunk_sequence,omitempty"`  // Order within a shard (0-based, for CDC chunk reassembly)
 	ParentFileID   string            `json:"parent_file_id,omitempty"`  // Link to parent file VersionID
 }
 
@@ -735,6 +740,265 @@ func (s *Store) updateBucketSize(bucketName string, delta int64) error {
 	return s.writeBucketMeta(bucketName, bucketMeta)
 }
 
+// getObjectContentWithErasureCoding reads an erasure-coded object and reconstructs
+// missing data shards if necessary. Returns a reader for the reconstructed file.
+//
+// The write path CDC-chunks data shards, so ec.DataHashes contains chunk hashes (not shard hashes).
+// We must fetch all chunks, reassemble them into data shards using ChunkMetadata.ShardIndex,
+// then potentially reconstruct using Reed-Solomon if data shards are missing.
+//
+//nolint:gocyclo // Complexity from shard reconstruction logic
+func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, key string, meta *ObjectMeta) (io.ReadCloser, *ObjectMeta, error) {
+	ec := meta.ErasureCoding
+	k := ec.DataShards
+	m := ec.ParityShards
+
+	// Phase 1: Fetch all CDC chunks and reassemble into data shards
+	// ec.DataHashes contains CDC chunk hashes from all data shards.
+	// We group them by shard index using ChunkMetadata, then sort
+	// by ChunkSequence to preserve correct ordering within each shard.
+	type chunkEntry struct {
+		data     []byte
+		sequence int
+	}
+	dataShardChunks := make(map[int][]chunkEntry) // shardIndex -> []chunkEntry
+	incompleteShard := make(map[int]bool)         // shards with any missing chunk
+	for i, chunkHash := range ec.DataHashes {
+		// Check for cancellation periodically
+		if i%contextCheckInterval == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, nil, fmt.Errorf("context canceled during data chunk fetch: %w", ctx.Err())
+			default:
+			}
+		}
+
+		chunkMeta, exists := meta.ChunkMetadata[chunkHash]
+		if !exists {
+			hashStr := chunkHash
+			if len(chunkHash) >= 8 {
+				hashStr = chunkHash[:8]
+			}
+			return nil, nil, fmt.Errorf("missing chunk metadata for data chunk %s (versionID=%s)", hashStr, meta.VersionID)
+		}
+		if chunkMeta.ShardType != "data" {
+			hashStr := chunkHash
+			if len(chunkHash) >= 8 {
+				hashStr = chunkHash[:8]
+			}
+			return nil, nil, fmt.Errorf("expected data shard chunk, got %s for chunk %s (versionID=%s)", chunkMeta.ShardType, hashStr, meta.VersionID)
+		}
+
+		// Fetch chunk from CAS
+		chunk, err := s.cas.ReadChunk(ctx, chunkHash)
+		if err != nil {
+			// Chunk missing locally - entire shard will need reconstruction
+			hashStr := chunkHash
+			if len(chunkHash) >= 8 {
+				hashStr = chunkHash[:8]
+			}
+			s.logger.Debug().Str("hash", hashStr).Int("shard", chunkMeta.ShardIndex).Msg("data chunk missing locally")
+			incompleteShard[chunkMeta.ShardIndex] = true
+			continue
+		}
+
+		dataShardChunks[chunkMeta.ShardIndex] = append(dataShardChunks[chunkMeta.ShardIndex], chunkEntry{
+			data:     chunk,
+			sequence: chunkMeta.ChunkSequence,
+		})
+	}
+
+	// Reassemble chunks into complete data shards
+	dataShards := make([][]byte, k)
+	for shardIdx := 0; shardIdx < k; shardIdx++ {
+		// If any chunk was missing for this shard, mark entire shard as nil
+		if incompleteShard[shardIdx] {
+			dataShards[shardIdx] = nil
+			continue
+		}
+
+		entries := dataShardChunks[shardIdx]
+		if len(entries) == 0 {
+			// No chunks found for this shard at all
+			dataShards[shardIdx] = nil
+			continue
+		}
+
+		// Sort chunks by sequence to ensure correct ordering within shard
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].sequence < entries[j].sequence
+		})
+
+		// Pre-allocate and concatenate chunks to rebuild shard
+		totalSize := 0
+		for _, entry := range entries {
+			totalSize += len(entry.data)
+		}
+		shardData := make([]byte, 0, totalSize)
+		for _, entry := range entries {
+			shardData = append(shardData, entry.data...)
+		}
+		dataShards[shardIdx] = shardData
+	}
+
+	// Count available data shards
+	availableDataShards := 0
+	for i := 0; i < k; i++ {
+		if dataShards[i] != nil {
+			availableDataShards++
+		}
+	}
+
+	// Phase 2: Fast path - all data shards available, skip parity fetch entirely
+	if availableDataShards == k {
+		// No reconstruction needed - reassemble file from data shards
+		// Pre-allocate to avoid multiple reallocations
+		totalShardSize := int64(0)
+		for i := 0; i < k; i++ {
+			totalShardSize += int64(len(dataShards[i]))
+		}
+		fileData := make([]byte, 0, totalShardSize)
+		for i := 0; i < k; i++ {
+			fileData = append(fileData, dataShards[i]...)
+		}
+
+		// Trim to original size (remove RS padding)
+		if int64(len(fileData)) < meta.Size {
+			return nil, nil, fmt.Errorf("reassembled data too small: got %d bytes, expected %d (versionID=%s)", len(fileData), meta.Size, meta.VersionID)
+		}
+		fileData = fileData[:meta.Size]
+
+		return io.NopCloser(bytes.NewReader(fileData)), meta, nil
+	}
+
+	// Phase 3: Fetch parity shards (only needed when data shards are missing)
+	// Check for cancellation before fetching parity shards
+	select {
+	case <-ctx.Done():
+		return nil, nil, fmt.Errorf("context canceled before parity shard fetch: %w", ctx.Err())
+	default:
+	}
+
+	parityShards := make([][]byte, m)
+	for i, parityHash := range ec.ParityHashes {
+		chunk, err := s.cas.ReadChunk(ctx, parityHash)
+		if err != nil {
+			// Parity shard missing
+			hashStr := parityHash
+			if len(parityHash) >= 8 {
+				hashStr = parityHash[:8]
+			}
+			s.logger.Debug().Str("hash", hashStr).Int("shard", i).Msg("parity shard missing locally")
+			parityShards[i] = nil
+			continue
+		}
+		parityShards[i] = chunk
+	}
+
+	// Count available parity shards
+	availableParityShards := 0
+	for i := 0; i < m; i++ {
+		if parityShards[i] != nil {
+			availableParityShards++
+		}
+	}
+
+	// Phase 4: Reconstruction path - some data shards missing
+	totalAvailable := availableDataShards + availableParityShards
+	if totalAvailable < k {
+		return nil, nil, fmt.Errorf("insufficient shards: need %d, have %d data + %d parity = %d total (versionID=%s)",
+			k, availableDataShards, availableParityShards, totalAvailable, meta.VersionID)
+	}
+
+	s.logger.Info().
+		Int("available_data", availableDataShards).
+		Int("available_parity", availableParityShards).
+		Int("needed", k).
+		Str("version", meta.VersionID).
+		Msg("reconstructing erasure-coded object")
+
+	// Combine data + parity shards into single array for DecodeFile
+	allShards := make([][]byte, k+m)
+	for i := 0; i < k; i++ {
+		allShards[i] = dataShards[i]
+	}
+	for i := 0; i < m; i++ {
+		allShards[k+i] = parityShards[i]
+	}
+
+	// Check for cancellation before expensive reconstruction
+	select {
+	case <-ctx.Done():
+		return nil, nil, fmt.Errorf("context canceled before reconstruction: %w", ctx.Err())
+	default:
+	}
+
+	// Reconstruct using Reed-Solomon
+	// NOTE: DecodeFile modifies the shards slice in-place
+	reconstructedData, err := DecodeFile(allShards, k, m, meta.Size)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to reconstruct file (versionID=%s): %w", meta.VersionID, err)
+	}
+
+	// Phase 5: Cache reconstructed data shards (best-effort, async)
+	// This improves future read performance by storing reconstructed shards locally.
+	// Deep copy reconstructed shards since DecodeFile modifies allShards in-place
+	// and the caller may still be reading reconstructedData.
+	cachedK := k
+	cachedShards := make([][]byte, k)
+	missingShards := make([]bool, k)
+	for i := 0; i < k; i++ {
+		missingShards[i] = dataShards[i] == nil
+		if missingShards[i] && allShards[i] != nil {
+			cachedShards[i] = make([]byte, len(allShards[i]))
+			copy(cachedShards[i], allShards[i])
+		}
+	}
+	go func() {
+		// Use background context since original request may have completed
+		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		// Cache any data shards that were reconstructed
+		for i := 0; i < cachedK; i++ {
+			if !missingShards[i] {
+				// Already had this shard
+				continue
+			}
+
+			// This shard was reconstructed - cache it by chunking and storing
+			reconstructedShard := cachedShards[i]
+			if reconstructedShard == nil {
+				s.logger.Warn().Int("shard", i).Msg("reconstructed shard is nil, skipping cache")
+				continue
+			}
+
+			shardChunker := NewStreamingChunker(bytes.NewReader(reconstructedShard))
+			for {
+				chunk, chunkHash, err := shardChunker.NextChunk()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					s.logger.Warn().Err(err).Int("shard", i).Msg("failed to chunk reconstructed shard")
+					break
+				}
+
+				// Write chunk to local CAS (best-effort)
+				if _, err := s.cas.WriteChunk(bgCtx, chunk); err != nil {
+					if len(chunkHash) >= 8 {
+						s.logger.Warn().Err(err).Int("shard", i).Str("hash", chunkHash[:8]).Msg("failed to cache reconstructed chunk")
+					} else {
+						s.logger.Warn().Err(err).Int("shard", i).Str("hash", chunkHash).Msg("failed to cache reconstructed chunk")
+					}
+				}
+			}
+		}
+	}()
+
+	return io.NopCloser(bytes.NewReader(reconstructedData)), meta, nil
+}
+
 // putObjectWithErasureCoding stores an object using Reed-Solomon erasure coding.
 // The entire file is buffered in memory, encoded into data+parity shards, then stored.
 // Data shards are CDC chunked (preserves deduplication), parity shards are stored directly.
@@ -864,6 +1128,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 
 		// Chunk this data shard using CDC
 		shardChunker := NewStreamingChunker(bytes.NewReader(shard))
+		chunkSeq := 0 // Track chunk order within this shard
 		for {
 			chunk, chunkHash, err := shardChunker.NextChunk()
 			if errors.Is(err, io.EOF) {
@@ -907,11 +1172,13 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 				LastModified:  now,
 				ShardType:     "data",
 				ShardIndex:    i,
+				ChunkSequence: chunkSeq,
 				ParentFileID:  versionID,
 			}
 
 			chunks = append(chunks, chunkHash)
 			dataHashes = append(dataHashes, chunkHash)
+			chunkSeq++
 		}
 	}
 
@@ -2680,6 +2947,11 @@ func (s *Store) getObjectContent(ctx context.Context, bucket, key string, meta *
 	if len(meta.Chunks) == 0 {
 		// Empty file
 		return io.NopCloser(bytes.NewReader(nil)), meta, nil
+	}
+
+	// Check if object uses erasure coding
+	if meta.ErasureCoding != nil && meta.ErasureCoding.Enabled {
+		return s.getObjectContentWithErasureCoding(ctx, bucket, key, meta)
 	}
 
 	// Use distributed chunk reader if replicator is configured (Phase 5)
