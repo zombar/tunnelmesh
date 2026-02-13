@@ -512,18 +512,22 @@ function renderPeersTable() {
             <td><code>${peer.mesh_ip}</code>${tunnelSuffix}</td>
             <td>${formatLatency(peer.coordinator_rtt_ms)}</td>
             <td class="sparkline-cell">
+                <a class="sparkline-link" href="/grafana/d/tunnelmesh-overview/tunnelmesh-overview?orgId=1&viewPanel=7" target="_blank">
                 ${createSparklineSVG(history.throughputTx, history.throughputRx)}
                 <div class="rate-values">
                     <span class="tx">${formatBytes(peer.bytes_sent_rate)}/s</span>
                     <span class="rx">${formatBytes(peer.bytes_received_rate)}/s</span>
                 </div>
+                </a>
             </td>
             <td class="sparkline-cell">
+                <a class="sparkline-link" href="/grafana/d/tunnelmesh-overview/tunnelmesh-overview?orgId=1&viewPanel=8" target="_blank">
                 ${createSparklineSVG(history.packetsTx, history.packetsRx)}
                 <div class="rate-values">
                     <span class="tx">${formatRate(peer.packets_sent_rate)}</span>
                     <span class="rx">${formatRate(peer.packets_received_rate)}</span>
                 </div>
+                </a>
             </td>
             <td><code>${escapeHtml(peer.version || '-')}</code></td>
             <td><span class="status-badge ${peer.online ? 'online' : 'offline'}">${peer.online ? 'Online' : 'Offline'}</span></td>

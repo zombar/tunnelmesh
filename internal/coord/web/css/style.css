@@ -425,6 +425,22 @@ main {
     stroke: var(--color-accent-green);
 }
 
+.sparkline-link {
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+    display: inline-block;
+}
+
+.sparkline-link > * {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.sparkline-link:hover {
+    background: var(--color-card-hover-bg);
+}
+
 .rate-values {
     display: inline-block;
     font-size: 0.75rem;
