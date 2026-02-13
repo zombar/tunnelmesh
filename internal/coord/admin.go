@@ -349,6 +349,9 @@ func (s *Server) setupAdminRoutes() {
 	// Expose debug trace endpoint on admin interface only (mesh-only access)
 	s.adminMux.HandleFunc("/debug/trace", s.handleTrace)
 
+	// Peer site hosting (serves files from peer shares as web pages)
+	s.adminMux.HandleFunc("/peers/", s.handlePeerSite)
+
 	s.adminMux.Handle("/", fileServer)
 }
 
@@ -1109,6 +1112,34 @@ type ShareCreateRequest struct {
 	ReplicationFactor int    `json:"replication_factor,omitempty"` // Number of replicas (1-3), defaults to 2
 }
 
+// validateShareName checks that a share name is DNS-safe (alphanumeric, hyphens, underscores, 1-63 chars).
+func validateShareName(name string) error {
+	if len(name) > 63 {
+		return fmt.Errorf("name too long (max 63 characters)")
+	}
+	for i, c := range name {
+		isAlphaNum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		isValidHyphen := c == '-' && i > 0 && i < len(name)-1
+		isUnderscore := c == '_'
+		if !isAlphaNum && !isValidHyphen && !isUnderscore {
+			return fmt.Errorf("name must be alphanumeric with optional hyphens (not at start/end)")
+		}
+	}
+	return nil
+}
+
+// validateShareQuota checks that share quota is valid.
+func validateShareQuota(quotaBytes int64) error {
+	const maxQuotaBytes = 1024 * 1024 * 1024 * 1024 // 1TB
+	if quotaBytes < 0 {
+		return fmt.Errorf("quota_bytes must be non-negative")
+	}
+	if quotaBytes > maxQuotaBytes {
+		return fmt.Errorf("quota_bytes exceeds maximum (1TB)")
+	}
+	return nil
+}
+
 // handleShareCreate creates a new file share.
 func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 	if s.fileShareMgr == nil {
@@ -1127,35 +1158,26 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate share name (DNS-safe: alphanumeric and hyphens, 1-63 chars)
-	if len(req.Name) > 63 {
-		s.jsonError(w, "name too long (max 63 characters)", http.StatusBadRequest)
-		return
-	}
-	for i, c := range req.Name {
-		isAlphaNum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-		isValidHyphen := c == '-' && i > 0 && i < len(req.Name)-1
-		if !isAlphaNum && !isValidHyphen {
-			s.jsonError(w, "name must be alphanumeric with optional hyphens (not at start/end)", http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Validate quota (must be non-negative and <= 1TB)
-	const maxQuotaBytes = 1024 * 1024 * 1024 * 1024 // 1TB
-	if req.QuotaBytes < 0 {
-		s.jsonError(w, "quota_bytes must be non-negative", http.StatusBadRequest)
-		return
-	}
-	if req.QuotaBytes > maxQuotaBytes {
-		s.jsonError(w, "quota_bytes exceeds maximum (1TB)", http.StatusBadRequest)
-		return
-	}
-
 	// Get owner from TLS client certificate - required for share creation
 	ownerID := s.getRequestOwner(r)
 	if ownerID == "" {
 		s.jsonError(w, "client certificate required for share creation", http.StatusUnauthorized)
+		return
+	}
+
+	// Auto-prefix share name with peer name to prevent name squatting
+	peerName := s.getPeerName(ownerID)
+	if peerName != "" && peerName != ownerID {
+		req.Name = peerName + "_" + req.Name
+	}
+
+	// Validate share name and quota
+	if err := validateShareName(req.Name); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateShareQuota(req.QuotaBytes); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

@@ -1598,6 +1598,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		// Create or update peer record in peer store
 		s.updatePeerRecord(peerID, req.Name, req.PublicKey, isNewPeer)
 
+		// Auto-create peer share on first registration
+		if isNewPeer && s.fileShareMgr != nil {
+			go s.createPeerShare(peerID, req.Name)
+		}
+
 		// Check if peer is admin (for both new and existing peers)
 		if s.s3Authorizer.Groups.IsMember(auth.GroupAdmins, peerID) {
 			isAdmin = true
@@ -1895,6 +1900,45 @@ func (s *Server) updatePeerRecord(peerID, peerName, publicKey string, isNewPeer 
 			log.Warn().Err(err).Msg("failed to refresh peer name cache")
 		}
 	}
+}
+
+// createPeerShare creates a default file share for a newly registered peer.
+// This is called in a background goroutine to avoid blocking registration.
+func (s *Server) createPeerShare(peerID, peerName string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	shareName := peerName + "_share"
+
+	// Check if share already exists (handles re-registration)
+	if s.fileShareMgr.Get(shareName) != nil {
+		return
+	}
+
+	quota := s.cfg.Coordinator.S3.DefaultShareQuota.Bytes()
+	opts := &s3.FileShareOptions{
+		GuestRead:         true,
+		GuestReadSet:      true,
+		ReplicationFactor: 2,
+	}
+
+	share, err := s.fileShareMgr.Create(ctx, shareName, "Personal share", peerID, quota, opts)
+	if err != nil {
+		log.Warn().Err(err).Str("peer", peerName).Str("share", shareName).Msg("failed to auto-create peer share")
+		return
+	}
+
+	// Persist bindings
+	if s.s3SystemStore != nil {
+		if err := s.s3SystemStore.SaveGroupBindings(ctx, s.s3Authorizer.GroupBindings.List()); err != nil {
+			log.Warn().Err(err).Msg("failed to persist group bindings for auto-created share")
+		}
+		if err := s.s3SystemStore.SaveBindings(ctx, s.s3Authorizer.Bindings.List()); err != nil {
+			log.Warn().Err(err).Msg("failed to persist role bindings for auto-created share")
+		}
+	}
+
+	log.Info().Str("peer", peerName).Str("share", share.Name).Msg("auto-created peer share")
 }
 
 func (s *Server) jsonError(w http.ResponseWriter, message string, code int) {
