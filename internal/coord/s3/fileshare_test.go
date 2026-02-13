@@ -705,3 +705,52 @@ func TestEnsureBucketForShare_NoMatchingShare(t *testing.T) {
 	err = mgr.EnsureBucketForShare(context.Background(), FileShareBucketPrefix+"nonexistent")
 	assert.NoError(t, err)
 }
+
+func TestEnsureBucketForShare_ReplicatedShare(t *testing.T) {
+	// Simulates the cross-coordinator scenario: a share is created on coordinator A
+	// and replicated to coordinator B's system store. Coordinator B's FileShareManager
+	// doesn't have the share in memory, but should discover it from the system store.
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+
+	// Create a share on "coordinator A"
+	mgrA := NewFileShareManager(store, systemStore, authorizer)
+	_, err = mgrA.Create(context.Background(), "photos", "Photos", "alice", 0, nil)
+	require.NoError(t, err)
+
+	// "Coordinator B": same system store (simulates replication), fresh FileShareManager
+	// that hasn't loaded the share into memory yet. Delete the bucket to simulate
+	// that B never had it locally.
+	mgrB := NewFileShareManager(store, systemStore, authorizer)
+
+	bucketName := FileShareBucketPrefix + "photos"
+
+	// Delete bucket to simulate coordinator B having replicated share metadata
+	// but not the bucket directories
+	bucketDir := filepath.Join(store.DataDir(), "buckets", bucketName)
+	require.NoError(t, os.RemoveAll(bucketDir))
+
+	// Clear mgrB's in-memory shares to simulate it not having loaded this share
+	mgrB.mu.Lock()
+	mgrB.shares = nil
+	mgrB.mu.Unlock()
+
+	// Verify share is not in memory
+	assert.Nil(t, mgrB.Get("photos"))
+
+	// EnsureBucketForShare should discover the share from the system store and recreate the bucket
+	err = mgrB.EnsureBucketForShare(context.Background(), bucketName)
+	require.NoError(t, err)
+
+	// Bucket should exist now
+	meta, err := store.HeadBucket(context.Background(), bucketName)
+	require.NoError(t, err)
+	assert.Equal(t, bucketName, meta.Name)
+	assert.Equal(t, "alice", meta.Owner)
+
+	// Share should now be in mgrB's memory
+	assert.NotNil(t, mgrB.Get("photos"))
+}

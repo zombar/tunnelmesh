@@ -248,7 +248,12 @@ func (m *FileShareManager) EnsureBucketForShare(ctx context.Context, bucketName 
 	shareName := strings.TrimPrefix(bucketName, FileShareBucketPrefix)
 	share := m.Get(shareName)
 	if share == nil {
-		return nil
+		// Share not in memory — it may have been created on another coordinator
+		// and replicated to our system store. Reload from system store.
+		share = m.refreshAndGet(ctx, shareName)
+		if share == nil {
+			return nil
+		}
 	}
 
 	if _, err := m.store.HeadBucket(ctx, bucketName); err == nil {
@@ -268,6 +273,30 @@ func (m *FileShareManager) EnsureBucketForShare(ctx context.Context, bucketName 
 		log.Info().Str("share", shareName).Str("bucket", bucketName).Msg("recreated missing bucket for share on demand")
 	}
 	return err
+}
+
+// refreshAndGet reloads shares from the system store and returns the named share if found.
+// This catches shares that were created on another coordinator and replicated via the system bucket.
+func (m *FileShareManager) refreshAndGet(ctx context.Context, name string) *FileShare {
+	if m.systemStore == nil {
+		return nil
+	}
+	shares, err := m.systemStore.LoadFileShares(ctx)
+	if err != nil || len(shares) == 0 {
+		return nil
+	}
+
+	m.mu.Lock()
+	m.shares = shares
+	m.mu.Unlock()
+
+	for _, s := range shares {
+		if s.Name == name {
+			log.Info().Str("share", name).Msg("discovered replicated share from system store")
+			return s
+		}
+	}
+	return nil
 }
 
 // List returns all file shares.
