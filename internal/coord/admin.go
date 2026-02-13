@@ -3,6 +3,7 @@ package coord
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -349,8 +351,77 @@ func (s *Server) setupAdminRoutes() {
 	// Expose debug trace endpoint on admin interface only (mesh-only access)
 	s.adminMux.HandleFunc("/debug/trace", s.handleTrace)
 
-	s.adminMux.Handle("/", fileServer)
+	// Peer site hosting (serves files from peer shares as web pages)
+	s.adminMux.HandleFunc("/peers/", s.handlePeerSite)
+
+	// Serve admin dashboard at /admin/ prefix
+	s.adminMux.Handle("/admin/", http.StripPrefix("/admin/", fileServer))
+
+	// Landing page at root, 404 for unknown paths
+	s.adminMux.HandleFunc("/", s.handleLanding)
 }
+
+// handleLanding serves the landing page at "/" or returns 404 for unknown paths.
+// If a custom landing page is configured via LandingPage config, it serves that file.
+// Otherwise, it serves a built-in default landing page with a redirect to /admin/.
+func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Custom landing page from config
+	if s.cfg.Coordinator.LandingPage != "" {
+		data, err := os.ReadFile(s.cfg.Coordinator.LandingPage)
+		if err != nil {
+			log.Error().Err(err).Str("path", s.cfg.Coordinator.LandingPage).Msg("failed to read custom landing page")
+			if os.IsNotExist(err) {
+				http.Error(w, "landing page not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "failed to read landing page", http.StatusInternalServerError)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(data)
+		return
+	}
+
+	// Default built-in landing page
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(defaultLandingPage))
+}
+
+const defaultLandingPage = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="5;url=/admin/">
+<title>TunnelMesh</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;overflow:hidden}
+.container{text-align:center;z-index:2;position:relative}
+h1{font-size:2.4rem;font-weight:600;color:#58a6ff;margin-bottom:.5rem;letter-spacing:-.02em}
+p{font-size:1.1rem;color:#8b949e;margin-bottom:2rem}
+a{color:#58a6ff;text-decoration:none;border:1px solid #30363d;padding:.6rem 1.6rem;font-size:.95rem;transition:all .2s}
+a:hover{background:#58a6ff;color:#0d1117;border-color:#58a6ff}
+.meta{margin-top:2rem;font-size:.8rem;color:#484f58}
+.grid{position:fixed;top:0;left:0;width:100%;height:100%;z-index:1;opacity:.08}
+.grid svg{width:100%;height:100%}
+</style>
+</head>
+<body>
+<div class="grid"><svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"><defs><pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0v40" fill="none" stroke="#58a6ff" stroke-width=".5"/></pattern></defs><rect width="100%" height="100%" fill="url(#g)"/></svg></div>
+<div class="container">
+<h1>TunnelMesh</h1>
+<p>Welcome to your secured mesh network</p>
+<a href="/admin/">Enter Dashboard</a>
+<div class="meta">Redirecting in 5 seconds&hellip;</div>
+</div>
+</body>
+</html>`
 
 // handleWGClients handles GET (list) and POST (create) for WireGuard clients.
 func (s *Server) handleWGClients(w http.ResponseWriter, r *http.Request) {
@@ -503,6 +574,8 @@ type MonitoringProxyConfig struct {
 
 // SetupMonitoringProxies registers reverse proxy handlers for Prometheus and Grafana.
 // These are registered on the adminMux for access via https://this.tunnelmesh/
+// If a service URL is configured locally, traffic is proxied to localhost.
+// Otherwise, traffic is forwarded to a coordinator that has monitoring configured.
 // Prometheus should be configured with --web.route-prefix=/prometheus/
 // Grafana should be configured with GF_SERVER_SERVE_FROM_SUB_PATH=true
 func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
@@ -510,41 +583,84 @@ func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
 		return
 	}
 
+	// Prometheus handler
 	if cfg.PrometheusURL != "" {
 		promURL, err := url.Parse(cfg.PrometheusURL)
 		if err == nil {
-			// Create custom reverse proxy that preserves the path
 			proxy := &httputil.ReverseProxy{
 				Director: func(req *http.Request) {
 					req.URL.Scheme = promURL.Scheme
 					req.URL.Host = promURL.Host
 					req.Host = promURL.Host
-					// Path already includes /prometheus/ prefix which Prometheus expects
 				},
 			}
 			s.adminMux.HandleFunc("/prometheus/", func(w http.ResponseWriter, r *http.Request) {
 				proxy.ServeHTTP(w, r)
 			})
 		}
+	} else {
+		s.adminMux.HandleFunc("/prometheus/", func(w http.ResponseWriter, r *http.Request) {
+			s.forwardToMonitoringCoordinator(w, r)
+		})
 	}
 
+	// Grafana handler
 	if cfg.GrafanaURL != "" {
 		grafanaURL, err := url.Parse(cfg.GrafanaURL)
 		if err == nil {
-			// Create custom reverse proxy that preserves the path
 			proxy := &httputil.ReverseProxy{
 				Director: func(req *http.Request) {
 					req.URL.Scheme = grafanaURL.Scheme
 					req.URL.Host = grafanaURL.Host
 					req.Host = grafanaURL.Host
-					// Path already includes /grafana/ prefix which Grafana expects
 				},
 			}
 			s.adminMux.HandleFunc("/grafana/", func(w http.ResponseWriter, r *http.Request) {
 				proxy.ServeHTTP(w, r)
 			})
 		}
+	} else {
+		s.adminMux.HandleFunc("/grafana/", func(w http.ResponseWriter, r *http.Request) {
+			s.forwardToMonitoringCoordinator(w, r)
+		})
 	}
+}
+
+// forwardToMonitoringCoordinator proxies the request to a coordinator that has monitoring configured.
+func (s *Server) forwardToMonitoringCoordinator(w http.ResponseWriter, r *http.Request) {
+	// Detect forwarding loops — if another coordinator already forwarded this request, stop.
+	if r.Header.Get("X-TunnelMesh-Forwarded") != "" {
+		http.Error(w, "monitoring proxy forwarding loop detected", http.StatusLoopDetected)
+		return
+	}
+
+	s.peersMu.RLock()
+	var targetIP string
+	for _, ci := range s.coordinators {
+		if ci.hasMonitoring {
+			targetIP = ci.peer.MeshIP
+			break
+		}
+	}
+	s.peersMu.RUnlock()
+
+	if targetIP == "" {
+		http.Error(w, "no monitoring coordinator available", http.StatusServiceUnavailable)
+		return
+	}
+
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = "https"
+			req.URL.Host = targetIP
+			req.Host = targetIP
+			req.Header.Set("X-TunnelMesh-Forwarded", "true")
+		},
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // mesh-internal traffic
+		},
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 // FilterRulesRequest is the request for adding/removing filter rules.
@@ -1109,6 +1225,34 @@ type ShareCreateRequest struct {
 	ReplicationFactor int    `json:"replication_factor,omitempty"` // Number of replicas (1-3), defaults to 2
 }
 
+// validateShareName checks that a share name is DNS-safe (alphanumeric, hyphens, underscores, 1-63 chars).
+func validateShareName(name string) error {
+	if len(name) > 63 {
+		return fmt.Errorf("name too long (max 63 characters)")
+	}
+	for i, c := range name {
+		isAlphaNum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		isValidHyphen := c == '-' && i > 0 && i < len(name)-1
+		isUnderscore := c == '_'
+		if !isAlphaNum && !isValidHyphen && !isUnderscore {
+			return fmt.Errorf("name must be alphanumeric with optional hyphens (not at start/end)")
+		}
+	}
+	return nil
+}
+
+// validateShareQuota checks that share quota is valid.
+func validateShareQuota(quotaBytes int64) error {
+	const maxQuotaBytes = 1024 * 1024 * 1024 * 1024 // 1TB
+	if quotaBytes < 0 {
+		return fmt.Errorf("quota_bytes must be non-negative")
+	}
+	if quotaBytes > maxQuotaBytes {
+		return fmt.Errorf("quota_bytes exceeds maximum (1TB)")
+	}
+	return nil
+}
+
 // handleShareCreate creates a new file share.
 func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 	if s.fileShareMgr == nil {
@@ -1127,35 +1271,26 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate share name (DNS-safe: alphanumeric and hyphens, 1-63 chars)
-	if len(req.Name) > 63 {
-		s.jsonError(w, "name too long (max 63 characters)", http.StatusBadRequest)
-		return
-	}
-	for i, c := range req.Name {
-		isAlphaNum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-		isValidHyphen := c == '-' && i > 0 && i < len(req.Name)-1
-		if !isAlphaNum && !isValidHyphen {
-			s.jsonError(w, "name must be alphanumeric with optional hyphens (not at start/end)", http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Validate quota (must be non-negative and <= 1TB)
-	const maxQuotaBytes = 1024 * 1024 * 1024 * 1024 // 1TB
-	if req.QuotaBytes < 0 {
-		s.jsonError(w, "quota_bytes must be non-negative", http.StatusBadRequest)
-		return
-	}
-	if req.QuotaBytes > maxQuotaBytes {
-		s.jsonError(w, "quota_bytes exceeds maximum (1TB)", http.StatusBadRequest)
-		return
-	}
-
 	// Get owner from TLS client certificate - required for share creation
 	ownerID := s.getRequestOwner(r)
 	if ownerID == "" {
 		s.jsonError(w, "client certificate required for share creation", http.StatusUnauthorized)
+		return
+	}
+
+	// Auto-prefix share name with peer name to prevent name squatting
+	peerName := s.getPeerName(ownerID)
+	if peerName != "" && peerName != ownerID {
+		req.Name = peerName + "_" + req.Name
+	}
+
+	// Validate share name and quota
+	if err := validateShareName(req.Name); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateShareQuota(req.QuotaBytes); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

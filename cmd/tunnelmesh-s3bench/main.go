@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -268,6 +269,7 @@ func runScenario(cmd *cobra.Command, args []string) error {
 
 	// Mesh integration (optional)
 	var meshClient *mesh.CoordinatorClient
+	var sharePrefix string
 	if coordinatorURL != "" {
 		log.Info().Str("coordinator", coordinatorURL).Msg("Mesh integration enabled")
 
@@ -298,37 +300,39 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		// Create mesh client targeting coordinator's mesh IP
 		log.Info().
 			Str("s3_endpoint", fmt.Sprintf("https://%s:443", meshInfo.CoordMeshIP)).
-			Msg("Creating buckets on coordinator mesh IP")
+			Msg("Creating shares on coordinator mesh IP")
 		meshClient = mesh.NewCoordinatorClient(meshInfo.CoordMeshIP, creds, insecureTLS)
 
-		// Create buckets for each department
+		// Create shares for each department (coordinator auto-prefixes with peer name)
 		for _, dept := range st.Departments() {
-			bucketName := s3.FileShareBucketPrefix + dept.FileShare
 			quotaMB := dept.QuotaMB
 			if quotaOverrideMB > 0 {
 				quotaMB = quotaOverrideMB
 			}
 
-			// Check if bucket exists
-			exists, err := meshClient.BucketExists(ctx, bucketName)
+			actualName, err := meshClient.CreateShare(ctx, dept.FileShare, dept.Name, quotaMB)
 			if err != nil {
-				log.Warn().Err(err).Str("bucket", bucketName).Msg("Failed to check bucket existence")
+				return fmt.Errorf("creating share %s: %w", dept.FileShare, err)
 			}
 
-			if exists {
-				log.Info().Str("bucket", bucketName).Msg("Bucket already exists, skipping creation")
-				continue
+			if actualName == "" {
+				// Share already existed (409 Conflict) — derive prefix from peer name
+				log.Info().Str("share", dept.FileShare).Msg("Share already exists, skipping creation")
+			} else {
+				// Extract prefix from the auto-prefixed name (e.g., "s3bench_alien-public" → "s3bench")
+				if idx := strings.Index(actualName, "_"); idx > 0 {
+					sharePrefix = actualName[:idx]
+				}
+				log.Info().
+					Str("share", actualName).
+					Int64("quota_mb", quotaMB).
+					Msg("Created share")
 			}
+		}
 
-			// Create bucket
-			err = meshClient.CreateBucket(ctx, bucketName, "s3bench", quotaMB)
-			if err != nil {
-				return fmt.Errorf("creating bucket %s: %w", bucketName, err)
-			}
-			log.Info().
-				Str("bucket", bucketName).
-				Int64("quota_mb", quotaMB).
-				Msg("Created bucket")
+		// If we didn't get a prefix from creation (all already existed), derive from peer name
+		if sharePrefix == "" {
+			sharePrefix = "s3bench"
 		}
 	}
 
@@ -346,6 +350,7 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		UserManager:          userMgr, // Pass user manager for actual S3 operations
 		UseMesh:              meshClient != nil,
 		MeshClient:           meshClient, // Pass mesh client for coordinator integration
+		SharePrefix:          sharePrefix,
 		WorkflowTestsEnabled: map[simulator.WorkflowType]bool{
 			simulator.WorkflowDeletion:    testDeletion,
 			simulator.WorkflowExpiration:  testExpiration,

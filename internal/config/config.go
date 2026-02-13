@@ -47,6 +47,7 @@ type CoordinatorConfig struct {
 	S3                 S3Config              `yaml:"s3"`                   // S3-compatible storage configuration
 	Filter             FilterConfig          `yaml:"filter"`               // Global packet filter rules for all peers
 	ServicePorts       []uint16              `yaml:"service_ports"`        // Service ports to auto-allow on peers (default: [9443] for metrics)
+	LandingPage        string                `yaml:"landing_page"`         // Path to custom landing page HTML file (default: built-in)
 }
 
 // S3Config holds configuration for the S3-compatible storage service.
@@ -60,6 +61,7 @@ type S3Config struct {
 	VersionRetentionDays   int                    `yaml:"version_retention_days"`   // Days to keep object versions (default: 30)
 	MaxVersionsPerObject   int                    `yaml:"max_versions_per_object"`  // Max versions to keep per object (default: 100, 0 = unlimited)
 	VersionRetention       VersionRetentionConfig `yaml:"version_retention"`        // Tiered version retention policy
+	DefaultShareQuota      bytesize.Size          `yaml:"default_share_quota"`      // Auto-share quota per peer (default: 10Mi)
 }
 
 // VersionRetentionConfig configures smart tiered version retention.
@@ -353,6 +355,9 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 	if cfg.Coordinator.Enabled {
 		if cfg.Coordinator.S3.MaxSize.Bytes() == 0 {
 			cfg.Coordinator.S3.MaxSize = bytesize.Size(1 << 30) // 1Gi default
+		}
+		if cfg.Coordinator.S3.DefaultShareQuota.Bytes() == 0 {
+			cfg.Coordinator.S3.DefaultShareQuota = bytesize.Size(10 * 1024 * 1024) // 10Mi default
 		}
 	}
 

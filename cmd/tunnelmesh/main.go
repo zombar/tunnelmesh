@@ -753,6 +753,8 @@ func discoverAndRegisterWithCoordinator(
 		log.Info().Str("coordinator", coordURL).Msg("attempting registration")
 
 		client := coord.NewClient(coordURL, cfg.AuthToken)
+		hasMonitoring := cfg.Coordinator.Enabled &&
+			(cfg.Coordinator.Monitoring.PrometheusURL != "" || cfg.Coordinator.Monitoring.GrafanaURL != "")
 		resp, err := client.RegisterWithRetry(
 			ctx,
 			cfg.Name,
@@ -768,6 +770,7 @@ func discoverAndRegisterWithCoordinator(
 			cfg.AllowExitTraffic,
 			cfg.DNS.Aliases,
 			cfg.Coordinator.Enabled,
+			hasMonitoring,
 			coord.DefaultRetryConfig(),
 		)
 
@@ -1488,6 +1491,14 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			}
 			return wireRules
 		})
+
+		// Coordinator list update handler - updates DNS round-robin when coordinators join/leave
+		node.PersistentRelay.SetCoordListUpdateHandler(func(coordIPs []string) {
+			if node.Resolver != nil {
+				node.Resolver.SetCoordMeshIPs(coordIPs)
+			}
+			log.Info().Strs("coord_ips", coordIPs).Msg("updated coordinator list from server push")
+		})
 	}
 
 	// Initialize WireGuard concentrator if enabled
@@ -1621,9 +1632,19 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 	var dnsConfigured bool
 	// DNS is always enabled for all peers
 	resolver := meshdns.NewResolver(resp.Domain, cfg.DNS.CacheTTL)
-	// Set coordinator's mesh IP for "this.tunnelmesh" resolution
-	if resp.CoordMeshIP != "" {
-		resolver.SetCoordMeshIP(resp.CoordMeshIP)
+	// Set coordinator mesh IPs for "this.tunnelmesh" round-robin resolution.
+	// For coordinators, read the current list from the server (the registration response
+	// may be stale — it was captured before SetCoordMeshIP populated the atomic).
+	if srv != nil {
+		if coordIPs := srv.GetCoordMeshIPs(); len(coordIPs) > 0 {
+			resolver.SetCoordMeshIPs(coordIPs)
+		}
+		// Keep local resolver in sync when coordinators join/leave
+		srv.OnCoordIPsChanged(func(ips []string) {
+			resolver.SetCoordMeshIPs(ips)
+		})
+	} else if len(resp.CoordMeshIPs) > 0 {
+		resolver.SetCoordMeshIPs(resp.CoordMeshIPs)
 	}
 	node.Resolver = resolver
 

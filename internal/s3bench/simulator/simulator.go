@@ -46,8 +46,9 @@ type SimulatorConfig struct {
 	UserManager *UserManager // User session manager with S3 access
 
 	// Mesh integration (Phase 2: Coordinator API)
-	UseMesh    bool                    // Enable mesh integration
-	MeshClient *mesh.CoordinatorClient // Coordinator API client (nil = standalone)
+	UseMesh     bool                    // Enable mesh integration
+	MeshClient  *mesh.CoordinatorClient // Coordinator API client (nil = standalone)
+	SharePrefix string                  // Peer name prefix for share bucket names (e.g. "s3bench" → buckets are "fs+s3bench_sharename")
 }
 
 // DefaultConfig returns a simulator config with sensible defaults.
@@ -82,9 +83,10 @@ type Simulator struct {
 	meshOrch     *MeshOrchestrator
 
 	// S3 components (for actual operations)
-	userMgr    *UserManager            // User session management
-	httpClient *http.Client            // HTTP client for network testing
-	meshClient *mesh.CoordinatorClient // Coordinator mesh API client
+	userMgr     *UserManager            // User session management
+	httpClient  *http.Client            // HTTP client for network testing
+	meshClient  *mesh.CoordinatorClient // Coordinator mesh API client
+	sharePrefix string                  // Peer name prefix for share bucket names
 
 	// Execution state
 	startTime time.Time
@@ -170,8 +172,9 @@ func NewSimulator(config SimulatorConfig) (*Simulator, error) {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		meshClient: config.MeshClient,
-		attempts:   make(map[string][]AdversaryAttempt),
+		meshClient:  config.MeshClient,
+		sharePrefix: config.SharePrefix,
+		attempts:    make(map[string][]AdversaryAttempt),
 		metrics: &SimulatorMetrics{
 			StoryDuration: config.Story.Duration(),
 		},
@@ -196,6 +199,16 @@ func NewSimulator(config SimulatorConfig) (*Simulator, error) {
 	}
 
 	return sim, nil
+}
+
+// shareBucketName computes the S3 bucket name for a file share.
+// When SharePrefix is set (mesh mode), the bucket is "fs+{prefix}_{shareName}".
+// Otherwise, the bucket is "fs+{shareName}" (standalone mode).
+func (s *Simulator) shareBucketName(shareName string) string {
+	if s.sharePrefix != "" {
+		return s3.FileShareBucketPrefix + s.sharePrefix + "_" + shareName
+	}
+	return s3.FileShareBucketPrefix + shareName
 }
 
 // GenerateScenario generates all tasks, attempts, and workflows for the scenario.
@@ -435,7 +448,7 @@ func (s *Simulator) executeTask(ctx context.Context, task *WorkloadTask) error {
 	store := s.userMgr.store
 
 	// Build bucket name (file share prefix + share name)
-	bucketName := s3.FileShareBucketPrefix + task.FileShare
+	bucketName := s.shareBucketName(task.FileShare)
 
 	// Execute operation based on type
 	start := time.Now()
@@ -771,43 +784,43 @@ func (s *Simulator) executeAdversaryAttempt(ctx context.Context, attempt Adversa
 		// Trying to read a classified object
 		resource = "objects"
 		verb = "read"
-		bucket = s3.FileShareBucketPrefix + "alien-classified" // High clearance bucket
+		bucket = s.shareBucketName("alien-classified") // High clearance bucket
 		objectKey = "classified_report.txt"
 	case ActionCreateAdminShare:
 		// Trying to create a file share (admin action)
 		resource = "file_shares"
 		verb = "admin"
-		bucket = s3.FileShareBucketPrefix + "my-evil-share"
+		bucket = s.shareBucketName("my-evil-share")
 		objectKey = ""
 	case ActionBulkDownload:
 		// Trying to download from restricted bucket
 		resource = "objects"
 		verb = "read"
-		bucket = s3.FileShareBucketPrefix + "alien-command" // Military bucket
+		bucket = s.shareBucketName("alien-command") // Military bucket
 		objectKey = "battle_plan.txt"
 	case ActionDeleteOthers:
 		// Trying to delete someone else's object
 		resource = "objects"
 		verb = "write"
-		bucket = s3.FileShareBucketPrefix + "alien-science"
+		bucket = s.shareBucketName("alien-science")
 		objectKey = "someone_else_document.txt"
 	case ActionModifyMetadata:
 		// Trying to modify object metadata (requires write access)
 		resource = "objects"
 		verb = "write"
-		bucket = s3.FileShareBucketPrefix + "alien-classified"
+		bucket = s.shareBucketName("alien-classified")
 		objectKey = "classified_report.txt"
 	case ActionCopyData:
 		// Trying to copy data from restricted bucket to public bucket
 		resource = "objects"
 		verb = "read"
-		bucket = s3.FileShareBucketPrefix + "alien-classified"
+		bucket = s.shareBucketName("alien-classified")
 		objectKey = "classified_data.txt"
 	case ActionBlendIn:
 		// Normal-looking operation to avoid detection - should actually be allowed
 		resource = "objects"
 		verb = "read"
-		bucket = s3.FileShareBucketPrefix + "alien-public" // Public bucket
+		bucket = s.shareBucketName("alien-public") // Public bucket
 		objectKey = "public_announcement.txt"
 	default:
 		return false, fmt.Errorf("unknown adversary action: %s", attempt.Action)
@@ -876,7 +889,7 @@ func (s *Simulator) executeWorkflow(ctx context.Context, workflow WorkflowTest) 
 
 // executeWorkflowDeletion tests document deletion and tombstone behavior.
 func (s *Simulator) executeWorkflowDeletion(ctx context.Context, store *s3.Store, session *UserSession, workflow WorkflowTest) (bool, error) {
-	bucket := s3.FileShareBucketPrefix + "alien-public" // Use public bucket for test
+	bucket := s.shareBucketName("alien-public") // Use public bucket for test
 	docName := workflow.Parameters["document_name"].(string)
 	content := []byte("Deletion test content")
 
@@ -927,9 +940,9 @@ func (s *Simulator) executeWorkflowPermissions(ctx context.Context, session *Use
 	// Test that the actor has access to SOME bucket (based on their clearance)
 	// Try their own department's bucket first
 	testBuckets := []string{
-		s3.FileShareBucketPrefix + "alien-public",
-		s3.FileShareBucketPrefix + "alien-science",
-		s3.FileShareBucketPrefix + "alien-command",
+		s.shareBucketName("alien-public"),
+		s.shareBucketName("alien-science"),
+		s.shareBucketName("alien-command"),
 	}
 
 	hasAnyAccess := false
@@ -960,7 +973,7 @@ func (s *Simulator) executeWorkflowQuota(ctx context.Context, store *s3.Store, s
 // executeWorkflowRetention tests version retention policy enforcement.
 func (s *Simulator) executeWorkflowRetention(ctx context.Context, store *s3.Store, session *UserSession, workflow WorkflowTest) (bool, error) {
 	// Simplified: Verify versioning works
-	bucket := s3.FileShareBucketPrefix + "alien-public"
+	bucket := s.shareBucketName("alien-public")
 	docName := "retention_test.txt"
 
 	// Upload multiple versions

@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,7 +43,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 		City:      "London",
 		Country:   "United Kingdom",
 	}
-	_, err = client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", location, "", false, nil, false)
+	_, err = client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", location, "", false, nil, false, false)
 	require.NoError(t, err)
 
 	// Fetch admin overview from adminMux (internal mesh only)
@@ -81,11 +84,11 @@ func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 
 	// Register an exit node
 	client := NewClient(ts.URL, "test-token")
-	_, err = client.Register("exit-node", "SHA256:exitkey", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", true, nil, false)
+	_, err = client.Register("exit-node", "SHA256:exitkey", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", true, nil, false, false)
 	require.NoError(t, err)
 
 	// Register a client that uses the exit node
-	_, err = client.Register("client1", "SHA256:client1key", []string{"5.6.7.8"}, nil, 2223, 0, false, "v1.0.0", nil, "exit-node", false, nil, false)
+	_, err = client.Register("client1", "SHA256:client1key", []string{"5.6.7.8"}, nil, 2223, 0, false, "v1.0.0", nil, "exit-node", false, nil, false, false)
 	require.NoError(t, err)
 
 	// Fetch admin overview from adminMux (internal mesh only)
@@ -138,7 +141,7 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 
 	// Register a peer
 	client := NewClient(ts.URL, "test-token")
-	_, err = client.Register("peer1", "SHA256:peer1key", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
+	_, err = client.Register("peer1", "SHA256:peer1key", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false, false)
 	require.NoError(t, err)
 
 	// Directly set stats on the server (simulating heartbeat)
@@ -182,16 +185,8 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 }
 
 func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
-	// Create a server with coordinator enabled to have adminMux
-	cfg := newTestConfig(t)
-	cfg.Coordinator.Enabled = true
-
-	srv, err := NewServer(context.Background(), cfg)
-	require.NoError(t, err)
-	t.Cleanup(func() { cleanupServer(t, srv) })
-	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
-
-	// Start mock Prometheus and Grafana servers
+	// Start mock Prometheus and Grafana servers before creating the server,
+	// since SetupMonitoringProxies is called unconditionally in setupRoutes()
 	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("prometheus"))
@@ -204,11 +199,16 @@ func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
 	}))
 	defer grafanaServer.Close()
 
-	// Setup monitoring proxies
-	srv.SetupMonitoringProxies(MonitoringProxyConfig{
-		PrometheusURL: promServer.URL,
-		GrafanaURL:    grafanaServer.URL,
-	})
+	// Create a server with monitoring URLs pre-configured so setupRoutes() registers them
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.Monitoring.PrometheusURL = promServer.URL
+	cfg.Coordinator.Monitoring.GrafanaURL = grafanaServer.URL
+
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupServer(t, srv) })
+	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
 
 	// Test adminMux has the prometheus route (admin is mesh-internal only)
 	req := httptest.NewRequest(http.MethodGet, "/prometheus/", nil)
@@ -1163,4 +1163,119 @@ func TestFilterAdd_WithSourcePeer(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "peer-specific rule should have been added")
+}
+
+// --- Landing Page & Admin Route Tests ---
+
+func TestLandingPage_Default(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, "secured mesh network")
+	assert.Contains(t, body, `content="5;url=/admin/"`)
+}
+
+func TestLandingPage_RedirectsToAdmin(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `href="/admin/"`)
+}
+
+func TestAdminDashboard_ServesAtAdmin(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, "<html")
+	assert.Contains(t, body, "TunnelMesh")
+}
+
+func TestAdminDashboard_StaticAssets(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/css/style.css", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, strings.Contains(rec.Header().Get("Content-Type"), "text/css"))
+}
+
+func TestAdminDashboard_APIStillAtRoot(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/overview", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestLandingPage_404ForUnknownPaths(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestLandingPage_Custom(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPage := filepath.Join(tmpDir, "landing.html")
+	err := os.WriteFile(customPage, []byte("<html><body>Custom Landing</body></html>"), 0o644)
+	require.NoError(t, err)
+
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.LandingPage = customPage
+
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupServer(t, srv) })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Custom Landing")
+}
+
+func TestForwardToMonitoringCoordinator_LoopDetection(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupServer(t, srv) })
+
+	// Request without forwarding header — should return 503 (no monitoring coordinator)
+	req := httptest.NewRequest(http.MethodGet, "/prometheus/", nil)
+	rec := httptest.NewRecorder()
+	srv.forwardToMonitoringCoordinator(rec, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	// Request with forwarding header — should return 508 (loop detected)
+	req = httptest.NewRequest(http.MethodGet, "/prometheus/", nil)
+	req.Header.Set("X-TunnelMesh-Forwarded", "true")
+	rec = httptest.NewRecorder()
+	srv.forwardToMonitoringCoordinator(rec, req)
+	assert.Equal(t, http.StatusLoopDetected, rec.Code)
+	assert.Contains(t, rec.Body.String(), "loop detected")
 }

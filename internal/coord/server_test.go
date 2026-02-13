@@ -181,6 +181,31 @@ func TestServer_Register_DuplicateName(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestServer_Register_ReservedName(t *testing.T) {
+	srv := newTestServer(t)
+
+	reserved := []string{"admin", "administrator", "super", "supervisor", "peers", "api", "prometheus", "grafana", "health", "assets", "static", "Admin", "ADMINISTRATOR", "Peers", "Prometheus"}
+	for _, name := range reserved {
+		t.Run(name, func(t *testing.T) {
+			regReq := proto.RegisterRequest{
+				Name:      name,
+				PublicKey: "SHA256:abc123",
+				SSHPort:   2222,
+			}
+			body, _ := json.Marshal(regReq)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer test-token")
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusForbidden, w.Code)
+			assert.Contains(t, w.Body.String(), "reserved")
+		})
+	}
+}
+
 func TestServer_Peers(t *testing.T) {
 	srv := newTestServer(t)
 
@@ -364,25 +389,32 @@ func TestServer_AdminStaticFiles(t *testing.T) {
 	srv := newTestServer(t)
 	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
-	// Admin is now mesh-internal only, test via adminMux at root path
+	// Admin dashboard served at /admin/ prefix
 	// Test index.html
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/", nil)
 	w := httptest.NewRecorder()
 	srv.adminMux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "<title>TunnelMesh</title>")
 
 	// Test CSS
-	req = httptest.NewRequest(http.MethodGet, "/css/style.css", nil)
+	req = httptest.NewRequest(http.MethodGet, "/admin/css/style.css", nil)
 	w = httptest.NewRecorder()
 	srv.adminMux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	// Test JS
-	req = httptest.NewRequest(http.MethodGet, "/js/app.js", nil)
+	req = httptest.NewRequest(http.MethodGet, "/admin/js/app.js", nil)
 	w = httptest.NewRecorder()
 	srv.adminMux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Test root serves landing page
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	w = httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "secured mesh network")
 }
 
 func TestServer_HolePunchBidirectionalCoordination(t *testing.T) {
@@ -1418,4 +1450,24 @@ func TestServer_SaveFilterRulesFiltersExpired(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, loaded.Temporary, 1, "expired rule should not be saved")
 	assert.Equal(t, uint16(80), loaded.Temporary[0].Port)
+}
+
+func TestCoordMeshIPs_CallbackAndGetter(t *testing.T) {
+	cfg := newTestConfig(t)
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+
+	// Initially empty
+	assert.Empty(t, srv.GetCoordMeshIPs())
+
+	// Set callback
+	var received []string
+	srv.OnCoordIPsChanged(func(ips []string) {
+		received = ips
+	})
+
+	// SetCoordMeshIP triggers callback
+	srv.SetCoordMeshIP("10.42.0.1")
+	assert.Equal(t, []string{"10.42.0.1"}, srv.GetCoordMeshIPs())
+	assert.Equal(t, []string{"10.42.0.1"}, received)
 }

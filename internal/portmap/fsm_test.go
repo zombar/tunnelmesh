@@ -296,8 +296,13 @@ func TestFSM_NetworkChange_FromActive(t *testing.T) {
 func TestFSM_NetworkChange_FromDiscovering(t *testing.T) {
 	mock := client.NewMockClient()
 
-	// Make probe slow so we can test network change during discovery
+	// Use a channel to synchronize: only signal network change after probe
+	// is actually running (run loop is blocked in handleDiscovering),
+	// otherwise the signal can be consumed at the top of the run loop
+	// before handleDiscovering starts, causing a no-op state transition.
+	probeStarted := make(chan struct{}, 2)
 	mock.ProbeFunc = func(ctx context.Context) (net.IP, error) {
+		probeStarted <- struct{}{}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -316,17 +321,25 @@ func TestFSM_NetworkChange_FromDiscovering(t *testing.T) {
 	err := pm.Start()
 	require.NoError(t, err)
 
-	// Wait for discovering state
-	waitForState(t, pm, StateDiscovering, 1*time.Second)
+	// Wait for the first probe to actually start running (not just the state
+	// transition). This ensures the run loop is blocked inside handleDiscovering
+	// and won't consume the network change signal at the top of the loop.
+	select {
+	case <-probeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first probe did not start")
+	}
 
-	// Simulate network change during discovery
+	// Simulate network change while probe is running
 	pm.NetworkChanged()
 
-	// Wait for the first probe to complete (500ms) plus time for network change
-	// to be processed and second probe to start
-	time.Sleep(700 * time.Millisecond)
+	// Wait for second probe to start (triggered by network change after first probe completes)
+	select {
+	case <-probeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second probe did not start after network change")
+	}
 
-	// Should have called probe at least twice (initial + after network change)
 	assert.GreaterOrEqual(t, mock.GetProbeCalls(), 2, "probe should be called again after network change")
 }
 

@@ -91,10 +91,15 @@ func RegisterWithCoordinator(ctx context.Context, coordinatorURL string, creds *
 		return nil, fmt.Errorf("decode registration response: %w", err)
 	}
 
-	// Extract mesh info
+	// Extract mesh info - use first coordinator IP for S3 API access
+	var coordMeshIP string
+	if len(regResp.CoordMeshIPs) > 0 {
+		coordMeshIP = regResp.CoordMeshIPs[0]
+	}
+
 	meshInfo := &MeshInfo{
 		MeshIP:      regResp.MeshIP,
-		CoordMeshIP: regResp.CoordMeshIP,
+		CoordMeshIP: coordMeshIP,
 		PeerID:      regResp.PeerID,
 		PeerName:    regResp.PeerName,
 		IsAdmin:     regResp.IsAdmin,
