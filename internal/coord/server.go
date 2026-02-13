@@ -84,16 +84,15 @@ type Server struct {
 	serverStats        serverStats
 	relay              *relayManager
 	holePunch          *holePunchManager
-	wgStore            *wireguard.Store      // WireGuard client storage
-	ca                 *CertificateAuthority // Internal CA for mesh TLS certs
-	version            string                // Server version for admin display
-	sseHub             *sseHub               // SSE hub for real-time dashboard updates
-	ipGeoCache         *IPGeoCache           // IP geolocation cache for location fallback
-	coordMeshIPs       atomic.Value          // All coordinator mesh IPs ([]string) for "this.tunnelmesh" round-robin
-	sortedCoordIPs     atomic.Value          // Sorted copy of coordMeshIPs for deterministic hashing
-	s3ForwardTransport *http.Transport       // Shared transport for S3 write forwarding (reuses connections)
-	coordMetrics       *CoordMetrics         // Prometheus metrics for coordinator
-	metricsRegistry    prometheus.Registerer // Prometheus registry for metrics (shared with peer metrics)
+	wgStore            *wireguard.Store           // WireGuard client storage
+	ca                 *CertificateAuthority      // Internal CA for mesh TLS certs
+	version            string                     // Server version for admin display
+	sseHub             *sseHub                    // SSE hub for real-time dashboard updates
+	ipGeoCache         *IPGeoCache                // IP geolocation cache for location fallback
+	coordIPs           atomic.Pointer[coordIPSet] // Coordinator mesh IPs (original + sorted) for DNS and write forwarding
+	s3ForwardTransport *http.Transport            // Shared transport for S3 write forwarding (reuses connections)
+	coordMetrics       *CoordMetrics              // Prometheus metrics for coordinator
+	metricsRegistry    prometheus.Registerer      // Prometheus registry for metrics (shared with peer metrics)
 	// S3 storage
 	s3Store             *s3.Store            // S3 file-based storage
 	s3Server            *s3.Server           // S3 HTTP server
@@ -117,6 +116,13 @@ type Server struct {
 	// Replication for multi-coordinator setup
 	replicator    *replication.Replicator    // S3 replication engine (nil if not enabled)
 	meshTransport *replication.MeshTransport // Transport for replication messages
+}
+
+// coordIPSet holds both the original and sorted coordinator IP lists as a single
+// atomic unit to prevent inconsistent reads during updates.
+type coordIPSet struct {
+	original []string // Self is always first
+	sorted   []string // Deterministic ordering for hash-based routing
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -1576,7 +1582,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Update replicator peer list if this is a coordinator
 	if peer.IsCoordinator && s.replicator != nil {
 		// SECURITY FIX #4: Don't add self to replication targets
-		// Check peer name instead of mesh IP to avoid race condition with coordMeshIPs.Store()
+		// Check peer name instead of mesh IP to avoid race condition with storeCoordIPs()
 		// which happens asynchronously after registration completes
 		if req.Name != s.cfg.Name {
 			s.replicator.AddPeer(meshIP)
@@ -1677,10 +1683,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		go s.lookupPeerLocation(req.Name, geoLookupIP)
 	}
 
-	// Get coordinator mesh IPs safely (uses atomic.Value).
+	// Get coordinator mesh IPs safely (uses atomic.Pointer).
 	// May be empty during coordinator self-registration at startup — the coordinator's
 	// DNS resolver reads directly from the server's atomic via GetCoordMeshIPs() instead.
-	coordIPs, _ := s.coordMeshIPs.Load().([]string)
+	coordIPs := s.GetCoordMeshIPs()
 
 	// If registering peer is a coordinator, include list of all known coordinators
 	// This enables immediate bidirectional replication without separate ListPeers() call
@@ -2043,23 +2049,27 @@ func (s *Server) ListenAndServe() error {
 
 // GetCoordMeshIPs returns the current list of coordinator mesh IPs.
 func (s *Server) GetCoordMeshIPs() []string {
-	ips, _ := s.coordMeshIPs.Load().([]string)
-	return ips
+	if set := s.coordIPs.Load(); set != nil {
+		return set.original
+	}
+	return nil
 }
 
 // getSortedCoordIPs returns the cached sorted coordinator IP list for deterministic hashing.
 func (s *Server) getSortedCoordIPs() []string {
-	ips, _ := s.sortedCoordIPs.Load().([]string)
-	return ips
+	if set := s.coordIPs.Load(); set != nil {
+		return set.sorted
+	}
+	return nil
 }
 
-// storeCoordIPs stores both the original and sorted coordinator IP lists atomically.
+// storeCoordIPs stores both the original and sorted coordinator IP lists as a single
+// atomic unit, preventing inconsistent reads between the two lists during updates.
 func (s *Server) storeCoordIPs(ips []string) {
-	s.coordMeshIPs.Store(ips)
 	sorted := make([]string, len(ips))
 	copy(sorted, ips)
 	sort.Strings(sorted)
-	s.sortedCoordIPs.Store(sorted)
+	s.coordIPs.Store(&coordIPSet{original: ips, sorted: sorted})
 }
 
 // OnCoordIPsChanged registers a callback that fires whenever the coordinator IP list changes.
@@ -2095,9 +2105,9 @@ func (s *Server) broadcastCoordinatorList() {
 	// to prevent races between list building and storage.
 	s.peersMu.RLock()
 	var ips []string
-	// Include self first (our coordMeshIPs always starts with self)
-	if stored, ok := s.coordMeshIPs.Load().([]string); ok && len(stored) > 0 {
-		ips = append(ips, stored[0]) // Self IP is always first
+	// Include self first (original list always starts with self)
+	if existing := s.GetCoordMeshIPs(); len(existing) > 0 {
+		ips = append(ips, existing[0]) // Self IP is always first
 	}
 	for _, ci := range s.coordinators {
 		// Skip self (already included above)

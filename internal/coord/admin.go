@@ -2317,7 +2317,9 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// Limit request body size to prevent DoS
 	r.Body = http.MaxBytesReader(w, r.Body, MaxS3ObjectSize)
 
-	// Attempt to recover missing bucket for share (no-op if bucket exists)
+	// Attempt to recover missing bucket for share (no-op if bucket exists).
+	// Recovery failure is logged but not returned: the subsequent PutObject will fail
+	// with ErrBucketNotFound, giving the caller the correct error for their operation.
 	if s.fileShareMgr != nil {
 		if err := s.fileShareMgr.EnsureBucketForShare(r.Context(), bucket); err != nil {
 			log.Warn().Err(err).Str("bucket", bucket).Msg("bucket recovery attempt failed")
