@@ -1514,6 +1514,11 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 	// so doing this outside the lock prevents blocking all S3 operations.
 	if s.cas != nil {
 		for _, hash := range chunksToCheck {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 			if !s.isChunkReferencedGlobally(ctx, hash) {
 				_ = s.cas.DeleteChunk(ctx, hash)
 			}
@@ -2346,7 +2351,7 @@ func (s *Store) pruneAllExpiredVersionsSimple(ctx context.Context, stats *GCStat
 			}
 			// Get key from path relative to metaDir (remove .json suffix)
 			relPath, err := filepath.Rel(metaDir, path)
-			if err != nil {
+			if err != nil || len(relPath) <= 5 {
 				return nil
 			}
 			key := relPath[:len(relPath)-5] // Remove .json
@@ -2372,10 +2377,18 @@ func (s *Store) pruneAllExpiredVersionsSimple(ctx context.Context, stats *GCStat
 		}
 	}
 
-	// Delete unreferenced chunks WITHOUT holding the lock
-	if s.cas != nil {
+	// Delete unreferenced chunks WITHOUT holding the lock.
+	// Build the reference set once (single scan) rather than calling
+	// isChunkReferencedGlobally per chunk (which would be O(chunks × buckets × objects)).
+	if s.cas != nil && len(allChunksToCheck) > 0 {
+		referencedChunks := s.buildChunkReferenceSet()
 		for _, hash := range allChunksToCheck {
-			if !s.isChunkReferencedGlobally(ctx, hash) {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			if _, ok := referencedChunks[hash]; !ok {
 				_ = s.cas.DeleteChunk(ctx, hash)
 			}
 		}
