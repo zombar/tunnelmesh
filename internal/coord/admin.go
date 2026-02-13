@@ -2327,15 +2327,29 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// and only sends chunks the remote peer doesn't already have.
 	if s.replicator != nil {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			for _, peerID := range s.replicator.GetPeers() {
+
+			allSucceeded := true
+			peers := s.replicator.GetPeers()
+			for _, peerID := range peers {
 				if err := s.replicator.ReplicateObject(ctx, bucket, key, peerID); err != nil {
 					log.Error().Err(err).
 						Str("peer", peerID).
 						Str("bucket", bucket).
 						Str("key", key).
 						Msg("Failed to replicate S3 PUT operation")
+					allSucceeded = false
+				}
+			}
+
+			// Only cleanup if ALL peers received their chunks
+			if allSucceeded && len(peers) > 0 {
+				if err := s.replicator.CleanupNonAssignedChunks(ctx, bucket, key); err != nil {
+					log.Error().Err(err).
+						Str("bucket", bucket).
+						Str("key", key).
+						Msg("Failed to cleanup non-assigned chunks")
 				}
 			}
 		}()

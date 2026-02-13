@@ -51,6 +51,9 @@ const (
 
 	// MessageTypeFetchChunkResponse returns chunk data in response to a fetch request
 	MessageTypeFetchChunkResponse MessageType = "fetch_chunk_response"
+
+	// MessageTypeReplicateObjectMeta replicates object metadata to a peer
+	MessageTypeReplicateObjectMeta MessageType = "replicate_object_meta"
 )
 
 // Message is the envelope for all replication protocol messages.
@@ -168,6 +171,15 @@ type FetchChunkResponsePayload struct {
 	RequestID string `json:"request_id"` // Matches FetchChunkPayload.RequestID
 	Success   bool   `json:"success"`
 	Error     string `json:"error,omitempty"`
+}
+
+// ReplicateObjectMetaPayload contains object metadata for replication to a peer.
+// The receiving coordinator uses this to create the metadata file so it can
+// serve reads for objects whose chunks arrive via chunk-level replication.
+type ReplicateObjectMetaPayload struct {
+	Bucket   string          `json:"bucket"`
+	Key      string          `json:"key"`
+	MetaJSON json.RawMessage `json:"meta_json"`
 }
 
 // NewReplicateMessage creates a new replication message.

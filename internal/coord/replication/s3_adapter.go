@@ -168,3 +168,23 @@ func (a *S3StoreAdapter) WriteChunkDirect(ctx context.Context, hash string, data
 
 	return nil
 }
+
+// ImportObjectMeta writes object metadata directly (for replication receiver).
+func (a *S3StoreAdapter) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte) error {
+	err := a.store.ImportObjectMeta(ctx, bucket, key, metaJSON)
+	if err != nil {
+		return fmt.Errorf("import object meta: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteChunk removes a chunk from CAS by hash (for cleanup after replication).
+func (a *S3StoreAdapter) DeleteChunk(ctx context.Context, hash string) error {
+	err := a.store.DeleteChunk(ctx, hash)
+	if err != nil {
+		return fmt.Errorf("delete chunk: %w", err)
+	}
+
+	return nil
+}
