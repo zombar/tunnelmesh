@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
@@ -24,10 +25,10 @@ type CoordinatorClient struct {
 }
 
 // NewCoordinatorClient creates a new coordinator S3 API client.
-// meshIP should be the coordinator's mesh IP (e.g., "10.42.0.1").
-func NewCoordinatorClient(meshIP string, creds *Credentials, insecureSkipVerify bool) *CoordinatorClient {
+// baseURL should be the coordinator's URL (e.g., "http://localhost:8081").
+func NewCoordinatorClient(baseURL string, creds *Credentials, insecureSkipVerify bool) *CoordinatorClient {
 	return &CoordinatorClient{
-		baseURL:   fmt.Sprintf("https://%s:443", meshIP),
+		baseURL:   strings.TrimRight(baseURL, "/"),
 		accessKey: creds.AccessKey,
 		secretKey: creds.SecretKey,
 		httpClient: &http.Client{
