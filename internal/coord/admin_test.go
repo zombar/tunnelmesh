@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1163,4 +1166,96 @@ func TestFilterAdd_WithSourcePeer(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "peer-specific rule should have been added")
+}
+
+// --- Landing Page & Admin Route Tests ---
+
+func TestLandingPage_Default(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, "secured mesh network")
+	assert.Contains(t, body, `content="5;url=/admin/"`)
+}
+
+func TestLandingPage_RedirectsToAdmin(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `href="/admin/"`)
+}
+
+func TestAdminDashboard_ServesAtAdmin(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, "<html")
+	assert.Contains(t, body, "TunnelMesh")
+}
+
+func TestAdminDashboard_StaticAssets(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/css/style.css", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, strings.Contains(rec.Header().Get("Content-Type"), "text/css"))
+}
+
+func TestAdminDashboard_APIStillAtRoot(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/overview", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestLandingPage_404ForUnknownPaths(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestLandingPage_Custom(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPage := filepath.Join(tmpDir, "landing.html")
+	err := os.WriteFile(customPage, []byte("<html><body>Custom Landing</body></html>"), 0o644)
+	require.NoError(t, err)
+
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.LandingPage = customPage
+
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupServer(t, srv) })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Custom Landing")
 }

@@ -389,25 +389,32 @@ func TestServer_AdminStaticFiles(t *testing.T) {
 	srv := newTestServer(t)
 	require.NotNil(t, srv.adminMux, "adminMux should be created when JoinMesh is configured")
 
-	// Admin is now mesh-internal only, test via adminMux at root path
+	// Admin dashboard served at /admin/ prefix
 	// Test index.html
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/", nil)
 	w := httptest.NewRecorder()
 	srv.adminMux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "<title>TunnelMesh</title>")
 
 	// Test CSS
-	req = httptest.NewRequest(http.MethodGet, "/css/style.css", nil)
+	req = httptest.NewRequest(http.MethodGet, "/admin/css/style.css", nil)
 	w = httptest.NewRecorder()
 	srv.adminMux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	// Test JS
-	req = httptest.NewRequest(http.MethodGet, "/js/app.js", nil)
+	req = httptest.NewRequest(http.MethodGet, "/admin/js/app.js", nil)
 	w = httptest.NewRecorder()
 	srv.adminMux.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Test root serves landing page
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	w = httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "secured mesh network")
 }
 
 func TestServer_HolePunchBidirectionalCoordination(t *testing.T) {

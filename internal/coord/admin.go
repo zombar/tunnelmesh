@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -352,8 +353,70 @@ func (s *Server) setupAdminRoutes() {
 	// Peer site hosting (serves files from peer shares as web pages)
 	s.adminMux.HandleFunc("/peers/", s.handlePeerSite)
 
-	s.adminMux.Handle("/", fileServer)
+	// Serve admin dashboard at /admin/ prefix
+	s.adminMux.Handle("/admin/", http.StripPrefix("/admin/", fileServer))
+
+	// Landing page at root, 404 for unknown paths
+	s.adminMux.HandleFunc("/", s.handleLanding)
 }
+
+// handleLanding serves the landing page at "/" or returns 404 for unknown paths.
+// If a custom landing page is configured via LandingPage config, it serves that file.
+// Otherwise, it serves a built-in default landing page with a redirect to /admin/.
+func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Custom landing page from config
+	if s.cfg.Coordinator.LandingPage != "" {
+		data, err := os.ReadFile(s.cfg.Coordinator.LandingPage)
+		if err != nil {
+			log.Error().Err(err).Str("path", s.cfg.Coordinator.LandingPage).Msg("failed to read custom landing page")
+			http.Error(w, "landing page not found", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(data)
+		return
+	}
+
+	// Default built-in landing page
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(defaultLandingPage))
+}
+
+const defaultLandingPage = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="5;url=/admin/">
+<title>TunnelMesh</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;overflow:hidden}
+.container{text-align:center;z-index:2;position:relative}
+h1{font-size:2.4rem;font-weight:600;color:#58a6ff;margin-bottom:.5rem;letter-spacing:-.02em}
+p{font-size:1.1rem;color:#8b949e;margin-bottom:2rem}
+a{color:#58a6ff;text-decoration:none;border:1px solid #30363d;padding:.6rem 1.6rem;font-size:.95rem;transition:all .2s}
+a:hover{background:#58a6ff;color:#0d1117;border-color:#58a6ff}
+.meta{margin-top:2rem;font-size:.8rem;color:#484f58}
+.grid{position:fixed;top:0;left:0;width:100%;height:100%;z-index:1;opacity:.08}
+.grid svg{width:100%;height:100%}
+</style>
+</head>
+<body>
+<div class="grid"><svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"><defs><pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0v40" fill="none" stroke="#58a6ff" stroke-width=".5"/></pattern></defs><rect width="100%" height="100%" fill="url(#g)"/></svg></div>
+<div class="container">
+<h1>TunnelMesh</h1>
+<p>Welcome to your secured mesh network</p>
+<a href="/admin/">Enter Dashboard</a>
+<div class="meta">Redirecting in 5 seconds&hellip;</div>
+</div>
+</body>
+</html>`
 
 // handleWGClients handles GET (list) and POST (create) for WireGuard clients.
 func (s *Server) handleWGClients(w http.ResponseWriter, r *http.Request) {

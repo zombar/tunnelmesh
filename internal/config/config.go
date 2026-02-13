@@ -47,6 +47,7 @@ type CoordinatorConfig struct {
 	S3                 S3Config              `yaml:"s3"`                   // S3-compatible storage configuration
 	Filter             FilterConfig          `yaml:"filter"`               // Global packet filter rules for all peers
 	ServicePorts       []uint16              `yaml:"service_ports"`        // Service ports to auto-allow on peers (default: [9443] for metrics)
+	LandingPage        string                `yaml:"landing_page"`         // Path to custom landing page HTML file (default: built-in)
 }
 
 // S3Config holds configuration for the S3-compatible storage service.
