@@ -167,7 +167,7 @@ through the admin panel with QR codes for easy mobile setup.
 ### Admin Interface
 
 The admin interface is **only accessible from within the mesh** via HTTPS on the coordinator's mesh IP. Access it at
-https://this.tm/ from any mesh peer.
+`https://this.tm/` from any mesh peer.
 
 When you run `tunnelmesh join`, the mesh CA certificate is automatically fetched and you'll be prompted to install it in
 your system trust store. This allows HTTPS connections to mesh services without browser warnings.
@@ -228,7 +228,7 @@ name: "mynode"
 # DNS is always enabled. Optional configuration:
 dns:
   listen: "127.0.0.53:5353"  # DNS listen address (default)
-  aliases:  # Custom DNS aliases for this peer
+  aliases:  # Custom DNS aliases for  peer
     - "nas"
     - "homeserver"
 ```
