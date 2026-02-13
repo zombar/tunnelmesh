@@ -819,6 +819,7 @@ func (s *Server) setupRoutes(ctx context.Context) {
 	s.mux.HandleFunc("/api/v1/register", s.withAuth(s.handleRegister))
 	s.mux.HandleFunc("/api/v1/peers", s.withAuth(s.handlePeers))
 	s.mux.HandleFunc("/api/v1/peers/", s.withAuth(s.handlePeerByName))
+	// Note: HTTP heartbeat endpoint removed - heartbeats now sent via WebSocket in relay.go
 	s.mux.HandleFunc("/api/v1/dns", s.withAuth(s.handleDNS))
 
 	// Setup relay routes (JWT auth handled internally)
@@ -1584,10 +1585,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			// Peer IDs are preferred as they're immutable (derived from SSH public key)
 			isAdminPeer := false
 			for _, adminEntry := range s.cfg.Coordinator.AdminPeers {
-				// Match by peer ID (SHA256 hash of SSH key)
+				// Check if entry matches peer ID (SHA256 hash of SSH key) - most secure
 				if peerID != "" && adminEntry == peerID {
 					isAdminPeer = true
-					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Msg("matched admin_peers entry by peer ID")
+					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Msg("matched admin_peers entry by peer ID (secure)")
+					break
+				}
+				// Fallback to name matching for convenience (less secure due to mutability)
+				if adminEntry == req.Name {
+					isAdminPeer = true
+					log.Warn().Str("peer", req.Name).Str("peer_id", peerID).Msg("matched admin_peers entry by name (consider using peer ID for better security)")
 					break
 				}
 			}
