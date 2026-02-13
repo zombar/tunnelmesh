@@ -1382,6 +1382,9 @@ func TestForwardS3Write_ProxyHeaders(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { cleanupServer(t, srv) })
 
+	// Override transport to trust the test server's certificate
+	srv.s3ForwardTransport = backend.Client().Transport.(*http.Transport)
+
 	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/b/objects/k", bytes.NewReader([]byte("hello")))
 	rec := httptest.NewRecorder()
 

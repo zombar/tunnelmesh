@@ -334,14 +334,6 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 		log.Info().Msg("WireGuard client management enabled")
 	}
 
-	// Shared transport for forwarding S3 writes to other coordinators (reuses connections)
-	srv.s3ForwardTransport = &http.Transport{
-		TLSClientConfig:    &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // mesh-internal traffic
-		MaxIdleConns:       100,
-		IdleConnTimeout:    90 * time.Second,
-		DisableCompression: true, // S3 objects are often already compressed
-	}
-
 	// Initialize S3 storage (always enabled, must be before IP allocator)
 	if err := srv.initS3Storage(ctx, cfg); err != nil {
 		return nil, fmt.Errorf("initialize S3 storage: %w", err)
@@ -360,6 +352,15 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 		return nil, fmt.Errorf("initialize CA: %w", err)
 	}
 	srv.ca = ca
+
+	// Shared transport for forwarding S3 writes to other coordinators.
+	// Trusts the internal CA so coordinators verify each other's certificates.
+	srv.s3ForwardTransport = &http.Transport{
+		TLSClientConfig:    ca.GetClientTLSConfig(),
+		MaxIdleConns:       100,
+		IdleConnTimeout:    90 * time.Second,
+		DisableCompression: true, // S3 objects are often already compressed
+	}
 
 	// Initialize packet filter
 	srv.filter = routing.NewPacketFilter(cfg.Coordinator.Filter.IsDefaultDeny())
@@ -395,8 +396,9 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	// Initialize S3 replication for multi-coordinator deployments
 	// Coordinators discover each other through the peer list using is_coordinator flag
 	if srv.s3Store != nil {
-		// Create mesh transport for replication messages (HTTPS between coordinators)
-		srv.meshTransport = replication.NewMeshTransport(log.Logger, nil)
+		// Create mesh transport for replication messages (HTTPS between coordinators).
+		// Trust the internal CA so coordinators can verify each other's certificates.
+		srv.meshTransport = replication.NewMeshTransport(log.Logger, srv.ca.GetClientTLSConfig())
 
 		// Create S3 store adapter for replication
 		s3Adapter := replication.NewS3StoreAdapter(srv.s3Store)
