@@ -181,6 +181,31 @@ func TestServer_Register_DuplicateName(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestServer_Register_ReservedName(t *testing.T) {
+	srv := newTestServer(t)
+
+	reserved := []string{"admin", "administrator", "super", "supervisor", "Admin", "ADMINISTRATOR"}
+	for _, name := range reserved {
+		t.Run(name, func(t *testing.T) {
+			regReq := proto.RegisterRequest{
+				Name:      name,
+				PublicKey: "SHA256:abc123",
+				SSHPort:   2222,
+			}
+			body, _ := json.Marshal(regReq)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/register", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer test-token")
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusForbidden, w.Code)
+			assert.Contains(t, w.Body.String(), "reserved")
+		})
+	}
+}
+
 func TestServer_Peers(t *testing.T) {
 	srv := newTestServer(t)
 

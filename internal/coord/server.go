@@ -1323,6 +1323,19 @@ func (s *Server) validateAliases(aliases []string, requestingPeer string) error 
 	return nil
 }
 
+// reservedPeerNames contains names that cannot be used for peer registration.
+var reservedPeerNames = map[string]bool{
+	"admin":         true,
+	"administrator": true,
+	"super":         true,
+	"supervisor":    true,
+}
+
+// isReservedPeerName checks if a peer name is reserved.
+func isReservedPeerName(name string) bool {
+	return reservedPeerNames[strings.ToLower(name)]
+}
+
 // nolint:gocyclo // Peer registration handles many edge cases and states
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1333,6 +1346,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req proto.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Reject reserved peer names
+	if isReservedPeerName(req.Name) {
+		s.jsonError(w, fmt.Sprintf("peer name %q is reserved", req.Name), http.StatusForbidden)
 		return
 	}
 
