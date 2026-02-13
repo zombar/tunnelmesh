@@ -143,9 +143,10 @@ func TestNewSyncResponseMessage(t *testing.T) {
 
 func TestMessage_Marshal_Unmarshal(t *testing.T) {
 	original := &Message{
-		Type: MessageTypeReplicate,
-		ID:   "test-123",
-		From: "coord1.tunnelmesh:8443",
+		Version: ProtocolVersion,
+		Type:    MessageTypeReplicate,
+		ID:      "test-123",
+		From:    "coord1.tunnelmesh:8443",
 		Payload: []byte(`{
 			"bucket": "system",
 			"key": "test.json",

@@ -495,7 +495,7 @@ func (p *PersistentRelay) handleMessage(data []byte) {
 
 	case MsgTypeHeartbeatAck:
 		// Server acknowledged our heartbeat - connection is alive
-		// Extended format: [MsgTypeHeartbeatAck][timestamp:8] echoes our sent timestamp
+		// Format: [MsgTypeHeartbeatAck][timestamp:8] echoes our sent timestamp
 		if len(data) >= 9 {
 			sentAt := int64(binary.BigEndian.Uint64(data[1:9]))
 			rtt := time.Duration(time.Now().UnixNano() - sentAt)
@@ -503,9 +503,6 @@ func (p *PersistentRelay) handleMessage(data []byte) {
 			p.lastRTT = rtt
 			p.latencyMu.Unlock()
 			log.Debug().Dur("rtt", rtt).Msg("measured coordinator RTT")
-		} else {
-			// Old server sent 1-byte ack without timestamp - no RTT measurement
-			log.Debug().Msg("persistent relay received heartbeat ack (no timestamp)")
 		}
 
 	case MsgTypeRelayNotify:

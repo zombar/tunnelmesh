@@ -164,8 +164,6 @@ func (c *Client) ListPeers() ([]proto.Peer, error) {
 	return result.Peers, nil
 }
 
-// Note: Heartbeat() and HeartbeatWithStats() removed - heartbeats now sent via WebSocket
-
 // Deregister removes this peer from the mesh.
 func (c *Client) Deregister(name string) error {
 	resp, err := c.doRequest(http.MethodDelete, "/api/v1/peers/"+name, nil)

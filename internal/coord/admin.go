@@ -330,8 +330,7 @@ func (s *Server) setupAdminRoutes() {
 	}
 
 	// Relay endpoints on admin mux (mesh-only heartbeats and relay fallback)
-	// These endpoints are also on the public mux for backwards compatibility and initial connections.
-	// Peers that have joined the mesh should prefer using these mesh-only endpoints for better security.
+	// Also registered on public mux for initial connections before mesh join.
 	s.adminMux.HandleFunc("/api/v1/relay/persistent", s.handlePersistentRelay)
 	s.adminMux.HandleFunc("/api/v1/relay/", s.handleRelay)
 	s.adminMux.HandleFunc("/api/v1/relay-status", s.handleRelayStatus)

@@ -419,11 +419,12 @@ func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 	})
 	require.NoError(t, err, "connection not registered")
 
-	// Send heartbeat WITHOUT HeartbeatSentAt (simulating old client)
+	// Send heartbeat with HeartbeatSentAt for RTT measurement
+	sentAt := time.Now().UnixMicro()
 	stats := &proto.PeerStats{
-		PacketsSent:   100,
-		ActiveTunnels: 2,
-		// HeartbeatSentAt is 0 (not set)
+		PacketsSent:     100,
+		ActiveTunnels:   2,
+		HeartbeatSentAt: sentAt,
 	}
 	statsJSON, _ := json.Marshal(stats)
 
@@ -436,14 +437,15 @@ func TestRelayManager_HeartbeatAckWithoutTimestamp(t *testing.T) {
 	err = conn.WriteMessage(websocket.BinaryMessage, msg)
 	require.NoError(t, err)
 
-	// Read heartbeat ack
+	// Read heartbeat ack - always extended format [type][timestamp:8]
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
 	_, ackData, err := conn.ReadMessage()
 	require.NoError(t, err)
 
-	// Ack should be 1 byte for backwards compatibility
 	assert.Equal(t, MsgTypeHeartbeatAck, ackData[0], "should receive heartbeat ack")
-	assert.Len(t, ackData, 1, "ack should be 1 byte for old clients without timestamp")
+	assert.Len(t, ackData, 9, "ack should be 9 bytes with echoed timestamp")
+	echoedTS := int64(binary.BigEndian.Uint64(ackData[1:]))
+	assert.Equal(t, sentAt, echoedTS, "echoed timestamp should match sent timestamp")
 }
 
 func TestRelayManager_QueryFilterRules(t *testing.T) {

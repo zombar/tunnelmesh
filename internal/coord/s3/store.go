@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -540,12 +541,24 @@ func (s *Store) DeleteBucket(ctx context.Context, bucket string) error {
 		return ErrBucketNotEmpty
 	}
 
-	// Remove bucket directory
-	if err := os.RemoveAll(bucketDir); err != nil {
-		return fmt.Errorf("remove bucket: %w", err)
+	// Remove bucket directory.
+	// On Windows, file handles may be transiently held by OS processes
+	// (antivirus, search indexer), causing RemoveAll to fail. Retry briefly.
+	var removeErr error
+	retries := 1
+	if runtime.GOOS == "windows" {
+		retries = 5
 	}
-
-	return nil
+	for i := 0; i < retries; i++ {
+		removeErr = os.RemoveAll(bucketDir)
+		if removeErr == nil {
+			return nil
+		}
+		if i < retries-1 {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("remove bucket: %w", removeErr)
 }
 
 // TombstoneBucket marks a bucket as soft-deleted.

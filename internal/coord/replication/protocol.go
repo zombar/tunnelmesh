@@ -306,12 +306,6 @@ func UnmarshalMessage(data []byte) (*Message, error) {
 		return nil, fmt.Errorf("unmarshal message: %w", err)
 	}
 
-	// Version 0 is treated as version 1 for backward compatibility during rollout
-	// Once all coordinators are upgraded, this fallback can be removed
-	if msg.Version == 0 {
-		msg.Version = 1
-	}
-
 	// Check protocol version compatibility
 	if msg.Version != ProtocolVersion {
 		return nil, fmt.Errorf("incompatible protocol version: got %d, expected %d", msg.Version, ProtocolVersion)
