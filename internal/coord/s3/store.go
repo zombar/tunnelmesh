@@ -735,6 +735,126 @@ func (s *Store) updateBucketSize(bucketName string, delta int64) error {
 	return s.writeBucketMeta(bucketName, bucketMeta)
 }
 
+// getObjectContentWithErasureCoding reads an erasure-coded object and reconstructs
+// missing data shards if necessary. Returns a reader for the reconstructed file.
+//
+//nolint:gocyclo // Complexity from shard reconstruction logic
+func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, key string, meta *ObjectMeta) (io.ReadCloser, *ObjectMeta, error) {
+	ec := meta.ErasureCoding
+	k := ec.DataShards
+	m := ec.ParityShards
+
+	// Collect all available shards (data + parity)
+	var availableShards [][]byte
+	var availableIndices []int
+	shardMap := make(map[string]int) // chunkHash -> shard index
+
+	// Build map of chunk hashes to shard indices
+	for i, hash := range ec.DataHashes {
+		shardMap[hash] = i
+	}
+	for i, hash := range ec.ParityHashes {
+		shardMap[hash] = k + i
+	}
+
+	// Try to fetch all shards locally
+	allShards := make([][]byte, k+m)
+	for hash, idx := range shardMap {
+		chunk, err := s.cas.ReadChunk(ctx, hash)
+		if err == nil {
+			allShards[idx] = chunk
+			availableShards = append(availableShards, chunk)
+			availableIndices = append(availableIndices, idx)
+		}
+	}
+
+	// Count available data shards
+	availableDataShards := 0
+	for i := 0; i < k; i++ {
+		if allShards[i] != nil {
+			availableDataShards++
+		}
+	}
+
+	// Check if we have enough shards for reconstruction
+	if len(availableShards) < k {
+		return nil, nil, fmt.Errorf("insufficient shards: need %d, have %d (versionID=%s)", k, len(availableShards), meta.VersionID)
+	}
+
+	// If all data shards are available, read directly without reconstruction
+	if availableDataShards == k {
+		// All data shards present - no reconstruction needed
+		// Read data shards in order and reassemble file
+		var fileData []byte
+		for i := 0; i < k; i++ {
+			fileData = append(fileData, allShards[i]...)
+		}
+
+		// Trim to original size (remove padding)
+		if int64(len(fileData)) < meta.Size {
+			return nil, nil, fmt.Errorf("reconstructed data too small: got %d bytes, expected %d", len(fileData), meta.Size)
+		}
+		fileData = fileData[:meta.Size]
+
+		return io.NopCloser(bytes.NewReader(fileData)), meta, nil
+	}
+
+	// Need reconstruction: some data shards are missing
+	s.logger.Info().
+		Int("available", len(availableShards)).
+		Int("needed", k).
+		Int("data_shards", availableDataShards).
+		Str("version", meta.VersionID).
+		Msg("reconstructing erasure-coded object")
+
+	// Reconstruct using Reed-Solomon
+	reconstructedData, err := DecodeFile(allShards, k, m, meta.Size)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to reconstruct file (versionID=%s): %w", meta.VersionID, err)
+	}
+
+	// Cache reconstructed data shards back to CAS for future reads
+	// This is a best-effort operation - don't fail the read if caching fails
+	go func() {
+		// Use background context since original request may have completed
+		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		// After reconstruction, allShards contains reconstructed data shards
+		// Extract and cache the data shards that were reconstructed
+		for i := 0; i < k; i++ {
+			if meta.ErasureCoding.DataHashes[i] == "" {
+				continue // No hash for this shard
+			}
+
+			// Check if this data shard was originally missing
+			hash := meta.ErasureCoding.DataHashes[i]
+			if _, exists := shardMap[hash]; !exists {
+				continue
+			}
+
+			// Skip if we already had this shard
+			originallyPresent := false
+			for _, idx := range availableIndices {
+				if idx == i {
+					originallyPresent = true
+					break
+				}
+			}
+			if originallyPresent {
+				continue
+			}
+
+			// Cache the reconstructed shard
+			if _, err := s.cas.WriteChunk(bgCtx, allShards[i]); err != nil {
+				s.logger.Warn().Err(err).Int("shard", i).Str("hash", hash[:8]).Msg("failed to cache reconstructed shard")
+			}
+		}
+	}()
+
+	return io.NopCloser(bytes.NewReader(reconstructedData)), meta, nil
+}
+
 // putObjectWithErasureCoding stores an object using Reed-Solomon erasure coding.
 // The entire file is buffered in memory, encoded into data+parity shards, then stored.
 // Data shards are CDC chunked (preserves deduplication), parity shards are stored directly.
@@ -2682,6 +2802,11 @@ func (s *Store) getObjectContent(ctx context.Context, bucket, key string, meta *
 	if len(meta.Chunks) == 0 {
 		// Empty file
 		return io.NopCloser(bytes.NewReader(nil)), meta, nil
+	}
+
+	// Check if object uses erasure coding
+	if meta.ErasureCoding != nil && meta.ErasureCoding.Enabled {
+		return s.getObjectContentWithErasureCoding(ctx, bucket, key, meta)
 	}
 
 	// Use distributed chunk reader if replicator is configured (Phase 5)
