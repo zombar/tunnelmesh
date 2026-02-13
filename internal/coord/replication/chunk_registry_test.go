@@ -509,3 +509,286 @@ func TestChunkRegistryConcurrentAccess(t *testing.T) {
 		t.Errorf("expected %d chunks, got %v (possible race condition)", expected, stats["total_chunks"])
 	}
 }
+
+// Shard-specific tests
+
+func TestRegisterShardChunk(t *testing.T) {
+	registry := NewChunkRegistry("coord-1", nil)
+
+	// Register a parity shard
+	err := registry.RegisterShardChunk("parity-hash-1", 1024, 2, "parity", 0, "file-version-123")
+	if err != nil {
+		t.Fatalf("RegisterShardChunk failed: %v", err)
+	}
+
+	// Verify ownership
+	ownership := registry.GetChunkOwnership("parity-hash-1")
+	if ownership == nil {
+		t.Fatal("expected ownership record, got nil")
+	}
+
+	if ownership.ShardType != "parity" {
+		t.Errorf("expected shard_type=parity, got %s", ownership.ShardType)
+	}
+
+	if ownership.ShardIndex != 0 {
+		t.Errorf("expected shard_index=0, got %d", ownership.ShardIndex)
+	}
+
+	if ownership.ParentFileID != "file-version-123" {
+		t.Errorf("expected parent_file_id=file-version-123, got %s", ownership.ParentFileID)
+	}
+
+	if ownership.ReplicationFactor != 2 {
+		t.Errorf("expected replication_factor=2, got %d", ownership.ReplicationFactor)
+	}
+}
+
+func TestRegisterShardChunkInvalidType(t *testing.T) {
+	registry := NewChunkRegistry("coord-1", nil)
+
+	// Register with invalid shard type
+	err := registry.RegisterShardChunk("hash-1", 1024, 2, "invalid", 0, "file-version-123")
+	if err == nil {
+		t.Error("expected error for invalid shard type, got nil")
+	}
+}
+
+func TestRegisterShardChunkDataShard(t *testing.T) {
+	registry := NewChunkRegistry("coord-1", nil)
+
+	// Register a data shard
+	err := registry.RegisterShardChunk("data-hash-1", 2048, 2, "data", 5, "file-version-456")
+	if err != nil {
+		t.Fatalf("RegisterShardChunk failed: %v", err)
+	}
+
+	ownership := registry.GetChunkOwnership("data-hash-1")
+	if ownership == nil {
+		t.Fatal("expected ownership record, got nil")
+	}
+
+	if ownership.ShardType != "data" {
+		t.Errorf("expected shard_type=data, got %s", ownership.ShardType)
+	}
+
+	if ownership.ShardIndex != 5 {
+		t.Errorf("expected shard_index=5, got %d", ownership.ShardIndex)
+	}
+}
+
+func TestGetParityShardsForFile(t *testing.T) {
+	registry := NewChunkRegistry("coord-1", nil)
+
+	// Register multiple shards for same file
+	_ = registry.RegisterShardChunk("data-0", 1024, 2, "data", 0, "file-v1")
+	_ = registry.RegisterShardChunk("data-1", 1024, 2, "data", 1, "file-v1")
+	_ = registry.RegisterShardChunk("parity-0", 1024, 2, "parity", 0, "file-v1")
+	_ = registry.RegisterShardChunk("parity-1", 1024, 2, "parity", 1, "file-v1")
+	_ = registry.RegisterShardChunk("parity-2", 1024, 2, "parity", 2, "file-v1")
+
+	// Register shards for different file
+	_ = registry.RegisterShardChunk("other-parity", 1024, 2, "parity", 0, "file-v2")
+
+	// Get parity shards for file-v1
+	shards, err := registry.GetParityShardsForFile("file-v1")
+	if err != nil {
+		t.Fatalf("GetParityShardsForFile failed: %v", err)
+	}
+
+	if len(shards) != 3 {
+		t.Fatalf("expected 3 parity shards, got %d", len(shards))
+	}
+
+	// Verify shards are sorted by index
+	for i, shard := range shards {
+		if shard.ShardIndex != i {
+			t.Errorf("shard %d has index %d (expected sorted order)", i, shard.ShardIndex)
+		}
+		if shard.ShardType != "parity" {
+			t.Errorf("shard %d has type %s (expected parity)", i, shard.ShardType)
+		}
+	}
+}
+
+func TestGetParityShardsForFileEmpty(t *testing.T) {
+	registry := NewChunkRegistry("coord-1", nil)
+
+	// Query for file with no shards
+	shards, err := registry.GetParityShardsForFile("nonexistent-file")
+	if err != nil {
+		t.Fatalf("GetParityShardsForFile failed: %v", err)
+	}
+
+	if len(shards) != 0 {
+		t.Errorf("expected 0 shards, got %d", len(shards))
+	}
+}
+
+func TestGetParityShardsForFileEmptyID(t *testing.T) {
+	registry := NewChunkRegistry("coord-1", nil)
+
+	_, err := registry.GetParityShardsForFile("")
+	if err == nil {
+		t.Error("expected error for empty file ID, got nil")
+	}
+}
+
+func TestGetShardsForFile(t *testing.T) {
+	registry := NewChunkRegistry("coord-1", nil)
+
+	// Register mixed shards
+	_ = registry.RegisterShardChunk("data-0", 1024, 2, "data", 0, "file-v1")
+	_ = registry.RegisterShardChunk("data-1", 1024, 2, "data", 1, "file-v1")
+	_ = registry.RegisterShardChunk("parity-0", 1024, 2, "parity", 0, "file-v1")
+	_ = registry.RegisterShardChunk("parity-1", 1024, 2, "parity", 1, "file-v1")
+
+	// Get all shards for file
+	shards, err := registry.GetShardsForFile("file-v1")
+	if err != nil {
+		t.Fatalf("GetShardsForFile failed: %v", err)
+	}
+
+	if len(shards) != 4 {
+		t.Fatalf("expected 4 shards, got %d", len(shards))
+	}
+
+	// Verify data shards come before parity shards
+	dataCount := 0
+	parityCount := 0
+	sawParity := false
+
+	for _, shard := range shards {
+		switch shard.ShardType {
+		case "data":
+			if sawParity {
+				t.Error("data shard found after parity shard (expected data shards first)")
+			}
+			dataCount++
+		case "parity":
+			sawParity = true
+			parityCount++
+		}
+	}
+
+	if dataCount != 2 {
+		t.Errorf("expected 2 data shards, got %d", dataCount)
+	}
+	if parityCount != 2 {
+		t.Errorf("expected 2 parity shards, got %d", parityCount)
+	}
+}
+
+func TestGetShardOwnersByType(t *testing.T) {
+	registry := NewChunkRegistry("coord-1", nil)
+
+	// Register various shards
+	_ = registry.RegisterShardChunk("data-0", 1024, 2, "data", 0, "file-v1")
+	_ = registry.RegisterShardChunk("data-1", 1024, 2, "data", 1, "file-v1")
+	_ = registry.RegisterShardChunk("parity-0", 1024, 2, "parity", 0, "file-v1")
+	_ = registry.RegisterShardChunk("parity-1", 1024, 2, "parity", 1, "file-v1")
+
+	// Get parity shard owners
+	owners, err := registry.GetShardOwnersByType("parity")
+	if err != nil {
+		t.Fatalf("GetShardOwnersByType failed: %v", err)
+	}
+
+	if len(owners) != 2 {
+		t.Fatalf("expected 2 parity chunks, got %d", len(owners))
+	}
+
+	// Get data shard owners
+	owners, err = registry.GetShardOwnersByType("data")
+	if err != nil {
+		t.Fatalf("GetShardOwnersByType failed: %v", err)
+	}
+
+	if len(owners) != 2 {
+		t.Fatalf("expected 2 data chunks, got %d", len(owners))
+	}
+
+	// Get all shards (empty type)
+	owners, err = registry.GetShardOwnersByType("")
+	if err != nil {
+		t.Fatalf("GetShardOwnersByType failed: %v", err)
+	}
+
+	if len(owners) != 4 {
+		t.Fatalf("expected 4 total chunks, got %d", len(owners))
+	}
+}
+
+func TestGetShardOwnersByTypeInvalid(t *testing.T) {
+	registry := NewChunkRegistry("coord-1", nil)
+
+	_, err := registry.GetShardOwnersByType("invalid")
+	if err == nil {
+		t.Error("expected error for invalid shard type, got nil")
+	}
+}
+
+func TestCleanupOrphanedShards(t *testing.T) {
+	registry := NewChunkRegistry("coord-1", nil)
+
+	// Register shards for multiple files
+	_ = registry.RegisterShardChunk("data-0", 1024, 2, "data", 0, "file-v1")
+	_ = registry.RegisterShardChunk("parity-0", 1024, 2, "parity", 0, "file-v1")
+	_ = registry.RegisterShardChunk("data-1", 1024, 2, "data", 0, "file-v2")
+	_ = registry.RegisterShardChunk("parity-1", 1024, 2, "parity", 0, "file-v2")
+
+	// Register regular chunk (no parent file)
+	_ = registry.RegisterChunk("regular-chunk", 1024)
+
+	// Mark only file-v1 as active
+	activeFiles := map[string]bool{
+		"file-v1": true,
+	}
+
+	// Cleanup orphaned shards
+	cleaned := registry.CleanupOrphanedShards(activeFiles)
+
+	// Should clean up 2 shards from file-v2
+	if cleaned != 2 {
+		t.Errorf("expected 2 cleaned shards, got %d", cleaned)
+	}
+
+	// Verify file-v1 shards still exist
+	shards, _ := registry.GetShardsForFile("file-v1")
+	if len(shards) != 2 {
+		t.Errorf("expected 2 shards remaining for file-v1, got %d", len(shards))
+	}
+
+	// Verify file-v2 shards are gone
+	shards, _ = registry.GetShardsForFile("file-v2")
+	if len(shards) != 0 {
+		t.Errorf("expected 0 shards remaining for file-v2, got %d", len(shards))
+	}
+
+	// Verify regular chunk still exists
+	ownership := registry.GetChunkOwnership("regular-chunk")
+	if ownership == nil {
+		t.Error("regular chunk was incorrectly removed")
+	}
+}
+
+func TestCleanupOrphanedShardsEmptyActive(t *testing.T) {
+	registry := NewChunkRegistry("coord-1", nil)
+
+	// Register shards
+	_ = registry.RegisterShardChunk("parity-0", 1024, 2, "parity", 0, "file-v1")
+	_ = registry.RegisterShardChunk("parity-1", 1024, 2, "parity", 1, "file-v1")
+
+	// Cleanup with no active files
+	cleaned := registry.CleanupOrphanedShards(map[string]bool{})
+
+	// Should clean up all shards
+	if cleaned != 2 {
+		t.Errorf("expected 2 cleaned shards, got %d", cleaned)
+	}
+
+	shards, _ := registry.GetShardsForFile("file-v1")
+	if len(shards) != 0 {
+		t.Errorf("expected 0 shards remaining, got %d", len(shards))
+	}
+}
