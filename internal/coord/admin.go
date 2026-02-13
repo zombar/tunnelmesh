@@ -375,7 +375,11 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 		data, err := os.ReadFile(s.cfg.Coordinator.LandingPage)
 		if err != nil {
 			log.Error().Err(err).Str("path", s.cfg.Coordinator.LandingPage).Msg("failed to read custom landing page")
-			http.Error(w, "landing page not found", http.StatusInternalServerError)
+			if os.IsNotExist(err) {
+				http.Error(w, "landing page not found", http.StatusNotFound)
+			} else {
+				http.Error(w, "failed to read landing page", http.StatusInternalServerError)
+			}
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

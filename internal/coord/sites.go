@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"path"
 	"sort"
 	"strings"
@@ -30,6 +31,7 @@ type peerSiteData struct {
 	Path       string
 	ParentPath string
 	Entries    []peerSiteEntry
+	Truncated  bool
 }
 
 // peerIndexEntry represents a peer in the peer index page.
@@ -39,6 +41,7 @@ type peerIndexEntry struct {
 }
 
 var dirListingTmpl = template.Must(template.New("dirlist").Funcs(template.FuncMap{
+	"urlEncode": url.PathEscape,
 	"formatSize": func(size int64) string {
 		switch {
 		case size >= 1<<30:
@@ -84,6 +87,7 @@ td.size, th.size { text-align: right; }
 .dir { color: #58a6ff; }
 .file { color: #e6edf3; }
 .expired { color: #f85149; }
+.truncated { color: #d29922; margin-top: 12px; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -92,17 +96,20 @@ td.size, th.size { text-align: right; }
 <tr><th>Name</th><th class="size">Size</th><th>Last Modified</th><th>Expires</th></tr>
 {{if .ParentPath}}<tr><td><a href="{{.ParentPath}}" class="dir">../</a></td><td class="size">-</td><td>-</td><td>-</td></tr>{{end}}
 {{range .Entries}}<tr>
-<td>{{if .IsDir}}<a href="{{.Name}}/" class="dir">{{.Name}}/</a>{{else}}<a href="{{.Name}}" class="file">{{.Name}}</a>{{end}}</td>
+<td>{{if .IsDir}}<a href="{{urlEncode .Name}}/" class="dir">{{.Name}}/</a>{{else}}<a href="{{urlEncode .Name}}" class="file">{{.Name}}</a>{{end}}</td>
 <td class="size">{{if .IsDir}}-{{else}}{{formatSize .Size}}{{end}}</td>
 <td>{{formatTime .LastModified}}</td>
 <td>{{formatExpiry .Expires}}</td>
 </tr>{{end}}
 </table>
+{{if .Truncated}}<p class="truncated">Listing truncated to 1000 entries.</p>{{end}}
 </body>
 </html>
 `))
 
-var peerIndexTmpl = template.Must(template.New("peerindex").Parse(`<!DOCTYPE html>
+var peerIndexTmpl = template.Must(template.New("peerindex").Funcs(template.FuncMap{
+	"urlEncode": url.PathEscape,
+}).Parse(`<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -121,7 +128,7 @@ li { padding: 4px 0; }
 <body>
 <h1>Peer Sites</h1>
 {{range $peer := .}}<h2>{{$peer.Name}}</h2>
-<ul>{{range $peer.Shares}}<li><a href="{{$peer.Name}}/{{.}}/">{{.}}</a></li>{{end}}</ul>
+<ul>{{range $peer.Shares}}<li><a href="{{urlEncode $peer.Name}}/{{urlEncode .}}/">{{.}}</a></li>{{end}}</ul>
 {{end}}
 </body>
 </html>
@@ -291,7 +298,8 @@ func (s *Server) tryServeFile(w http.ResponseWriter, r *http.Request, bucketName
 
 // handleDirectoryListing renders a directory listing for a given prefix.
 func (s *Server) handleDirectoryListing(w http.ResponseWriter, r *http.Request, bucketName, prefix string) {
-	objects, _, _, err := s.s3Store.ListObjects(r.Context(), bucketName, prefix, "", 1000)
+	const maxListObjects = 1000
+	objects, _, _, err := s.s3Store.ListObjects(r.Context(), bucketName, prefix, "", maxListObjects)
 	if err != nil {
 		if errors.Is(err, s3.ErrBucketNotFound) {
 			http.Error(w, "Not found", http.StatusNotFound)
@@ -300,6 +308,8 @@ func (s *Server) handleDirectoryListing(w http.ResponseWriter, r *http.Request, 
 		}
 		return
 	}
+
+	truncated := len(objects) >= maxListObjects
 
 	// Build entries: deduplicate directories, list files
 	dirSet := make(map[string]bool)
@@ -360,6 +370,7 @@ func (s *Server) handleDirectoryListing(w http.ResponseWriter, r *http.Request, 
 		Path:       displayPath,
 		ParentPath: parentPath,
 		Entries:    entries,
+		Truncated:  truncated,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -372,21 +383,20 @@ func (s *Server) handleDirectoryListing(w http.ResponseWriter, r *http.Request, 
 func (s *Server) handlePeerIndex(w http.ResponseWriter, r *http.Request) {
 	shares := s.fileShareMgr.List()
 
-	// Group shares by peer name
+	// Group shares by peer name using owner -> peer name resolution
 	peerShares := make(map[string][]string)
 	for _, share := range shares {
-		// Only show shares the requester can access
 		if !s.canAccessShare(r, share) {
 			continue
 		}
 
-		// Extract peer name and share name from internal name (e.g., "alice_share" -> "alice", "share")
-		idx := strings.Index(share.Name, "_")
-		if idx < 0 {
+		// Resolve peer name from share owner (handles underscores in peer names)
+		peerName := s.getPeerName(share.Owner)
+		prefix := peerName + "_"
+		if !strings.HasPrefix(share.Name, prefix) {
 			continue
 		}
-		peerName := share.Name[:idx]
-		shareName := share.Name[idx+1:]
+		shareName := strings.TrimPrefix(share.Name, prefix)
 		peerShares[peerName] = append(peerShares[peerName], shareName)
 	}
 

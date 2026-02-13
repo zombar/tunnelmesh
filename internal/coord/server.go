@@ -1328,6 +1328,8 @@ var reservedPeerNames = map[string]bool{
 	"administrator": true,
 	"super":         true,
 	"supervisor":    true,
+	"peers":         true,
+	"api":           true,
 }
 
 // isReservedPeerName checks if a peer name is reserved.
@@ -1938,11 +1940,6 @@ func (s *Server) createPeerShare(peerID, peerName string) {
 
 	shareName := peerName + "_share"
 
-	// Check if share already exists (handles re-registration)
-	if s.fileShareMgr.Get(shareName) != nil {
-		return
-	}
-
 	quota := s.cfg.Coordinator.S3.DefaultShareQuota.Bytes()
 	opts := &s3.FileShareOptions{
 		GuestRead:         true,
@@ -1952,6 +1949,9 @@ func (s *Server) createPeerShare(peerID, peerName string) {
 
 	share, err := s.fileShareMgr.Create(ctx, shareName, "Personal share", peerID, quota, opts)
 	if err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			return // Share already exists (re-registration), nothing to do
+		}
 		log.Warn().Err(err).Str("peer", peerName).Str("share", shareName).Msg("failed to auto-create peer share")
 		return
 	}

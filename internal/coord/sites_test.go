@@ -230,6 +230,10 @@ func TestPeerSite_CacheHeaders(t *testing.T) {
 func TestPeerSite_PeerIndex(t *testing.T) {
 	srv := newTestServer(t)
 
+	// Set up peer name cache for owner resolution
+	nameMap := map[string]string{"alice-id": "alice", "bob-id": "bob"}
+	srv.peerNameCache.Store(&nameMap)
+
 	// Create shares for multiple peers
 	opts := &s3.FileShareOptions{GuestRead: true, GuestReadSet: true, ReplicationFactor: 1}
 	_, err := srv.fileShareMgr.Create(context.Background(), "alice_share", "Alice share", "alice-id", 0, opts)
@@ -420,4 +424,72 @@ func TestShareCreate_AutoPrefixed(t *testing.T) {
 	share := srv.fileShareMgr.Get("alice_blog")
 	require.NotNil(t, share, "share should be created with prefixed name")
 	assert.Equal(t, "alice_blog", share.Name)
+}
+
+func TestPeerSite_URLEncodingInFilenames(t *testing.T) {
+	srv := newTestServerWithShare(t, "alice_share", "alice-id", true, map[string]string{
+		"hello world.txt":   "spaces in name",
+		"file&name.txt":     "ampersand in name",
+		"100% done.txt":     "percent in name",
+		"docs/my file.html": "file in subdir with space",
+	})
+
+	// Directory listing should contain URL-encoded hrefs
+	req := httptest.NewRequest(http.MethodGet, "/peers/alice/share/", nil)
+	w := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	// Hrefs should be URL-encoded; & is valid in paths so only HTML-escaped
+	assert.Contains(t, body, `href="hello%20world.txt"`)
+	assert.Contains(t, body, ">hello world.txt<")
+	assert.Contains(t, body, `href="file&amp;name.txt"`) // & is valid in paths, HTML-escaped in attribute
+	assert.Contains(t, body, `href="100%25%20done.txt"`)
+}
+
+func TestPeerIndex_UnderscoreInPeerName(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Create shares for a peer with underscore in the name
+	nameMap := map[string]string{"alice-dev-id": "alice_dev"}
+	srv.peerNameCache.Store(&nameMap)
+
+	opts := &s3.FileShareOptions{GuestRead: true, GuestReadSet: true, ReplicationFactor: 1}
+	_, err := srv.fileShareMgr.Create(context.Background(), "alice_dev_share", "Share", "alice-dev-id", 0, opts)
+	require.NoError(t, err)
+	_, err = srv.fileShareMgr.Create(context.Background(), "alice_dev_blog", "Blog", "alice-dev-id", 0, opts)
+	require.NoError(t, err)
+
+	// Peer index should correctly resolve peer name from owner
+	req := httptest.NewRequest(http.MethodGet, "/peers/", nil)
+	w := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+
+	// Peer name "alice_dev" should appear as a heading
+	assert.Contains(t, body, "alice_dev")
+	// Share names should be "share" and "blog" (stripped of "alice_dev_" prefix)
+	assert.Contains(t, body, ">share<")
+	assert.Contains(t, body, ">blog<")
+}
+
+func TestCreatePeerShare_RaceConditionSafe(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Pre-create the share to simulate race
+	opts := &s3.FileShareOptions{GuestRead: true, GuestReadSet: true, ReplicationFactor: 1}
+	_, err := srv.fileShareMgr.Create(context.Background(), "racepeer_share", "Original", "race-id", 0, opts)
+	require.NoError(t, err)
+
+	// Concurrent auto-create should not panic or error
+	srv.createPeerShare("race-id", "racepeer")
+
+	// Original share should be unchanged
+	share := srv.fileShareMgr.Get("racepeer_share")
+	require.NotNil(t, share)
+	assert.Equal(t, "Original", share.Description)
 }
