@@ -419,3 +419,163 @@ func TestErasureCodingReadPath_RepeatedContent(t *testing.T) {
 	got := putAndGet(t, store, "ec-bucket", "repeated.bin", data)
 	assert.Equal(t, data, got, "repeated content should round-trip correctly")
 }
+
+// TestErasureCodingReadPath_DistributedFetch tests that missing local chunks are
+// fetched from remote coordinators via the chunk registry and replicator.
+func TestErasureCodingReadPath_DistributedFetch(t *testing.T) {
+	k, m := 6, 3
+	data := make([]byte, 24*1024) // 24KB
+	_, err := rand.Read(data)
+	require.NoError(t, err)
+
+	store := newTestStoreWithErasureCoding(t, k, m)
+	ctx := context.Background()
+
+	// Write the object
+	meta, err := store.PutObject(ctx, "ec-bucket", "test.bin", bytes.NewReader(data), int64(len(data)), "application/octet-stream", nil)
+	require.NoError(t, err)
+	require.NotNil(t, meta.ErasureCoding)
+
+	// Read all data chunks from CAS before deleting them (to populate the mock replicator)
+	remoteChunks := make(map[string][]byte)
+	registryOwners := make(map[string][]string)
+	shardsToDelete := 2 // Delete 2 data shards' worth of chunks
+	shardsDeleted := make(map[int]bool)
+
+	for _, chunkHash := range meta.ErasureCoding.DataHashes {
+		chunkMeta := meta.ChunkMetadata[chunkHash]
+		if chunkMeta == nil {
+			continue
+		}
+		// Read chunk data before deleting
+		chunkData, readErr := store.cas.ReadChunk(ctx, chunkHash)
+		if readErr != nil {
+			continue
+		}
+		if len(shardsDeleted) < shardsToDelete || shardsDeleted[chunkMeta.ShardIndex] {
+			if !shardsDeleted[chunkMeta.ShardIndex] && len(shardsDeleted) < shardsToDelete {
+				shardsDeleted[chunkMeta.ShardIndex] = true
+			}
+			if shardsDeleted[chunkMeta.ShardIndex] {
+				// Store in remote and delete locally
+				remoteChunks[chunkHash] = chunkData
+				registryOwners[chunkHash] = []string{"remote-coord-1"}
+				_ = store.cas.DeleteChunk(ctx, chunkHash)
+			}
+		}
+	}
+	require.Equal(t, shardsToDelete, len(shardsDeleted), "should have deleted chunks for %d shards", shardsToDelete)
+
+	// Set up mock registry and replicator
+	mockReg := &mockChunkRegistry{owners: registryOwners}
+	mockRepl := &mockReplicator{chunks: remoteChunks}
+	store.SetChunkRegistry(mockReg)
+	store.SetReplicator(mockRepl)
+
+	// Read should succeed by fetching missing chunks from remote
+	reader, _, err := store.GetObject(ctx, "ec-bucket", "test.bin")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+
+	got, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, data, got, "data should match after distributed fetch of missing chunks")
+}
+
+// TestErasureCodingReadPath_DistributedFetchFallbackToReconstruction tests that when
+// remote fetch fails for some chunks, the EC path falls back to RS reconstruction.
+func TestErasureCodingReadPath_DistributedFetchFallbackToReconstruction(t *testing.T) {
+	k, m := 6, 3
+	data := make([]byte, 24*1024)
+	_, err := rand.Read(data)
+	require.NoError(t, err)
+
+	store := newTestStoreWithErasureCoding(t, k, m)
+	ctx := context.Background()
+
+	meta, err := store.PutObject(ctx, "ec-bucket", "test.bin", bytes.NewReader(data), int64(len(data)), "application/octet-stream", nil)
+	require.NoError(t, err)
+
+	// Delete 2 data shard chunks - but do NOT populate the replicator with them
+	// This simulates remote fetch failing, forcing RS reconstruction
+	shardsDeleted := make(map[int]bool)
+	for _, chunkHash := range meta.ErasureCoding.DataHashes {
+		chunkMeta := meta.ChunkMetadata[chunkHash]
+		if chunkMeta == nil {
+			continue
+		}
+		if shardsDeleted[chunkMeta.ShardIndex] {
+			_ = store.cas.DeleteChunk(ctx, chunkHash)
+			continue
+		}
+		if len(shardsDeleted) < 2 {
+			shardsDeleted[chunkMeta.ShardIndex] = true
+			_ = store.cas.DeleteChunk(ctx, chunkHash)
+		}
+	}
+
+	// Set up registry with empty owners (remote fetch will fail)
+	mockReg := &mockChunkRegistry{owners: make(map[string][]string)}
+	mockRepl := &mockReplicator{chunks: make(map[string][]byte)}
+	store.SetChunkRegistry(mockReg)
+	store.SetReplicator(mockRepl)
+
+	// Read should still succeed via RS reconstruction (we have enough parity)
+	reader, _, err := store.GetObject(ctx, "ec-bucket", "test.bin")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+
+	got, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, data, got, "should reconstruct via RS after failed distributed fetch")
+
+	// Wait for background caching goroutine
+	time.Sleep(200 * time.Millisecond)
+}
+
+// TestErasureCodingReadPath_NoDistributedWithoutReplicator tests that without
+// a replicator, the EC read path behaves as before (local-only + reconstruction).
+func TestErasureCodingReadPath_NoDistributedWithoutReplicator(t *testing.T) {
+	k, m := 6, 3
+	data := make([]byte, 24*1024)
+	_, err := rand.Read(data)
+	require.NoError(t, err)
+
+	store := newTestStoreWithErasureCoding(t, k, m)
+	ctx := context.Background()
+
+	meta, err := store.PutObject(ctx, "ec-bucket", "test.bin", bytes.NewReader(data), int64(len(data)), "application/octet-stream", nil)
+	require.NoError(t, err)
+
+	// Delete 2 data shards (within parity tolerance)
+	shardsDeleted := make(map[int]bool)
+	for _, chunkHash := range meta.ErasureCoding.DataHashes {
+		chunkMeta := meta.ChunkMetadata[chunkHash]
+		if chunkMeta == nil {
+			continue
+		}
+		if shardsDeleted[chunkMeta.ShardIndex] {
+			_ = store.cas.DeleteChunk(ctx, chunkHash)
+			continue
+		}
+		if len(shardsDeleted) < 2 {
+			shardsDeleted[chunkMeta.ShardIndex] = true
+			_ = store.cas.DeleteChunk(ctx, chunkHash)
+		}
+	}
+
+	// No registry or replicator set - should fall back to RS reconstruction
+	assert.Nil(t, store.chunkRegistry)
+	assert.Nil(t, store.replicator)
+
+	reader, _, err := store.GetObject(ctx, "ec-bucket", "test.bin")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+
+	got, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, data, got, "should reconstruct via RS without distributed fetch capability")
+
+	// Wait for background caching goroutine
+	time.Sleep(200 * time.Millisecond)
+}
