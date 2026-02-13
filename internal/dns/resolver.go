@@ -13,12 +13,12 @@ import (
 
 // Resolver is a local DNS server that resolves mesh hostnames.
 type Resolver struct {
-	ttl         uint32            // TTL for DNS responses
-	records     map[string]string // hostname (without suffix) -> IP
-	coordMeshIP string            // Coordinator's mesh IP for "this.tunnelmesh" resolution
-	mu          sync.RWMutex
-	server      *dns.Server
-	shutdown    chan struct{}
+	ttl          uint32            // TTL for DNS responses
+	records      map[string]string // hostname (without suffix) -> IP
+	coordMeshIPs []string          // All coordinator mesh IPs for "this.tunnelmesh" round-robin
+	mu           sync.RWMutex
+	server       *dns.Server
+	shutdown     chan struct{}
 }
 
 // NewResolver creates a new DNS resolver.
@@ -79,31 +79,47 @@ func (r *Resolver) UpdateRecords(records map[string]string) {
 		Msg("DNS records updated")
 }
 
-// SetCoordMeshIP sets the coordinator's mesh IP for "this.tunnelmesh" resolution.
-func (r *Resolver) SetCoordMeshIP(ip string) {
+// SetCoordMeshIPs sets the coordinator mesh IPs for "this.tunnelmesh" round-robin resolution.
+func (r *Resolver) SetCoordMeshIPs(ips []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.coordMeshIP = ip
-	log.Debug().Str("ip", ip).Msg("coordinator mesh IP set for 'this' DNS entry")
+	// Defensive copy
+	r.coordMeshIPs = make([]string, len(ips))
+	copy(r.coordMeshIPs, ips)
+	log.Debug().Strs("ips", ips).Msg("coordinator mesh IPs set for 'this' DNS entry")
 }
 
-// Resolve looks up a hostname and returns its IP.
+// Resolve looks up a hostname and returns its first IP.
 func (r *Resolver) Resolve(hostname string) (string, bool) {
+	ips, ok := r.ResolveAll(hostname)
+	if !ok || len(ips) == 0 {
+		return "", false
+	}
+	return ips[0], ok
+}
+
+// ResolveAll looks up a hostname and returns all matching IPs.
+// For "this.tunnelmesh", returns all coordinator mesh IPs (round-robin).
+// For regular hostnames, returns a single IP.
+func (r *Resolver) ResolveAll(hostname string) ([]string, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	hostname = r.stripSuffix(hostname)
 
-	// Special case: "this" resolves to coordinator's mesh IP (admin access)
+	// Special case: "this" resolves to all coordinator mesh IPs (round-robin)
 	if hostname == "this" {
-		if r.coordMeshIP != "" {
-			return r.coordMeshIP, true
+		if len(r.coordMeshIPs) > 0 {
+			return r.coordMeshIPs, true
 		}
-		return "", false
+		return nil, false
 	}
 
 	ip, ok := r.records[hostname]
-	return ip, ok
+	if !ok {
+		return nil, false
+	}
+	return []string{ip}, ok
 }
 
 // ListRecords returns a copy of all records.
@@ -161,23 +177,25 @@ func (r *Resolver) handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 		hostname := strings.TrimSuffix(q.Name, ".")
 		hostname = r.stripSuffix(hostname)
 
-		ip, ok := r.Resolve(hostname)
+		ips, ok := r.ResolveAll(hostname)
 		if !ok {
 			resp.Rcode = dns.RcodeNameError
 			continue
 		}
 
 		if q.Qtype == dns.TypeA {
-			rr := &dns.A{
-				Hdr: dns.RR_Header{
-					Name:   q.Name,
-					Rrtype: dns.TypeA,
-					Class:  dns.ClassINET,
-					Ttl:    r.ttl,
-				},
-				A: net.ParseIP(ip),
+			for _, ip := range ips {
+				rr := &dns.A{
+					Hdr: dns.RR_Header{
+						Name:   q.Name,
+						Rrtype: dns.TypeA,
+						Class:  dns.ClassINET,
+						Ttl:    r.ttl,
+					},
+					A: net.ParseIP(ip),
+				}
+				resp.Answer = append(resp.Answer, rr)
 			}
-			resp.Answer = append(resp.Answer, rr)
 		}
 	}
 

@@ -86,6 +86,9 @@ const (
 	MsgTypeServicePortNotify byte = 0x33 // Server -> Client: coordinator service port announcement
 	MsgTypeFilterRulesQuery  byte = 0x34 // Server -> Client: request current filter rules
 	MsgTypeFilterRulesReply  byte = 0x35 // Client -> Server: response with filter rules
+
+	// Coordinator discovery message types
+	MsgTypeCoordListUpdate byte = 0x36 // Server -> Client: updated coordinator IP list
 )
 
 var upgrader = websocket.Upgrader{
@@ -774,6 +777,51 @@ func (r *relayManager) PushFilterRuleRemove(peerName string, port uint16, protoc
 		log.Debug().
 			Str("peer", peerName).
 			Msg("failed to push filter rule remove: channel full")
+	}
+}
+
+// BroadcastCoordListUpdate sends the updated coordinator IP list to all connected peers.
+// Format: [MsgTypeCoordListUpdate][count:1][ip_len:1][ip]...
+func (r *relayManager) BroadcastCoordListUpdate(ips []string) {
+	r.mu.Lock()
+	peers := make([]*persistentConn, 0, len(r.persistent))
+	for _, pc := range r.persistent {
+		peers = append(peers, pc)
+	}
+	r.mu.Unlock()
+
+	if len(peers) == 0 {
+		return
+	}
+
+	// Build message: [MsgTypeCoordListUpdate][count:1][ip_len:1][ip]...
+	msgLen := 2 // type + count
+	for _, ip := range ips {
+		msgLen += 1 + len(ip) // ip_len + ip
+	}
+
+	for _, pc := range peers {
+		msg := make([]byte, msgLen)
+		msg[0] = MsgTypeCoordListUpdate
+		msg[1] = byte(len(ips))
+		offset := 2
+		for _, ip := range ips {
+			msg[offset] = byte(len(ip))
+			copy(msg[offset+1:], ip)
+			offset += 1 + len(ip)
+		}
+
+		select {
+		case pc.writeChan <- msg:
+			log.Debug().
+				Str("target", pc.peerName).
+				Int("coordinators", len(ips)).
+				Msg("sent coordinator list update")
+		default:
+			log.Debug().
+				Str("target", pc.peerName).
+				Msg("failed to send coordinator list update: channel full")
+		}
 	}
 }
 

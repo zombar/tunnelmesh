@@ -90,6 +90,9 @@ const (
 	MsgTypeServicePortNotify byte = 0x33 // Server -> Client: coordinator service port announcement
 	MsgTypeFilterRulesQuery  byte = 0x34 // Server -> Client: request current filter rules
 	MsgTypeFilterRulesReply  byte = 0x35 // Client -> Server: response with filter rules
+
+	// Coordinator discovery message types
+	MsgTypeCoordListUpdate byte = 0x36 // Server -> Client: updated coordinator IP list
 )
 
 // PersistentRelay maintains a persistent connection to the coordination server
@@ -124,6 +127,7 @@ type PersistentRelay struct {
 	onFilterRuleRemove func(port uint16, protocol string)             // Called when server removes a rule
 	onServicePorts     func(ports []uint16)                           // Called when server announces service ports
 	getFilterRules     func() []FilterRuleWithSourceWire              // Returns all filter rules with their sources
+	onCoordListUpdate  func(coordIPs []string)                        // Called when server sends updated coordinator IP list
 
 	// Reconnection control
 	reconnecting bool // Prevents concurrent autoReconnect goroutines
@@ -684,6 +688,37 @@ func (p *PersistentRelay) handleMessage(data []byte) {
 			handler(ports)
 		}
 
+	case MsgTypeCoordListUpdate:
+		// Format: [MsgTypeCoordListUpdate][count:1][ip_len:1][ip]...
+		if len(data) < 2 {
+			log.Debug().Int("len", len(data)).Msg("persistent relay: coord list update too short")
+			return
+		}
+		count := int(data[1])
+		coordIPs := make([]string, 0, count)
+		offset := 2
+		for i := 0; i < count; i++ {
+			if offset >= len(data) {
+				break
+			}
+			ipLen := int(data[offset])
+			if offset+1+ipLen > len(data) {
+				break
+			}
+			coordIPs = append(coordIPs, string(data[offset+1:offset+1+ipLen]))
+			offset += 1 + ipLen
+		}
+
+		log.Debug().Strs("coord_ips", coordIPs).Msg("received coordinator list update")
+
+		p.mu.RLock()
+		handler := p.onCoordListUpdate
+		p.mu.RUnlock()
+
+		if handler != nil {
+			handler(coordIPs)
+		}
+
 	case MsgTypeFilterRulesQuery:
 		// Format: [MsgTypeFilterRulesQuery][reqID:4]
 		if len(data) < 5 {
@@ -903,6 +938,14 @@ func (p *PersistentRelay) SetGetFilterRulesHandler(handler func() []FilterRuleWi
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.getFilterRules = handler
+}
+
+// SetCoordListUpdateHandler sets a callback for coordinator list updates.
+// This is called when the server notifies of coordinator join/leave events.
+func (p *PersistentRelay) SetCoordListUpdateHandler(handler func(coordIPs []string)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onCoordListUpdate = handler
 }
 
 // SendHeartbeat sends a heartbeat with stats to the coordination server.

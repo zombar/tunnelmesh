@@ -3,6 +3,7 @@ package coord
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -569,6 +570,8 @@ type MonitoringProxyConfig struct {
 
 // SetupMonitoringProxies registers reverse proxy handlers for Prometheus and Grafana.
 // These are registered on the adminMux for access via https://this.tunnelmesh/
+// If a service URL is configured locally, traffic is proxied to localhost.
+// Otherwise, traffic is forwarded to a coordinator that has monitoring configured.
 // Prometheus should be configured with --web.route-prefix=/prometheus/
 // Grafana should be configured with GF_SERVER_SERVE_FROM_SUB_PATH=true
 func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
@@ -576,41 +579,77 @@ func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
 		return
 	}
 
+	// Prometheus handler
 	if cfg.PrometheusURL != "" {
 		promURL, err := url.Parse(cfg.PrometheusURL)
 		if err == nil {
-			// Create custom reverse proxy that preserves the path
 			proxy := &httputil.ReverseProxy{
 				Director: func(req *http.Request) {
 					req.URL.Scheme = promURL.Scheme
 					req.URL.Host = promURL.Host
 					req.Host = promURL.Host
-					// Path already includes /prometheus/ prefix which Prometheus expects
 				},
 			}
 			s.adminMux.HandleFunc("/prometheus/", func(w http.ResponseWriter, r *http.Request) {
 				proxy.ServeHTTP(w, r)
 			})
 		}
+	} else {
+		s.adminMux.HandleFunc("/prometheus/", func(w http.ResponseWriter, r *http.Request) {
+			s.forwardToMonitoringCoordinator(w, r)
+		})
 	}
 
+	// Grafana handler
 	if cfg.GrafanaURL != "" {
 		grafanaURL, err := url.Parse(cfg.GrafanaURL)
 		if err == nil {
-			// Create custom reverse proxy that preserves the path
 			proxy := &httputil.ReverseProxy{
 				Director: func(req *http.Request) {
 					req.URL.Scheme = grafanaURL.Scheme
 					req.URL.Host = grafanaURL.Host
 					req.Host = grafanaURL.Host
-					// Path already includes /grafana/ prefix which Grafana expects
 				},
 			}
 			s.adminMux.HandleFunc("/grafana/", func(w http.ResponseWriter, r *http.Request) {
 				proxy.ServeHTTP(w, r)
 			})
 		}
+	} else {
+		s.adminMux.HandleFunc("/grafana/", func(w http.ResponseWriter, r *http.Request) {
+			s.forwardToMonitoringCoordinator(w, r)
+		})
 	}
+}
+
+// forwardToMonitoringCoordinator proxies the request to a coordinator that has monitoring configured.
+func (s *Server) forwardToMonitoringCoordinator(w http.ResponseWriter, r *http.Request) {
+	s.peersMu.RLock()
+	var targetIP string
+	for _, ci := range s.coordinators {
+		if ci.hasMonitoring {
+			targetIP = ci.peer.MeshIP
+			break
+		}
+	}
+	s.peersMu.RUnlock()
+
+	if targetIP == "" {
+		http.Error(w, "no monitoring coordinator available", http.StatusServiceUnavailable)
+		return
+	}
+
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = "https"
+			req.URL.Host = targetIP
+			req.Host = targetIP
+		},
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // mesh-internal traffic
+		},
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 // FilterRulesRequest is the request for adding/removing filter rules.

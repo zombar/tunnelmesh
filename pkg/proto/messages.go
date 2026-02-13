@@ -79,6 +79,7 @@ type RegisterRequest struct {
 	ExitPeer          string       `json:"exit_node,omitempty"`           // Name of peer to use as exit node
 	Aliases           []string     `json:"aliases,omitempty"`             // Custom DNS aliases for this peer
 	IsCoordinator     bool         `json:"is_coordinator,omitempty"`      // True if peer is running coordinator services
+	HasMonitoring     bool         `json:"has_monitoring,omitempty"`      // True if coordinator has monitoring (Prometheus/Grafana) configured
 }
 
 // RegisterResponse is returned after successful registration.
@@ -89,7 +90,7 @@ type RegisterResponse struct {
 	Token         string   `json:"token"`                    // JWT token for relay authentication
 	TLSCert       string   `json:"tls_cert,omitempty"`       // PEM-encoded TLS certificate signed by mesh CA
 	TLSKey        string   `json:"tls_key,omitempty"`        // PEM-encoded TLS private key
-	CoordMeshIP   string   `json:"coord_mesh_ip,omitempty"`  // Coordinator's mesh IP for "this.tunnelmesh" resolution
+	CoordMeshIPs  []string `json:"coord_mesh_ips,omitempty"` // All coordinator mesh IPs for DNS round-robin
 	ServerVersion string   `json:"server_version,omitempty"` // Server version for compatibility check
 	PeerName      string   `json:"peer_name,omitempty"`      // Assigned peer name (may differ from request if renamed)
 	PeerID        string   `json:"peer_id,omitempty"`        // Derived peer ID for RBAC (SHA256(pubkey)[:8] hex)

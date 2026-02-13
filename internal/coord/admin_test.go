@@ -43,7 +43,7 @@ func TestAdminOverview_IncludesLocation(t *testing.T) {
 		City:      "London",
 		Country:   "United Kingdom",
 	}
-	_, err = client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", location, "", false, nil, false)
+	_, err = client.Register("geonode", "SHA256:abc123", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", location, "", false, nil, false, false)
 	require.NoError(t, err)
 
 	// Fetch admin overview from adminMux (internal mesh only)
@@ -84,11 +84,11 @@ func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 
 	// Register an exit node
 	client := NewClient(ts.URL, "test-token")
-	_, err = client.Register("exit-node", "SHA256:exitkey", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", true, nil, false)
+	_, err = client.Register("exit-node", "SHA256:exitkey", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", true, nil, false, false)
 	require.NoError(t, err)
 
 	// Register a client that uses the exit node
-	_, err = client.Register("client1", "SHA256:client1key", []string{"5.6.7.8"}, nil, 2223, 0, false, "v1.0.0", nil, "exit-node", false, nil, false)
+	_, err = client.Register("client1", "SHA256:client1key", []string{"5.6.7.8"}, nil, 2223, 0, false, "v1.0.0", nil, "exit-node", false, nil, false, false)
 	require.NoError(t, err)
 
 	// Fetch admin overview from adminMux (internal mesh only)
@@ -141,7 +141,7 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 
 	// Register a peer
 	client := NewClient(ts.URL, "test-token")
-	_, err = client.Register("peer1", "SHA256:peer1key", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false)
+	_, err = client.Register("peer1", "SHA256:peer1key", []string{"1.2.3.4"}, nil, 2222, 0, false, "v1.0.0", nil, "", false, nil, false, false)
 	require.NoError(t, err)
 
 	// Directly set stats on the server (simulating heartbeat)
@@ -185,16 +185,8 @@ func TestAdminOverview_ConnectionTypes(t *testing.T) {
 }
 
 func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
-	// Create a server with coordinator enabled to have adminMux
-	cfg := newTestConfig(t)
-	cfg.Coordinator.Enabled = true
-
-	srv, err := NewServer(context.Background(), cfg)
-	require.NoError(t, err)
-	t.Cleanup(func() { cleanupServer(t, srv) })
-	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
-
-	// Start mock Prometheus and Grafana servers
+	// Start mock Prometheus and Grafana servers before creating the server,
+	// since SetupMonitoringProxies is called unconditionally in setupRoutes()
 	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("prometheus"))
@@ -207,11 +199,16 @@ func TestSetupMonitoringProxies_AdminMux(t *testing.T) {
 	}))
 	defer grafanaServer.Close()
 
-	// Setup monitoring proxies
-	srv.SetupMonitoringProxies(MonitoringProxyConfig{
-		PrometheusURL: promServer.URL,
-		GrafanaURL:    grafanaServer.URL,
-	})
+	// Create a server with monitoring URLs pre-configured so setupRoutes() registers them
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+	cfg.Coordinator.Monitoring.PrometheusURL = promServer.URL
+	cfg.Coordinator.Monitoring.GrafanaURL = grafanaServer.URL
+
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupServer(t, srv) })
+	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
 
 	// Test adminMux has the prometheus route (admin is mesh-internal only)
 	req := httptest.NewRequest(http.MethodGet, "/prometheus/", nil)

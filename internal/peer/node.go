@@ -435,11 +435,13 @@ func (m *MeshNode) setupRelayHandlers(relay *tunnel.PersistentRelay) {
 		if errors.Is(err, coord.ErrPeerNotFound) {
 			log.Info().Msg("peer not registered on server, re-registering...")
 			publicIPs, privateIPs, behindNAT := m.identity.GetLocalIPs()
+			hasMonitoring := m.identity.Config.Coordinator.Enabled &&
+				(m.identity.Config.Coordinator.Monitoring.PrometheusURL != "" || m.identity.Config.Coordinator.Monitoring.GrafanaURL != "")
 			if _, regErr := m.client.Register(
 				m.identity.Name, m.identity.PubKeyEncoded,
 				publicIPs, privateIPs, m.identity.SSHPort, m.identity.UDPPort, behindNAT, m.identity.Version, nil,
 				m.identity.Config.ExitPeer, m.identity.Config.AllowExitTraffic, m.identity.Config.DNS.Aliases,
-				m.identity.Config.Coordinator.Enabled,
+				m.identity.Config.Coordinator.Enabled, hasMonitoring,
 			); regErr != nil {
 				log.Error().Err(regErr).Msg("failed to re-register after peer not found")
 			} else {

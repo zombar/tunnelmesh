@@ -25,11 +25,11 @@ func TestRegisterWithCoordinator(t *testing.T) {
 			name:         "successful registration",
 			serverStatus: http.StatusOK,
 			serverResponse: proto.RegisterResponse{
-				MeshIP:      "10.42.0.100",
-				CoordMeshIP: "10.42.0.1",
-				PeerID:      "test-peer-id",
-				PeerName:    "s3bench",
-				IsAdmin:     false,
+				MeshIP:       "10.42.0.100",
+				CoordMeshIPs: []string{"10.42.0.1"},
+				PeerID:       "test-peer-id",
+				PeerName:     "s3bench",
+				IsAdmin:      false,
 			},
 			expectError: false,
 		},
@@ -37,11 +37,11 @@ func TestRegisterWithCoordinator(t *testing.T) {
 			name:         "successful registration with admin",
 			serverStatus: http.StatusOK,
 			serverResponse: proto.RegisterResponse{
-				MeshIP:      "10.42.0.100",
-				CoordMeshIP: "10.42.0.1",
-				PeerID:      "admin-peer-id",
-				PeerName:    "s3bench",
-				IsAdmin:     true,
+				MeshIP:       "10.42.0.100",
+				CoordMeshIPs: []string{"10.42.0.1"},
+				PeerID:       "admin-peer-id",
+				PeerName:     "s3bench",
+				IsAdmin:      true,
 			},
 			expectError: false,
 		},
@@ -49,11 +49,11 @@ func TestRegisterWithCoordinator(t *testing.T) {
 			name:         "registration with auth token",
 			serverStatus: http.StatusOK,
 			serverResponse: proto.RegisterResponse{
-				MeshIP:      "10.42.0.100",
-				CoordMeshIP: "10.42.0.1",
-				PeerID:      "test-peer-id",
-				PeerName:    "s3bench",
-				IsAdmin:     false,
+				MeshIP:       "10.42.0.100",
+				CoordMeshIPs: []string{"10.42.0.1"},
+				PeerID:       "test-peer-id",
+				PeerName:     "s3bench",
+				IsAdmin:      false,
 			},
 			authToken:   "test-token-12345",
 			expectError: false,
@@ -158,8 +158,12 @@ func TestRegisterWithCoordinator(t *testing.T) {
 				if meshInfo.MeshIP != tt.serverResponse.MeshIP {
 					t.Errorf("Expected MeshIP=%s, got %s", tt.serverResponse.MeshIP, meshInfo.MeshIP)
 				}
-				if meshInfo.CoordMeshIP != tt.serverResponse.CoordMeshIP {
-					t.Errorf("Expected CoordMeshIP=%s, got %s", tt.serverResponse.CoordMeshIP, meshInfo.CoordMeshIP)
+				expectedCoordIP := ""
+				if len(tt.serverResponse.CoordMeshIPs) > 0 {
+					expectedCoordIP = tt.serverResponse.CoordMeshIPs[0]
+				}
+				if meshInfo.CoordMeshIP != expectedCoordIP {
+					t.Errorf("Expected CoordMeshIP=%s, got %s", expectedCoordIP, meshInfo.CoordMeshIP)
 				}
 				if meshInfo.PeerID != tt.serverResponse.PeerID {
 					t.Errorf("Expected PeerID=%s, got %s", tt.serverResponse.PeerID, meshInfo.PeerID)
@@ -179,11 +183,11 @@ func TestRegisterWithCoordinator_TLSVerification(t *testing.T) {
 	// Start HTTPS test server
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := proto.RegisterResponse{
-			MeshIP:      "10.42.0.100",
-			CoordMeshIP: "10.42.0.1",
-			PeerID:      "test-peer",
-			PeerName:    "s3bench",
-			IsAdmin:     false,
+			MeshIP:       "10.42.0.100",
+			CoordMeshIPs: []string{"10.42.0.1"},
+			PeerID:       "test-peer",
+			PeerName:     "s3bench",
+			IsAdmin:      false,
 		}
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(resp)

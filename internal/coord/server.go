@@ -45,6 +45,7 @@ type peerInfo struct {
 	prevStatsTime  time.Time
 	aliases        []string // DNS aliases registered by this peer
 	peerID         string   // Peer ID derived from peer's public key (SHA256[:8] hex)
+	hasMonitoring  bool     // True if coordinator has monitoring (Prometheus/Grafana) configured
 
 	// Latency metrics reported by peer
 	coordinatorRTT int64            // Peer's reported RTT to coordinator (ms)
@@ -86,7 +87,7 @@ type Server struct {
 	version         string                // Server version for admin display
 	sseHub          *sseHub               // SSE hub for real-time dashboard updates
 	ipGeoCache      *IPGeoCache           // IP geolocation cache for location fallback
-	coordMeshIP     atomic.Value          // Coordinator's mesh IP (string) for "this.tunnelmesh" resolution
+	coordMeshIPs    atomic.Value          // All coordinator mesh IPs ([]string) for "this.tunnelmesh" round-robin
 	coordMetrics    *CoordMetrics         // Prometheus metrics for coordinator
 	metricsRegistry prometheus.Registerer // Prometheus registry for metrics (shared with peer metrics)
 	// S3 storage
@@ -826,13 +827,11 @@ func (s *Server) setupRoutes(ctx context.Context) {
 	// Always setup admin routes (admin always enabled for coordinators)
 	s.setupAdminRoutes()
 
-	// Setup monitoring reverse proxies if configured
-	if s.cfg.Coordinator.Monitoring.PrometheusURL != "" || s.cfg.Coordinator.Monitoring.GrafanaURL != "" {
-		s.SetupMonitoringProxies(MonitoringProxyConfig{
-			PrometheusURL: s.cfg.Coordinator.Monitoring.PrometheusURL,
-			GrafanaURL:    s.cfg.Coordinator.Monitoring.GrafanaURL,
-		})
-	}
+	// Always setup monitoring proxies (local proxy or forward to remote coordinator)
+	s.SetupMonitoringProxies(MonitoringProxyConfig{
+		PrometheusURL: s.cfg.Coordinator.Monitoring.PrometheusURL,
+		GrafanaURL:    s.cfg.Coordinator.Monitoring.GrafanaURL,
+	})
 
 	// Setup UDP hole-punch coordination routes
 	s.setupHolePunchRoutes()
@@ -1531,10 +1530,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	info := &peerInfo{
-		peer:         peer,
-		registeredAt: registeredAt,
-		aliases:      req.Aliases,
-		peerID:       peerID,
+		peer:          peer,
+		registeredAt:  registeredAt,
+		aliases:       req.Aliases,
+		peerID:        peerID,
+		hasMonitoring: req.HasMonitoring,
 	}
 	s.peers[req.Name] = info
 	s.dnsCache[req.Name] = meshIP
@@ -1542,6 +1542,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Add to coordinators index for O(1) lookups
 	if peer.IsCoordinator {
 		s.coordinators[req.Name] = info
+
+		// Broadcast updated coordinator list to all connected peers
+		go s.broadcastCoordinatorList()
 	}
 
 	// Persist DNS data to S3 (async to avoid blocking registration)
@@ -1550,7 +1553,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Update replicator peer list if this is a coordinator
 	if peer.IsCoordinator && s.replicator != nil {
 		// SECURITY FIX #4: Don't add self to replication targets
-		// Check peer name instead of mesh IP to avoid race condition with coordMeshIP.Store()
+		// Check peer name instead of mesh IP to avoid race condition with coordMeshIPs.Store()
 		// which happens asynchronously after registration completes
 		if req.Name != s.cfg.Name {
 			s.replicator.AddPeer(meshIP)
@@ -1648,8 +1651,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		go s.lookupPeerLocation(req.Name, geoLookupIP)
 	}
 
-	// Get coordinator mesh IP safely (uses atomic.Value)
-	coordIP, _ := s.coordMeshIP.Load().(string)
+	// Get coordinator mesh IPs safely (uses atomic.Value)
+	coordIPs, _ := s.coordMeshIPs.Load().([]string)
 
 	// If registering peer is a coordinator, include list of all known coordinators
 	// This enables immediate bidirectional replication without separate ListPeers() call
@@ -1667,7 +1670,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		MeshCIDR:      mesh.CIDR,
 		Domain:        mesh.DomainSuffix,
 		Token:         token,
-		CoordMeshIP:   coordIP, // For "this.tunnelmesh" resolution
+		CoordMeshIPs:  coordIPs, // All coordinator IPs for DNS round-robin
 		ServerVersion: s.version,
 		PeerName:      req.Name, // May differ from original request if renamed
 		PeerID:        peerID,
@@ -1745,14 +1748,20 @@ func (s *Server) handlePeerByName(w http.ResponseWriter, r *http.Request) {
 			delete(s.dnsCache, name)
 
 			// Remove from coordinators index
-			if info.peer.IsCoordinator {
+			wasCoordinator := info.peer.IsCoordinator
+			if wasCoordinator {
 				delete(s.coordinators, name)
 			}
 
 			// Remove from replicator if this was a coordinator
-			if info.peer.IsCoordinator && s.replicator != nil {
+			if wasCoordinator && s.replicator != nil {
 				s.replicator.RemovePeer(info.peer.MeshIP)
 				log.Debug().Str("peer", name).Str("mesh_ip", info.peer.MeshIP).Msg("removed coordinator from replication targets")
+			}
+
+			// Broadcast updated coordinator list if a coordinator was removed
+			if wasCoordinator {
+				go s.broadcastCoordinatorList()
 			}
 		}
 		s.peersMu.Unlock()
@@ -2006,11 +2015,55 @@ func (s *Server) ListenAndServe() error {
 	return http.ListenAndServe(s.cfg.Coordinator.Listen, s)
 }
 
-// SetCoordMeshIP sets the coordinator's mesh IP for "this.tunnelmesh" resolution.
+// SetCoordMeshIP sets the coordinator's own mesh IP for "this.tunnelmesh" resolution.
 // This is called after join_mesh completes so other peers can resolve "this" to the coordinator.
+// The full list of coordinator IPs is built dynamically from registered coordinators.
 func (s *Server) SetCoordMeshIP(ip string) {
-	s.coordMeshIP.Store(ip)
-	log.Info().Str("ip", ip).Msg("coordinator mesh IP set for 'this.tunnelmesh' resolution")
+	// Build full list: self + all other coordinators
+	s.peersMu.RLock()
+	ips := []string{ip}
+	for _, ci := range s.coordinators {
+		if ci.peer.MeshIP != ip {
+			ips = append(ips, ci.peer.MeshIP)
+		}
+	}
+	s.peersMu.RUnlock()
+	s.coordMeshIPs.Store(ips)
+	log.Info().Strs("ips", ips).Msg("coordinator mesh IPs set for 'this.tunnelmesh' resolution")
+}
+
+// broadcastCoordinatorList sends the updated coordinator IP list to all connected peers.
+// This is called when a coordinator joins or leaves the mesh.
+func (s *Server) broadcastCoordinatorList() {
+	// Build IP list from coordinators map + self
+	s.peersMu.RLock()
+	var ips []string
+	// Include self first (our coordMeshIPs always starts with self)
+	if stored, ok := s.coordMeshIPs.Load().([]string); ok && len(stored) > 0 {
+		ips = append(ips, stored[0]) // Self IP is always first
+	}
+	for _, ci := range s.coordinators {
+		// Skip self (already included above)
+		if len(ips) > 0 && ci.peer.MeshIP == ips[0] {
+			continue
+		}
+		ips = append(ips, ci.peer.MeshIP)
+	}
+	s.peersMu.RUnlock()
+
+	if len(ips) == 0 {
+		return
+	}
+
+	// Update our own stored list
+	s.coordMeshIPs.Store(ips)
+
+	// Broadcast to all connected peers via relay
+	if s.relay != nil {
+		s.relay.BroadcastCoordListUpdate(ips)
+	}
+
+	log.Info().Strs("ips", ips).Msg("broadcast coordinator list update")
 }
 
 // SetMetricsRegistry initializes coordinator metrics with the given registry.
