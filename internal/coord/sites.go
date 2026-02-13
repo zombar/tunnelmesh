@@ -21,6 +21,7 @@ type peerSiteEntry struct {
 	IsDir        bool
 	Size         int64
 	LastModified time.Time
+	Expires      *time.Time
 }
 
 // peerSiteData holds data for the directory listing template.
@@ -56,6 +57,15 @@ var dirListingTmpl = template.Must(template.New("dirlist").Funcs(template.FuncMa
 		}
 		return t.Format("02-Jan-2006 15:04")
 	},
+	"formatExpiry": func(t *time.Time) string {
+		if t == nil || t.IsZero() {
+			return "-"
+		}
+		if time.Now().After(*t) {
+			return t.Format("02-Jan-2006 15:04") + " (expired)"
+		}
+		return t.Format("02-Jan-2006 15:04")
+	},
 }).Parse(`<!DOCTYPE html>
 <html>
 <head>
@@ -67,23 +77,25 @@ body { background: #0d1117; color: #e6edf3; font-family: 'SFMono-Regular', Conso
 h1 { color: #58a6ff; font-size: 18px; margin-bottom: 16px; }
 a { color: #58a6ff; text-decoration: none; }
 a:hover { text-decoration: underline; }
-table { border-collapse: collapse; width: 100%; max-width: 900px; }
+table { border-collapse: collapse; width: 100%; max-width: 1100px; }
 th { text-align: left; color: #8b949e; border-bottom: 1px solid #30363d; padding: 8px 16px 8px 0; font-weight: normal; }
 td { padding: 4px 16px 4px 0; border-bottom: 1px solid #21262d; }
 td.size, th.size { text-align: right; }
 .dir { color: #58a6ff; }
 .file { color: #e6edf3; }
+.expired { color: #f85149; }
 </style>
 </head>
 <body>
 <h1>Index of {{.Path}}</h1>
 <table>
-<tr><th>Name</th><th class="size">Size</th><th>Last Modified</th></tr>
-{{if .ParentPath}}<tr><td><a href="{{.ParentPath}}" class="dir">../</a></td><td class="size">-</td><td>-</td></tr>{{end}}
+<tr><th>Name</th><th class="size">Size</th><th>Last Modified</th><th>Expires</th></tr>
+{{if .ParentPath}}<tr><td><a href="{{.ParentPath}}" class="dir">../</a></td><td class="size">-</td><td>-</td><td>-</td></tr>{{end}}
 {{range .Entries}}<tr>
 <td>{{if .IsDir}}<a href="{{.Name}}/" class="dir">{{.Name}}/</a>{{else}}<a href="{{.Name}}" class="file">{{.Name}}</a>{{end}}</td>
 <td class="size">{{if .IsDir}}-{{else}}{{formatSize .Size}}{{end}}</td>
 <td>{{formatTime .LastModified}}</td>
+<td>{{formatExpiry .Expires}}</td>
 </tr>{{end}}
 </table>
 </body>
@@ -320,6 +332,7 @@ func (s *Server) handleDirectoryListing(w http.ResponseWriter, r *http.Request, 
 				IsDir:        false,
 				Size:         obj.Size,
 				LastModified: obj.LastModified,
+				Expires:      obj.Expires,
 			})
 		}
 	}
@@ -332,17 +345,10 @@ func (s *Server) handleDirectoryListing(w http.ResponseWriter, r *http.Request, 
 		return entries[i].Name < entries[j].Name
 	})
 
-	// Build parent path
-	parentPath := ""
-	if prefix != "" {
-		// Go up one directory level
-		trimmed := strings.TrimSuffix(prefix, "/")
-		if idx := strings.LastIndex(trimmed, "/"); idx >= 0 {
-			parentPath = "../"
-		} else {
-			parentPath = "./"
-		}
-	}
+	// Always show parent link — "../" works correctly for all directory levels.
+	// At share root (/peers/alice/share/), ../ goes to share index.
+	// At subdirectory (/peers/alice/share/docs/), ../ goes up one level.
+	parentPath := "../"
 
 	displayPath := "/" + prefix
 	if prefix == "" {

@@ -142,7 +142,7 @@ func (um *UserManager) createFileShare(ctx context.Context, dept story.Departmen
 
 // grantDepartmentAccess grants all department members access to the department file share.
 func (um *UserManager) grantDepartmentAccess(dept story.Department) error {
-	bucketName := s3.FileShareBucketPrefix + dept.FileShare
+	bucketName := um.shareManager.BucketName(dept.FileShare)
 
 	for _, memberID := range dept.Members {
 		// Find character to determine clearance level
@@ -213,7 +213,7 @@ func (um *UserManager) GrantPermission(characterID, fileShareName, roleName stri
 		return fmt.Errorf("file share %s not found", fileShareName)
 	}
 
-	bucketName := s3.FileShareBucketPrefix + fileShareName
+	bucketName := um.shareManager.BucketName(fileShareName)
 
 	// Create role binding
 	binding := auth.NewRoleBinding(characterID, roleName, bucketName)
@@ -225,7 +225,7 @@ func (um *UserManager) GrantPermission(characterID, fileShareName, roleName stri
 // RevokePermission revokes a character's access to a file share.
 // Removes all role bindings for the character on the specified file share.
 func (um *UserManager) RevokePermission(characterID, fileShareName string) error {
-	bucketName := s3.FileShareBucketPrefix + fileShareName
+	bucketName := um.shareManager.BucketName(fileShareName)
 
 	// Find and remove all bindings for this user on this bucket
 	removed := false

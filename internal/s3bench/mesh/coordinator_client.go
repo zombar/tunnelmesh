@@ -91,6 +91,64 @@ func (c *CoordinatorClient) CreateBucket(ctx context.Context, bucketName, ownerI
 	return nil
 }
 
+// ShareResponse is the response from creating a file share.
+type ShareResponse struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Owner       string `json:"owner"`
+	GuestRead   bool   `json:"guest_read"`
+}
+
+// CreateShare creates a file share on the coordinator via /api/shares.
+// The coordinator auto-prefixes the share name with the peer name.
+// Returns the actual share name (with prefix) so callers can compute the bucket name.
+func (c *CoordinatorClient) CreateShare(ctx context.Context, name, description string, quotaMB int64) (string, error) {
+	requestURL := fmt.Sprintf("%s/api/shares", c.baseURL)
+
+	payload := map[string]interface{}{
+		"name":        name,
+		"description": description,
+	}
+	if quotaMB > 0 {
+		payload["quota_bytes"] = quotaMB * 1024 * 1024
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	c.setBasicAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("HTTP POST %s: %w", requestURL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusConflict {
+		// Share already exists — return expected name (caller should handle)
+		return "", nil
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("create share failed: %d %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var shareResp ShareResponse
+	if err := json.NewDecoder(resp.Body).Decode(&shareResp); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+
+	return shareResp.Name, nil
+}
+
 // BucketExists checks if a bucket exists on the coordinator.
 func (c *CoordinatorClient) BucketExists(ctx context.Context, bucketName string) (bool, error) {
 	requestURL := fmt.Sprintf("%s/api/s3/buckets/%s", c.baseURL, url.PathEscape(bucketName))
