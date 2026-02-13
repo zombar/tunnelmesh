@@ -42,7 +42,7 @@ func TestPanelRegistry_ListByTab(t *testing.T) {
 	// App tab should have: s3, shares, docker
 	assert.Len(t, appPanels, 3)
 
-	// Data tab should have: peer-mgmt, groups, bindings, dns
+	// Data tab should have: peers-mgmt, groups, bindings, dns
 	assert.Len(t, dataPanels, 4)
 
 	// Mesh tab should have: visualizer, map, alerts, peers, logs, wireguard, filter

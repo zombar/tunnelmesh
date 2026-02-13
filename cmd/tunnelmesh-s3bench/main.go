@@ -112,7 +112,7 @@ func init() {
 	// Mesh integration flags
 	runCmd.Flags().StringVar(&coordinatorURL, "coordinator", "", "Coordinator URL (enables mesh mode, e.g., https://coordinator.example.com:8443)")
 	runCmd.Flags().StringVar(&sshKeyPath, "ssh-key", "", "SSH private key path (default: ~/.tunnelmesh/s3bench_key)")
-	runCmd.Flags().BoolVar(&insecureTLS, "insecure-tls", false, "Skip TLS certificate verification (only use with self-signed certs for testing)")
+	runCmd.Flags().BoolVar(&insecureTLS, "insecure-tls", true, "Skip TLS certificate verification (admin mux uses mesh CA)")
 	runCmd.Flags().StringVar(&authToken, "auth-token", "", "Coordinator auth token (for protected coordinators)")
 }
 
@@ -290,18 +290,22 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		log.Info().
 			Str("peer_id", meshInfo.PeerID).
 			Str("mesh_ip", meshInfo.MeshIP).
-			Str("coord_mesh_ip", meshInfo.CoordMeshIP).
 			Bool("is_admin", meshInfo.IsAdmin).
 			Msg("Registration successful")
 
 		// Derive S3 credentials
 		log.Info().Str("access_key", creds.AccessKey).Msg("Derived S3 credentials")
 
-		// Create mesh client targeting coordinator's mesh IP
+		// Construct admin mux URL from coordinator mesh IP
+		adminURL := coordinatorURL // fallback to coordinator URL
+		if len(meshInfo.CoordMeshIPs) > 0 {
+			adminURL = fmt.Sprintf("https://%s", meshInfo.CoordMeshIPs[0])
+		}
+
 		log.Info().
-			Str("s3_endpoint", fmt.Sprintf("https://%s:443", meshInfo.CoordMeshIP)).
-			Msg("Creating shares on coordinator mesh IP")
-		meshClient = mesh.NewCoordinatorClient(meshInfo.CoordMeshIP, creds, insecureTLS)
+			Str("s3_endpoint", adminURL).
+			Msg("Creating shares on coordinator admin mux")
+		meshClient = mesh.NewCoordinatorClient(adminURL, creds, insecureTLS)
 
 		// Create shares for each department (coordinator auto-prefixes with peer name)
 		for _, dept := range st.Departments() {

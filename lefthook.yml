@@ -1,21 +1,25 @@
 pre-commit:
-  parallel: true
+  piped: true
   commands:
-    # Go formatting
+    # Go formatting (fast, no side effects - run first)
     fmt:
+      priority: 1
       glob: "*.go"
       exclude: "vendor/**"
       run: gofmt -l {staged_files} | xargs -r false
       fail_text: "Run 'gofmt -w .' to fix formatting"
 
-    # Go module checks
+    # Go module checks (may modify vendor/ - must complete before lint)
     tidy:
+      priority: 2
       run: go mod tidy && git diff --exit-code go.mod go.sum
       fail_text: "Run 'go mod tidy' and stage the changes"
     mod-verify:
+      priority: 3
       run: go mod verify
       fail_text: "Module verification failed. Run 'go clean -modcache' and retry."
     vendor-check:
+      priority: 4
       run: |
         go mod vendor
         if ! git diff --exit-code vendor/; then
@@ -26,6 +30,7 @@ pre-commit:
 
     # Generated code check
     generated:
+      priority: 5
       run: |
         # Check if any go:generate directives exist (exclude vendor/)
         if git grep -q '//go:generate' -- '*.go' ':!vendor'; then
@@ -40,8 +45,9 @@ pre-commit:
         fi
       fail_text: "Generated code out of date. Run 'go generate ./...' and stage changes"
 
-    # Go linting
+    # Go linting (reads vendor/ - runs after vendor-check completes)
     lint:
+      priority: 6
       glob: "*.go"
       exclude: "vendor/**"
       run: GOFLAGS="-mod=readonly" golangci-lint run ./...
@@ -49,16 +55,19 @@ pre-commit:
 
     # JavaScript linting and tests
     js-lint:
+      priority: 7
       glob: "internal/coord/web/js/**/*.js"
       run: biome check internal/coord/web/js/
       fail_text: "Fix JS linting errors: run 'biome check --write internal/coord/web/js/'"
     js-test:
+      priority: 7
       glob: "internal/coord/web/js/**/*.js"
       run: cd internal/coord/web && (command -v bun >/dev/null 2>&1 && bun test || ~/.bun/bin/bun test)
       fail_text: "JS tests failed"
 
     # Dockerfile linting
     dockerfile-lint:
+      priority: 7
       glob: "**/Dockerfile*"
       run: |
         if command -v hadolint >/dev/null 2>&1; then
@@ -71,6 +80,7 @@ pre-commit:
 
     # YAML linting
     yaml-lint:
+      priority: 7
       glob: "**/*.{yml,yaml}"
       exclude: "vendor/**"
       run: |
@@ -84,6 +94,7 @@ pre-commit:
 
     # Markdown linting
     markdown-lint:
+      priority: 7
       glob: "**/*.md"
       exclude: "vendor/**"
       run: |
@@ -97,6 +108,7 @@ pre-commit:
 
     # CSS linting
     css-lint:
+      priority: 7
       glob: "**/*.css"
       run: |
         if command -v npx >/dev/null 2>&1; then
