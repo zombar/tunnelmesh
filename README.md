@@ -21,12 +21,12 @@ routing.
 - **Coordinator Peers** - Admin peers that provide discovery, IP allocation, and NAT traversal coordination
 - **Exit Peers** - Split-tunnel routing: route internet traffic through peers and keep mesh traffic direct
 - **TUN Interface** - Virtual network interface for transparent IP routing
-- **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh`)
+- **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh` or `node.tm`)
 - **Network Monitoring** - Automatic detection of network changes with re-connection
 - **NAT Traversal** - UDP hole-punching with STUN-like endpoint discovery, plus relay fallback
 - **Multi-Platform** - Linux, macOS, and Windows support
 - **Admin Dashboard** - Web UI for mesh status, peers, traffic statistics, and per-peer transport controls
-- **Node Location Map** - Optional geographic visualization of mesh peers (requires `--locations` flag)
+- **Node Location Map** - Geographic visualization of mesh peers
 - **Unified Architecture** - All nodes are peers; coordinators are peers with admin services enabled
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
 - **Internal Packet Filter** - Port-based firewall with per-peer rules, configurable via config, CLI, or admin UI
@@ -228,7 +228,7 @@ name: "mynode"
 # DNS is always enabled. Optional configuration:
 dns:
   listen: "127.0.0.53:5353"  # DNS listen address (default)
-  aliases:  # Custom DNS aliases for  peer
+  aliases:  # Custom DNS aliases for this peer
     - "nas"
     - "homeserver"
 ```
