@@ -201,13 +201,14 @@ func (ss *SystemStore) LoadPanels(ctx context.Context) ([]*auth.PanelDefinition,
 
 // FileShare represents a file sharing configuration backed by an S3 bucket.
 type FileShare struct {
-	Name        string    `json:"name"`                  // Share name (bucket will be "fs+{name}")
-	Description string    `json:"description"`           // Human-readable description
-	Owner       string    `json:"owner"`                 // PeerID of creator
-	CreatedAt   time.Time `json:"created_at"`            //
-	ExpiresAt   time.Time `json:"expires_at,omitempty"`  // When the share expires (0 = never)
-	QuotaBytes  int64     `json:"quota_bytes,omitempty"` // Per-share quota in bytes (0 = unlimited within global quota)
-	GuestRead   bool      `json:"guest_read"`            // Allow all mesh peers to read (default: true)
+	Name              string    `json:"name"`                         // Share name (bucket will be "fs+{name}")
+	Description       string    `json:"description"`                  // Human-readable description
+	Owner             string    `json:"owner"`                        // PeerID of creator
+	CreatedAt         time.Time `json:"created_at"`                   //
+	ExpiresAt         time.Time `json:"expires_at,omitempty"`         // When the share expires (0 = never)
+	QuotaBytes        int64     `json:"quota_bytes,omitempty"`        // Per-share quota in bytes (0 = unlimited within global quota)
+	GuestRead         bool      `json:"guest_read"`                   // Allow all mesh peers to read (default: true)
+	ReplicationFactor int       `json:"replication_factor,omitempty"` // Bucket replication factor (0 treated as 2)
 }
 
 // IsExpired returns true if the share has expired.
