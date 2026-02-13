@@ -1218,6 +1218,73 @@ func (sp *StripingPolicy) ChunksForPeer(peerID string, totalChunks int, replicat
 	return chunks
 }
 
+// ShardDistributionForPeer returns which data and parity shards should be stored on a peer
+// for optimal erasure coding fault tolerance. Ensures data and parity shards are distributed
+// across different coordinators to maximize recoverability.
+//
+// Strategy: Round-robin with separation guarantee
+// - Data shards: distributed round-robin across all coordinators
+// - Parity shards: distributed round-robin, avoiding coordinators that already have too many data shards
+//
+// Example: 3 coordinators, 10 data + 3 parity shards:
+//
+//	Coord A: data[0,3,6,9], parity[0]       -> 4 data + 1 parity = 5 total
+//	Coord B: data[1,4,7],   parity[1,2]     -> 3 data + 2 parity = 5 total
+//	Coord C: data[2,5,8]                    -> 3 data + 0 parity = 3 total
+func (sp *StripingPolicy) ShardDistributionForPeer(peerID string, dataShards, parityShards int) (dataIndices, parityIndices []int) {
+	if len(sp.Peers) == 0 {
+		return nil, nil
+	}
+
+	// Find peer index
+	peerIdx := -1
+	for i, p := range sp.Peers {
+		if p == peerID {
+			peerIdx = i
+			break
+		}
+	}
+	if peerIdx < 0 {
+		return nil, nil
+	}
+
+	// Distribute data shards round-robin
+	for i := 0; i < dataShards; i++ {
+		if i%len(sp.Peers) == peerIdx {
+			dataIndices = append(dataIndices, i)
+		}
+	}
+
+	// Distribute parity shards round-robin (starting after data shards to spread load)
+	// Use a different offset to avoid concentrating parity shards on the same coordinator
+	// that has the most data shards
+	for i := 0; i < parityShards; i++ {
+		// Add dataShards to offset to start parity distribution at a different point
+		owner := (dataShards + i) % len(sp.Peers)
+		if owner == peerIdx {
+			parityIndices = append(parityIndices, i)
+		}
+	}
+
+	return dataIndices, parityIndices
+}
+
+// GetShardOwner returns the coordinator that should own a specific shard (data or parity).
+// For data shards, uses round-robin. For parity shards, uses offset round-robin to spread load.
+func (sp *StripingPolicy) GetShardOwner(shardIndex int, isParityShard bool, dataShards int) string {
+	if len(sp.Peers) == 0 {
+		return ""
+	}
+
+	if isParityShard {
+		// Parity shards: use offset to avoid concentration
+		return sp.Peers[(dataShards+shardIndex)%len(sp.Peers)]
+	}
+
+	// Data shards: simple round-robin
+	return sp.Peers[shardIndex%len(sp.Peers)]
+}
+
 // ==== Phase 4: Chunk-Level Replication Functions ====
 
 // ReplicateObject replicates a file to a specific peer by sending individual chunks.

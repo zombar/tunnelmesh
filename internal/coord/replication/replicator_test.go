@@ -1205,3 +1205,163 @@ func TestStripedReplicateObject_SinglePeer(t *testing.T) {
 	// With RF=2 and only 2 coordinators total, all chunks go to the single peer
 	assert.Len(t, receivedChunks, 3, "Single peer should receive all chunks with RF=2")
 }
+
+// Erasure coding shard distribution tests
+
+func TestShardDistributionForPeer(t *testing.T) {
+	// 3 coordinators, 10 data + 3 parity shards
+	peers := []string{"coord-a", "coord-b", "coord-c"}
+	sp := NewStripingPolicy(peers)
+
+	// Get distribution for each coordinator
+	dataA, parityA := sp.ShardDistributionForPeer("coord-a", 10, 3)
+	dataB, parityB := sp.ShardDistributionForPeer("coord-b", 10, 3)
+	dataC, parityC := sp.ShardDistributionForPeer("coord-c", 10, 3)
+
+	// Verify all data shards are distributed
+	totalDataShards := len(dataA) + len(dataB) + len(dataC)
+	assert.Equal(t, 10, totalDataShards, "All data shards should be distributed")
+
+	// Verify all parity shards are distributed
+	totalParityShards := len(parityA) + len(parityB) + len(parityC)
+	assert.Equal(t, 3, totalParityShards, "All parity shards should be distributed")
+
+	// Verify round-robin distribution for data shards
+	// coord-a should have indices 0, 3, 6, 9 (i % 3 == 0)
+	assert.Equal(t, []int{0, 3, 6, 9}, dataA, "coord-a data shards")
+	assert.Equal(t, []int{1, 4, 7}, dataB, "coord-b data shards")
+	assert.Equal(t, []int{2, 5, 8}, dataC, "coord-c data shards")
+
+	// Verify parity shards are distributed (with offset to spread load)
+	// With 10 data shards, parity starts at index (10+i) % 3
+	// parity[0] -> (10+0) % 3 = 1 -> coord-b
+	// parity[1] -> (10+1) % 3 = 2 -> coord-c
+	// parity[2] -> (10+2) % 3 = 0 -> coord-a
+	assert.Equal(t, []int{2}, parityA, "coord-a parity shards")
+	assert.Equal(t, []int{0}, parityB, "coord-b parity shards")
+	assert.Equal(t, []int{1}, parityC, "coord-c parity shards")
+}
+
+func TestShardDistributionForPeerTwoCoordinators(t *testing.T) {
+	// 2 coordinators, 6 data + 2 parity shards
+	peers := []string{"coord-a", "coord-b"}
+	sp := NewStripingPolicy(peers)
+
+	dataA, parityA := sp.ShardDistributionForPeer("coord-a", 6, 2)
+	dataB, parityB := sp.ShardDistributionForPeer("coord-b", 6, 2)
+
+	// Verify data distribution
+	assert.Equal(t, []int{0, 2, 4}, dataA, "coord-a data shards")
+	assert.Equal(t, []int{1, 3, 5}, dataB, "coord-b data shards")
+
+	// Verify parity distribution
+	// parity[0] -> (6+0) % 2 = 0 -> coord-a
+	// parity[1] -> (6+1) % 2 = 1 -> coord-b
+	assert.Equal(t, []int{0}, parityA, "coord-a parity shards")
+	assert.Equal(t, []int{1}, parityB, "coord-b parity shards")
+}
+
+func TestShardDistributionForPeerSingleCoordinator(t *testing.T) {
+	// 1 coordinator, 10 data + 3 parity shards (all on same coordinator)
+	peers := []string{"coord-a"}
+	sp := NewStripingPolicy(peers)
+
+	dataA, parityA := sp.ShardDistributionForPeer("coord-a", 10, 3)
+
+	// Single coordinator gets all shards
+	assert.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, dataA, "coord-a should get all data shards")
+	assert.Equal(t, []int{0, 1, 2}, parityA, "coord-a should get all parity shards")
+}
+
+func TestShardDistributionForPeerUnknownPeer(t *testing.T) {
+	peers := []string{"coord-a", "coord-b"}
+	sp := NewStripingPolicy(peers)
+
+	data, parity := sp.ShardDistributionForPeer("coord-unknown", 10, 3)
+
+	assert.Nil(t, data, "Unknown peer should get no data shards")
+	assert.Nil(t, parity, "Unknown peer should get no parity shards")
+}
+
+func TestShardDistributionForPeerEmptyPeers(t *testing.T) {
+	sp := NewStripingPolicy([]string{})
+
+	data, parity := sp.ShardDistributionForPeer("coord-a", 10, 3)
+
+	assert.Nil(t, data, "Empty peer list should return nil data shards")
+	assert.Nil(t, parity, "Empty peer list should return nil parity shards")
+}
+
+func TestGetShardOwner(t *testing.T) {
+	peers := []string{"coord-a", "coord-b", "coord-c"}
+	sp := NewStripingPolicy(peers)
+
+	// Test data shard ownership (round-robin)
+	assert.Equal(t, "coord-a", sp.GetShardOwner(0, false, 10))
+	assert.Equal(t, "coord-b", sp.GetShardOwner(1, false, 10))
+	assert.Equal(t, "coord-c", sp.GetShardOwner(2, false, 10))
+	assert.Equal(t, "coord-a", sp.GetShardOwner(3, false, 10))
+
+	// Test parity shard ownership (offset round-robin)
+	// parity[0] with 10 data shards -> (10+0) % 3 = 1 -> coord-b
+	// parity[1] with 10 data shards -> (10+1) % 3 = 2 -> coord-c
+	// parity[2] with 10 data shards -> (10+2) % 3 = 0 -> coord-a
+	assert.Equal(t, "coord-b", sp.GetShardOwner(0, true, 10))
+	assert.Equal(t, "coord-c", sp.GetShardOwner(1, true, 10))
+	assert.Equal(t, "coord-a", sp.GetShardOwner(2, true, 10))
+}
+
+func TestGetShardOwnerEmptyPeers(t *testing.T) {
+	sp := NewStripingPolicy([]string{})
+
+	owner := sp.GetShardOwner(0, false, 10)
+	assert.Equal(t, "", owner, "Empty peer list should return empty owner")
+}
+
+func TestShardDistributionBalanced(t *testing.T) {
+	// Test that shard distribution is reasonably balanced across coordinators
+	peers := []string{"coord-a", "coord-b", "coord-c", "coord-d"}
+	sp := NewStripingPolicy(peers)
+
+	// 20 data + 5 parity shards across 4 coordinators
+	distributions := make(map[string]int)
+
+	for _, peer := range peers {
+		data, parity := sp.ShardDistributionForPeer(peer, 20, 5)
+		distributions[peer] = len(data) + len(parity)
+	}
+
+	// Each coordinator should get roughly 25/4 = 6-7 shards
+	for peer, count := range distributions {
+		assert.GreaterOrEqual(t, count, 5, "peer %s should get at least 5 shards", peer)
+		assert.LessOrEqual(t, count, 7, "peer %s should get at most 7 shards", peer)
+	}
+
+	// Total should be 25 shards
+	total := 0
+	for _, count := range distributions {
+		total += count
+	}
+	assert.Equal(t, 25, total, "Total shard count should be 25")
+}
+
+func TestShardDistributionSeparation(t *testing.T) {
+	// Verify that no single coordinator has all data or all parity shards
+	peers := []string{"coord-a", "coord-b", "coord-c"}
+	sp := NewStripingPolicy(peers)
+
+	for _, peer := range peers {
+		data, parity := sp.ShardDistributionForPeer(peer, 10, 3)
+
+		// No single coordinator should have all 10 data shards
+		assert.Less(t, len(data), 10, "peer %s should not have all data shards", peer)
+
+		// No single coordinator should have all 3 parity shards
+		assert.Less(t, len(parity), 3, "peer %s should not have all parity shards", peer)
+
+		// Most importantly, no coordinator should have both all data AND all parity
+		if len(data) == 10 {
+			assert.Less(t, len(parity), 3, "peer %s has all data shards, so should not have all parity shards", peer)
+		}
+	}
+}
