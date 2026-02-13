@@ -133,6 +133,11 @@ func (m *MeshNode) shouldInitiateConnection(peer proto.Peer) bool {
 
 	// Both keys must be present for deterministic tie-breaking
 	if ourKey == "" || peerKey == "" {
+		log.Debug().
+			Str("peer", peer.Name).
+			Bool("our_key_empty", ourKey == "").
+			Bool("peer_key_empty", peerKey == "").
+			Msg("skipping connection: missing public key for tie-breaking")
 		return false
 	}
 
