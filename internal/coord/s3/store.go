@@ -186,6 +186,7 @@ type Store struct {
 	versionRetentionDays    int                    // Days to retain object versions (0 = forever)
 	maxVersionsPerObject    int                    // Max versions to keep per object (0 = unlimited)
 	versionRetentionPolicy  VersionRetentionPolicy
+	erasureCodingSemaphore  chan struct{} // Limits concurrent erasure coding operations (memory safety)
 	mu                      sync.RWMutex
 }
 
@@ -198,9 +199,10 @@ func NewStore(dataDir string, quota *QuotaManager) (*Store, error) {
 	}
 
 	store := &Store{
-		dataDir: dataDir,
-		quota:   quota,
-		logger:  zerolog.Nop(), // Default to no-op logger
+		dataDir:                dataDir,
+		quota:                  quota,
+		logger:                 zerolog.Nop(),           // Default to no-op logger
+		erasureCodingSemaphore: make(chan struct{}, 10), // Allow 10 concurrent EC operations
 	}
 
 	// Calculate initial quota usage from existing objects
@@ -746,6 +748,22 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	k := bucketMeta.ErasureCoding.DataShards
 	m := bucketMeta.ErasureCoding.ParityShards
 
+	// Validate shard configuration (defense against malicious/corrupted bucket metadata)
+	// While validateErasureCodingPolicy already checked this, re-validate at upload time
+	// to prevent issues if metadata was corrupted or modified externally
+	if k < 1 || k > 32 || m < 1 || m > 32 || k+m > 64 {
+		return nil, fmt.Errorf("invalid erasure coding config: k=%d, m=%d (max 32 each, 64 total)", k, m)
+	}
+
+	// Acquire semaphore to limit concurrent erasure coding operations (memory safety)
+	// Each operation buffers up to 100MB, so limiting concurrency prevents OOM
+	select {
+	case s.erasureCodingSemaphore <- struct{}{}:
+		defer func() { <-s.erasureCodingSemaphore }()
+	case <-ctx.Done():
+		return nil, fmt.Errorf("waiting for erasure coding slot: %w", ctx.Err())
+	}
+
 	metaPath := s.objectMetaPath(bucket, key)
 
 	// Check if object already exists (for quota update calculation and versioning)
@@ -784,10 +802,17 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	// Generate version ID before encoding (needed for tracking shards)
 	versionID := generateVersionID()
 
+	// Check for cancellation before expensive encoding operation
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("context canceled before encoding: %w", ctx.Err())
+	default:
+	}
+
 	// Encode file into Reed-Solomon shards
 	dataShards, parityShards, err := EncodeFile(data, k, m)
 	if err != nil {
-		return nil, fmt.Errorf("encode file with erasure coding: %w", err)
+		return nil, fmt.Errorf("encode file with erasure coding (k=%d,m=%d,size=%d): %w", k, m, size, err)
 	}
 
 	// Calculate shard size for metadata
@@ -811,6 +836,25 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	var dataHashes []string // Original CDC chunk hashes from data shards
 	var parityHashes []string
 
+	// Cleanup on failure: remove all written chunks from CAS and registry
+	// This prevents orphaned data that would waste space until GC runs
+	var success bool
+	defer func() {
+		if !success && len(chunks) > 0 {
+			// Best-effort cleanup - errors are logged but not propagated
+			for _, hash := range chunks {
+				if err := s.cas.DeleteChunk(context.Background(), hash); err != nil {
+					s.logger.Warn().Str("hash", hash[:8]).Err(err).Msg("failed to cleanup chunk during rollback")
+				}
+				if s.chunkRegistry != nil {
+					if err := s.chunkRegistry.UnregisterChunk(hash); err != nil {
+						s.logger.Warn().Str("hash", hash[:8]).Err(err).Msg("failed to unregister chunk during rollback")
+					}
+				}
+			}
+		}
+	}()
+
 	// Process data shards: chunk them using CDC to preserve deduplication
 	// Each data shard is treated as a separate "mini-file" that gets chunked
 	md5Hasher := md5.New()
@@ -826,12 +870,12 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 				break
 			}
 			if err != nil {
-				return nil, fmt.Errorf("chunk data shard %d: %w", i, err)
+				return nil, fmt.Errorf("chunk data shard %d/%d (versionID=%s): %w", i, k, versionID, err)
 			}
 
 			// Write chunk to CAS
 			if _, err := s.cas.WriteChunk(ctx, chunk); err != nil {
-				return nil, fmt.Errorf("write data shard %d chunk %s: %w", i, chunkHash, err)
+				return nil, fmt.Errorf("write data shard %d/%d chunk %s (versionID=%s): %w", i, k, chunkHash[:8], versionID, err)
 			}
 
 			// Register chunk ownership
@@ -877,7 +921,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		// Write parity shard directly to CAS (it will compute SHA-256 hash)
 		parityHash, err := s.cas.WriteChunk(ctx, shard)
 		if err != nil {
-			return nil, fmt.Errorf("write parity shard %d: %w", i, err)
+			return nil, fmt.Errorf("write parity shard %d/%d (versionID=%s): %w", i, m, versionID, err)
 		}
 
 		// Register parity shard ownership
@@ -995,6 +1039,9 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 			_ = err
 		}
 	}
+
+	// Mark as successful to prevent cleanup rollback
+	success = true
 
 	return &objMeta, nil
 }
