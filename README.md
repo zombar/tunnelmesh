@@ -17,21 +17,21 @@ routing.
 ## Features
 
 - **P2P Encrypted Tunnels** - Direct connections between peers using pluggable transports
-- **Pluggable Transport Layer** - Supports SSH, UDP (WireGuard-like), and WebSocket relay transports with automatic
-  fallback
-- **Coordinator Peers** - Admin peers that provide discovery, IP allocation, and NAT traversal coordination (not traffic routers)
-- **Exit Peers** - Split-tunnel VPN routing: route internet traffic through designated peers while keeping mesh traffic
-  direct
+- **Pluggable Transport Layer** - Supports SSH, UDP, and WebSocket relay transports with fallback
+- **Coordinator Peers** - Admin peers that provide discovery, IP allocation, and NAT traversal coordination
+- **Exit Peers** - Split-tunnel routing: route internet traffic through peers and keep mesh traffic direct
 - **TUN Interface** - Virtual network interface for transparent IP routing
-- **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh`)
+- **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh` or `node.tm`)
 - **Network Monitoring** - Automatic detection of network changes with re-connection
 - **NAT Traversal** - UDP hole-punching with STUN-like endpoint discovery, plus relay fallback
 - **Multi-Platform** - Linux, macOS, and Windows support
-- **Admin Dashboard** - Web interface showing mesh status, peers, traffic statistics, and per-peer transport controls
-- **Node Location Map** - Optional geographic visualization of mesh peers (requires `--locations` flag)
+- **Admin Dashboard** - Web UI for mesh status, peers, traffic statistics, and per-peer transport controls
+- **Node Location Map** - Geographic visualization of mesh peers
 - **Unified Architecture** - All nodes are peers; coordinators are peers with admin services enabled
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
 - **Internal Packet Filter** - Port-based firewall with per-peer rules, configurable via config, CLI, or admin UI
+- **S3 Compatible Storage** - Distributed and replicated across the mesh with erasure coding
+- **Observability Baked-in** - Prometheus, Grafana and Loki integrated into Admin dashboard
 
 ### What Requires Admin Access?
 
