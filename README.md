@@ -31,6 +31,7 @@ routing.
 - **High Performance** - Zero-copy packet forwarding with lock-free routing table
 - **Internal Packet Filter** - Port-based firewall with per-peer rules, configurable via config, CLI, or admin UI
 - **S3 Compatible Storage** - Distributed and replicated across the mesh with erasure coding
+- **Observability Baked-in** - Prometheus, Grafana and Loki integrated into Admin dashboard
 
 ### What Requires Admin Access?
 
