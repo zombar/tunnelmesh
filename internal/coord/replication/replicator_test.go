@@ -227,7 +227,7 @@ func (m *mockS3Store) WriteChunkDirect(ctx context.Context, hash string, data []
 }
 
 // ImportObjectMeta writes object metadata directly.
-func (m *mockS3Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte) error {
+func (m *mockS3Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -254,6 +254,11 @@ func (m *mockS3Store) ImportObjectMeta(ctx context.Context, bucket, key string, 
 		chunks:      meta.Chunks,
 	}
 	return nil
+}
+
+// GetBucketReplicationFactor returns the replication factor for a bucket.
+func (m *mockS3Store) GetBucketReplicationFactor(_ context.Context, _ string) int {
+	return 2 // Default for tests
 }
 
 // DeleteChunk removes a chunk from CAS.

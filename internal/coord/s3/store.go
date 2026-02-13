@@ -1999,7 +1999,8 @@ func (s *Store) WriteChunkDirect(ctx context.Context, hash string, data []byte) 
 // ImportObjectMeta writes object metadata directly without processing chunks.
 // This is used by the replication receiver to create the metadata file so the
 // remote coordinator can serve reads for objects whose chunks arrive separately.
-func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte) error {
+// bucketOwner is used when auto-creating the bucket (empty string defaults to "system").
+func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) error {
 	// Validate names
 	if err := validateName(bucket); err != nil {
 		return fmt.Errorf("invalid bucket name: %w", err)
@@ -2021,10 +2022,13 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 	bucketMeta, err := s.getBucketMeta(bucket)
 	if err != nil {
 		// Bucket doesn't exist — create minimal bucket meta
+		if bucketOwner == "" {
+			bucketOwner = "system"
+		}
 		bucketMeta = &BucketMeta{
 			Name:              bucket,
 			CreatedAt:         time.Now(),
-			Owner:             "replication",
+			Owner:             bucketOwner,
 			ReplicationFactor: 1,
 		}
 		bucketDir := s.bucketPath(bucket)

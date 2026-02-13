@@ -177,9 +177,10 @@ type FetchChunkResponsePayload struct {
 // The receiving coordinator uses this to create the metadata file so it can
 // serve reads for objects whose chunks arrive via chunk-level replication.
 type ReplicateObjectMetaPayload struct {
-	Bucket   string          `json:"bucket"`
-	Key      string          `json:"key"`
-	MetaJSON json.RawMessage `json:"meta_json"`
+	Bucket      string          `json:"bucket"`
+	Key         string          `json:"key"`
+	MetaJSON    json.RawMessage `json:"meta_json"`
+	BucketOwner string          `json:"bucket_owner,omitempty"` // Original bucket owner for auto-created buckets
 }
 
 // NewReplicateMessage creates a new replication message.

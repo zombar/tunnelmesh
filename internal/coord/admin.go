@@ -2325,17 +2325,42 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// Replicate to other coordinators asynchronously using chunk-level replication.
 	// Chunks are already stored by PutObject above — ReplicateObject reads them from CAS
 	// and only sends chunks the remote peer doesn't already have.
+	//
+	// Uses context.Background() intentionally: replication must complete even if the
+	// HTTP client disconnects, since partial replication would leave the cluster inconsistent.
+	// 60s timeout accounts for chunk transfer + metadata send + cleanup across all peers.
 	if s.replicator != nil {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 
-			allSucceeded := true
 			peers := s.replicator.GetPeers()
+			if len(peers) == 0 {
+				return
+			}
+
+			// Replicate to all peers in parallel with bounded concurrency
+			type result struct {
+				peerID string
+				err    error
+			}
+			results := make(chan result, len(peers))
+			sem := make(chan struct{}, 3) // Limit to 3 concurrent peer replications
+
 			for _, peerID := range peers {
-				if err := s.replicator.ReplicateObject(ctx, bucket, key, peerID); err != nil {
-					log.Error().Err(err).
-						Str("peer", peerID).
+				go func(pid string) {
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					results <- result{pid, s.replicator.ReplicateObject(ctx, bucket, key, pid)}
+				}(peerID)
+			}
+
+			allSucceeded := true
+			for range peers {
+				res := <-results
+				if res.err != nil {
+					log.Error().Err(res.err).
+						Str("peer", res.peerID).
 						Str("bucket", bucket).
 						Str("key", key).
 						Msg("Failed to replicate S3 PUT operation")
@@ -2343,8 +2368,9 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 				}
 			}
 
-			// Only cleanup if ALL peers received their chunks
-			if allSucceeded && len(peers) > 0 {
+			// Only cleanup non-assigned chunks if ALL peers received their chunks.
+			// If any peer failed, keep all chunks locally so a retry can succeed.
+			if allSucceeded {
 				if err := s.replicator.CleanupNonAssignedChunks(ctx, bucket, key); err != nil {
 					log.Error().Err(err).
 						Str("bucket", bucket).

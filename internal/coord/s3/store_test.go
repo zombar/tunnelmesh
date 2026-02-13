@@ -1889,7 +1889,7 @@ func TestImportObjectMeta_NewBucket(t *testing.T) {
 	metaJSON, err := json.Marshal(meta)
 	require.NoError(t, err)
 
-	err = store.ImportObjectMeta(ctx, "newbucket", "report.pdf", metaJSON)
+	err = store.ImportObjectMeta(ctx, "newbucket", "report.pdf", metaJSON, "alice")
 	require.NoError(t, err)
 
 	// Verify the metadata is readable
@@ -1899,6 +1899,12 @@ func TestImportObjectMeta_NewBucket(t *testing.T) {
 	assert.Equal(t, int64(5000), got.Size)
 	assert.Equal(t, "application/pdf", got.ContentType)
 	assert.Equal(t, []string{"hash1", "hash2"}, got.Chunks)
+
+	// Verify bucket was created with correct owner
+	buckets, err := store.ListBuckets(ctx)
+	require.NoError(t, err)
+	require.Len(t, buckets, 1)
+	assert.Equal(t, "alice", buckets[0].Owner)
 }
 
 func TestImportObjectMeta_ExistingBucket(t *testing.T) {
@@ -1917,7 +1923,7 @@ func TestImportObjectMeta_ExistingBucket(t *testing.T) {
 	metaJSON, err := json.Marshal(meta)
 	require.NoError(t, err)
 
-	err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON)
+	err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
 	require.NoError(t, err)
 
 	got, err := store.GetObjectMeta(ctx, "mybucket", "doc.txt")
@@ -1929,7 +1935,7 @@ func TestImportObjectMeta_InvalidJSON(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ctx := context.Background()
 
-	err := store.ImportObjectMeta(ctx, "bucket", "key", []byte("not json"))
+	err := store.ImportObjectMeta(ctx, "bucket", "key", []byte("not json"), "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid object meta JSON")
 }
@@ -1941,7 +1947,7 @@ func TestImportObjectMeta_InvalidBucketName(t *testing.T) {
 	meta := ObjectMeta{Key: "test"}
 	metaJSON, _ := json.Marshal(meta)
 
-	err := store.ImportObjectMeta(ctx, "../escape", "test", metaJSON)
+	err := store.ImportObjectMeta(ctx, "../escape", "test", metaJSON, "")
 	assert.Error(t, err)
 }
 
@@ -1975,7 +1981,9 @@ func TestDeleteChunk_NonExistent(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ctx := context.Background()
 
-	// Deleting a non-existent chunk should not error
+	// Deleting a non-existent chunk should not error (idempotent behavior).
+	// This is important because cleanup may run after a chunk was already
+	// garbage collected or deleted by another process.
 	err := store.DeleteChunk(ctx, "nonexistent-hash")
 	assert.NoError(t, err)
 }

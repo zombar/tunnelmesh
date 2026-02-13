@@ -78,11 +78,15 @@ type S3Store interface {
 	// WriteChunkDirect writes chunk data directly to CAS (for replication receiver)
 	WriteChunkDirect(ctx context.Context, hash string, data []byte) error
 
-	// ImportObjectMeta writes object metadata directly (for replication receiver)
-	ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte) error
+	// ImportObjectMeta writes object metadata directly (for replication receiver).
+	// bucketOwner is used when auto-creating the bucket (empty = "system").
+	ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) error
 
 	// DeleteChunk removes a chunk from CAS by hash (for cleanup after replication)
 	DeleteChunk(ctx context.Context, hash string) error
+
+	// GetBucketReplicationFactor returns the replication factor for a bucket (0 if unknown)
+	GetBucketReplicationFactor(ctx context.Context, bucket string) int
 }
 
 // ChunkRegistryInterface defines operations for chunk ownership tracking.
@@ -1276,9 +1280,11 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 	var chunksToReplicate []string
 
 	if len(allCoords) > 1 {
-		// Multi-coordinator: use striping policy
-		// Default replication factor of 2 (each chunk on primary + 1 replica)
-		replicationFactor := 2
+		// Multi-coordinator: use striping policy with bucket's replication factor
+		replicationFactor := r.s3.GetBucketReplicationFactor(ctx, bucket)
+		if replicationFactor < 1 {
+			replicationFactor = 2 // Fallback if bucket RF is unknown
+		}
 
 		sp := NewStripingPolicy(allCoords)
 		assignedIndices := sp.ChunksForPeer(peerID, len(meta.Chunks), replicationFactor)
@@ -1867,9 +1873,10 @@ func (r *Replicator) sendFetchChunkResponse(peerID string, payload FetchChunkRes
 // This is fire-and-forget (no ACK needed) since metadata is idempotent.
 func (r *Replicator) sendReplicateObjectMeta(ctx context.Context, peerID, bucket, key string, metaJSON []byte) error {
 	payload := ReplicateObjectMetaPayload{
-		Bucket:   bucket,
-		Key:      key,
-		MetaJSON: json.RawMessage(metaJSON),
+		Bucket:      bucket,
+		Key:         key,
+		MetaJSON:    json.RawMessage(metaJSON),
+		BucketOwner: r.nodeID, // Preserve ownership: sender is the original bucket owner
 	}
 
 	payloadJSON, err := json.Marshal(payload)
@@ -1919,7 +1926,7 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 	ctx, cancel := context.WithTimeout(r.ctx, r.applyTimeout)
 	defer cancel()
 
-	if err := r.s3.ImportObjectMeta(ctx, payload.Bucket, payload.Key, payload.MetaJSON); err != nil {
+	if err := r.s3.ImportObjectMeta(ctx, payload.Bucket, payload.Key, payload.MetaJSON, payload.BucketOwner); err != nil {
 		r.logger.Error().Err(err).
 			Str("bucket", payload.Bucket).
 			Str("key", payload.Key).
@@ -1969,8 +1976,11 @@ func (r *Replicator) CleanupNonAssignedChunks(ctx context.Context, bucket, key s
 		return nil
 	}
 
-	// Default replication factor of 2 (same as ReplicateObject)
-	replicationFactor := 2
+	// Use bucket's replication factor for consistent assignment
+	replicationFactor := r.s3.GetBucketReplicationFactor(ctx, bucket)
+	if replicationFactor < 1 {
+		replicationFactor = 2 // Fallback if bucket RF is unknown
+	}
 
 	sp := NewStripingPolicy(allCoords)
 	assignedIndices := sp.ChunksForPeer(r.nodeID, len(meta.Chunks), replicationFactor)
