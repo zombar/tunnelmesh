@@ -63,6 +63,10 @@ func (m *mockChunkRegistry) RegisterChunkWithReplication(hash string, size int64
 	return nil
 }
 
+func (m *mockChunkRegistry) RegisterShardChunk(hash string, size int64, parentFileID string, shardType string, shardIndex int, replicationFactor int) error {
+	return nil
+}
+
 func (m *mockChunkRegistry) UnregisterChunk(hash string) error {
 	return nil
 }
