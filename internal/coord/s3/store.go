@@ -43,10 +43,10 @@ type ErasureCodingPolicy struct {
 type BucketMeta struct {
 	Name              string               `json:"name"`
 	CreatedAt         time.Time            `json:"created_at"`
-	Owner             string               `json:"owner"`                   // User ID who created the bucket
-	TombstonedAt      *time.Time           `json:"tombstoned_at,omitempty"` // When bucket was soft-deleted
-	SizeBytes         int64                `json:"size_bytes"`              // Total size of non-tombstoned objects (updated incrementally)
-	ReplicationFactor int                  `json:"replication_factor"`      // Number of replicas (1-3)
+	Owner             string               `json:"owner"`                    // User ID who created the bucket
+	TombstonedAt      *time.Time           `json:"tombstoned_at,omitempty"`  // When bucket was soft-deleted
+	SizeBytes         int64                `json:"size_bytes"`               // Total size of non-tombstoned objects (updated incrementally)
+	ReplicationFactor int                  `json:"replication_factor"`       // Number of replicas (1-3)
 	ErasureCoding     *ErasureCodingPolicy `json:"erasure_coding,omitempty"` // Erasure coding policy for new objects
 }
 
@@ -77,11 +77,11 @@ type ChunkMetadata struct {
 
 // ErasureCodingInfo contains erasure coding metadata for a specific object version.
 type ErasureCodingInfo struct {
-	Enabled      bool     `json:"enabled"`                // Whether this object uses erasure coding
-	DataShards   int      `json:"data_shards"`            // k: number of data shards
-	ParityShards int      `json:"parity_shards"`          // m: number of parity shards
-	ShardSize    int64    `json:"shard_size"`             // Bytes per shard (before padding)
-	DataHashes   []string `json:"data_hashes,omitempty"`  // Original CDC chunk hashes (data shards)
+	Enabled      bool     `json:"enabled"`                 // Whether this object uses erasure coding
+	DataShards   int      `json:"data_shards"`             // k: number of data shards
+	ParityShards int      `json:"parity_shards"`           // m: number of parity shards
+	ShardSize    int64    `json:"shard_size"`              // Bytes per shard (before padding)
+	DataHashes   []string `json:"data_hashes,omitempty"`   // Original CDC chunk hashes (data shards)
 	ParityHashes []string `json:"parity_hashes,omitempty"` // Parity shard hashes (parity-*)
 }
 
