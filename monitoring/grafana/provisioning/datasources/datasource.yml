@@ -3,6 +3,7 @@ apiVersion: 1
 datasources:
   - name: Prometheus
     type: prometheus
+    uid: PBFA97CFB590B2093
     access: proxy
     # Prometheus serves at /prometheus/ path (--web.route-prefix)
     url: http://localhost:9090/prometheus
@@ -11,6 +12,7 @@ datasources:
 
   - name: Loki
     type: loki
+    uid: P8E80F9AEF21F6940
     access: proxy
     url: http://localhost:3100
     isDefault: false

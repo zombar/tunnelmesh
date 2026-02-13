@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# Generate unique node name from hostname
-NODE_NAME="node-$(hostname)"
+# Use NODE_NAME env var if set, otherwise generate from hostname
+NODE_NAME="${NODE_NAME:-node-$(hostname)}"
 export NODE_NAME
 
 # Random first names for user registration

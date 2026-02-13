@@ -118,12 +118,12 @@ services:
       retries: 5
       start_period: 3s
 
-  client:
+  alice:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    deploy:
-      replicas: 5
+    hostname: alice
+    container_name: tunnelmesh-alice
     entrypoint: ["/bin/bash", "/scripts/client-entrypoint.sh"]
     volumes:
       - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro
@@ -138,6 +138,115 @@ services:
     networks:
       - mesh-control
     environment:
+      - NODE_NAME=alice
+      - SERVER_URL=http://coordinator-1:8080
+      - AUTH_TOKEN=${TUNNELMESH_TOKEN}
+      - TUNNELMESH_ALLOW_HTTP=true
+      - PING_INTERVAL=2
+      - DISCOVERY_INTERVAL=20
+
+  bob:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: bob
+    container_name: tunnelmesh-bob
+    entrypoint: ["/bin/bash", "/scripts/client-entrypoint.sh"]
+    volumes:
+      - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro
+      - ./scripts/client-entrypoint.sh:/scripts/client-entrypoint.sh:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    depends_on:
+      coord-1:
+        condition: service_started
+    networks:
+      - mesh-control
+    environment:
+      - NODE_NAME=bob
+      - SERVER_URL=http://coordinator-1:8080
+      - AUTH_TOKEN=${TUNNELMESH_TOKEN}
+      - TUNNELMESH_ALLOW_HTTP=true
+      - PING_INTERVAL=2
+      - DISCOVERY_INTERVAL=20
+
+  charlie:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: charlie
+    container_name: tunnelmesh-charlie
+    entrypoint: ["/bin/bash", "/scripts/client-entrypoint.sh"]
+    volumes:
+      - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro
+      - ./scripts/client-entrypoint.sh:/scripts/client-entrypoint.sh:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    depends_on:
+      coord-1:
+        condition: service_started
+    networks:
+      - mesh-control
+    environment:
+      - NODE_NAME=charlie
+      - SERVER_URL=http://coordinator-1:8080
+      - AUTH_TOKEN=${TUNNELMESH_TOKEN}
+      - TUNNELMESH_ALLOW_HTTP=true
+      - PING_INTERVAL=2
+      - DISCOVERY_INTERVAL=20
+
+  diana:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: diana
+    container_name: tunnelmesh-diana
+    entrypoint: ["/bin/bash", "/scripts/client-entrypoint.sh"]
+    volumes:
+      - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro
+      - ./scripts/client-entrypoint.sh:/scripts/client-entrypoint.sh:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    depends_on:
+      coord-1:
+        condition: service_started
+    networks:
+      - mesh-control
+    environment:
+      - NODE_NAME=diana
+      - SERVER_URL=http://coordinator-1:8080
+      - AUTH_TOKEN=${TUNNELMESH_TOKEN}
+      - TUNNELMESH_ALLOW_HTTP=true
+      - PING_INTERVAL=2
+      - DISCOVERY_INTERVAL=20
+
+  eve:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    hostname: eve
+    container_name: tunnelmesh-eve
+    entrypoint: ["/bin/bash", "/scripts/client-entrypoint.sh"]
+    volumes:
+      - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro
+      - ./scripts/client-entrypoint.sh:/scripts/client-entrypoint.sh:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    depends_on:
+      coord-1:
+        condition: service_started
+    networks:
+      - mesh-control
+    environment:
+      - NODE_NAME=eve
       - SERVER_URL=http://coordinator-1:8080
       - AUTH_TOKEN=${TUNNELMESH_TOKEN}
       - TUNNELMESH_ALLOW_HTTP=true
