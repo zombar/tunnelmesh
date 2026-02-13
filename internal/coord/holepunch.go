@@ -16,15 +16,21 @@ import (
 // Stores both IPv4 and IPv6 addresses separately for dual-stack support.
 type UDPEndpoint struct {
 	PeerName      string    `json:"peer_name"`
-	LocalAddr     string    `json:"local_addr"`     // Local UDP address (e.g., "0.0.0.0:51820")
-	ExternalAddr  string    `json:"external_addr"`  // Primary external address (for backwards compat)
-	ExternalAddr4 string    `json:"external_addr4"` // IPv4 external address
-	ExternalAddr6 string    `json:"external_addr6"` // IPv6 external address
-	LastSeen      time.Time `json:"last_seen"`
+	LocalAddr     string    `json:"local_addr"`         // Local UDP address (e.g., "0.0.0.0:51820")
+	ExternalAddr4 string    `json:"external_addr4"`     // IPv4 external address
+	ExternalAddr6 string    `json:"external_addr6"`     // IPv6 external address
 	LastSeen4     time.Time `json:"last_seen4"`         // Last time IPv4 was updated
 	LastSeen6     time.Time `json:"last_seen6"`         // Last time IPv6 was updated
 	NATType       string    `json:"nat_type,omitempty"` // "none", "full_cone", "restricted", "symmetric"
 	PCPMapped     bool      `json:"pcp_mapped"`         // Whether endpoint has PCP/NAT-PMP mapping
+}
+
+// BestExternalAddr returns the best available external address, preferring IPv4.
+func (ep *UDPEndpoint) BestExternalAddr() string {
+	if ep.ExternalAddr4 != "" {
+		return ep.ExternalAddr4
+	}
+	return ep.ExternalAddr6
 }
 
 // HolePunchRequest is sent by a peer to initiate hole-punching.
@@ -91,8 +97,6 @@ func (m *holePunchManager) RegisterEndpoint(peerName, localAddr, externalAddr st
 	}
 
 	ep.LocalAddr = localAddr
-	ep.ExternalAddr = externalAddr // Keep for backwards compatibility
-	ep.LastSeen = now
 	ep.PCPMapped = pcpMapped
 
 	// Parse the external address to determine if it's IPv4 or IPv6
@@ -148,10 +152,7 @@ func (m *holePunchManager) GetEndpoint(peerName string) (*UDPEndpoint, bool) {
 	ipv4Fresh := ep.ExternalAddr4 != "" && time.Since(ep.LastSeen4) <= staleThreshold
 	ipv6Fresh := ep.ExternalAddr6 != "" && time.Since(ep.LastSeen6) <= staleThreshold
 
-	// Also check legacy LastSeen for backwards compatibility
-	legacyFresh := time.Since(ep.LastSeen) <= staleThreshold
-
-	if !ipv4Fresh && !ipv6Fresh && !legacyFresh {
+	if !ipv4Fresh && !ipv6Fresh {
 		return nil, false
 	}
 
@@ -182,8 +183,8 @@ func (m *holePunchManager) CleanupStale() {
 			log.Debug().Str("peer", name).Msg("cleared stale IPv6 UDP endpoint")
 		}
 
-		// Remove entire endpoint if both are stale and legacy is stale
-		if ep.ExternalAddr4 == "" && ep.ExternalAddr6 == "" && ep.LastSeen.Before(cutoff) {
+		// Remove entire endpoint if both addresses are stale
+		if ep.ExternalAddr4 == "" && ep.ExternalAddr6 == "" {
 			delete(m.endpoints, name)
 			log.Debug().Str("peer", name).Msg("removed stale UDP endpoint")
 		}
@@ -363,16 +364,17 @@ func (s *Server) handleHolePunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	peerAddr := targetEp.BestExternalAddr()
 	log.Debug().
 		Str("from", req.FromPeer).
 		Str("to", req.ToPeer).
-		Str("target_addr", targetEp.ExternalAddr).
+		Str("target_addr", peerAddr).
 		Msg("hole-punch coordination")
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(HolePunchResponse{
 		OK:            true,
-		PeerAddr:      targetEp.ExternalAddr,
+		PeerAddr:      peerAddr,
 		PeerLocalAddr: targetEp.LocalAddr,
 		Ready:         true,
 	})

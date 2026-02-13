@@ -1458,7 +1458,6 @@ func (t *Transport) getPeerEndpoint(ctx context.Context, peerName string) (strin
 	}
 
 	var endpoint struct {
-		ExternalAddr  string `json:"external_addr"`  // Legacy field
 		ExternalAddr4 string `json:"external_addr4"` // IPv4 address
 		ExternalAddr6 string `json:"external_addr6"` // IPv6 address
 		LocalAddr     string `json:"local_addr"`
@@ -1489,16 +1488,7 @@ func (t *Transport) getPeerEndpoint(ctx context.Context, peerName string) (strin
 		return endpoint.ExternalAddr6, nil
 	}
 
-	// Fall back to legacy field or any available address
-	if endpoint.ExternalAddr4 != "" && t.conn != nil {
-		return endpoint.ExternalAddr4, nil
-	}
-	if endpoint.ExternalAddr6 != "" && t.conn6 != nil && haveIPv6External {
-		return endpoint.ExternalAddr6, nil
-	}
-	if endpoint.ExternalAddr != "" {
-		return endpoint.ExternalAddr, nil
-	}
+	// Fall back to local address
 	if endpoint.LocalAddr != "" {
 		return endpoint.LocalAddr, nil
 	}
@@ -1937,10 +1927,6 @@ func (t *Transport) registerEndpointVia(ctx context.Context, peerName, localAddr
 		} else if ip != nil {
 			t.externalAddr6 = result.ExternalAddr
 		}
-	}
-	// Also keep legacy field updated
-	if t.externalAddr == "" {
-		t.externalAddr = result.ExternalAddr
 	}
 	t.mu.Unlock()
 

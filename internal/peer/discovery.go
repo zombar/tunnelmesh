@@ -131,9 +131,9 @@ func (m *MeshNode) shouldInitiateConnection(peer proto.Peer) bool {
 	ourKey := m.identity.PubKeyEncoded
 	peerKey := peer.PublicKey
 
-	// If either key is empty, fall back to initiating (legacy behavior)
+	// Both keys must be present for deterministic tie-breaking
 	if ourKey == "" || peerKey == "" {
-		return true
+		return false
 	}
 
 	// Compare keys: lower key initiates

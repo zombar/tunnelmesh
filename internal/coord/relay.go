@@ -1043,18 +1043,11 @@ func (s *Server) handlePersistentRelayMessage(sourcePeer string, data []byte) {
 		}
 
 		// Send ack via the persistent connection
-		// Extended format if HeartbeatSentAt is set: [MsgTypeHeartbeatAck][timestamp:8]
+		// Format: [MsgTypeHeartbeatAck][timestamp:8]
 		if pc, ok := s.relay.GetPersistent(sourcePeer); ok {
-			var ackMsg []byte
-			if stats.HeartbeatSentAt != 0 {
-				// Echo the timestamp for RTT measurement
-				ackMsg = make([]byte, 9)
-				ackMsg[0] = MsgTypeHeartbeatAck
-				binary.BigEndian.PutUint64(ackMsg[1:], uint64(stats.HeartbeatSentAt))
-			} else {
-				// Old client without timestamp - send simple 1-byte ack
-				ackMsg = []byte{MsgTypeHeartbeatAck}
-			}
+			ackMsg := make([]byte, 9)
+			ackMsg[0] = MsgTypeHeartbeatAck
+			binary.BigEndian.PutUint64(ackMsg[1:], uint64(stats.HeartbeatSentAt))
 			select {
 			case pc.writeChan <- ackMsg:
 				log.Debug().Str("peer", sourcePeer).Int("ack_len", len(ackMsg)).Msg("sent heartbeat ack")

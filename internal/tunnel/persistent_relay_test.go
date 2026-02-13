@@ -137,8 +137,20 @@ func (m *mockRelayServer) handlePersistentRelay(w http.ResponseWriter, r *http.R
 				peerName: peerName,
 				data:     data[1:], // Skip message type byte
 			}
-			// Send ack
-			_ = conn.WriteMessage(websocket.BinaryMessage, []byte{MsgTypeHeartbeatAck})
+			// Send extended ack with echoed timestamp
+			ack := make([]byte, 9)
+			ack[0] = MsgTypeHeartbeatAck
+			// Parse stats to get HeartbeatSentAt
+			if len(data) >= 4 {
+				statsLen := int(data[1])<<8 | int(data[2])
+				if len(data) >= 3+statsLen {
+					var stats proto.PeerStats
+					if err := json.Unmarshal(data[3:3+statsLen], &stats); err == nil {
+						binary.BigEndian.PutUint64(ack[1:], uint64(stats.HeartbeatSentAt))
+					}
+				}
+			}
+			_ = conn.WriteMessage(websocket.BinaryMessage, ack)
 		}
 	}
 }
@@ -579,9 +591,9 @@ func (m *mockRelayServerWithRTT) handlePersistentRelayWithRTT(w http.ResponseWri
 				data:     statsJSON,
 			}
 
-			// Parse to get HeartbeatSentAt
+			// Parse to get HeartbeatSentAt and echo it back
 			var stats proto.PeerStats
-			if err := json.Unmarshal(statsJSON, &stats); err == nil && stats.HeartbeatSentAt != 0 {
+			if err := json.Unmarshal(statsJSON, &stats); err == nil {
 				// Small delay to ensure measurable RTT on Windows (15.6ms timer resolution)
 				time.Sleep(20 * time.Millisecond)
 				// Send extended ack with echoed timestamp: [MsgTypeHeartbeatAck][timestamp:8]
@@ -589,9 +601,6 @@ func (m *mockRelayServerWithRTT) handlePersistentRelayWithRTT(w http.ResponseWri
 				ack[0] = MsgTypeHeartbeatAck
 				binary.BigEndian.PutUint64(ack[1:], uint64(stats.HeartbeatSentAt))
 				_ = conn.WriteMessage(websocket.BinaryMessage, ack)
-			} else {
-				// Fallback to simple ack (backwards compatibility)
-				_ = conn.WriteMessage(websocket.BinaryMessage, []byte{MsgTypeHeartbeatAck})
 			}
 
 		case MsgTypeSendPacket:
@@ -675,44 +684,6 @@ func TestPersistentRelay_RTTCalculation(t *testing.T) {
 	rtt := relay.GetLastRTT()
 	assert.Greater(t, rtt, time.Duration(0), "RTT should be positive after heartbeat")
 	assert.Less(t, rtt, time.Second, "RTT should be less than 1 second for local test")
-}
-
-func TestPersistentRelay_RTTBackwardsCompatibility(t *testing.T) {
-	// Use the original mock server that sends 1-byte ack (no timestamp)
-	server := newMockRelayServer(t)
-	defer server.Close()
-
-	relay := NewPersistentRelay(server.URL(), "peer1")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := relay.Connect(ctx)
-	require.NoError(t, err)
-	defer func() { _ = relay.Close() }()
-
-	// Send a heartbeat
-	stats := &proto.PeerStats{
-		PacketsSent:   50,
-		ActiveTunnels: 1,
-	}
-	err = relay.SendHeartbeat(stats)
-	require.NoError(t, err)
-
-	// Wait for heartbeat
-	select {
-	case <-server.heartbeats:
-		// Good
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for heartbeat")
-	}
-
-	// Wait for ack processing
-	time.Sleep(200 * time.Millisecond)
-
-	// RTT should still be 0 because old server sends 1-byte ack without timestamp
-	rtt := relay.GetLastRTT()
-	assert.Equal(t, time.Duration(0), rtt, "RTT should be 0 when server doesn't echo timestamp")
 }
 
 func TestPersistentRelay_HeartbeatIncludesSentAt(t *testing.T) {

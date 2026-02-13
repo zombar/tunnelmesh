@@ -233,22 +233,22 @@ func TestMeshNode_shouldInitiateConnection(t *testing.T) {
 			expectInitiate: false,
 		},
 		{
-			name:           "our key is empty - legacy behavior, we initiate",
+			name:           "our key is empty - no initiation",
 			ourKey:         "",
 			peerKey:        "BBBB",
-			expectInitiate: true,
+			expectInitiate: false,
 		},
 		{
-			name:           "peer key is empty - legacy behavior, we initiate",
+			name:           "peer key is empty - no initiation",
 			ourKey:         "AAAA",
 			peerKey:        "",
-			expectInitiate: true,
+			expectInitiate: false,
 		},
 		{
-			name:           "both keys empty - legacy behavior, we initiate",
+			name:           "both keys empty - no initiation",
 			ourKey:         "",
 			peerKey:        "",
-			expectInitiate: true,
+			expectInitiate: false,
 		},
 		{
 			name:           "realistic base64 keys - lower initiates",

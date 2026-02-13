@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -521,7 +520,6 @@ func (ss *SystemStore) loadJSONWithChecksum(ctx context.Context, key string, tar
 }
 
 // tryLoadVersion attempts to load and validate a specific version.
-// It supports both checksum-wrapped format (new) and direct JSON (legacy).
 func (ss *SystemStore) tryLoadVersion(ctx context.Context, key, versionID string, target interface{}) error {
 	// Get object (specific version if provided)
 	var reader io.ReadCloser
@@ -571,45 +569,7 @@ func (ss *SystemStore) tryLoadVersion(ctx context.Context, key, versionID string
 		return nil
 	}
 
-	// No wrapper (legacy format or first write) - try direct unmarshal
-	if err := json.Unmarshal(data, target); err != nil {
-		return fmt.Errorf("unmarshal direct: %w", err)
-	}
-
-	return nil
-}
-
-// --- Migration helpers ---
-
-// MigrateFromFile migrates data from a local file to S3.
-// If the S3 key already exists, no migration is performed.
-// If the local file exists, it's read and saved to the S3 path.
-// Returns true if migration was performed.
-func (ss *SystemStore) MigrateFromFile(ctx context.Context, localPath, s3Key string) (bool, error) {
-	// Check if already exists in S3
-	_, _, err := ss.store.GetObject(ctx, SystemBucket, s3Key)
-	if err == nil {
-		return false, nil // Already migrated
-	}
-	if !errors.Is(err, ErrObjectNotFound) {
-		return false, err
-	}
-
-	// Read from local file
-	data, err := os.ReadFile(localPath)
-	if os.IsNotExist(err) {
-		return false, nil // No local file to migrate
-	}
-	if err != nil {
-		return false, fmt.Errorf("read local file: %w", err)
-	}
-
-	// Save to S3
-	if _, err := ss.store.PutObject(ctx, SystemBucket, s3Key, bytes.NewReader(data), int64(len(data)), "application/json", nil); err != nil {
-		return false, fmt.Errorf("save to S3: %w", err)
-	}
-
-	return true, nil
+	return fmt.Errorf("invalid format: missing checksum wrapper")
 }
 
 // Exists checks if an object exists in the system bucket.
