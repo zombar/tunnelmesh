@@ -3008,16 +3008,12 @@ func (s *Store) getObjectContent(ctx context.Context, bucket, key string, meta *
 	// set once during initialization and never modified after that
 	if s.replicator != nil && s.chunkRegistry != nil {
 		// Distributed reads: can fetch chunks from remote peers
-		s.mu.RLock()
-		logger := s.logger
-		s.mu.RUnlock()
-
 		reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
 			Chunks:     meta.Chunks,
 			LocalCAS:   s.cas,
 			Registry:   s.chunkRegistry,
 			Replicator: s.replicator,
-			Logger:     logger,
+			Logger:     s.logger,
 			TotalSize:  meta.Size,
 			Prefetch:   PrefetchConfig{WindowSize: 8, Parallelism: 4},
 		})

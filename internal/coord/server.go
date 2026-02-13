@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1591,10 +1592,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Msg("matched admin_peers entry by peer ID (secure)")
 					break
 				}
-				// Fallback to name matching for convenience (less secure due to mutability)
-				if adminEntry == req.Name {
+				// Fallback to name matching with glob pattern support (less secure due to mutability)
+				// path.Match supports *, ?, [...] patterns - no regex injection risk
+				if matched, _ := path.Match(adminEntry, req.Name); matched {
 					isAdminPeer = true
-					log.Warn().Str("peer", req.Name).Str("peer_id", peerID).Msg("matched admin_peers entry by name (consider using peer ID for better security)")
+					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Str("pattern", adminEntry).Msg("matched admin_peers entry by name pattern")
 					break
 				}
 			}
