@@ -557,7 +557,7 @@ func (cr *ChunkRegistry) CleanupStaleOwners(maxAge time.Duration) int {
 
 // RegisterShardChunk registers a chunk as an erasure coding shard.
 // This is used when storing parity shards or data shards with tracking metadata.
-func (cr *ChunkRegistry) RegisterShardChunk(hash string, size int64, replicationFactor int, shardType string, shardIndex int, parentFileID string) error {
+func (cr *ChunkRegistry) RegisterShardChunk(hash string, size int64, parentFileID string, shardType string, shardIndex int, replicationFactor int) error {
 	if hash == "" {
 		return fmt.Errorf("chunk hash cannot be empty")
 	}

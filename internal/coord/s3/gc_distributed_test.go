@@ -297,6 +297,10 @@ func (f *failingChunkRegistry) RegisterChunkWithReplication(hash string, size in
 	return assert.AnError
 }
 
+func (f *failingChunkRegistry) RegisterShardChunk(hash string, size int64, parentFileID string, shardType string, shardIndex int, replicationFactor int) error {
+	return assert.AnError
+}
+
 func (f *failingChunkRegistry) UnregisterChunk(hash string) error {
 	return assert.AnError
 }

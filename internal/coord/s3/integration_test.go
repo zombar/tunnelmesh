@@ -280,6 +280,16 @@ func (r *threadSafeRegistry) RegisterChunkWithReplication(hash string, size int6
 	return nil
 }
 
+func (r *threadSafeRegistry) RegisterShardChunk(hash string, size int64, parentFileID string, shardType string, shardIndex int, replicationFactor int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.owners[hash] == nil {
+		r.owners[hash] = []string{"local"}
+	}
+	return nil
+}
+
 func (r *threadSafeRegistry) UnregisterChunk(hash string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

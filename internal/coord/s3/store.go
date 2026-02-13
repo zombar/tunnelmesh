@@ -32,6 +32,11 @@ import (
 // For large file uploads: Consider 24 hours or more
 const GCGracePeriod = 1 * time.Hour
 
+// MaxErasureCodingFileSize is the maximum file size for erasure coding (Phase 1).
+// Files larger than this will use standard replication.
+// Streaming encoder (Phase 6) will remove this limit.
+const MaxErasureCodingFileSize = 100 * 1024 * 1024 // 100 MB
+
 // ErasureCodingPolicy defines the erasure coding configuration for a bucket.
 type ErasureCodingPolicy struct {
 	Enabled      bool `json:"enabled"`       // Whether erasure coding is enabled for new objects
@@ -148,6 +153,9 @@ type ChunkRegistryInterface interface {
 	// RegisterChunkWithReplication registers a chunk with a custom replication factor
 	RegisterChunkWithReplication(hash string, size int64, replicationFactor int) error
 
+	// RegisterShardChunk registers an erasure-coded shard chunk with shard metadata
+	RegisterShardChunk(hash string, size int64, parentFileID, shardType string, shardIndex, replicationFactor int) error
+
 	// UnregisterChunk removes the local coordinator as an owner of the chunk
 	UnregisterChunk(hash string) error
 
@@ -178,6 +186,7 @@ type Store struct {
 	versionRetentionDays    int                    // Days to retain object versions (0 = forever)
 	maxVersionsPerObject    int                    // Max versions to keep per object (0 = unlimited)
 	versionRetentionPolicy  VersionRetentionPolicy
+	erasureCodingSemaphore  chan struct{} // Limits concurrent erasure coding operations (memory safety)
 	mu                      sync.RWMutex
 }
 
@@ -190,9 +199,10 @@ func NewStore(dataDir string, quota *QuotaManager) (*Store, error) {
 	}
 
 	store := &Store{
-		dataDir: dataDir,
-		quota:   quota,
-		logger:  zerolog.Nop(), // Default to no-op logger
+		dataDir:                dataDir,
+		quota:                  quota,
+		logger:                 zerolog.Nop(),           // Default to no-op logger
+		erasureCodingSemaphore: make(chan struct{}, 10), // Allow 10 concurrent EC operations
 	}
 
 	// Calculate initial quota usage from existing objects
@@ -725,6 +735,317 @@ func (s *Store) updateBucketSize(bucketName string, delta int64) error {
 	return s.writeBucketMeta(bucketName, bucketMeta)
 }
 
+// putObjectWithErasureCoding stores an object using Reed-Solomon erasure coding.
+// The entire file is buffered in memory, encoded into data+parity shards, then stored.
+// Data shards are CDC chunked (preserves deduplication), parity shards are stored directly.
+//
+// NOTE: This is Phase 1 implementation with full buffering. Streaming encoder will be added in Phase 6.
+//
+//nolint:gocyclo // Complexity will be reduced when streaming encoder is added (Phase 6)
+func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string, metadata map[string]string, bucketMeta *BucketMeta) (*ObjectMeta, error) {
+	// Caller must hold s.mu.Lock()
+
+	k := bucketMeta.ErasureCoding.DataShards
+	m := bucketMeta.ErasureCoding.ParityShards
+
+	// Validate shard configuration (defense against malicious/corrupted bucket metadata)
+	// While validateErasureCodingPolicy already checked this, re-validate at upload time
+	// to prevent issues if metadata was corrupted or modified externally
+	if k < 1 || k > 32 || m < 1 || m > 32 || k+m > 64 {
+		return nil, fmt.Errorf("invalid erasure coding config: k=%d, m=%d (max 32 each, 64 total)", k, m)
+	}
+
+	// Acquire semaphore to limit concurrent erasure coding operations (memory safety)
+	// Each operation buffers up to 100MB, so limiting concurrency prevents OOM
+	select {
+	case s.erasureCodingSemaphore <- struct{}{}:
+		defer func() { <-s.erasureCodingSemaphore }()
+	case <-ctx.Done():
+		return nil, fmt.Errorf("waiting for erasure coding slot: %w", ctx.Err())
+	}
+
+	metaPath := s.objectMetaPath(bucket, key)
+
+	// Check if object already exists (for quota update calculation and versioning)
+	var oldSize int64
+	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
+		oldSize = oldMeta.Size
+	}
+
+	// Check quota if configured (only if object is growing)
+	if s.quota != nil && size > oldSize {
+		delta := size - oldSize
+		if !s.quota.CanAllocate(delta) {
+			return nil, ErrQuotaExceeded
+		}
+	}
+
+	// Archive current version for version history
+	if err := s.archiveCurrentVersion(bucket, key); err != nil {
+		return nil, fmt.Errorf("archive current version: %w", err)
+	}
+
+	// Create parent directories for metadata
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0755); err != nil {
+		return nil, fmt.Errorf("create meta dir: %w", err)
+	}
+
+	// Buffer entire file into memory (required for Reed-Solomon encoding)
+	data, err := io.ReadAll(io.LimitReader(reader, size))
+	if err != nil {
+		return nil, fmt.Errorf("read file data: %w", err)
+	}
+	if int64(len(data)) != size {
+		return nil, fmt.Errorf("file size mismatch: expected %d bytes, got %d", size, len(data))
+	}
+
+	// Generate version ID before encoding (needed for tracking shards)
+	versionID := generateVersionID()
+
+	// Check for cancellation before expensive encoding operation
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("context canceled before encoding: %w", ctx.Err())
+	default:
+	}
+
+	// Encode file into Reed-Solomon shards
+	dataShards, parityShards, err := EncodeFile(data, k, m)
+	if err != nil {
+		return nil, fmt.Errorf("encode file with erasure coding (k=%d,m=%d,size=%d): %w", k, m, size, err)
+	}
+
+	// Calculate shard size for metadata
+	shardSize := int64(0)
+	if len(dataShards) > 0 && len(dataShards[0]) > 0 {
+		shardSize = int64(len(dataShards[0]))
+	}
+
+	now := time.Now().UTC()
+	coordID := s.coordinatorID
+
+	// File-level version vector
+	fileVersionVector := make(map[string]uint64)
+	if coordID != "" {
+		fileVersionVector[coordID] = 1
+	}
+
+	// Track all chunks (data shard chunks + parity shards)
+	var chunks []string
+	chunkMetadata := make(map[string]*ChunkMetadata)
+	var dataHashes []string // Original CDC chunk hashes from data shards
+	var parityHashes []string
+
+	// Cleanup on failure: remove all written chunks from CAS and registry
+	// This prevents orphaned data that would waste space until GC runs
+	var success bool
+	defer func() {
+		if !success && len(chunks) > 0 {
+			// Best-effort cleanup - errors are logged but not propagated
+			for _, hash := range chunks {
+				if err := s.cas.DeleteChunk(context.Background(), hash); err != nil {
+					s.logger.Warn().Str("hash", hash[:8]).Err(err).Msg("failed to cleanup chunk during rollback")
+				}
+				if s.chunkRegistry != nil {
+					if err := s.chunkRegistry.UnregisterChunk(hash); err != nil {
+						s.logger.Warn().Str("hash", hash[:8]).Err(err).Msg("failed to unregister chunk during rollback")
+					}
+				}
+			}
+		}
+	}()
+
+	// Process data shards: chunk them using CDC to preserve deduplication
+	// Each data shard is treated as a separate "mini-file" that gets chunked
+	md5Hasher := md5.New()
+	for i, shard := range dataShards {
+		// Hash the original data for ETag calculation
+		md5Hasher.Write(shard)
+
+		// Chunk this data shard using CDC
+		shardChunker := NewStreamingChunker(bytes.NewReader(shard))
+		for {
+			chunk, chunkHash, err := shardChunker.NextChunk()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return nil, fmt.Errorf("chunk data shard %d/%d (versionID=%s): %w", i, k, versionID, err)
+			}
+
+			// Write chunk to CAS
+			if _, err := s.cas.WriteChunk(ctx, chunk); err != nil {
+				return nil, fmt.Errorf("write data shard %d/%d chunk %s (versionID=%s): %w", i, k, chunkHash[:8], versionID, err)
+			}
+
+			// Register chunk ownership
+			if s.chunkRegistry != nil {
+				// Register as data shard chunk
+				if err := s.chunkRegistry.RegisterShardChunk(chunkHash, int64(len(chunk)), versionID, "data", i, bucketMeta.ReplicationFactor); err != nil {
+					if os.Getenv("DEBUG") != "" || os.Getenv("TUNNELMESH_DEBUG") != "" {
+						fmt.Fprintf(os.Stderr, "chunk registry warning: failed to register data shard chunk %s: %v\n", chunkHash[:8], err)
+					}
+				}
+			}
+
+			// Track chunk metadata
+			versionVector := make(map[string]uint64)
+			if coordID != "" {
+				versionVector[coordID] = 1
+			}
+			var owners []string
+			if coordID != "" {
+				owners = []string{coordID}
+			}
+
+			chunkMetadata[chunkHash] = &ChunkMetadata{
+				Hash:          chunkHash,
+				Size:          int64(len(chunk)),
+				VersionVector: versionVector,
+				Owners:        owners,
+				FirstSeen:     now,
+				LastModified:  now,
+				ShardType:     "data",
+				ShardIndex:    i,
+				ParentFileID:  versionID,
+			}
+
+			chunks = append(chunks, chunkHash)
+			dataHashes = append(dataHashes, chunkHash)
+		}
+	}
+
+	// Process parity shards: store directly without CDC chunking
+	// (parity shards are already optimally sized and don't benefit from dedup)
+	for i, shard := range parityShards {
+		// Write parity shard directly to CAS (it will compute SHA-256 hash)
+		parityHash, err := s.cas.WriteChunk(ctx, shard)
+		if err != nil {
+			return nil, fmt.Errorf("write parity shard %d/%d (versionID=%s): %w", i, m, versionID, err)
+		}
+
+		// Register parity shard ownership
+		if s.chunkRegistry != nil {
+			if err := s.chunkRegistry.RegisterShardChunk(parityHash, int64(len(shard)), versionID, "parity", i, bucketMeta.ReplicationFactor); err != nil {
+				if os.Getenv("DEBUG") != "" || os.Getenv("TUNNELMESH_DEBUG") != "" {
+					fmt.Fprintf(os.Stderr, "chunk registry warning: failed to register parity shard %s: %v\n", parityHash[:8], err)
+				}
+			}
+		}
+
+		// Track parity shard metadata
+		versionVector := make(map[string]uint64)
+		if coordID != "" {
+			versionVector[coordID] = 1
+		}
+		var owners []string
+		if coordID != "" {
+			owners = []string{coordID}
+		}
+
+		chunkMetadata[parityHash] = &ChunkMetadata{
+			Hash:          parityHash,
+			Size:          int64(len(shard)),
+			VersionVector: versionVector,
+			Owners:        owners,
+			FirstSeen:     now,
+			LastModified:  now,
+			ShardType:     "parity",
+			ShardIndex:    i,
+			ParentFileID:  versionID,
+		}
+
+		chunks = append(chunks, parityHash)
+		parityHashes = append(parityHashes, parityHash)
+	}
+
+	// Generate ETag from MD5 hash of original data (S3-compatible format)
+	hash := md5Hasher.Sum(nil)
+	etag := fmt.Sprintf("\"%s\"", hex.EncodeToString(hash))
+
+	// Update quota tracking
+	var quotaUpdated bool
+	if s.quota != nil {
+		if oldSize > 0 {
+			s.quota.Update(bucket, oldSize, size)
+		} else {
+			s.quota.Allocate(bucket, size)
+		}
+		quotaUpdated = true
+	}
+
+	// Create object metadata with erasure coding info
+	objMeta := ObjectMeta{
+		Key:           key,
+		Size:          size, // Original file size (before encoding)
+		ContentType:   contentType,
+		ETag:          etag,
+		LastModified:  now,
+		Metadata:      metadata,
+		VersionID:     versionID,
+		Chunks:        chunks,
+		ChunkMetadata: chunkMetadata,
+		VersionVector: fileVersionVector,
+		ErasureCoding: &ErasureCodingInfo{
+			Enabled:      true,
+			DataShards:   k,
+			ParityShards: m,
+			ShardSize:    shardSize,
+			DataHashes:   dataHashes,
+			ParityHashes: parityHashes,
+		},
+	}
+
+	// Set expiry if configured (skip for system bucket)
+	if s.defaultObjectExpiryDays > 0 && bucket != SystemBucket {
+		expiry := now.AddDate(0, 0, s.defaultObjectExpiryDays)
+		objMeta.Expires = &expiry
+	}
+
+	// Serialize and write metadata
+	metaData, err := json.MarshalIndent(objMeta, "", "  ")
+	if err != nil {
+		// Rollback quota on failure
+		if quotaUpdated {
+			if oldSize > 0 {
+				s.quota.Update(bucket, size, oldSize)
+			} else {
+				s.quota.Release(bucket, size)
+			}
+		}
+		return nil, fmt.Errorf("marshal object meta: %w", err)
+	}
+
+	if err := syncedWriteFile(metaPath, metaData, 0644); err != nil {
+		// Rollback quota on failure
+		if quotaUpdated {
+			if oldSize > 0 {
+				s.quota.Update(bucket, size, oldSize)
+			} else {
+				s.quota.Release(bucket, size)
+			}
+		}
+		return nil, fmt.Errorf("write object meta: %w", err)
+	}
+
+	// Prune expired versions (lazy cleanup)
+	s.pruneExpiredVersions(ctx, bucket, key)
+
+	// Update bucket size
+	sizeDelta := size - oldSize
+	if sizeDelta != 0 {
+		if err := s.updateBucketSize(bucket, sizeDelta); err != nil {
+			// Log error but don't fail the put operation
+			_ = err
+		}
+	}
+
+	// Mark as successful to prevent cleanup rollback
+	success = true
+
+	return &objMeta, nil
+}
+
 // PutObject writes an object to a bucket using CDC chunks stored in CAS.
 // Archives the current version before overwriting (for version history).
 //
@@ -763,6 +1084,18 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	// Get bucket's replication factor for chunk registration
 	replicationFactor := bucketMeta.ReplicationFactor
 
+	// Check if erasure coding is enabled and file size is suitable
+	useErasureCoding := bucketMeta.ErasureCoding != nil &&
+		bucketMeta.ErasureCoding.Enabled &&
+		size > 0 &&
+		size <= MaxErasureCodingFileSize
+
+	if useErasureCoding {
+		// Use erasure coding path (buffer entire file)
+		return s.putObjectWithErasureCoding(ctx, bucket, key, reader, size, contentType, metadata, bucketMeta)
+	}
+
+	// Use standard streaming path for non-erasure-coded objects or large files
 	metaPath := s.objectMetaPath(bucket, key)
 
 	// Check if object already exists (for quota update calculation and versioning)
