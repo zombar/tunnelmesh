@@ -17,6 +17,11 @@ type ChunkOwnership struct {
 	TotalSize         int64                `json:"total_size"`         // Uncompressed size
 	CreatedAt         time.Time            `json:"created_at"`
 	UpdatedAt         time.Time            `json:"updated_at"`
+
+	// Erasure coding shard metadata (optional, only for RS-encoded files)
+	ShardType    string `json:"shard_type,omitempty"`     // "data" or "parity" (empty for non-RS chunks)
+	ShardIndex   int    `json:"shard_index,omitempty"`    // Position in RS matrix (0-based)
+	ParentFileID string `json:"parent_file_id,omitempty"` // Link to parent file VersionID
 }
 
 // ChunkRegistry is the distributed index of chunk ownership.
@@ -326,6 +331,9 @@ func (co *ChunkOwnership) Copy() *ChunkOwnership {
 		TotalSize:         co.TotalSize,
 		CreatedAt:         co.CreatedAt,
 		UpdatedAt:         co.UpdatedAt,
+		ShardType:         co.ShardType,
+		ShardIndex:        co.ShardIndex,
+		ParentFileID:      co.ParentFileID,
 	}
 }
 
@@ -381,6 +389,20 @@ func (cr *ChunkRegistry) MergeChunkOwnership(remote *ChunkOwnership) (bool, erro
 				local.Owners[coordID] = timestamp
 				modified = true
 			}
+		}
+
+		// Merge shard metadata (prefer remote if set)
+		if remote.ShardType != "" && local.ShardType == "" {
+			local.ShardType = remote.ShardType
+			modified = true
+		}
+		if remote.ParentFileID != "" && local.ParentFileID == "" {
+			local.ParentFileID = remote.ParentFileID
+			modified = true
+		}
+		// For ShardIndex, prefer remote if it has a parent file ID
+		if remote.ParentFileID != "" {
+			local.ShardIndex = remote.ShardIndex
 		}
 
 		// Merge version vectors
@@ -528,6 +550,186 @@ func (cr *ChunkRegistry) CleanupStaleOwners(maxAge time.Duration) int {
 
 	if cleaned > 0 {
 		cr.logger.Info("Cleaned %d stale ownership entries", cleaned)
+	}
+
+	return cleaned
+}
+
+// RegisterShardChunk registers a chunk as an erasure coding shard.
+// This is used when storing parity shards or data shards with tracking metadata.
+func (cr *ChunkRegistry) RegisterShardChunk(hash string, size int64, replicationFactor int, shardType string, shardIndex int, parentFileID string) error {
+	if hash == "" {
+		return fmt.Errorf("chunk hash cannot be empty")
+	}
+	if shardType != "" && shardType != "data" && shardType != "parity" {
+		return fmt.Errorf("invalid shard type: %s (must be 'data' or 'parity')", shardType)
+	}
+
+	cr.mu.Lock()
+	defer cr.mu.Unlock()
+
+	now := time.Now()
+
+	ownership, exists := cr.ownership[hash]
+	if !exists {
+		// New chunk - create ownership record with shard metadata
+		ownership = &ChunkOwnership{
+			ChunkHash:         hash,
+			Owners:            make(map[string]time.Time),
+			VersionVector:     NewVersionVector(),
+			ReplicationFactor: replicationFactor,
+			TotalSize:         size,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+			ShardType:         shardType,
+			ShardIndex:        shardIndex,
+			ParentFileID:      parentFileID,
+		}
+		cr.ownership[hash] = ownership
+	} else {
+		// Update shard metadata if provided
+		if shardType != "" {
+			ownership.ShardType = shardType
+		}
+		if parentFileID != "" {
+			ownership.ParentFileID = parentFileID
+		}
+		ownership.ShardIndex = shardIndex
+	}
+
+	// Add local coordinator as owner
+	ownership.Owners[cr.localCoordID] = now
+	ownership.VersionVector.Increment(cr.localCoordID)
+	ownership.UpdatedAt = now
+
+	cr.logger.Debug("Registered %s shard %d (chunk %s) for file %s on coordinator %s",
+		shardType, shardIndex, truncateHash(hash), parentFileID, cr.localCoordID)
+
+	return nil
+}
+
+// GetParityShardsForFile returns all parity shards for a specific file version.
+// Returns a slice of ChunkOwnership records sorted by shard index.
+func (cr *ChunkRegistry) GetParityShardsForFile(parentFileID string) ([]*ChunkOwnership, error) {
+	if parentFileID == "" {
+		return nil, fmt.Errorf("parent file ID cannot be empty")
+	}
+
+	cr.mu.RLock()
+	defer cr.mu.RUnlock()
+
+	var shards []*ChunkOwnership
+	for _, ownership := range cr.ownership {
+		if ownership.ParentFileID == parentFileID && ownership.ShardType == "parity" {
+			// Create a copy to avoid race conditions
+			shardCopy := *ownership
+			shards = append(shards, &shardCopy)
+		}
+	}
+
+	// Sort by shard index for consistent ordering
+	// Using a simple bubble sort since the number of parity shards is typically small (< 10)
+	for i := 0; i < len(shards); i++ {
+		for j := i + 1; j < len(shards); j++ {
+			if shards[i].ShardIndex > shards[j].ShardIndex {
+				shards[i], shards[j] = shards[j], shards[i]
+			}
+		}
+	}
+
+	return shards, nil
+}
+
+// GetShardsForFile returns all shards (data + parity) for a specific file version.
+// Returns a slice of ChunkOwnership records sorted by shard type then index.
+func (cr *ChunkRegistry) GetShardsForFile(parentFileID string) ([]*ChunkOwnership, error) {
+	if parentFileID == "" {
+		return nil, fmt.Errorf("parent file ID cannot be empty")
+	}
+
+	cr.mu.RLock()
+	defer cr.mu.RUnlock()
+
+	var shards []*ChunkOwnership
+	for _, ownership := range cr.ownership {
+		if ownership.ParentFileID == parentFileID {
+			// Create a copy to avoid race conditions
+			shardCopy := *ownership
+			shards = append(shards, &shardCopy)
+		}
+	}
+
+	// Sort by shard type (data before parity) then by index
+	for i := 0; i < len(shards); i++ {
+		for j := i + 1; j < len(shards); j++ {
+			// Sort data shards before parity shards
+			if shards[i].ShardType == "parity" && shards[j].ShardType == "data" {
+				shards[i], shards[j] = shards[j], shards[i]
+			} else if shards[i].ShardType == shards[j].ShardType && shards[i].ShardIndex > shards[j].ShardIndex {
+				shards[i], shards[j] = shards[j], shards[i]
+			}
+		}
+	}
+
+	return shards, nil
+}
+
+// GetShardOwnersByType returns a map of chunk hashes to their owners, grouped by shard type.
+// This is useful for distributing shards across coordinators during replication.
+func (cr *ChunkRegistry) GetShardOwnersByType(shardType string) (map[string][]string, error) {
+	if shardType != "" && shardType != "data" && shardType != "parity" {
+		return nil, fmt.Errorf("invalid shard type: %s (must be 'data', 'parity', or empty for all)", shardType)
+	}
+
+	cr.mu.RLock()
+	defer cr.mu.RUnlock()
+
+	result := make(map[string][]string)
+	for hash, ownership := range cr.ownership {
+		// Filter by shard type if specified
+		if shardType != "" && ownership.ShardType != shardType {
+			continue
+		}
+
+		// Convert map[string]time.Time to []string
+		var owners []string
+		for coordID := range ownership.Owners {
+			owners = append(owners, coordID)
+		}
+
+		if len(owners) > 0 {
+			result[hash] = owners
+		}
+	}
+
+	return result, nil
+}
+
+// CleanupOrphanedShards removes shard chunks whose parent file no longer exists.
+// This is called during garbage collection to clean up parity shards from deleted files.
+// Returns the number of shards cleaned up.
+func (cr *ChunkRegistry) CleanupOrphanedShards(activeFileIDs map[string]bool) int {
+	cr.mu.Lock()
+	defer cr.mu.Unlock()
+
+	cleaned := 0
+	for hash, ownership := range cr.ownership {
+		// Only clean up chunks with parent file IDs (i.e., shards)
+		if ownership.ParentFileID == "" {
+			continue
+		}
+
+		// Check if parent file is still active
+		if !activeFileIDs[ownership.ParentFileID] {
+			delete(cr.ownership, hash)
+			cleaned++
+			cr.logger.Debug("Cleaned up orphaned %s shard %d (chunk %s) for deleted file %s",
+				ownership.ShardType, ownership.ShardIndex, truncateHash(hash), ownership.ParentFileID)
+		}
+	}
+
+	if cleaned > 0 {
+		cr.logger.Info("Cleaned up %d orphaned shard chunks", cleaned)
 	}
 
 	return cleaned

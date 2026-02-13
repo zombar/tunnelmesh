@@ -48,6 +48,7 @@ func TestEncodeFile_RoundTrip(t *testing.T) {
 		{"medium-6+3", make([]byte, 1024), 6, 3},
 		{"large-10+3", make([]byte, 100*1024), 10, 3},
 		{"uneven-5+2", []byte("hello world"), 5, 2},
+		{"no-padding-10+3", make([]byte, 10*1024), 10, 3}, // 10 KB with 10 shards = 1024 bytes each, no padding
 	}
 
 	for _, tt := range tests {
@@ -281,6 +282,10 @@ func TestDecodeFile_InvalidInputs(t *testing.T) {
 	copy(allShards[:k], dataShards)
 	copy(allShards[k:], parityShards)
 
+	// Calculate max reconstructible size for oversized test
+	shardSize := int64(len(dataShards[0]))
+	maxSize := shardSize * int64(k)
+
 	tests := []struct {
 		name         string
 		shards       [][]byte
@@ -293,6 +298,7 @@ func TestDecodeFile_InvalidInputs(t *testing.T) {
 		{"negative_size", allShards, k, m, -1},
 		{"invalid_k", allShards, 0, m, int64(len(data))},
 		{"invalid_m", allShards, k, 0, int64(len(data))},
+		{"oversized", allShards, k, m, maxSize + 1000}, // originalSize exceeds maximum reconstructible
 	}
 
 	for _, tt := range tests {
