@@ -1593,10 +1593,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 				// Fallback to name matching with glob pattern support (less secure due to mutability)
-				// path.Match supports *, ?, [...] patterns - no regex injection risk
-				if matched, _ := path.Match(adminEntry, req.Name); matched {
+				// path.Match supports *, ?, [...] shell-style glob patterns - no regex injection risk
+				if matched, err := path.Match(adminEntry, req.Name); err != nil {
+					log.Warn().Err(err).Str("pattern", adminEntry).Msg("invalid admin_peers glob pattern, skipping")
+				} else if matched {
 					isAdminPeer = true
-					log.Info().Str("peer", req.Name).Str("peer_id", peerID).Str("pattern", adminEntry).Msg("matched admin_peers entry by name pattern")
+					log.Warn().Str("peer", req.Name).Str("peer_id", peerID).Str("pattern", adminEntry).Msg("matched admin_peers by name pattern (peer ID matching is more secure)")
 					break
 				}
 			}
