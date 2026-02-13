@@ -1510,13 +1510,13 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 	s.mu.Unlock()
 
 	// Phase 2: Delete unreferenced chunks WITHOUT holding the lock.
-	// isChunkReferencedGlobally performs a full filesystem scan of all buckets,
-	// so doing this outside the lock prevents blocking all S3 operations.
+	// This is best-effort: the object is already purged (metadata removed in Phase 1).
+	// If context is cancelled, orphaned chunks will be cleaned by the next GC cycle.
 	if s.cas != nil {
 		for _, hash := range chunksToCheck {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return nil // Object already purged; chunk cleanup deferred to GC
 			default:
 			}
 			if !s.isChunkReferencedGlobally(ctx, hash) {
