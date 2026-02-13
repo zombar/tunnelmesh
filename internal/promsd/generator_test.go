@@ -462,7 +462,6 @@ func TestHTTPFetcher_ConnectionError(t *testing.T) {
 
 func TestCoordinatorsToTargets(t *testing.T) {
 	now := time.Now()
-	threshold := 2 * time.Minute
 
 	tests := []struct {
 		name     string
@@ -490,11 +489,11 @@ func TestCoordinatorsToTargets(t *testing.T) {
 			expected: 1,
 		},
 		{
-			name: "offline coordinator filtered",
+			name: "offline coordinator still included",
 			peers: []Peer{
 				{Name: "coord-1", MeshIP: "10.42.0.1", LastSeen: now.Add(-5 * time.Minute), IsCoordinator: true},
 			},
-			expected: 0,
+			expected: 1,
 		},
 		{
 			name: "coordinator without mesh IP filtered",
@@ -507,7 +506,7 @@ func TestCoordinatorsToTargets(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			targets := CoordinatorsToTargets(tt.peers, threshold, now)
+			targets := CoordinatorsToTargets(tt.peers)
 			if len(targets) != tt.expected {
 				t.Errorf("expected %d targets, got %d", tt.expected, len(targets))
 			}
@@ -516,12 +515,11 @@ func TestCoordinatorsToTargets(t *testing.T) {
 }
 
 func TestCoordinatorsToTargets_TargetFormat(t *testing.T) {
-	now := time.Now()
 	peers := []Peer{
-		{Name: "coord-1", MeshIP: "10.42.0.42", LastSeen: now, IsCoordinator: true},
+		{Name: "coord-1", MeshIP: "10.42.0.42", IsCoordinator: true},
 	}
 
-	targets := CoordinatorsToTargets(peers, 2*time.Minute, now)
+	targets := CoordinatorsToTargets(peers)
 
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))

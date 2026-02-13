@@ -104,14 +104,12 @@ func PeersToTargets(peers []Peer, metricsPort string, onlineThreshold time.Durat
 }
 
 // CoordinatorsToTargets converts coordinator peers to Prometheus targets on port 443.
-// Coordinators expose metrics on the admin server (port 443) rather than the peer metrics port.
-func CoordinatorsToTargets(peers []Peer, onlineThreshold time.Duration, now time.Time) []Target {
+// Unlike PeersToTargets, this does NOT filter by online status - coordinators are always
+// included so that Prometheus can detect failures via up==0 and absent() alerts.
+func CoordinatorsToTargets(peers []Peer) []Target {
 	var targets []Target
 	for _, peer := range peers {
 		if !peer.IsCoordinator {
-			continue
-		}
-		if now.Sub(peer.LastSeen) >= onlineThreshold {
 			continue
 		}
 		if peer.MeshIP == "" {
@@ -165,7 +163,7 @@ func (g *Generator) Generate() (int, error) {
 
 	// Write coordinator targets (port 443) if output file is configured
 	if g.config.CoordOutputFile != "" {
-		coordTargets := CoordinatorsToTargets(peers, g.config.OnlineThreshold, now)
+		coordTargets := CoordinatorsToTargets(peers)
 		if err := WriteTargets(coordTargets, g.config.CoordOutputFile); err != nil {
 			return 0, fmt.Errorf("write coordinator targets: %w", err)
 		}
