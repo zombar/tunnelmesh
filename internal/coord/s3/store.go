@@ -752,7 +752,16 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 	// ec.DataHashes contains CDC chunk hashes from all data shards
 	// We need to group them by shard index using ChunkMetadata
 	dataShardChunks := make(map[int][][]byte) // shardIndex -> []chunk
-	for _, chunkHash := range ec.DataHashes {
+	for i, chunkHash := range ec.DataHashes {
+		// Check for cancellation periodically (every 100 chunks)
+		if i%100 == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, nil, fmt.Errorf("context canceled during data chunk fetch: %w", ctx.Err())
+			default:
+			}
+		}
+
 		chunkMeta, exists := meta.ChunkMetadata[chunkHash]
 		if !exists {
 			return nil, nil, fmt.Errorf("missing chunk metadata for data chunk %s (versionID=%s)", chunkHash[:8], meta.VersionID)
@@ -800,6 +809,13 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 	}
 
 	// Phase 2: Fetch parity shards (these are stored whole, not CDC chunked)
+	// Check for cancellation before fetching parity shards
+	select {
+	case <-ctx.Done():
+		return nil, nil, fmt.Errorf("context canceled before parity shard fetch: %w", ctx.Err())
+	default:
+	}
+
 	parityShards := make([][]byte, m)
 	for i, parityHash := range ec.ParityHashes {
 		chunk, err := s.cas.ReadChunk(ctx, parityHash)
@@ -823,7 +839,12 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 	// Phase 3: Fast path - all data shards available
 	if availableDataShards == k {
 		// No reconstruction needed - reassemble file from data shards
-		var fileData []byte
+		// Pre-allocate to avoid multiple reallocations
+		totalShardSize := int64(0)
+		for i := 0; i < k; i++ {
+			totalShardSize += int64(len(dataShards[i]))
+		}
+		fileData := make([]byte, 0, totalShardSize)
 		for i := 0; i < k; i++ {
 			fileData = append(fileData, dataShards[i]...)
 		}
@@ -875,6 +896,10 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 
 	// Phase 5: Cache reconstructed data shards (best-effort, async)
 	// This improves future read performance by storing reconstructed shards locally
+	// Capture variables to avoid race conditions
+	cachedShards := allShards
+	cachedDataShards := dataShards
+	cachedK := k
 	go func() {
 		// Use background context since original request may have completed
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -882,14 +907,19 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 
 		// After DecodeFile, allShards contains reconstructed data shards
 		// Cache any data shards that were missing
-		for i := 0; i < k; i++ {
-			if dataShards[i] != nil {
+		for i := 0; i < cachedK; i++ {
+			if cachedDataShards[i] != nil {
 				// Already had this shard
 				continue
 			}
 
 			// This shard was reconstructed - cache it by chunking and storing
-			reconstructedShard := allShards[i]
+			reconstructedShard := cachedShards[i]
+			if reconstructedShard == nil {
+				s.logger.Warn().Int("shard", i).Msg("reconstructed shard is nil, skipping cache")
+				continue
+			}
+
 			shardChunker := NewStreamingChunker(bytes.NewReader(reconstructedShard))
 			for {
 				chunk, chunkHash, err := shardChunker.NextChunk()
@@ -903,7 +933,11 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 
 				// Write chunk to local CAS (best-effort)
 				if _, err := s.cas.WriteChunk(bgCtx, chunk); err != nil {
-					s.logger.Warn().Err(err).Int("shard", i).Str("hash", chunkHash[:8]).Msg("failed to cache reconstructed chunk")
+					if len(chunkHash) >= 8 {
+						s.logger.Warn().Err(err).Int("shard", i).Str("hash", chunkHash[:8]).Msg("failed to cache reconstructed chunk")
+					} else {
+						s.logger.Warn().Err(err).Int("shard", i).Str("hash", chunkHash).Msg("failed to cache reconstructed chunk")
+					}
 				}
 			}
 		}
