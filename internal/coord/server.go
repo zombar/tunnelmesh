@@ -1332,6 +1332,11 @@ var reservedPeerNames = map[string]bool{
 	"supervisor":    true,
 	"peers":         true,
 	"api":           true,
+	"prometheus":    true,
+	"grafana":       true,
+	"health":        true,
+	"assets":        true,
+	"static":        true,
 }
 
 // isReservedPeerName checks if a peer name is reserved.
@@ -2054,7 +2059,8 @@ func (s *Server) SetCoordMeshIP(ip string) {
 // broadcastCoordinatorList sends the updated coordinator IP list to all connected peers.
 // This is called when a coordinator joins or leaves the mesh.
 func (s *Server) broadcastCoordinatorList() {
-	// Build IP list from coordinators map + self
+	// Build IP list from coordinators map + self, store atomically while holding the lock
+	// to prevent races between list building and storage.
 	s.peersMu.RLock()
 	var ips []string
 	// Include self first (our coordMeshIPs always starts with self)
@@ -2068,14 +2074,14 @@ func (s *Server) broadcastCoordinatorList() {
 		}
 		ips = append(ips, ci.peer.MeshIP)
 	}
+	if len(ips) > 0 {
+		s.coordMeshIPs.Store(ips)
+	}
 	s.peersMu.RUnlock()
 
 	if len(ips) == 0 {
 		return
 	}
-
-	// Update our own stored list
-	s.coordMeshIPs.Store(ips)
 
 	// Update local DNS resolver
 	if s.coordIPsCb != nil {

@@ -493,3 +493,40 @@ func TestCreatePeerShare_RaceConditionSafe(t *testing.T) {
 	require.NotNil(t, share)
 	assert.Equal(t, "Original", share.Description)
 }
+
+func TestPeerSite_DoubleEncodedPathTraversal(t *testing.T) {
+	// Create two shares — traversal should not allow accessing one share from another
+	srv := newTestServer(t)
+	opts := &s3.FileShareOptions{GuestRead: true, GuestReadSet: true, ReplicationFactor: 1}
+
+	_, err := srv.fileShareMgr.Create(context.Background(), "alice_photos", "Photos", "alice-id", 0, opts)
+	require.NoError(t, err)
+	_, err = srv.fileShareMgr.Create(context.Background(), "alice_private", "Private", "alice-id", 0, opts)
+	require.NoError(t, err)
+
+	// Upload secret to private share
+	privateBucket := srv.fileShareMgr.BucketName("alice_private")
+	_, err = srv.s3Store.PutObject(context.Background(), privateBucket, "secret.txt",
+		bytes.NewReader([]byte("private data")), 12, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Upload normal file to photos share
+	photosBucket := srv.fileShareMgr.BucketName("alice_photos")
+	_, err = srv.s3Store.PutObject(context.Background(), photosBucket, "pic.txt",
+		bytes.NewReader([]byte("photo data")), 10, "text/plain", nil)
+	require.NoError(t, err)
+
+	// path.Clean prevents escaping the share — these all stay within alice_photos bucket
+	// (no cross-share traversal is possible because bucket lookup is by share name, not path)
+	paths := []string{
+		"/peers/alice/photos/../private/secret.txt",
+		"/peers/alice/photos/%2e%2e/private/secret.txt",
+	}
+	for _, p := range paths {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		rec := httptest.NewRecorder()
+		srv.handlePeerSite(rec, req)
+		// Should not serve private data — path.Clean normalizes within the share boundary
+		assert.NotContains(t, rec.Body.String(), "private data", "traversal should not reach other share for %s", p)
+	}
+}

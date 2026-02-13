@@ -1256,3 +1256,26 @@ func TestLandingPage_Custom(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "Custom Landing")
 }
+
+func TestForwardToMonitoringCoordinator_LoopDetection(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Coordinator.Enabled = true
+
+	srv, err := NewServer(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupServer(t, srv) })
+
+	// Request without forwarding header — should return 503 (no monitoring coordinator)
+	req := httptest.NewRequest(http.MethodGet, "/prometheus/", nil)
+	rec := httptest.NewRecorder()
+	srv.forwardToMonitoringCoordinator(rec, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	// Request with forwarding header — should return 508 (loop detected)
+	req = httptest.NewRequest(http.MethodGet, "/prometheus/", nil)
+	req.Header.Set("X-TunnelMesh-Forwarded", "true")
+	rec = httptest.NewRecorder()
+	srv.forwardToMonitoringCoordinator(rec, req)
+	assert.Equal(t, http.StatusLoopDetected, rec.Code)
+	assert.Contains(t, rec.Body.String(), "loop detected")
+}

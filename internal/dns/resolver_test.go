@@ -233,6 +233,39 @@ func TestResolver_DNSServer_MultipleARecords(t *testing.T) {
 	}
 }
 
+func TestResolver_DNSServer_AllCoordinatorsDeregistered(t *testing.T) {
+	port := testutil.FreePort(t)
+	addr := "127.0.0.1:" + strconv.Itoa(port)
+
+	r := NewResolver(".tunnelmesh", 60)
+	r.SetCoordMeshIPs([]string{"10.42.0.1"})
+
+	go func() {
+		_ = r.ListenAndServe(addr)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	defer func() { _ = r.Shutdown() }()
+
+	c := new(dns.Client)
+
+	// Should resolve initially
+	m := new(dns.Msg)
+	m.SetQuestion("this.tm.", dns.TypeA)
+	resp, _, err := c.Exchange(m, addr)
+	require.NoError(t, err)
+	assert.Len(t, resp.Answer, 1)
+
+	// Clear all coordinator IPs (simulates all coordinators leaving)
+	r.SetCoordMeshIPs(nil)
+
+	m = new(dns.Msg)
+	m.SetQuestion("this.tm.", dns.TypeA)
+	resp, _, err = c.Exchange(m, addr)
+	require.NoError(t, err)
+	assert.Equal(t, dns.RcodeNameError, resp.Rcode)
+	assert.Empty(t, resp.Answer)
+}
+
 func TestResolver_ListRecords(t *testing.T) {
 	r := NewResolver(".tunnelmesh", 60)
 

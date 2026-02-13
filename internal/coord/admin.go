@@ -628,6 +628,12 @@ func (s *Server) SetupMonitoringProxies(cfg MonitoringProxyConfig) {
 
 // forwardToMonitoringCoordinator proxies the request to a coordinator that has monitoring configured.
 func (s *Server) forwardToMonitoringCoordinator(w http.ResponseWriter, r *http.Request) {
+	// Detect forwarding loops — if another coordinator already forwarded this request, stop.
+	if r.Header.Get("X-TunnelMesh-Forwarded") != "" {
+		http.Error(w, "monitoring proxy forwarding loop detected", http.StatusLoopDetected)
+		return
+	}
+
 	s.peersMu.RLock()
 	var targetIP string
 	for _, ci := range s.coordinators {
@@ -648,6 +654,7 @@ func (s *Server) forwardToMonitoringCoordinator(w http.ResponseWriter, r *http.R
 			req.URL.Scheme = "https"
 			req.URL.Host = targetIP
 			req.Host = targetIP
+			req.Header.Set("X-TunnelMesh-Forwarded", "true")
 		},
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // mesh-internal traffic

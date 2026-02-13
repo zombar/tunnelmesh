@@ -184,7 +184,7 @@ func TestServer_Register_DuplicateName(t *testing.T) {
 func TestServer_Register_ReservedName(t *testing.T) {
 	srv := newTestServer(t)
 
-	reserved := []string{"admin", "administrator", "super", "supervisor", "peers", "api", "Admin", "ADMINISTRATOR", "Peers"}
+	reserved := []string{"admin", "administrator", "super", "supervisor", "peers", "api", "prometheus", "grafana", "health", "assets", "static", "Admin", "ADMINISTRATOR", "Peers", "Prometheus"}
 	for _, name := range reserved {
 		t.Run(name, func(t *testing.T) {
 			regReq := proto.RegisterRequest{
