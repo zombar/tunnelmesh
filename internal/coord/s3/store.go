@@ -789,9 +789,13 @@ func (s *Store) fetchChunkDistributed(ctx context.Context, chunkHash string) ([]
 			continue
 		}
 
-		// 6. Cache locally (best-effort)
+		// 6. Cache locally and register ownership (best-effort)
 		if _, werr := s.cas.WriteChunk(ctx, data); werr != nil {
 			s.logger.Warn().Err(werr).Str("hash", truncHash(chunkHash)).Msg("failed to cache remote chunk locally")
+		} else if s.chunkRegistry != nil {
+			if rerr := s.chunkRegistry.RegisterChunk(chunkHash, int64(len(data))); rerr != nil {
+				s.logger.Warn().Err(rerr).Str("hash", truncHash(chunkHash)).Msg("failed to register chunk ownership")
+			}
 		}
 
 		return data, nil

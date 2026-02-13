@@ -447,21 +447,19 @@ func TestErasureCodingReadPath_DistributedFetch(t *testing.T) {
 		if chunkMeta == nil {
 			continue
 		}
-		// Read chunk data before deleting
 		chunkData, readErr := store.cas.ReadChunk(ctx, chunkHash)
 		if readErr != nil {
 			continue
 		}
-		if len(shardsDeleted) < shardsToDelete || shardsDeleted[chunkMeta.ShardIndex] {
-			if !shardsDeleted[chunkMeta.ShardIndex] && len(shardsDeleted) < shardsToDelete {
-				shardsDeleted[chunkMeta.ShardIndex] = true
-			}
-			if shardsDeleted[chunkMeta.ShardIndex] {
-				// Store in remote and delete locally
-				remoteChunks[chunkHash] = chunkData
-				registryOwners[chunkHash] = []string{"remote-coord-1"}
-				_ = store.cas.DeleteChunk(ctx, chunkHash)
-			}
+		// Mark first N unseen shards for deletion
+		if !shardsDeleted[chunkMeta.ShardIndex] && len(shardsDeleted) < shardsToDelete {
+			shardsDeleted[chunkMeta.ShardIndex] = true
+		}
+		// Move all chunks belonging to marked shards to remote
+		if shardsDeleted[chunkMeta.ShardIndex] {
+			remoteChunks[chunkHash] = chunkData
+			registryOwners[chunkHash] = []string{"remote-coord-1"}
+			_ = store.cas.DeleteChunk(ctx, chunkHash)
 		}
 	}
 	require.Equal(t, shardsToDelete, len(shardsDeleted), "should have deleted chunks for %d shards", shardsToDelete)
@@ -575,6 +573,61 @@ func TestErasureCodingReadPath_NoDistributedWithoutReplicator(t *testing.T) {
 	got, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	assert.Equal(t, data, got, "should reconstruct via RS without distributed fetch capability")
+
+	// Wait for background caching goroutine
+	time.Sleep(200 * time.Millisecond)
+}
+
+// TestErasureCodingReadPath_DistributedFetchHashMismatch tests that corrupt chunks
+// from remote coordinators are rejected and the read falls back to RS reconstruction.
+func TestErasureCodingReadPath_DistributedFetchHashMismatch(t *testing.T) {
+	k, m := 6, 3
+	data := make([]byte, 24*1024)
+	_, err := rand.Read(data)
+	require.NoError(t, err)
+
+	store := newTestStoreWithErasureCoding(t, k, m)
+	ctx := context.Background()
+
+	meta, err := store.PutObject(ctx, "ec-bucket", "test.bin", bytes.NewReader(data), int64(len(data)), "application/octet-stream", nil)
+	require.NoError(t, err)
+
+	// Delete 2 data shards and populate replicator with corrupted data
+	corruptChunks := make(map[string][]byte)
+	registryOwners := make(map[string][]string)
+	shardsDeleted := make(map[int]bool)
+
+	for _, chunkHash := range meta.ErasureCoding.DataHashes {
+		chunkMeta := meta.ChunkMetadata[chunkHash]
+		if chunkMeta == nil {
+			continue
+		}
+		if !shardsDeleted[chunkMeta.ShardIndex] && len(shardsDeleted) < 2 {
+			shardsDeleted[chunkMeta.ShardIndex] = true
+		}
+		if shardsDeleted[chunkMeta.ShardIndex] {
+			// Store corrupted data (wrong bytes) so hash validation fails
+			corruptChunks[chunkHash] = []byte("corrupted data that won't match hash")
+			registryOwners[chunkHash] = []string{"bad-coord-1"}
+			_ = store.cas.DeleteChunk(ctx, chunkHash)
+		}
+	}
+	require.Equal(t, 2, len(shardsDeleted))
+
+	mockReg := &mockChunkRegistry{owners: registryOwners}
+	mockRepl := &mockReplicator{chunks: corruptChunks}
+	store.SetChunkRegistry(mockReg)
+	store.SetReplicator(mockRepl)
+
+	// Remote chunks are corrupt → hash mismatch → fall back to RS reconstruction
+	// With 2 missing data shards and 3 parity shards, RS should still succeed
+	reader, _, err := store.GetObject(ctx, "ec-bucket", "test.bin")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+
+	got, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, data, got, "should reconstruct via RS after rejecting corrupt remote chunks")
 
 	// Wait for background caching goroutine
 	time.Sleep(200 * time.Millisecond)
