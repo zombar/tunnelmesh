@@ -299,6 +299,7 @@ services:
       - AUTH_TOKEN=${TUNNELMESH_TOKEN}
       - POLL_INTERVAL=30s
       - OUTPUT_FILE=/targets/peers.json
+      - COORD_OUTPUT_FILE=/targets/coordinators.json
       - METRICS_PORT=9443
       - TLS_SKIP_VERIFY=true
     volumes:

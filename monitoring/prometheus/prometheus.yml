@@ -25,7 +25,8 @@ scrape_configs:
     scheme: https
     tls_config:
       insecure_skip_verify: true
-    static_configs:
-      - targets: ['10.85.0.1:443']  # Coordinator mesh IP
+    file_sd_configs:
+      - files:
+          - '/targets/coordinators.json'
+        refresh_interval: 30s
     metrics_path: '/metrics'
-    scrape_interval: 15s
