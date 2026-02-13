@@ -738,74 +738,134 @@ func (s *Store) updateBucketSize(bucketName string, delta int64) error {
 // getObjectContentWithErasureCoding reads an erasure-coded object and reconstructs
 // missing data shards if necessary. Returns a reader for the reconstructed file.
 //
+// The write path CDC-chunks data shards, so ec.DataHashes contains chunk hashes (not shard hashes).
+// We must fetch all chunks, reassemble them into data shards using ChunkMetadata.ShardIndex,
+// then potentially reconstruct using Reed-Solomon if data shards are missing.
+//
 //nolint:gocyclo // Complexity from shard reconstruction logic
 func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, key string, meta *ObjectMeta) (io.ReadCloser, *ObjectMeta, error) {
 	ec := meta.ErasureCoding
 	k := ec.DataShards
 	m := ec.ParityShards
 
-	// Collect all available shards (data + parity)
-	var availableShards [][]byte
-	var availableIndices []int
-	shardMap := make(map[string]int) // chunkHash -> shard index
-
-	// Build map of chunk hashes to shard indices
-	for i, hash := range ec.DataHashes {
-		shardMap[hash] = i
-	}
-	for i, hash := range ec.ParityHashes {
-		shardMap[hash] = k + i
-	}
-
-	// Try to fetch all shards locally
-	allShards := make([][]byte, k+m)
-	for hash, idx := range shardMap {
-		chunk, err := s.cas.ReadChunk(ctx, hash)
-		if err == nil {
-			allShards[idx] = chunk
-			availableShards = append(availableShards, chunk)
-			availableIndices = append(availableIndices, idx)
+	// Phase 1: Fetch all CDC chunks and reassemble into data shards
+	// ec.DataHashes contains CDC chunk hashes from all data shards
+	// We need to group them by shard index using ChunkMetadata
+	dataShardChunks := make(map[int][][]byte) // shardIndex -> []chunk
+	for _, chunkHash := range ec.DataHashes {
+		chunkMeta, exists := meta.ChunkMetadata[chunkHash]
+		if !exists {
+			return nil, nil, fmt.Errorf("missing chunk metadata for data chunk %s (versionID=%s)", chunkHash[:8], meta.VersionID)
 		}
+		if chunkMeta.ShardType != "data" {
+			return nil, nil, fmt.Errorf("expected data shard chunk, got %s for chunk %s (versionID=%s)", chunkMeta.ShardType, chunkHash[:8], meta.VersionID)
+		}
+
+		// Fetch chunk from CAS
+		chunk, err := s.cas.ReadChunk(ctx, chunkHash)
+		if err != nil {
+			// Chunk missing locally - will need to reconstruct
+			s.logger.Debug().Str("hash", chunkHash[:8]).Int("shard", chunkMeta.ShardIndex).Msg("data chunk missing locally")
+			continue
+		}
+
+		// Group chunk by shard index
+		dataShardChunks[chunkMeta.ShardIndex] = append(dataShardChunks[chunkMeta.ShardIndex], chunk)
+	}
+
+	// Reassemble chunks into complete data shards
+	dataShards := make([][]byte, k)
+	for shardIdx := 0; shardIdx < k; shardIdx++ {
+		chunks, exists := dataShardChunks[shardIdx]
+		if !exists || len(chunks) == 0 {
+			// Data shard missing - mark as nil for reconstruction
+			dataShards[shardIdx] = nil
+			continue
+		}
+
+		// Concatenate chunks to rebuild shard
+		var shardData []byte
+		for _, chunk := range chunks {
+			shardData = append(shardData, chunk...)
+		}
+		dataShards[shardIdx] = shardData
 	}
 
 	// Count available data shards
 	availableDataShards := 0
 	for i := 0; i < k; i++ {
-		if allShards[i] != nil {
+		if dataShards[i] != nil {
 			availableDataShards++
 		}
 	}
 
-	// Check if we have enough shards for reconstruction
-	if len(availableShards) < k {
-		return nil, nil, fmt.Errorf("insufficient shards: need %d, have %d (versionID=%s)", k, len(availableShards), meta.VersionID)
+	// Phase 2: Fetch parity shards (these are stored whole, not CDC chunked)
+	parityShards := make([][]byte, m)
+	for i, parityHash := range ec.ParityHashes {
+		chunk, err := s.cas.ReadChunk(ctx, parityHash)
+		if err != nil {
+			// Parity shard missing
+			s.logger.Debug().Str("hash", parityHash[:8]).Int("shard", i).Msg("parity shard missing locally")
+			parityShards[i] = nil
+			continue
+		}
+		parityShards[i] = chunk
 	}
 
-	// If all data shards are available, read directly without reconstruction
+	// Count available parity shards
+	availableParityShards := 0
+	for i := 0; i < m; i++ {
+		if parityShards[i] != nil {
+			availableParityShards++
+		}
+	}
+
+	// Phase 3: Fast path - all data shards available
 	if availableDataShards == k {
-		// All data shards present - no reconstruction needed
-		// Read data shards in order and reassemble file
+		// No reconstruction needed - reassemble file from data shards
 		var fileData []byte
 		for i := 0; i < k; i++ {
-			fileData = append(fileData, allShards[i]...)
+			fileData = append(fileData, dataShards[i]...)
 		}
 
-		// Trim to original size (remove padding)
+		// Trim to original size (remove RS padding)
 		if int64(len(fileData)) < meta.Size {
-			return nil, nil, fmt.Errorf("reconstructed data too small: got %d bytes, expected %d", len(fileData), meta.Size)
+			return nil, nil, fmt.Errorf("reassembled data too small: got %d bytes, expected %d (versionID=%s)", len(fileData), meta.Size, meta.VersionID)
 		}
 		fileData = fileData[:meta.Size]
 
 		return io.NopCloser(bytes.NewReader(fileData)), meta, nil
 	}
 
-	// Need reconstruction: some data shards are missing
+	// Phase 4: Reconstruction path - some data shards missing
+	totalAvailable := availableDataShards + availableParityShards
+	if totalAvailable < k {
+		return nil, nil, fmt.Errorf("insufficient shards: need %d, have %d data + %d parity = %d total (versionID=%s)",
+			k, availableDataShards, availableParityShards, totalAvailable, meta.VersionID)
+	}
+
 	s.logger.Info().
-		Int("available", len(availableShards)).
+		Int("available_data", availableDataShards).
+		Int("available_parity", availableParityShards).
 		Int("needed", k).
-		Int("data_shards", availableDataShards).
 		Str("version", meta.VersionID).
 		Msg("reconstructing erasure-coded object")
+
+	// Combine data + parity shards into single array for DecodeFile
+	allShards := make([][]byte, k+m)
+	for i := 0; i < k; i++ {
+		allShards[i] = dataShards[i]
+	}
+	for i := 0; i < m; i++ {
+		allShards[k+i] = parityShards[i]
+	}
+
+	// Check for cancellation before expensive reconstruction
+	select {
+	case <-ctx.Done():
+		return nil, nil, fmt.Errorf("context canceled before reconstruction: %w", ctx.Err())
+	default:
+	}
 
 	// Reconstruct using Reed-Solomon
 	reconstructedData, err := DecodeFile(allShards, k, m, meta.Size)
@@ -813,41 +873,38 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 		return nil, nil, fmt.Errorf("failed to reconstruct file (versionID=%s): %w", meta.VersionID, err)
 	}
 
-	// Cache reconstructed data shards back to CAS for future reads
-	// This is a best-effort operation - don't fail the read if caching fails
+	// Phase 5: Cache reconstructed data shards (best-effort, async)
+	// This improves future read performance by storing reconstructed shards locally
 	go func() {
 		// Use background context since original request may have completed
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		// After reconstruction, allShards contains reconstructed data shards
-		// Extract and cache the data shards that were reconstructed
+		// After DecodeFile, allShards contains reconstructed data shards
+		// Cache any data shards that were missing
 		for i := 0; i < k; i++ {
-			if meta.ErasureCoding.DataHashes[i] == "" {
-				continue // No hash for this shard
-			}
-
-			// Check if this data shard was originally missing
-			hash := meta.ErasureCoding.DataHashes[i]
-			if _, exists := shardMap[hash]; !exists {
+			if dataShards[i] != nil {
+				// Already had this shard
 				continue
 			}
 
-			// Skip if we already had this shard
-			originallyPresent := false
-			for _, idx := range availableIndices {
-				if idx == i {
-					originallyPresent = true
+			// This shard was reconstructed - cache it by chunking and storing
+			reconstructedShard := allShards[i]
+			shardChunker := NewStreamingChunker(bytes.NewReader(reconstructedShard))
+			for {
+				chunk, chunkHash, err := shardChunker.NextChunk()
+				if errors.Is(err, io.EOF) {
 					break
 				}
-			}
-			if originallyPresent {
-				continue
-			}
+				if err != nil {
+					s.logger.Warn().Err(err).Int("shard", i).Msg("failed to chunk reconstructed shard")
+					break
+				}
 
-			// Cache the reconstructed shard
-			if _, err := s.cas.WriteChunk(bgCtx, allShards[i]); err != nil {
-				s.logger.Warn().Err(err).Int("shard", i).Str("hash", hash[:8]).Msg("failed to cache reconstructed shard")
+				// Write chunk to local CAS (best-effort)
+				if _, err := s.cas.WriteChunk(bgCtx, chunk); err != nil {
+					s.logger.Warn().Err(err).Int("shard", i).Str("hash", chunkHash[:8]).Msg("failed to cache reconstructed chunk")
+				}
 			}
 		}
 	}()
