@@ -17,12 +17,12 @@ routing.
 ## Features
 
 - **P2P Encrypted Tunnels** - Direct connections between peers using pluggable transports
-- **Pluggable Transport Layer** - Supports SSH, UDP, and WebSocket relay transports with fallback
 - **Coordinator Peers** - Admin peers that provide discovery, IP allocation, and NAT traversal coordination
 - **Exit Peers** - Split-tunnel routing: route internet traffic through peers and keep mesh traffic direct
 - **TUN Interface** - Virtual network interface for transparent IP routing
 - **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh` or `node.tm`)
 - **Network Monitoring** - Automatic detection of network changes with re-connection
+- **Pluggable Transport Layer** - Supports SSH, UDP, and WebSocket relay transports with fallback
 - **NAT Traversal** - UDP hole-punching with STUN-like endpoint discovery, plus relay fallback
 - **Multi-Platform** - Linux, macOS, and Windows support
 - **Admin Dashboard** - Web UI for mesh status, peers, traffic statistics, and per-peer transport controls
@@ -32,38 +32,6 @@ routing.
 - **Internal Packet Filter** - Port-based firewall with per-peer rules, configurable via config, CLI, or admin UI
 - **S3 Compatible Storage** - Distributed and replicated across the mesh with erasure coding
 - **Observability Baked-in** - Prometheus, Grafana and Loki integrated into Admin dashboard
-
-### What Requires Admin Access?
-
-> [!NOTE]
-> TunnelMesh separates **network functionality** (no admin required) from **configuration operations**
-> (admin only). Most features work without admin access - you only need admin rights to configure
-> and manage the mesh.
-
-**Works Without Admin** (all peers):
-- Join mesh and establish encrypted tunnels
-- Route traffic through the mesh
-- Use mesh DNS resolution
-- Access services on other peers
-- Speed test other peers
-- Use exit peers for VPN
-- Access S3 buckets (with RBAC permissions)
-
-**Requires Admin Access**:
-- View peer stats and connection details
-- Configure packet filter rules
-- Manage WireGuard clients
-- Create/delete S3 buckets and file shares
-- Manage users, groups, and RBAC bindings
-- Control Docker containers (if enabled)
-
-**Admin Configuration**:
-```yaml
-coordinator:
-  admin_peers: ["alice", "a1b2c3d4e5f6g7h8"]  # Names or peer IDs (16 hex chars)
-```
-
-See [Admin Guide](docs/ADMIN.md) for complete details.
 
 ## Getting Started
 
@@ -165,13 +133,45 @@ through the admin panel with QR codes for easy mobile setup.
 - Clients get mesh DNS names (e.g., `iphone.tunnelmesh`)
 - Managed via coordination server admin panel
 
-### Admin Interface
+## Admin Interface
 
 The admin interface is **only accessible from within the mesh** via HTTPS on the coordinator's mesh IP. Access it at
 `https://this.tm/` from any mesh peer.
 
 When you run `tunnelmesh join`, the mesh CA certificate is automatically fetched and you'll be prompted to install it in
 your system trust store. This allows HTTPS connections to mesh services without browser warnings.
+
+> [!NOTE]
+> TunnelMesh separates **network functionality** (no admin required) from **configuration operations**
+> (admin only). Most features work without admin access - you only need admin rights to configure
+> and manage the mesh.
+
+### What Requires Admin Access?
+
+**Works Without Admin** (all peers):
+- Join mesh and establish encrypted tunnels
+- Route traffic through the mesh
+- Use mesh DNS resolution
+- Access services on other peers
+- Speed test other peers
+- Use exit peers for VPN
+- Access S3 buckets (with RBAC permissions)
+
+**Requires Admin Access**:
+- View peer stats and connection details
+- Configure packet filter rules
+- Manage WireGuard clients
+- Create/delete S3 buckets and file shares
+- Manage users, groups, and RBAC bindings
+- Control Docker containers (if enabled)
+
+**Admin Configuration**:
+```yaml
+coordinator:
+  admin_peers: ["alice", "a1b2c3d4e5f6g7h8"]  # Names or peer IDs (16 hex chars)
+```
+
+See [Admin Guide](docs/ADMIN.md) for complete details.
 
 ## Configuration
 
