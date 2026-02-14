@@ -17,12 +17,12 @@ routing.
 ## Features
 
 - **P2P Encrypted Tunnels** - Direct connections between peers using pluggable transports
-- **Pluggable Transport Layer** - Supports SSH, UDP, and WebSocket relay transports with fallback
 - **Coordinator Peers** - Admin peers that provide discovery, IP allocation, and NAT traversal coordination
 - **Exit Peers** - Split-tunnel routing: route internet traffic through peers and keep mesh traffic direct
 - **TUN Interface** - Virtual network interface for transparent IP routing
 - **Built-in DNS** - Local resolver for mesh hostnames (e.g., `node.tunnelmesh` or `node.tm`)
 - **Network Monitoring** - Automatic detection of network changes with re-connection
+- **Pluggable Transport Layer** - Supports SSH, UDP, and WebSocket relay transports with fallback
 - **NAT Traversal** - UDP hole-punching with STUN-like endpoint discovery, plus relay fallback
 - **Multi-Platform** - Linux, macOS, and Windows support
 - **Admin Dashboard** - Web UI for mesh status, peers, traffic statistics, and per-peer transport controls
