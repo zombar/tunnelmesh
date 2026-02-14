@@ -777,6 +777,7 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 
 		// Update metrics on startup
 		s.updateCASMetrics()
+		s.updateStorageMetrics()
 		s.collectAndPersistCapacity(ctx)
 
 		// Wait for stagger delay before first GC run.
@@ -829,8 +830,9 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 					metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
 				}
 
-				// Update CAS metrics after GC
+				// Update CAS and storage metrics after GC
 				s.updateCASMetrics()
+				s.updateStorageMetrics()
 
 				// Collect and persist local capacity, then load peer snapshots
 				s.collectAndPersistCapacity(ctx)
@@ -885,6 +887,40 @@ func (s *Server) updateCASMetrics() {
 			casStats.LogicalBytes,
 			casStats.VersionCount,
 		)
+	}
+}
+
+// updateStorageMetrics updates storage-related Prometheus gauges (buckets, objects,
+// storage bytes, quota, registered users). Called alongside updateCASMetrics.
+func (s *Server) updateStorageMetrics() {
+	if s.s3Store == nil {
+		return
+	}
+	metrics := s3.GetS3Metrics()
+	if metrics == nil {
+		return
+	}
+
+	buckets, err := s.s3Store.ListBuckets(context.Background())
+	if err != nil {
+		return
+	}
+	var storageBytes int64
+	for _, b := range buckets {
+		storageBytes += b.SizeBytes
+	}
+
+	casStats := s.s3Store.GetCASStats()
+
+	var quotaBytes int64
+	if qs := s.s3Store.QuotaStats(); qs != nil {
+		quotaBytes = qs.MaxBytes
+	}
+
+	metrics.UpdateStorageMetrics(len(buckets), casStats.ObjectCount, storageBytes, quotaBytes)
+
+	if s.s3Credentials != nil {
+		metrics.SetRegisteredUsers(s.s3Credentials.UserCount())
 	}
 }
 
@@ -2317,6 +2353,15 @@ func (s *Server) SetMetricsRegistry(registry prometheus.Registerer) {
 	if s.s3Server != nil {
 		s.s3Server.SetMetrics(s3Metrics)
 	}
+
+	// Refresh storage metrics now that metrics are initialized.
+	// StartPeriodicCleanup may have already run its startup update before
+	// the registry was set, so those updates would have been silently skipped.
+	go func() {
+		s.updateCASMetrics()
+		s.updateStorageMetrics()
+		s.collectAndPersistCapacity(context.Background())
+	}()
 
 	log.Debug().Msg("coordinator metrics initialized")
 }

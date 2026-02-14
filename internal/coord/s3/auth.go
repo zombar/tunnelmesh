@@ -56,6 +56,13 @@ func (cs *CredentialStore) LookupUser(accessKey string) (userID string, ok bool)
 	return
 }
 
+// UserCount returns the number of registered users.
+func (cs *CredentialStore) UserCount() int {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return len(cs.userSecrets)
+}
+
 // GetSecret returns the secret key for a user ID.
 func (cs *CredentialStore) GetSecret(userID string) (secretKey string, ok bool) {
 	cs.mu.RLock()
