@@ -704,6 +704,84 @@ func TestObjectLifecycle_PurgeCancellation(t *testing.T) {
 	assert.Equal(t, totalObjects-purged, remaining, "remaining objects should equal total minus purged")
 }
 
+func TestObjectLifecycle_PurgeAllTombstonedObjects(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create objects: two tombstoned (one old, one recent), one live
+	_, err := store.PutObject(context.Background(), "test-bucket", "old.txt", bytes.NewReader([]byte("old")), 3, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = store.PutObject(context.Background(), "test-bucket", "new.txt", bytes.NewReader([]byte("new")), 3, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = store.PutObject(context.Background(), "test-bucket", "live.txt", bytes.NewReader([]byte("live")), 4, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Tombstone old.txt and new.txt
+	err = store.TombstoneObject(context.Background(), "test-bucket", "old.txt")
+	require.NoError(t, err)
+	err = store.TombstoneObject(context.Background(), "test-bucket", "new.txt")
+	require.NoError(t, err)
+
+	// Backdate old.txt tombstone to 100 days ago
+	metaPath := filepath.Join(store.dataDir, "buckets", "test-bucket", "meta", "old.txt.json")
+	metaData, _ := os.ReadFile(metaPath)
+	var meta ObjectMeta
+	_ = json.Unmarshal(metaData, &meta)
+	oldTime := time.Now().UTC().AddDate(0, 0, -100)
+	meta.TombstonedAt = &oldTime
+	updatedData, _ := json.MarshalIndent(meta, "", "  ")
+	_ = os.WriteFile(metaPath, updatedData, 0644)
+
+	// PurgeAll should purge BOTH tombstoned objects regardless of age
+	purged := store.PurgeAllTombstonedObjects(context.Background())
+	assert.Equal(t, 2, purged)
+
+	// Both tombstoned objects should be gone
+	_, err = store.HeadObject(context.Background(), "test-bucket", "old.txt")
+	assert.ErrorIs(t, err, ErrObjectNotFound)
+	_, err = store.HeadObject(context.Background(), "test-bucket", "new.txt")
+	assert.ErrorIs(t, err, ErrObjectNotFound)
+
+	// Live object should still exist
+	liveMeta, err := store.HeadObject(context.Background(), "test-bucket", "live.txt")
+	require.NoError(t, err)
+	assert.False(t, liveMeta.IsTombstoned())
+}
+
+func TestObjectLifecycle_PurgeAllTombstonedObjectsEmpty(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// No tombstoned objects — should return 0
+	purged := store.PurgeAllTombstonedObjects(context.Background())
+	assert.Equal(t, 0, purged)
+}
+
+func TestObjectLifecycle_PurgeAllCancellation(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create and tombstone enough objects to observe partial cancellation
+	count := 500
+	if testing.Short() {
+		count = 200
+	}
+	for i := 0; i < count; i++ {
+		key := fmt.Sprintf("file-%04d.txt", i)
+		_, err := store.PutObject(context.Background(), "test-bucket", key, bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+		require.NoError(t, err)
+		err = store.TombstoneObject(context.Background(), "test-bucket", key)
+		require.NoError(t, err)
+	}
+
+	// Cancel immediately
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	purged := store.PurgeAllTombstonedObjects(ctx)
+	assert.Less(t, purged, count, "should not purge all objects when cancelled")
+}
+
 func TestBucketTombstone(t *testing.T) {
 	masterKey := [32]byte{1, 2, 3, 4, 5, 6, 7, 8}
 	store, err := NewStoreWithCAS(t.TempDir(), nil, masterKey)

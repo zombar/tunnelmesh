@@ -2755,10 +2755,10 @@ func (s *Store) RunGarbageCollection(ctx context.Context) GCStats {
 	s.deleteOrphanedChunks(ctx, &stats, referencedChunks, gcStartTime)
 
 	// Update quota if tracking
+	// Note: calculateQuotaUsage acquires s.mu.Lock() internally,
+	// so we must NOT hold the lock here.
 	if s.quota != nil {
-		s.mu.Lock()
 		_ = s.calculateQuotaUsage()
-		s.mu.Unlock()
 	}
 
 	return stats
