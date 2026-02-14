@@ -719,7 +719,10 @@ func createTestReplicatorWithMocks(t *testing.T, transport *mockTransport, s3 *m
 		Logger:    logger,
 	}
 
-	return NewReplicator(config)
+	r := NewReplicator(config)
+	// Ensure async ACK goroutines complete before goleak checks
+	t.Cleanup(func() { _ = r.Stop() })
+	return r
 }
 
 // ==== Phase 4: Chunk-Level Replication Tests ====
@@ -751,6 +754,7 @@ func TestReplicateObject_AllChunksAlreadyReplicated(t *testing.T) {
 		ChunkRegistry: registry,
 		Logger:        zerolog.Nop(),
 	})
+	t.Cleanup(func() { _ = replicator.Stop() })
 
 	// Replicate to peer (should skip all chunks)
 	err := replicator.ReplicateObject(ctx, "bucket1", "file.txt", "coord-peer")
@@ -778,6 +782,7 @@ func TestReplicateObject_SomeMissingChunks(t *testing.T) {
 		ChunkAckTimeout: 1 * time.Second, // Reasonable timeout
 		Logger:          zerolog.Nop(),
 	})
+	t.Cleanup(func() { _ = sender.Stop() })
 
 	receiver := NewReplicator(Config{
 		NodeID:        "coord-receiver",
@@ -786,6 +791,7 @@ func TestReplicateObject_SomeMissingChunks(t *testing.T) {
 		ChunkRegistry: registry,
 		Logger:        zerolog.Nop(),
 	})
+	t.Cleanup(func() { _ = receiver.Stop() })
 
 	// Receiver is used indirectly via the broker routing messages to its handler
 	_ = receiver
@@ -854,6 +860,7 @@ func TestReplicateObject_ChunkReadError(t *testing.T) {
 		ChunkRegistry: registry,
 		Logger:        zerolog.Nop(),
 	})
+	t.Cleanup(func() { _ = replicator.Stop() })
 
 	// Replicate should fail
 	err := replicator.ReplicateObject(ctx, "bucket1", "file.txt", "coord-peer")
@@ -949,6 +956,7 @@ func TestReplicateObject_ObjectNotFound(t *testing.T) {
 		ChunkRegistry: registry,
 		Logger:        zerolog.Nop(),
 	})
+	t.Cleanup(func() { _ = replicator.Stop() })
 
 	// Try to replicate non-existent object
 	err := replicator.ReplicateObject(ctx, "bucket1", "nonexistent.txt", "coord-peer")
@@ -968,6 +976,7 @@ func TestReplicateObject_NoChunkRegistry(t *testing.T) {
 		S3Store:   s3,
 		Logger:    zerolog.Nop(),
 	})
+	t.Cleanup(func() { _ = replicator.Stop() })
 
 	err := replicator.ReplicateObject(ctx, "bucket1", "file.txt", "coord-peer")
 	assert.Error(t, err)
@@ -1138,6 +1147,7 @@ func TestStripedReplicateObject_Distribution(t *testing.T) {
 		ChunkRegistry: registry,
 		Logger:        zerolog.Nop(),
 	})
+	t.Cleanup(func() { _ = sender.Stop() })
 
 	// Add two peers
 	sender.AddPeer("coord-peer1")
@@ -1161,6 +1171,7 @@ func TestStripedReplicateObject_Distribution(t *testing.T) {
 			ChunkRegistry: peerRegistry,
 			Logger:        zerolog.Nop(),
 		})
+		t.Cleanup(func() { _ = receiver.Stop() })
 		_ = receiver
 
 		// Wrap the handler in the broker to intercept messages
@@ -1233,6 +1244,7 @@ func TestStripedReplicateObject_SinglePeer(t *testing.T) {
 		ChunkRegistry: registry,
 		Logger:        zerolog.Nop(),
 	})
+	t.Cleanup(func() { _ = sender.Stop() })
 
 	// Only one peer
 	sender.AddPeer("coord-peer1")
@@ -1240,13 +1252,15 @@ func TestStripedReplicateObject_SinglePeer(t *testing.T) {
 	// Set up receiver
 	peerTransport := broker.newTransportFor("coord-peer1")
 	peerS3 := newMockS3Store()
-	_ = NewReplicator(Config{
+	peerReplicator := NewReplicator(Config{
 		NodeID:        "coord-peer1",
 		Transport:     peerTransport,
 		S3Store:       peerS3,
 		ChunkRegistry: NewChunkRegistry("coord-peer1", nil),
 		Logger:        zerolog.Nop(),
 	})
+	t.Cleanup(func() { _ = peerReplicator.Stop() })
+	_ = peerReplicator
 
 	var receivedChunks []string
 	var mu sync.Mutex
@@ -1493,6 +1507,7 @@ func TestHandleReplicateObjectMeta_InvalidPayload(t *testing.T) {
 		S3Store:   s3,
 		Logger:    zerolog.Nop(),
 	})
+	t.Cleanup(func() { _ = r.Stop() })
 
 	// Send message with invalid JSON payload
 	msg := &Message{
@@ -1535,6 +1550,7 @@ func TestCleanupNonAssignedChunks_ThreeCoordinators(t *testing.T) {
 		ChunkRegistry: registry,
 		Logger:        zerolog.Nop(),
 	})
+	t.Cleanup(func() { _ = r.Stop() })
 
 	// Add peers (3 coordinators total: coord-a, coord-b, coord-c)
 	r.AddPeer("coord-b")
@@ -1601,6 +1617,7 @@ func TestCleanupNonAssignedChunks_NoPeers(t *testing.T) {
 		ChunkRegistry: registry,
 		Logger:        zerolog.Nop(),
 	})
+	t.Cleanup(func() { _ = r.Stop() })
 
 	// No peers added — should keep everything
 	err := r.CleanupNonAssignedChunks(ctx, "bucket", "file.bin")
@@ -1625,6 +1642,7 @@ func TestCleanupNonAssignedChunks_NoChunkRegistry(t *testing.T) {
 		Logger:    zerolog.Nop(),
 		// No ChunkRegistry
 	})
+	t.Cleanup(func() { _ = r.Stop() })
 
 	err := r.CleanupNonAssignedChunks(ctx, "bucket", "file.bin")
 	assert.Error(t, err)
@@ -1685,4 +1703,113 @@ func TestReplicateObject_SendsMetadata(t *testing.T) {
 		_, exists := s3b.chunks[hash]
 		assert.True(t, exists, "Chunk %s should have been replicated to coord-b", hash)
 	}
+}
+
+func TestHandleReplicateChunk_AsyncACK(t *testing.T) {
+	// Verify that handleReplicateChunk returns before the ACK is sent.
+	// We use a slow transport that blocks on send to prove the handler
+	// doesn't wait for the ACK delivery.
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+
+	ackStarted := make(chan struct{}, 1)
+	ackBlocked := make(chan struct{})
+
+	slowTransport := &mockTransport{
+		sent: make(map[string][]byte),
+	}
+	// Override SendToCoordinator to block until we signal
+	slowTransport.sendErr = nil
+
+	r := NewReplicator(Config{
+		NodeID:        "coord-receiver",
+		Transport:     slowTransport,
+		S3Store:       s3Store,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+	t.Cleanup(func() {
+		close(ackBlocked) // unblock any pending goroutines
+		_ = r.Stop()
+	})
+
+	// Replace transport's SendToCoordinator to block on ACK send
+	origHandler := slowTransport.handler
+	blockingTransport := &blockingSendTransport{
+		handler:    origHandler,
+		ackStarted: ackStarted,
+		ackBlocked: ackBlocked,
+	}
+	// Re-register with the blocking transport
+	r.transport = blockingTransport
+	blockingTransport.RegisterHandler(r.handleIncomingMessage)
+
+	// Create a chunk replication message
+	payload := ReplicateChunkPayload{
+		Bucket:      "bucket",
+		Key:         "file.txt",
+		ChunkHash:   "testhash123",
+		ChunkData:   []byte("chunk data"),
+		ChunkIndex:  0,
+		TotalChunks: 1,
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeReplicateChunk,
+		ID:      "test-chunk-msg",
+		From:    "coord-sender",
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	data, err := msg.Marshal()
+	require.NoError(t, err)
+
+	// Simulate receiving the chunk — handler should return immediately
+	err = blockingTransport.simulateReceive("coord-sender", data)
+	assert.NoError(t, err)
+
+	// Verify chunk was written (handler completed)
+	_, exists := s3Store.chunks["testhash123"]
+	assert.True(t, exists, "Chunk should be written before ACK is sent")
+
+	// Wait for the async ACK goroutine to start (proves it's async)
+	select {
+	case <-ackStarted:
+		// Good — the ACK send started in a separate goroutine
+	case <-time.After(2 * time.Second):
+		t.Fatal("Async ACK goroutine did not start")
+	}
+}
+
+// blockingSendTransport blocks on SendToCoordinator until signaled.
+type blockingSendTransport struct {
+	handler    func(from string, data []byte) error
+	ackStarted chan struct{}
+	ackBlocked chan struct{}
+}
+
+func (t *blockingSendTransport) SendToCoordinator(_ context.Context, _ string, _ []byte) error {
+	// Signal that the ACK send started
+	select {
+	case t.ackStarted <- struct{}{}:
+	default:
+	}
+	// Block until test unblocks us
+	<-t.ackBlocked
+	return nil
+}
+
+func (t *blockingSendTransport) RegisterHandler(handler func(from string, data []byte) error) {
+	t.handler = handler
+}
+
+func (t *blockingSendTransport) simulateReceive(from string, data []byte) error {
+	if t.handler == nil {
+		return fmt.Errorf("no handler registered")
+	}
+	return t.handler(from, data)
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -130,17 +131,19 @@ type Replicator struct {
 	pendingFetchRequests   map[string]chan *FetchChunkResponsePayload // map[requestID]chan (Phase 5)
 	pendingFetchTimestamps map[string]time.Time                       // map[requestID]timestamp for TTL cleanup
 
+	// Async ACK sending
+	ackSendSem chan struct{} // Semaphore to bound concurrent async ACK sends
+
 	// Rate limiting
 	rateLimiter *rate.Limiter // Limits incoming replication messages per second
 
-	// Metrics
-	metricsMu     sync.RWMutex
-	sentCount     uint64
-	receivedCount uint64
-	conflictCount uint64
-	errorCount    uint64
-	droppedCount  uint64 // Operations dropped due to pending limit
-	rateLimited   uint64 // Messages dropped due to rate limiting
+	// Metrics (lock-free via atomics)
+	sentCount     atomic.Uint64
+	receivedCount atomic.Uint64
+	conflictCount atomic.Uint64
+	errorCount    atomic.Uint64
+	droppedCount  atomic.Uint64 // Operations dropped due to pending limit
+	rateLimited   atomic.Uint64 // Messages dropped due to rate limiting
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -242,6 +245,7 @@ func NewReplicator(config Config) *Replicator {
 		syncRequestTimeout:     config.SyncRequestTimeout,
 		syncResponseTimeout:    config.SyncResponseTimeout,
 		chunkAckTimeout:        config.ChunkAckTimeout,
+		ackSendSem:             make(chan struct{}, 100),
 		rateLimiter:            rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst),
 		peers:                  make(map[string]bool),
 		pending:                make(map[string]*pendingReplication),
@@ -555,13 +559,15 @@ func (r *Replicator) handleReplicate(msg *Message) error {
 		// If remote won, apply the update
 		if winner.Equal(payload.VersionVector) {
 			if err := r.applyReplication(payload); err != nil {
+				// Error ACKs stay synchronous — handler is already returning error
 				return r.sendAck(msg.ID, msg.From, false, err.Error(), localVV)
 			}
 		}
 		// Merge version vectors (for both local and remote wins)
 		// This ensures both coordinators converge to the same VV after conflict
 		mergedVV, _ := r.state.Merge(payload.Bucket, payload.Key, payload.VersionVector)
-		return r.sendAck(msg.ID, msg.From, true, "", mergedVV)
+		r.asyncSendAck(msg.ID, msg.From, true, "", mergedVV)
+		return nil
 	}
 
 	// No conflict - check if we should apply
@@ -576,8 +582,9 @@ func (r *Replicator) handleReplicate(msg *Message) error {
 	// Merge version vectors
 	mergedVV, _ := r.state.Merge(payload.Bucket, payload.Key, payload.VersionVector)
 
-	// Send ACK
-	return r.sendAck(msg.ID, msg.From, true, "", mergedVV)
+	// Send ACK asynchronously to avoid blocking this handler
+	r.asyncSendAck(msg.ID, msg.From, true, "", mergedVV)
+	return nil
 }
 
 // applyReplication applies a replication operation to local S3.
@@ -652,6 +659,64 @@ func (r *Replicator) sendAck(replicateID, to string, success bool, errorMsg stri
 	}
 
 	return nil
+}
+
+// asyncSendAck sends an ACK in a background goroutine bounded by the ACK send
+// semaphore. This prevents the handler from blocking on the ACK send — which
+// would create a bidirectional HTTP dependency between coordinators and lead to
+// convoy/deadlock under sustained load.
+func (r *Replicator) asyncSendAck(replicateID, to string, success bool, errorMsg string, vv VersionVector) {
+	select {
+	case r.ackSendSem <- struct{}{}:
+		// Acquired semaphore slot — send asynchronously
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			defer func() { <-r.ackSendSem }()
+
+			if err := r.sendAck(replicateID, to, success, errorMsg, vv); err != nil {
+				r.logger.Warn().Err(err).
+					Str("to", to).
+					Str("replicate_id", replicateID).
+					Msg("Failed to send async ACK")
+			}
+		}()
+	default:
+		// Semaphore full — fall back to synchronous send (still better than not sending)
+		if err := r.sendAck(replicateID, to, success, errorMsg, vv); err != nil {
+			r.logger.Warn().Err(err).
+				Str("to", to).
+				Str("replicate_id", replicateID).
+				Msg("Failed to send sync-fallback ACK")
+		}
+	}
+}
+
+// asyncSendChunkAck sends a chunk ACK in a background goroutine bounded by the
+// ACK send semaphore.
+func (r *Replicator) asyncSendChunkAck(replicateID, to, bucket, key, chunkHash string, chunkIndex int, success bool, errorMsg string) {
+	select {
+	case r.ackSendSem <- struct{}{}:
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			defer func() { <-r.ackSendSem }()
+
+			if err := r.sendChunkAck(replicateID, to, bucket, key, chunkHash, chunkIndex, success, errorMsg); err != nil {
+				r.logger.Warn().Err(err).
+					Str("to", to).
+					Str("chunk", truncateHashForLog(chunkHash)).
+					Msg("Failed to send async chunk ACK")
+			}
+		}()
+	default:
+		if err := r.sendChunkAck(replicateID, to, bucket, key, chunkHash, chunkIndex, success, errorMsg); err != nil {
+			r.logger.Warn().Err(err).
+				Str("to", to).
+				Str("chunk", truncateHashForLog(chunkHash)).
+				Msg("Failed to send sync-fallback chunk ACK")
+		}
+	}
 }
 
 // handleAck processes an incoming ACK message.
@@ -1018,9 +1083,6 @@ type Stats struct {
 }
 
 func (r *Replicator) GetStats() Stats {
-	r.metricsMu.RLock()
-	defer r.metricsMu.RUnlock()
-
 	r.pendingMu.RLock()
 	pendingCount := len(r.pending)
 	r.pendingMu.RUnlock()
@@ -1030,52 +1092,23 @@ func (r *Replicator) GetStats() Stats {
 	r.mu.RUnlock()
 
 	return Stats{
-		SentCount:     r.sentCount,
-		ReceivedCount: r.receivedCount,
-		ConflictCount: r.conflictCount,
-		ErrorCount:    r.errorCount,
-		DroppedCount:  r.droppedCount,
-		RateLimited:   r.rateLimited,
+		SentCount:     r.sentCount.Load(),
+		ReceivedCount: r.receivedCount.Load(),
+		ConflictCount: r.conflictCount.Load(),
+		ErrorCount:    r.errorCount.Load(),
+		DroppedCount:  r.droppedCount.Load(),
+		RateLimited:   r.rateLimited.Load(),
 		PeerCount:     peerCount,
 		PendingACKs:   pendingCount,
 	}
 }
 
-func (r *Replicator) incrementSentCount() {
-	r.metricsMu.Lock()
-	r.sentCount++
-	r.metricsMu.Unlock()
-}
-
-func (r *Replicator) incrementReceivedCount() {
-	r.metricsMu.Lock()
-	r.receivedCount++
-	r.metricsMu.Unlock()
-}
-
-func (r *Replicator) incrementConflictCount() {
-	r.metricsMu.Lock()
-	r.conflictCount++
-	r.metricsMu.Unlock()
-}
-
-func (r *Replicator) incrementErrorCount() {
-	r.metricsMu.Lock()
-	r.errorCount++
-	r.metricsMu.Unlock()
-}
-
-func (r *Replicator) incrementDroppedCount() {
-	r.metricsMu.Lock()
-	r.droppedCount++
-	r.metricsMu.Unlock()
-}
-
-func (r *Replicator) incrementRateLimitedCount() {
-	r.metricsMu.Lock()
-	r.rateLimited++
-	r.metricsMu.Unlock()
-}
+func (r *Replicator) incrementSentCount()        { r.sentCount.Add(1) }
+func (r *Replicator) incrementReceivedCount()    { r.receivedCount.Add(1) }
+func (r *Replicator) incrementConflictCount()    { r.conflictCount.Add(1) }
+func (r *Replicator) incrementErrorCount()       { r.errorCount.Add(1) }
+func (r *Replicator) incrementDroppedCount()     { r.droppedCount.Add(1) }
+func (r *Replicator) incrementRateLimitedCount() { r.rateLimited.Add(1) }
 
 // GetState returns the replication state tracker.
 func (r *Replicator) GetState() *State {
@@ -1554,6 +1587,7 @@ func (r *Replicator) handleReplicateChunk(msg *Message) error {
 	// Store chunk in local CAS
 	if err := r.s3.WriteChunkDirect(r.ctx, payload.ChunkHash, payload.ChunkData); err != nil {
 		r.logger.Error().Err(err).Str("chunk", truncateHashForLog(payload.ChunkHash)).Msg("Failed to write chunk")
+		// Error ACK stays synchronous
 		return r.sendChunkAck(msg.ID, msg.From, payload.Bucket, payload.Key, payload.ChunkHash, payload.ChunkIndex, false, err.Error())
 	}
 
@@ -1565,8 +1599,9 @@ func (r *Replicator) handleReplicateChunk(msg *Message) error {
 		}
 	}
 
-	// Send success ACK
-	return r.sendChunkAck(msg.ID, msg.From, payload.Bucket, payload.Key, payload.ChunkHash, payload.ChunkIndex, true, "")
+	// Send success ACK asynchronously to avoid blocking this handler
+	r.asyncSendChunkAck(msg.ID, msg.From, payload.Bucket, payload.Key, payload.ChunkHash, payload.ChunkIndex, true, "")
+	return nil
 }
 
 // sendChunkAck sends a chunk ACK message.
