@@ -768,73 +768,89 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 
 	log.Info().Str("coordinator", s.cfg.Name).Dur("stagger", stagger).Msg("GC stagger delay computed")
 
-	// Run cleanup every hour
-	ticker := time.NewTicker(1 * time.Hour)
+	// GC cycle body — shared between first run and ticker runs
+	runGCCycle := func() {
+		// Purge tombstoned objects past retention period
+		if purged := s.s3Store.PurgeTombstonedObjects(ctx); purged > 0 {
+			log.Info().Int("count", purged).Msg("purged tombstoned S3 objects")
+		}
+
+		// Tombstone content in expired file shares
+		if s.fileShareMgr != nil {
+			if tombstoned := s.fileShareMgr.TombstoneExpiredShareContents(ctx); tombstoned > 0 {
+				log.Info().Int("count", tombstoned).Msg("tombstoned expired file share content")
+			}
+		}
+
+		// Serialize with manual GC — skip this cycle if manual GC is running
+		if !s.gcMu.TryLock() {
+			log.Debug().Msg("skipping periodic GC: manual GC in progress")
+		} else {
+			// Run garbage collection on versions and orphaned chunks
+			gcStart := time.Now()
+			gcStats := s.s3Store.RunGarbageCollection(ctx)
+			gcDuration := time.Since(gcStart).Seconds()
+			s.gcMu.Unlock()
+
+			// Log GC results: Info when work was done, Debug for no-ops
+			logEvent := log.Debug()
+			if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 || gcStats.ChunksSkippedShared > 0 || gcStats.ChunksSkippedGracePeriod > 0 {
+				logEvent = log.Info()
+			}
+			logEvent.
+				Str("coordinator", s.cfg.Name).
+				Int("versions_pruned", gcStats.VersionsPruned).
+				Int("chunks_deleted", gcStats.ChunksDeleted).
+				Int64("bytes_reclaimed", gcStats.BytesReclaimed).
+				Int("objects_scanned", gcStats.ObjectsScanned).
+				Int("chunks_skipped_shared", gcStats.ChunksSkippedShared).
+				Int("chunks_skipped_grace_period", gcStats.ChunksSkippedGracePeriod).
+				Float64("duration_seconds", gcDuration).
+				Msg("S3 garbage collection completed")
+
+			// Record GC metrics
+			if metrics := s3.GetS3Metrics(); metrics != nil {
+				metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
+			}
+
+			// Update S3 metrics after GC
+			s.updateS3Metrics()
+		}
+
+		// Collect and persist local capacity, then load peer snapshots
+		s.collectAndPersistCapacity(ctx)
+		s.loadPeerCapacitySnapshots(ctx)
+	}
+
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		defer ticker.Stop()
 
 		// Update metrics on startup
 		s.updateS3Metrics()
 		s.collectAndPersistCapacity(ctx)
 
-		// Wait for stagger delay before first GC run.
-		// The first GC fires at startup+stagger, then every hour after that.
-		// This means the gap between first and second run is a full hour,
-		// regardless of the stagger offset.
+		// Wait for stagger delay before first GC run
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(stagger):
 		}
 
+		// Run first GC cycle immediately after stagger
+		runGCCycle()
+
+		// Create ticker AFTER stagger so the hourly cycle is properly offset.
+		// Each coordinator's cycle: stagger, stagger+1h, stagger+2h, ...
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				// Purge tombstoned objects past retention period
-				if purged := s.s3Store.PurgeTombstonedObjects(ctx); purged > 0 {
-					log.Info().Int("count", purged).Msg("purged tombstoned S3 objects")
-				}
-
-				// Tombstone content in expired file shares
-				if s.fileShareMgr != nil {
-					if tombstoned := s.fileShareMgr.TombstoneExpiredShareContents(ctx); tombstoned > 0 {
-						log.Info().Int("count", tombstoned).Msg("tombstoned expired file share content")
-					}
-				}
-
-				// Run garbage collection on versions and orphaned chunks
-				gcStart := time.Now()
-				gcStats := s.s3Store.RunGarbageCollection(ctx)
-				gcDuration := time.Since(gcStart).Seconds()
-
-				// Log when cleanup occurred or chunks were skipped (indicates multi-coordinator or recent-upload activity)
-				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 || gcStats.ChunksSkippedShared > 0 || gcStats.ChunksSkippedGracePeriod > 0 {
-					log.Info().
-						Str("coordinator", s.cfg.Name).
-						Int("versions_pruned", gcStats.VersionsPruned).
-						Int("chunks_deleted", gcStats.ChunksDeleted).
-						Int64("bytes_reclaimed", gcStats.BytesReclaimed).
-						Int("objects_scanned", gcStats.ObjectsScanned).
-						Int("chunks_skipped_shared", gcStats.ChunksSkippedShared).
-						Int("chunks_skipped_grace_period", gcStats.ChunksSkippedGracePeriod).
-						Msg("S3 garbage collection completed")
-				}
-
-				// Record GC metrics
-				if metrics := s3.GetS3Metrics(); metrics != nil {
-					metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
-				}
-
-				// Update S3 metrics after GC
-				s.updateS3Metrics()
-
-				// Collect and persist local capacity, then load peer snapshots
-				s.collectAndPersistCapacity(ctx)
-				s.loadPeerCapacitySnapshots(ctx)
+				runGCCycle()
 			}
 		}
 	}()

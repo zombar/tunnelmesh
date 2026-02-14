@@ -2190,6 +2190,15 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 		bucketMeta.SizeBytes -= oldMeta.Size
 	}
 
+	// Archive current version before overwriting — same as PutObject does.
+	// This enables GC to prune old versions on replica coordinators.
+	if err := s.archiveCurrentVersion(bucket, key); err != nil {
+		// Non-fatal: log warning but don't fail replication import
+		s.logger.Warn().Err(err).
+			Str("bucket", bucket).Str("key", key).
+			Msg("Failed to archive version during replication import")
+	}
+
 	if writeErr := syncedWriteFile(metaPath, metaJSON, 0644); writeErr != nil {
 		return fmt.Errorf("write object meta: %w", writeErr)
 	}
@@ -2700,12 +2709,20 @@ func (s *Store) GetCASStats() CASStats {
 	// gauge metrics refreshed every 60s where brief races are acceptable.
 	// This avoids RLock contention that starves concurrent PutObject writers.
 
-	// Count chunks and their sizes
+	// Count chunks and their on-disk sizes (compressed+encrypted).
+	// Build a size map so LogicalBytes can use the same unit.
 	chunksDir := filepath.Join(s.dataDir, "chunks")
+	chunkSizes := make(map[string]int64)
 	_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
+		// Skip orphaned temp files from interrupted CAS writes
+		if strings.HasSuffix(info.Name(), ".tmp") {
+			return nil
+		}
+		hash := filepath.Base(path)
+		chunkSizes[hash] = info.Size()
 		stats.ChunkCount++
 		stats.ChunkBytes += info.Size()
 		return nil
@@ -2724,7 +2741,10 @@ func (s *Store) GetCASStats() CASStats {
 		}
 		bucket := bucketEntry.Name()
 
-		// Count current objects and their logical sizes
+		// Count current objects and their logical sizes.
+		// LogicalBytes uses on-disk chunk sizes (same unit as ChunkBytes)
+		// so the dedup ratio reflects actual storage savings, not
+		// compression artifacts.
 		metaDir := filepath.Join(bucketsDir, bucket, "meta")
 		_ = filepath.Walk(metaDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
@@ -2737,14 +2757,10 @@ func (s *Store) GetCASStats() CASStats {
 			}
 			var meta ObjectMeta
 			if json.Unmarshal(data, &meta) == nil {
-				if len(meta.ChunkMetadata) > 0 {
-					for _, chunkHash := range meta.Chunks {
-						if cm, ok := meta.ChunkMetadata[chunkHash]; ok {
-							stats.LogicalBytes += cm.Size
-						}
+				for _, chunkHash := range meta.Chunks {
+					if size, ok := chunkSizes[chunkHash]; ok {
+						stats.LogicalBytes += size
 					}
-				} else {
-					stats.LogicalBytes += meta.Size
 				}
 			}
 			return nil

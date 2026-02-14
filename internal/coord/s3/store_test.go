@@ -2135,6 +2135,46 @@ func TestImportObjectMeta_InvalidBucketName(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestImportObjectMeta_ArchivesVersion(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "mybucket", "alice", 1, nil))
+
+	// Import first version
+	meta1 := ObjectMeta{
+		Key:         "doc.txt",
+		Size:        100,
+		ContentType: "text/plain",
+		Chunks:      []string{"hash1"},
+	}
+	metaJSON1, err := json.Marshal(meta1)
+	require.NoError(t, err)
+	require.NoError(t, store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON1, ""))
+
+	// Import second version (overwrites first)
+	meta2 := ObjectMeta{
+		Key:         "doc.txt",
+		Size:        200,
+		ContentType: "text/plain",
+		Chunks:      []string{"hash2"},
+	}
+	metaJSON2, err := json.Marshal(meta2)
+	require.NoError(t, err)
+	require.NoError(t, store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON2, ""))
+
+	// Verify current version is meta2
+	got, err := store.GetObjectMeta(ctx, "mybucket", "doc.txt")
+	require.NoError(t, err)
+	assert.Equal(t, int64(200), got.Size)
+
+	// Verify a version was archived (versions directory has a file)
+	versionsDir := filepath.Join(store.DataDir(), "buckets", "mybucket", "versions", "doc.txt")
+	entries, err := os.ReadDir(versionsDir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "should have 1 archived version")
+}
+
 // ==== DeleteChunk Tests ====
 
 func TestDeleteChunk(t *testing.T) {
@@ -2285,36 +2325,46 @@ func TestGetCASStats_LogicalBytesUsesChunkMetadata(t *testing.T) {
 
 	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
 
-	// Put two identical objects (same content = dedup opportunity)
-	content := []byte("deduplicated content for stats test")
+	// Put a single unique object — ratio should be 1.0
+	content := []byte("unique content for stats test")
 	_, err := store.PutObject(ctx, "test-bucket", "file1.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
-	require.NoError(t, err)
-	_, err = store.PutObject(ctx, "test-bucket", "file2.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
 	stats := store.GetCASStats()
 
-	assert.Equal(t, 2, stats.ObjectCount, "should have 2 objects")
+	assert.Equal(t, 1, stats.ObjectCount, "should have 1 object")
 	assert.Greater(t, stats.ChunkBytes, int64(0), "should have chunk bytes on disk")
 	assert.Greater(t, stats.LogicalBytes, int64(0), "should have logical bytes")
-	// LogicalBytes should be >= ChunkBytes (dedup means physical <= logical)
-	assert.GreaterOrEqual(t, stats.LogicalBytes, stats.ChunkBytes,
-		"logical bytes (%d) should be >= chunk bytes (%d) — dedup should reduce physical storage",
+	// For unique content, LogicalBytes should equal ChunkBytes (both use on-disk sizes)
+	assert.Equal(t, stats.ChunkBytes, stats.LogicalBytes,
+		"unique content: logical bytes (%d) should equal chunk bytes (%d) — ratio 1.0",
+		stats.LogicalBytes, stats.ChunkBytes)
+
+	// Put a second identical object (dedup) — LogicalBytes should be 2x ChunkBytes
+	_, err = store.PutObject(ctx, "test-bucket", "file2.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	stats = store.GetCASStats()
+
+	assert.Equal(t, 2, stats.ObjectCount, "should have 2 objects")
+	assert.Equal(t, stats.LogicalBytes, 2*stats.ChunkBytes,
+		"deduplicated: logical bytes (%d) should be 2x chunk bytes (%d)",
 		stats.LogicalBytes, stats.ChunkBytes)
 }
 
-func TestGetCASStats_LogicalBytesFallbackForLegacyObjects(t *testing.T) {
+func TestGetCASStats_LegacyObjectsUseChunkLookup(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ctx := context.Background()
 
 	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
 
-	// Put an object normally to get its metadata file path
+	// Put an object normally
 	content := []byte("legacy test content")
 	_, err := store.PutObject(ctx, "test-bucket", "legacy.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
 	// Simulate a legacy object by stripping ChunkMetadata from the stored meta
+	// The Chunks field is preserved, so on-disk lookup still works
 	metaDir := filepath.Join(store.DataDir(), "buckets", "test-bucket", "meta")
 	err = filepath.Walk(metaDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil || info.IsDir() || filepath.Ext(path) != ".json" {
@@ -2340,7 +2390,7 @@ func TestGetCASStats_LogicalBytesFallbackForLegacyObjects(t *testing.T) {
 	stats := store.GetCASStats()
 
 	assert.Equal(t, 1, stats.ObjectCount)
-	// Should fall back to meta.Size for legacy objects
-	assert.Equal(t, int64(len(content)), stats.LogicalBytes,
-		"legacy objects without ChunkMetadata should use meta.Size as fallback")
+	// Legacy objects still have Chunks list — LogicalBytes uses on-disk chunk sizes
+	assert.Equal(t, stats.ChunkBytes, stats.LogicalBytes,
+		"legacy objects should use on-disk chunk sizes via Chunks list lookup")
 }
