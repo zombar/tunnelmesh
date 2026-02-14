@@ -1764,10 +1764,18 @@ type S3QuotaInfo struct {
 	AvailBytes int64 `json:"avail_bytes"`
 }
 
+// S3VolumeInfo represents filesystem volume information for the S3 storage.
+type S3VolumeInfo struct {
+	TotalBytes     int64 `json:"total_bytes"`
+	UsedBytes      int64 `json:"used_bytes"`
+	AvailableBytes int64 `json:"available_bytes"`
+}
+
 // S3BucketsResponse is the response for the buckets list endpoint.
 type S3BucketsResponse struct {
 	Buckets []S3BucketInfo `json:"buckets"`
 	Quota   S3QuotaInfo    `json:"quota"`
+	Volume  *S3VolumeInfo  `json:"volume,omitempty"`
 }
 
 // validateS3Name validates a bucket or object key name to prevent path traversal.
@@ -1990,6 +1998,11 @@ func (s *Server) handleS3ListBuckets(w http.ResponseWriter, r *http.Request) {
 			UsedBytes:  quotaStats.UsedBytes,
 			AvailBytes: quotaStats.AvailableBytes,
 		}
+	}
+
+	// Add filesystem volume info
+	if total, used, avail, err := s.s3Store.VolumeStats(); err == nil {
+		resp.Volume = &S3VolumeInfo{TotalBytes: total, UsedBytes: used, AvailableBytes: avail}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -2265,3 +2265,16 @@ func TestGetBucketMeta_CorruptedJSON(t *testing.T) {
 	_, err = store.HeadBucket(ctx, "test-bucket")
 	assert.ErrorIs(t, err, ErrBucketNotFound)
 }
+
+func TestStore_VolumeStats(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir, nil)
+	require.NoError(t, err)
+
+	total, used, available, err := store.VolumeStats()
+	require.NoError(t, err)
+
+	assert.Greater(t, total, int64(0), "total should be positive")
+	assert.GreaterOrEqual(t, used, int64(0), "used should be non-negative")
+	assert.Greater(t, available, int64(0), "available should be positive")
+}

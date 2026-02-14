@@ -116,8 +116,9 @@ type Server struct {
 	// Callback for coordinator list changes (updates local DNS resolver)
 	coordIPsCb func([]string)
 	// Replication for multi-coordinator setup
-	replicator    *replication.Replicator    // S3 replication engine (nil if not enabled)
-	meshTransport *replication.MeshTransport // Transport for replication messages
+	replicator       *replication.Replicator    // S3 replication engine (nil if not enabled)
+	meshTransport    *replication.MeshTransport // Transport for replication messages
+	capacityRegistry *s3.CapacityRegistry       // Storage capacity tracking for replication
 }
 
 // coordIPSet holds both the original and sorted coordinator IP lists as a single
@@ -397,6 +398,9 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	// Initialize S3 replication for multi-coordinator deployments
 	// Coordinators discover each other through the peer list using is_coordinator flag
 	if srv.s3Store != nil {
+		// Initialize capacity registry for storage capacity tracking
+		srv.capacityRegistry = s3.NewCapacityRegistry()
+
 		// Create mesh transport for replication messages (HTTPS between coordinators).
 		// TLS config is set later by SetMeshTLS() with the registration CA.
 		srv.meshTransport = replication.NewMeshTransport(log.Logger, nil)
@@ -421,6 +425,7 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 			Transport:            srv.meshTransport,
 			S3Store:              s3Adapter,
 			ChunkRegistry:        chunkRegistry,
+			CapacityChecker:      srv.capacityRegistry,
 			Logger:               log.Logger,
 			Context:              ctx, // Pass server context for proper cancellation
 			AckTimeout:           10 * time.Second,
@@ -772,6 +777,7 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 
 		// Update metrics on startup
 		s.updateCASMetrics()
+		s.collectAndPersistCapacity(ctx)
 
 		// Wait for stagger delay before first GC run.
 		// The first GC fires at startup+stagger, then every hour after that.
@@ -825,6 +831,10 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 
 				// Update CAS metrics after GC
 				s.updateCASMetrics()
+
+				// Collect and persist local capacity, then load peer snapshots
+				s.collectAndPersistCapacity(ctx)
+				s.loadPeerCapacitySnapshots(ctx)
 			}
 		}
 	}()
@@ -875,6 +885,87 @@ func (s *Server) updateCASMetrics() {
 			casStats.LogicalBytes,
 			casStats.VersionCount,
 		)
+	}
+}
+
+// collectAndPersistCapacity collects local volume/quota stats, updates the local
+// capacity registry, updates Prometheus metrics, and persists to the system bucket.
+func (s *Server) collectAndPersistCapacity(ctx context.Context) {
+	if s.s3Store == nil || s.capacityRegistry == nil {
+		return
+	}
+
+	total, used, available, err := s.s3Store.VolumeStats()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to collect volume stats")
+		return
+	}
+
+	snap := &s3.CapacitySnapshot{
+		Timestamp:            time.Now(),
+		CoordinatorName:      s.cfg.Name,
+		VolumeTotalBytes:     total,
+		VolumeUsedBytes:      used,
+		VolumeAvailableBytes: available,
+	}
+
+	// Add quota info if available
+	if qs := s.s3Store.QuotaStats(); qs != nil {
+		snap.QuotaMaxBytes = qs.MaxBytes
+		snap.QuotaUsedBytes = qs.UsedBytes
+		snap.QuotaAvailBytes = qs.AvailableBytes
+	} else {
+		snap.QuotaAvailBytes = -1 // unlimited
+	}
+
+	// Update local registry
+	s.capacityRegistry.Update(snap)
+
+	// Update Prometheus metrics
+	if metrics := s3.GetS3Metrics(); metrics != nil {
+		metrics.UpdateVolumeMetrics(total, used, available)
+	}
+
+	// Persist to system bucket
+	if s.s3SystemStore != nil {
+		key := "stats/" + s.cfg.Name + ".capacity.json"
+		if err := s.s3SystemStore.SaveJSON(ctx, key, snap); err != nil {
+			log.Warn().Err(err).Msg("failed to persist capacity snapshot")
+		}
+	}
+}
+
+// loadPeerCapacitySnapshots loads capacity snapshots from the system bucket
+// for all coordinators and populates the capacity registry.
+func (s *Server) loadPeerCapacitySnapshots(ctx context.Context) {
+	if s.s3Store == nil || s.s3SystemStore == nil || s.capacityRegistry == nil {
+		return
+	}
+
+	objects, _, _, err := s.s3Store.ListObjects(ctx, "_tunnelmesh", "stats/", "", 1000)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list capacity snapshots")
+		return
+	}
+
+	loaded := 0
+	for _, obj := range objects {
+		key := obj.Key
+		if !strings.HasSuffix(key, ".capacity.json") {
+			continue
+		}
+
+		var snap s3.CapacitySnapshot
+		if err := s.s3SystemStore.LoadJSON(ctx, key, &snap); err != nil {
+			log.Warn().Err(err).Str("key", key).Msg("failed to load capacity snapshot")
+			continue
+		}
+		s.capacityRegistry.Update(&snap)
+		loaded++
+	}
+
+	if loaded > 0 {
+		log.Info().Int("count", loaded).Msg("loaded peer capacity snapshots")
 	}
 }
 
@@ -1153,6 +1244,9 @@ func (s *Server) recoverCoordinatorState(ctx context.Context, cfg *config.PeerCo
 			s.coordIPsCb(coordIPs)
 		}
 	}
+
+	// Pre-populate capacity registry from replicated system bucket
+	s.loadPeerCapacitySnapshots(ctx)
 }
 
 // ensureBuiltinGroupBindings sets up the built-in group bindings if not already present.

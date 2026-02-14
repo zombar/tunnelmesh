@@ -376,6 +376,11 @@ func (s *Store) DefaultShareExpiryDays() int {
 	return s.defaultShareExpiryDays
 }
 
+// VolumeStats returns filesystem volume statistics for the store's data directory.
+func (s *Store) VolumeStats() (total, used, available int64, err error) {
+	return GetVolumeStats(s.dataDir)
+}
+
 // QuotaStats returns current quota statistics, or nil if no quota is configured.
 func (s *Store) QuotaStats() *QuotaStats {
 	if s.quota == nil {

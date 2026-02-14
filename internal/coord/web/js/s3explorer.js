@@ -807,6 +807,7 @@
             const data = await resp.json();
             // Store quota info in state
             state.quota = data.quota || null;
+            state.volume = data.volume || null;
             return data.buckets || [];
         } catch (err) {
             console.error('Failed to fetch buckets:', err);
@@ -960,6 +961,42 @@
     }
 
     /* istanbul ignore next */
+    function renderVolumeBar() {
+        let bar = document.getElementById('s3-volume-bar');
+        // Only show when viewing bucket list (not inside a bucket)
+        if (state.currentBucket || !state.volume) {
+            if (bar) bar.style.display = 'none';
+            return;
+        }
+        const v = state.volume;
+        const pct = v.total_bytes > 0 ? ((v.used_bytes / v.total_bytes) * 100).toFixed(1) : 0;
+        const color =
+            pct >= 95
+                ? 'var(--color-danger, #dc3545)'
+                : pct >= 80
+                  ? 'var(--color-warning, #ffc107)'
+                  : 'var(--color-success, #28a745)';
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 's3-volume-bar';
+            bar.style.cssText =
+                'margin:8px 0;padding:6px 10px;border:1px solid var(--border-color, #333);background:var(--bg-secondary, #1a1a2e)';
+            const table = document.getElementById('s3-files');
+            if (table) table.parentNode.insertBefore(bar, table);
+            else return;
+        }
+        bar.style.display = 'block';
+        bar.innerHTML =
+            `<div style="display:flex;align-items:center;gap:10px;font-size:12px">` +
+            `<span>Volume</span>` +
+            `<div style="flex:1;height:8px;background:var(--bg-tertiary, #2a2a3e);position:relative">` +
+            `<div style="height:100%;width:${Math.min(pct, 100)}%;background:${color}"></div></div>` +
+            `<span>${pct}% used</span>` +
+            `<span style="color:var(--text-secondary, #888)">${formatBytes(v.used_bytes)} / ${formatBytes(v.total_bytes)} (${formatBytes(v.available_bytes)} free)</span>` +
+            `</div>`;
+    }
+
+    /* istanbul ignore next */
     async function renderFileListing(resetPagination = true) {
         const tbody = document.getElementById('s3-files-body');
         const table = document.getElementById('s3-files');
@@ -1107,6 +1144,9 @@
         if (actionsCol) {
             actionsCol.style.display = !state.currentBucket && isAdmin ? '' : 'none';
         }
+
+        // Render volume capacity bar when viewing bucket list
+        renderVolumeBar();
 
         // Always render breadcrumb for navigation
         renderBreadcrumb();

@@ -1846,3 +1846,264 @@ func TestAsyncSendAck_SemaphoreFallback(t *testing.T) {
 		<-r.ackSendSem
 	}
 }
+
+// ==== Capacity Checker Tests ====
+
+// mockCapacityChecker implements CapacityChecker for testing.
+type mockCapacityChecker struct {
+	results map[string]bool // coordinatorName -> hasCapacity
+}
+
+func newMockCapacityChecker() *mockCapacityChecker {
+	return &mockCapacityChecker{results: make(map[string]bool)}
+}
+
+func (m *mockCapacityChecker) HasCapacityFor(coordinatorName string, _ int64) bool {
+	result, ok := m.results[coordinatorName]
+	if !ok {
+		return true // fail-open like the real implementation
+	}
+	return result
+}
+
+func TestNewReplicator_CapacityCheckerWiring(t *testing.T) {
+	checker := newMockCapacityChecker()
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	logger := zerolog.Nop()
+
+	r := NewReplicator(Config{
+		NodeID:          "coord1",
+		Transport:       transport,
+		S3Store:         s3Store,
+		CapacityChecker: checker,
+		Logger:          logger,
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	assert.NotNil(t, r.capacityChecker, "capacityChecker should be set")
+}
+
+func TestNewReplicator_NilCapacityChecker(t *testing.T) {
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	logger := zerolog.Nop()
+
+	r := NewReplicator(Config{
+		NodeID:    "coord1",
+		Transport: transport,
+		S3Store:   s3Store,
+		Logger:    logger,
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	assert.Nil(t, r.capacityChecker, "capacityChecker should be nil when not configured")
+}
+
+func TestCheckPeerCapacity_NilChecker(t *testing.T) {
+	r := createTestReplicator(t)
+	// With nil checker, should pass (fail-open)
+	err := r.checkPeerCapacity("peer1", "bucket", "key", []string{"chunk1"}, &ObjectMeta{
+		ChunkMetadata: map[string]*ChunkMetadata{
+			"chunk1": {Hash: "chunk1", Size: 1000},
+		},
+	})
+	assert.NoError(t, err)
+}
+
+func TestCheckPeerCapacity_EmptyChunks(t *testing.T) {
+	checker := newMockCapacityChecker()
+	checker.results["peer1"] = false // would fail if checked
+
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	r := NewReplicator(Config{
+		NodeID:          "coord1",
+		Transport:       transport,
+		S3Store:         s3Store,
+		CapacityChecker: checker,
+		Logger:          zerolog.Nop(),
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	// Empty chunks list should pass without checking
+	err := r.checkPeerCapacity("peer1", "bucket", "key", []string{}, &ObjectMeta{})
+	assert.NoError(t, err)
+}
+
+func TestCheckPeerCapacity_SufficientCapacity(t *testing.T) {
+	checker := newMockCapacityChecker()
+	checker.results["peer1"] = true
+
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	r := NewReplicator(Config{
+		NodeID:          "coord1",
+		Transport:       transport,
+		S3Store:         s3Store,
+		CapacityChecker: checker,
+		Logger:          zerolog.Nop(),
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	err := r.checkPeerCapacity("peer1", "bucket", "key", []string{"chunk1", "chunk2"}, &ObjectMeta{
+		ChunkMetadata: map[string]*ChunkMetadata{
+			"chunk1": {Hash: "chunk1", Size: 500},
+			"chunk2": {Hash: "chunk2", Size: 500},
+		},
+	})
+	assert.NoError(t, err)
+}
+
+func TestCheckPeerCapacity_InsufficientCapacity(t *testing.T) {
+	checker := newMockCapacityChecker()
+	checker.results["peer1"] = false
+
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	r := NewReplicator(Config{
+		NodeID:          "coord1",
+		Transport:       transport,
+		S3Store:         s3Store,
+		CapacityChecker: checker,
+		Logger:          zerolog.Nop(),
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	err := r.checkPeerCapacity("peer1", "bucket", "key", []string{"chunk1"}, &ObjectMeta{
+		ChunkMetadata: map[string]*ChunkMetadata{
+			"chunk1": {Hash: "chunk1", Size: 1000},
+		},
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "near capacity")
+}
+
+func TestCheckPeerCapacity_NoMetadataForChunks(t *testing.T) {
+	checker := newMockCapacityChecker()
+	checker.results["peer1"] = false // would fail if bytes > 0
+
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	r := NewReplicator(Config{
+		NodeID:          "coord1",
+		Transport:       transport,
+		S3Store:         s3Store,
+		CapacityChecker: checker,
+		Logger:          zerolog.Nop(),
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	// Chunks with no metadata — estimatedBytes stays 0, so check is skipped
+	err := r.checkPeerCapacity("peer1", "bucket", "key", []string{"chunk1"}, &ObjectMeta{
+		ChunkMetadata: map[string]*ChunkMetadata{},
+	})
+	assert.NoError(t, err)
+}
+
+func TestHandleReplicateChunk_CapacityExceeded(t *testing.T) {
+	checker := newMockCapacityChecker()
+	s3Store := newMockS3Store()
+	transport := newMockTransport()
+
+	r := NewReplicator(Config{
+		NodeID:          "coord-local",
+		Transport:       transport,
+		S3Store:         s3Store,
+		CapacityChecker: checker,
+		Logger:          zerolog.Nop(),
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+	require.NoError(t, r.Start())
+
+	// Mark local coordinator as having no capacity
+	checker.results["coord-local"] = false
+
+	// Build a chunk replication message
+	payload := ReplicateChunkPayload{
+		Bucket:      "test-bucket",
+		Key:         "test-key",
+		ChunkHash:   "abc123",
+		ChunkData:   []byte("some chunk data"),
+		ChunkIndex:  0,
+		TotalChunks: 1,
+		ChunkSize:   15,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	msg := &Message{
+		ID:      "msg-1",
+		Type:    MessageTypeReplicateChunk,
+		From:    "coord-peer",
+		Payload: payloadJSON,
+	}
+
+	err = r.handleReplicateChunk(msg)
+	assert.NoError(t, err) // Returns nil (sends error ACK instead)
+
+	// Verify chunk was NOT written to store
+	_, chunkErr := s3Store.ReadChunk(context.Background(), "abc123")
+	assert.Error(t, chunkErr, "chunk should not be stored when capacity exceeded")
+
+	// Verify error ACK was sent
+	sentData := transport.getLastSent("coord-peer")
+	assert.NotNil(t, sentData, "error ACK should be sent")
+	if sentData != nil {
+		var ackMsg Message
+		require.NoError(t, json.Unmarshal(sentData, &ackMsg))
+		assert.Equal(t, MessageTypeChunkAck, ackMsg.Type)
+
+		var ackPayload ChunkAckPayload
+		require.NoError(t, json.Unmarshal(ackMsg.Payload, &ackPayload))
+		assert.False(t, ackPayload.Success)
+		assert.Contains(t, ackPayload.Error, "storage capacity exceeded")
+	}
+}
+
+func TestHandleReplicateChunk_CapacityOK(t *testing.T) {
+	checker := newMockCapacityChecker()
+	s3Store := newMockS3Store()
+	transport := newMockTransport()
+
+	r := NewReplicator(Config{
+		NodeID:          "coord-local",
+		Transport:       transport,
+		S3Store:         s3Store,
+		CapacityChecker: checker,
+		Logger:          zerolog.Nop(),
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+	require.NoError(t, r.Start())
+
+	// Mark local coordinator as having capacity
+	checker.results["coord-local"] = true
+
+	// Build a chunk replication message
+	payload := ReplicateChunkPayload{
+		Bucket:      "test-bucket",
+		Key:         "test-key",
+		ChunkHash:   "abc123",
+		ChunkData:   []byte("some chunk data"),
+		ChunkIndex:  0,
+		TotalChunks: 1,
+		ChunkSize:   15,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	msg := &Message{
+		ID:      "msg-2",
+		Type:    MessageTypeReplicateChunk,
+		From:    "coord-peer",
+		Payload: payloadJSON,
+	}
+
+	err = r.handleReplicateChunk(msg)
+	assert.NoError(t, err)
+
+	// Verify chunk WAS written to store
+	data, readErr := s3Store.ReadChunk(context.Background(), "abc123")
+	assert.NoError(t, readErr, "chunk should be stored when capacity is OK")
+	assert.Equal(t, []byte("some chunk data"), data)
+}
