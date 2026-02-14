@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -1096,10 +1097,19 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			return fmt.Errorf("failed to load TLS certificate for coordinator services: %w", err)
 		}
 
-		// Set coordinator's own cert as client cert for inter-coordinator
-		// communication (replication, write forwarding). This allows
-		// receiving coordinators to authenticate the sender via TLS.
-		srv.SetClientCert(&tlsCert)
+		// Configure mesh TLS for inter-coordinator replication and forwarding.
+		// Trust the CA from registration (not the locally-generated CA) since all
+		// coordinator certs are signed by the primary's CA. Include our own cert
+		// for client authentication.
+		if caPEM, caErr := os.ReadFile(tlsMgr.CAPath()); caErr == nil {
+			caPool := x509.NewCertPool()
+			caPool.AppendCertsFromPEM(caPEM)
+			srv.SetMeshTLS(&tls.Config{
+				Certificates: []tls.Certificate{tlsCert},
+				RootCAs:      caPool,
+				MinVersion:   tls.VersionTLS12,
+			})
+		}
 
 		{
 			// Start admin HTTPS server if enabled

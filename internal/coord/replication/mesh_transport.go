@@ -49,11 +49,11 @@ func NewMeshTransport(logger zerolog.Logger, tlsConfig *tls.Config) *MeshTranspo
 	}
 }
 
-// SetClientCert configures a TLS client certificate for authenticating with other coordinators.
+// SetTLSConfig replaces the TLS configuration on the underlying HTTP transport.
 // Must be called before any requests are sent.
-func (mt *MeshTransport) SetClientCert(cert *tls.Certificate) {
-	if t, ok := mt.httpClient.Transport.(*http.Transport); ok && t.TLSClientConfig != nil {
-		t.TLSClientConfig.Certificates = []tls.Certificate{*cert}
+func (mt *MeshTransport) SetTLSConfig(cfg *tls.Config) {
+	if t, ok := mt.httpClient.Transport.(*http.Transport); ok {
+		t.TLSClientConfig = cfg
 	}
 }
 

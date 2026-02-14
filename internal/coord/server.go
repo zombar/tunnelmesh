@@ -354,9 +354,8 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	srv.ca = ca
 
 	// Shared transport for forwarding S3 writes to other coordinators.
-	// Trusts the internal CA so coordinators verify each other's certificates.
+	// TLS config is set later by SetMeshTLS() with the registration CA.
 	srv.s3ForwardTransport = &http.Transport{
-		TLSClientConfig:    ca.GetClientTLSConfig(),
 		MaxIdleConns:       100,
 		IdleConnTimeout:    90 * time.Second,
 		DisableCompression: true, // S3 objects are often already compressed
@@ -397,8 +396,8 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	// Coordinators discover each other through the peer list using is_coordinator flag
 	if srv.s3Store != nil {
 		// Create mesh transport for replication messages (HTTPS between coordinators).
-		// Trust the internal CA so coordinators can verify each other's certificates.
-		srv.meshTransport = replication.NewMeshTransport(log.Logger, srv.ca.GetClientTLSConfig())
+		// TLS config is set later by SetMeshTLS() with the registration CA.
+		srv.meshTransport = replication.NewMeshTransport(log.Logger, nil)
 
 		// Create S3 store adapter for replication
 		s3Adapter := replication.NewS3StoreAdapter(srv.s3Store)
@@ -435,16 +434,16 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	return srv, nil
 }
 
-// SetClientCert configures the coordinator's own TLS certificate as a client
-// certificate on all inter-coordinator transports. This allows other coordinators
-// to authenticate this coordinator via TLS client cert verification.
-// Must be called before any inter-coordinator requests are sent.
-func (s *Server) SetClientCert(cert *tls.Certificate) {
-	if s.s3ForwardTransport != nil && s.s3ForwardTransport.TLSClientConfig != nil {
-		s.s3ForwardTransport.TLSClientConfig.Certificates = []tls.Certificate{*cert}
-	}
+// SetMeshTLS configures the TLS settings for inter-coordinator communication.
+// The TLS config should trust the mesh CA (from registration) and include the
+// coordinator's own certificate for client authentication.
+// Must be called before any replication traffic is sent.
+func (s *Server) SetMeshTLS(cfg *tls.Config) {
 	if s.meshTransport != nil {
-		s.meshTransport.SetClientCert(cert)
+		s.meshTransport.SetTLSConfig(cfg)
+	}
+	if s.s3ForwardTransport != nil {
+		s.s3ForwardTransport.TLSClientConfig = cfg
 	}
 }
 
