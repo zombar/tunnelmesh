@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCoordinatorClient_CreateBucket(t *testing.T) {
@@ -511,6 +512,63 @@ func TestCoordinatorClient_TriggerGC(t *testing.T) {
 			t.Errorf("Expected error containing '500', got: %v", err)
 		}
 	})
+}
+
+func TestCoordinatorClient_TriggerGC_SlowServer(t *testing.T) {
+	// Verify that TriggerGC tolerates responses slower than the default 60s client timeout.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second) // Simulate slow GC
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"tombstoned_purged":1,"versions_pruned":0,"chunks_deleted":0,"bytes_reclaimed":0}`))
+	}))
+	defer server.Close()
+
+	client := &CoordinatorClient{
+		baseURL:   server.URL,
+		accessKey: "test",
+		secretKey: "test",
+		httpClient: &http.Client{
+			Timeout:   1 * time.Second, // Shorter than the server delay
+			Transport: server.Client().Transport,
+		},
+	}
+
+	stats, err := client.TriggerGC(context.Background(), true)
+	if err != nil {
+		t.Fatalf("GC should not timeout with context-based timeout: %v", err)
+	}
+	if stats.TombstonedPurged != 1 {
+		t.Errorf("Expected TombstonedPurged=1, got %d", stats.TombstonedPurged)
+	}
+}
+
+func TestCoordinatorClient_TriggerGC_ContextCancellation(t *testing.T) {
+	// Verify that TriggerGC respects parent context cancellation.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := &CoordinatorClient{
+		baseURL:    server.URL,
+		accessKey:  "test",
+		secretKey:  "test",
+		httpClient: server.Client(),
+	}
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_, err := client.TriggerGC(ctx, true)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("Expected error from cancelled context")
+	}
+	if elapsed > 1*time.Second {
+		t.Errorf("Expected cancellation within ~200ms, took %v", elapsed)
+	}
 }
 
 func TestCoordinatorClient_URLEscaping(t *testing.T) {

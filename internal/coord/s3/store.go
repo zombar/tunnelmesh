@@ -200,7 +200,8 @@ type Store struct {
 	versionRetentionDays    int                    // Days to retain object versions (0 = forever)
 	maxVersionsPerObject    int                    // Max versions to keep per object (0 = unlimited)
 	versionRetentionPolicy  VersionRetentionPolicy
-	erasureCodingSemaphore  chan struct{} // Limits concurrent erasure coding operations (memory safety)
+	erasureCodingSemaphore  chan struct{}  // Limits concurrent erasure coding operations (memory safety)
+	bgWg                    sync.WaitGroup // Tracks background goroutines (e.g., shard caching)
 	mu                      sync.RWMutex
 }
 
@@ -323,6 +324,11 @@ func (s *Store) SetReplicator(replicator ReplicatorInterface) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.replicator = replicator
+}
+
+// WaitBackground blocks until all background goroutines (e.g., shard caching) complete.
+func (s *Store) WaitBackground() {
+	s.bgWg.Wait()
 }
 
 // SetCoordinatorID sets the coordinator ID for version vector tracking.
@@ -1057,7 +1063,9 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 			copy(cachedShards[i], allShards[i])
 		}
 	}
+	s.bgWg.Add(1)
 	go func() {
+		defer s.bgWg.Done()
 		// Use background context since original request may have completed
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

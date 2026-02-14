@@ -128,6 +128,7 @@ services:
     volumes:
       - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro
       - ./scripts/client-entrypoint.sh:/scripts/client-entrypoint.sh:ro
+      - alice-keys:/root/.tunnelmesh
     cap_add:
       - NET_ADMIN
     devices:
@@ -155,6 +156,7 @@ services:
     volumes:
       - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro
       - ./scripts/client-entrypoint.sh:/scripts/client-entrypoint.sh:ro
+      - bob-keys:/root/.tunnelmesh
     cap_add:
       - NET_ADMIN
     devices:
@@ -182,6 +184,7 @@ services:
     volumes:
       - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro
       - ./scripts/client-entrypoint.sh:/scripts/client-entrypoint.sh:ro
+      - charlie-keys:/root/.tunnelmesh
     cap_add:
       - NET_ADMIN
     devices:
@@ -209,6 +212,7 @@ services:
     volumes:
       - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro
       - ./scripts/client-entrypoint.sh:/scripts/client-entrypoint.sh:ro
+      - diana-keys:/root/.tunnelmesh
     cap_add:
       - NET_ADMIN
     devices:
@@ -236,6 +240,7 @@ services:
     volumes:
       - ./config/peer.yaml.template:/etc/tunnelmesh/peer.yaml.template:ro
       - ./scripts/client-entrypoint.sh:/scripts/client-entrypoint.sh:ro
+      - eve-keys:/root/.tunnelmesh
     cap_add:
       - NET_ADMIN
     devices:
@@ -416,6 +421,11 @@ volumes:
   coord-2-keys:
   coord-3-data:
   coord-3-keys:
+  alice-keys:
+  bob-keys:
+  charlie-keys:
+  diana-keys:
+  eve-keys:
   prometheus-data:
   grafana-data:
   loki-data:

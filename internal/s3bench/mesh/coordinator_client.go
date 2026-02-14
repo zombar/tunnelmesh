@@ -312,7 +312,14 @@ type GCStats struct {
 }
 
 // TriggerGC triggers on-demand garbage collection on the coordinator via POST /api/s3/gc.
+// Uses a 10-minute context timeout since GC can be slow under sustained load.
 func (c *CoordinatorClient) TriggerGC(ctx context.Context, purgeAllTombstoned bool) (*GCStats, error) {
+	// GC can take several minutes under sustained load; use a longer timeout
+	// than the default 60-second client. Context-based timeout respects parent
+	// cancellation (e.g., user interrupt) unlike http.Client.Timeout.
+	gcCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+
 	requestURL := fmt.Sprintf("%s/api/s3/gc", c.baseURL)
 
 	payload := map[string]interface{}{
@@ -323,14 +330,17 @@ func (c *CoordinatorClient) TriggerGC(ctx context.Context, purgeAllTombstoned bo
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(gcCtx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.setBasicAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	// Use a client without its own Timeout so the context controls cancellation.
+	gcClient := &http.Client{Transport: c.httpClient.Transport}
+
+	resp, err := gcClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP POST %s: %w", requestURL, err)
 	}
