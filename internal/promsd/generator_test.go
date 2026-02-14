@@ -70,6 +70,29 @@ func TestPeersToTargets(t *testing.T) {
 			},
 			expected: 1,
 		},
+		{
+			name: "offline coordinator always included",
+			peers: []Peer{
+				{Name: "coord-1", MeshIP: "10.42.0.1", LastSeen: now.Add(-5 * time.Minute), IsCoordinator: true},
+			},
+			expected: 1,
+		},
+		{
+			name: "coordinator without mesh IP filtered",
+			peers: []Peer{
+				{Name: "coord-1", MeshIP: "", LastSeen: now, IsCoordinator: true},
+			},
+			expected: 0,
+		},
+		{
+			name: "mixed peers and coordinators",
+			peers: []Peer{
+				{Name: "coord-1", MeshIP: "10.42.0.1", LastSeen: now.Add(-10 * time.Minute), IsCoordinator: true},
+				{Name: "peer1", MeshIP: "10.42.0.2", LastSeen: now},
+				{Name: "peer2", MeshIP: "10.42.0.3", LastSeen: now.Add(-5 * time.Minute)}, // offline
+			},
+			expected: 2, // coord-1 (always included) + peer1 (online)
+		},
 	}
 
 	for _, tt := range tests {
@@ -107,6 +130,37 @@ func TestPeersToTargets_TargetFormat(t *testing.T) {
 	// Check labels
 	if target.Labels["peer"] != "test-peer" {
 		t.Errorf("expected peer label 'test-peer', got '%s'", target.Labels["peer"])
+	}
+	// Regular peer should not have is_coordinator label
+	if _, ok := target.Labels["is_coordinator"]; ok {
+		t.Error("regular peer should not have is_coordinator label")
+	}
+}
+
+func TestPeersToTargets_CoordinatorLabel(t *testing.T) {
+	now := time.Now()
+	peers := []Peer{
+		{Name: "coord-1", MeshIP: "10.42.0.1", LastSeen: now, IsCoordinator: true},
+		{Name: "peer1", MeshIP: "10.42.0.2", LastSeen: now},
+	}
+
+	targets := PeersToTargets(peers, "9443", 2*time.Minute, now)
+
+	if len(targets) != 2 {
+		t.Fatalf("expected 2 targets, got %d", len(targets))
+	}
+
+	// Coordinator target should have is_coordinator label
+	if targets[0].Labels["is_coordinator"] != "true" {
+		t.Errorf("coordinator should have is_coordinator=true label")
+	}
+	if targets[0].Labels["peer"] != "coord-1" {
+		t.Errorf("expected peer label 'coord-1', got '%s'", targets[0].Labels["peer"])
+	}
+
+	// Regular peer should not have is_coordinator label
+	if _, ok := targets[1].Labels["is_coordinator"]; ok {
+		t.Error("regular peer should not have is_coordinator label")
 	}
 }
 
@@ -205,7 +259,6 @@ func TestGenerator_Generate(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.OutputFile = outputFile
-	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 
@@ -236,7 +289,6 @@ func TestGenerator_Generate_FetchError(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := DefaultConfig()
 	cfg.OutputFile = filepath.Join(tmpDir, "targets.json")
-	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 	g.SetFetcher(&mockFetcher{
@@ -263,9 +315,6 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.OnlineThreshold != 2*time.Minute {
 		t.Errorf("unexpected default OnlineThreshold: %v", cfg.OnlineThreshold)
-	}
-	if cfg.CoordOutputFile != "/targets/coordinators.json" {
-		t.Errorf("unexpected default CoordOutputFile: %s", cfg.CoordOutputFile)
 	}
 }
 
@@ -330,7 +379,6 @@ func TestGenerator_Generate_WriteError(t *testing.T) {
 	cfg := DefaultConfig()
 	// Invalid path that can't be written to
 	cfg.OutputFile = "/nonexistent/dir/targets.json"
-	cfg.CoordOutputFile = "" // disable to isolate peer write error
 
 	g := NewGenerator(cfg)
 	g.SetFetcher(&mockFetcher{
@@ -367,7 +415,6 @@ func TestHTTPFetcher_Success(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.CoordURL = server.URL
 	cfg.OutputFile = filepath.Join(tmpDir, "targets.json")
-	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 	count, err := g.Generate()
@@ -393,7 +440,6 @@ func TestHTTPFetcher_WithAuthToken(t *testing.T) {
 	cfg.CoordURL = server.URL
 	cfg.AuthToken = "test-token-123"
 	cfg.OutputFile = filepath.Join(tmpDir, "targets.json")
-	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 	_, err := g.Generate()
@@ -417,7 +463,6 @@ func TestHTTPFetcher_APIError(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.CoordURL = server.URL
 	cfg.OutputFile = filepath.Join(tmpDir, "targets.json")
-	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 	_, err := g.Generate()
@@ -437,7 +482,6 @@ func TestHTTPFetcher_InvalidJSON(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.CoordURL = server.URL
 	cfg.OutputFile = filepath.Join(tmpDir, "targets.json")
-	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 	_, err := g.Generate()
@@ -451,7 +495,6 @@ func TestHTTPFetcher_ConnectionError(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.CoordURL = "http://localhost:99999" // invalid port
 	cfg.OutputFile = filepath.Join(tmpDir, "targets.json")
-	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 	_, err := g.Generate()
@@ -460,85 +503,11 @@ func TestHTTPFetcher_ConnectionError(t *testing.T) {
 	}
 }
 
-func TestCoordinatorsToTargets(t *testing.T) {
-	now := time.Now()
-
-	tests := []struct {
-		name     string
-		peers    []Peer
-		expected int
-	}{
-		{
-			name:     "no peers",
-			peers:    []Peer{},
-			expected: 0,
-		},
-		{
-			name: "no coordinators",
-			peers: []Peer{
-				{Name: "peer1", MeshIP: "10.42.0.1", LastSeen: now},
-			},
-			expected: 0,
-		},
-		{
-			name: "one coordinator",
-			peers: []Peer{
-				{Name: "coord-1", MeshIP: "10.42.0.1", LastSeen: now, IsCoordinator: true},
-				{Name: "peer1", MeshIP: "10.42.0.2", LastSeen: now},
-			},
-			expected: 1,
-		},
-		{
-			name: "offline coordinator still included",
-			peers: []Peer{
-				{Name: "coord-1", MeshIP: "10.42.0.1", LastSeen: now.Add(-5 * time.Minute), IsCoordinator: true},
-			},
-			expected: 1,
-		},
-		{
-			name: "coordinator without mesh IP filtered",
-			peers: []Peer{
-				{Name: "coord-1", MeshIP: "", LastSeen: now, IsCoordinator: true},
-			},
-			expected: 0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			targets := CoordinatorsToTargets(tt.peers)
-			if len(targets) != tt.expected {
-				t.Errorf("expected %d targets, got %d", tt.expected, len(targets))
-			}
-		})
-	}
-}
-
-func TestCoordinatorsToTargets_TargetFormat(t *testing.T) {
-	peers := []Peer{
-		{Name: "coord-1", MeshIP: "10.42.0.42", IsCoordinator: true},
-	}
-
-	targets := CoordinatorsToTargets(peers)
-
-	if len(targets) != 1 {
-		t.Fatalf("expected 1 target, got %d", len(targets))
-	}
-
-	if targets[0].Targets[0] != "10.42.0.42:443" {
-		t.Errorf("expected target '10.42.0.42:443', got '%s'", targets[0].Targets[0])
-	}
-	if targets[0].Labels["peer"] != "coord-1" {
-		t.Errorf("expected peer label 'coord-1', got '%s'", targets[0].Labels["peer"])
-	}
-}
-
 func TestGenerator_Generate_WithCoordinators(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	cfg := DefaultConfig()
 	cfg.OutputFile = filepath.Join(tmpDir, "peers.json")
-	cfg.CoordOutputFile = filepath.Join(tmpDir, "coordinators.json")
 
 	g := NewGenerator(cfg)
 
@@ -555,19 +524,28 @@ func TestGenerator_Generate_WithCoordinators(t *testing.T) {
 		t.Fatalf("Generate failed: %v", err)
 	}
 	if count != 2 {
-		t.Errorf("expected 2 peer targets, got %d", count)
+		t.Errorf("expected 2 targets (coord + peer), got %d", count)
 	}
 
-	// Verify coordinator file was written with 1 target
-	data, err := os.ReadFile(filepath.Join(tmpDir, "coordinators.json"))
+	// Verify peers file includes coordinator with is_coordinator label
+	data, err := os.ReadFile(filepath.Join(tmpDir, "peers.json"))
 	if err != nil {
-		t.Fatalf("failed to read coordinator targets: %v", err)
+		t.Fatalf("failed to read peers file: %v", err)
 	}
-	var coordTargets []Target
-	if err := json.Unmarshal(data, &coordTargets); err != nil {
-		t.Fatalf("failed to parse coordinator targets: %v", err)
+	var targets []Target
+	if err := json.Unmarshal(data, &targets); err != nil {
+		t.Fatalf("failed to parse peers file: %v", err)
 	}
-	if len(coordTargets) != 1 {
-		t.Errorf("expected 1 coordinator target, got %d", len(coordTargets))
+	if len(targets) != 2 {
+		t.Fatalf("expected 2 targets, got %d", len(targets))
+	}
+
+	// First target should be coordinator with label
+	if targets[0].Labels["is_coordinator"] != "true" {
+		t.Errorf("coordinator target missing is_coordinator label")
+	}
+	// Second target should be regular peer without label
+	if _, ok := targets[1].Labels["is_coordinator"]; ok {
+		t.Errorf("regular peer should not have is_coordinator label")
 	}
 }
