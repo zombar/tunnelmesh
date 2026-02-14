@@ -93,6 +93,24 @@ func TestStoreDeleteBucketNotEmpty(t *testing.T) {
 	assert.ErrorIs(t, err, ErrBucketNotEmpty)
 }
 
+func TestStoreDeleteBucketWithOnlyTombstones(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Add an object
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt", bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Tombstone the object (first delete)
+	require.NoError(t, store.DeleteObject(ctx, "test-bucket", "file.txt"))
+
+	// Bucket with only tombstoned objects should be deletable
+	err = store.DeleteBucket(ctx, "test-bucket")
+	assert.NoError(t, err, "bucket with only tombstones should be deletable")
+}
+
 func TestStoreHeadBucketNotFound(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 

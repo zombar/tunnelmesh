@@ -2,6 +2,8 @@ package replication
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -857,6 +859,81 @@ func TestReplicateObject_ChunkReadError(t *testing.T) {
 	err := replicator.ReplicateObject(ctx, "bucket1", "file.txt", "coord-peer")
 	require.Error(t, err, "Expected error when chunk read fails")
 	assert.Contains(t, err.Error(), "disk error", "Error should mention chunk error")
+}
+
+func TestReplicateObject_ChunkReadError_FallbackSuccess(t *testing.T) {
+	ctx := context.Background()
+	senderS3 := newMockS3Store()
+	peerS3 := newMockS3Store()
+	receiverS3 := newMockS3Store()
+	registry := newMockChunkRegistry()
+
+	broker := newTestTransportBroker()
+
+	// Use real sha256 hash so FetchChunk integrity check passes
+	data := []byte("test chunk data for fallback")
+	h := sha256.Sum256(data)
+	chunkHash := hex.EncodeToString(h[:])
+
+	// Create object on sender with chunk metadata but inject read error
+	chunks := []string{chunkHash}
+	chunkData := map[string][]byte{chunkHash: data}
+	senderS3.addObjectWithChunks("bucket1", "file.txt", chunks, chunkData)
+
+	// Peer has the chunk (can serve FetchChunk requests)
+	peerS3.addObjectWithChunks("bucket1", "file.txt", chunks, chunkData)
+
+	// Chunk needs replication (only sender owns it)
+	registry.setOwnership(chunkHash, []string{"coord-sender"})
+
+	// Inject read error on sender (simulates concurrent CleanupNonAssignedChunks)
+	senderS3.chunkErr = fmt.Errorf("chunk cleaned up")
+
+	sender := NewReplicator(Config{
+		NodeID:          "coord-sender",
+		Transport:       broker.newTransportFor("coord-sender"),
+		S3Store:         senderS3,
+		ChunkRegistry:   registry,
+		ChunkAckTimeout: 1 * time.Second,
+		Logger:          zerolog.Nop(),
+	})
+	require.NoError(t, sender.Start())
+	defer func() { _ = sender.Stop() }()
+
+	// Peer replicator can serve FetchChunk requests
+	peer := NewReplicator(Config{
+		NodeID:    "coord-peer",
+		Transport: broker.newTransportFor("coord-peer"),
+		S3Store:   peerS3,
+		Logger:    zerolog.Nop(),
+	})
+	require.NoError(t, peer.Start())
+	defer func() { _ = peer.Stop() }()
+
+	// Receiver handles incoming replicated chunks
+	receiver := NewReplicator(Config{
+		NodeID:        "coord-receiver",
+		Transport:     broker.newTransportFor("coord-receiver"),
+		S3Store:       receiverS3,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+	_ = receiver
+
+	// Sender knows about both peers: coord-peer for fallback fetching,
+	// coord-receiver as the replication target (both needed for striping)
+	sender.AddPeer("coord-peer")
+	sender.AddPeer("coord-receiver")
+
+	// Replicate should succeed via peer fallback
+	err := sender.ReplicateObject(ctx, "bucket1", "file.txt", "coord-receiver")
+	require.NoError(t, err, "Replication should succeed via peer fallback")
+
+	// Wait for async handlers
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify receiver got the chunk
+	assert.Contains(t, receiverS3.chunks, chunkHash, "Receiver should have chunk via peer fallback")
 }
 
 func TestReplicateObject_ObjectNotFound(t *testing.T) {
