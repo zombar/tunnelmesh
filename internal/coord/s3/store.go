@@ -339,6 +339,13 @@ func (s *Store) SetCoordinatorID(coordID string) {
 	s.coordinatorID = coordID
 }
 
+// CoordinatorID returns the coordinator ID used for version vector tracking.
+func (s *Store) CoordinatorID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.coordinatorID
+}
+
 // SetLogger sets the logger for the store.
 func (s *Store) SetLogger(logger zerolog.Logger) {
 	s.mu.Lock()

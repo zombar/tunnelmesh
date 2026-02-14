@@ -735,9 +735,10 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 }
 
 // StartPeriodicCleanup starts the background cleanup goroutine for S3 storage.
-// gcStaggerDelay computes a deterministic stagger delay (0-29 min) based on the
-// coordinator name hash, to avoid all coordinators running GC simultaneously.
-// The window is ≤50% of the GC interval (1h) to ensure predictable cleanup cadence.
+// gcStaggerDelay computes a deterministic stagger delay based on the coordinator
+// name hash, to avoid all coordinators running GC simultaneously.
+// Returns 0 to 1799 seconds (0–29m59s), keeping the window under 50% of the
+// 1-hour GC interval to ensure predictable cleanup cadence.
 func gcStaggerDelay(coordName string) time.Duration {
 	if coordName == "" {
 		coordName = "coordinator"
@@ -772,7 +773,10 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 		// Update metrics on startup
 		s.updateCASMetrics()
 
-		// Wait for stagger delay before first GC run
+		// Wait for stagger delay before first GC run.
+		// The first GC fires at startup+stagger, then every hour after that.
+		// This means the gap between first and second run is a full hour,
+		// regardless of the stagger offset.
 		select {
 		case <-ctx.Done():
 			return
