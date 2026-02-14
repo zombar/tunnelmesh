@@ -1405,13 +1405,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Load persisted peers BEFORE acquiring peersMu to avoid holding the lock
+	// during S3 I/O. Peer registration is idempotent, so a slightly stale read
+	// is safe — worst case is a missed name collision caught on next registration.
+	persistedPeers, _ := s.s3SystemStore.LoadPeers(context.Background())
+
 	s.peersMu.Lock()
 	defer s.peersMu.Unlock()
-
-	// Load persisted peers once at the start to avoid race conditions and improve performance
-	// Previously: LoadPeers() was called 3 times (lines 1393, 1420, and during group checks)
-	// This cache prevents race conditions where two peers register simultaneously
-	persistedPeers, _ := s.s3SystemStore.LoadPeers(context.Background())
 
 	// Check for hostname collision with different public key
 	// Important: Check both active peers AND persisted peers to prevent admin spoofing

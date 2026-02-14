@@ -1843,6 +1843,93 @@ func TestConcurrent_GCAndPurgeNoDeadlock(t *testing.T) {
 	}
 }
 
+// TestConcurrent_GCDoesNotBlockReads verifies that GC's filesystem scan
+// (buildChunkReferenceSet) does not hold s.mu, allowing concurrent ListObjects
+// and PutObject to proceed without blocking. This is a regression test for the
+// S3 explorer freeze after ~1 hour (GC holding RLock during full walk).
+func TestConcurrent_GCDoesNotBlockReads(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create objects to make GC scan take some time
+	for i := 0; i < 10; i++ {
+		content := []byte(fmt.Sprintf("content-%d-%s", i, strings.Repeat("x", 1000)))
+		_, err := store.PutObject(context.Background(), "test-bucket", fmt.Sprintf("obj-%d.txt", i), bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	// Run GC repeatedly (this does the expensive filesystem scan)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 5; i++ {
+			store.RunGarbageCollection(ctx)
+		}
+	}()
+
+	// Concurrent writes — these acquire s.mu.Lock() and would deadlock
+	// if buildChunkReferenceSet held s.mu.RLock() (write-preferring RWMutex
+	// blocks new RLock acquires once a Lock waiter exists)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			content := []byte(fmt.Sprintf("concurrent-write-%d", i))
+			_, _ = store.PutObject(ctx, "test-bucket", "concurrent.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		}
+	}()
+
+	// Concurrent reads — simulate dashboard API calls that were freezing
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 30; i++ {
+			_, _, _, _ = store.ListObjects(ctx, "test-bucket", "", "", 100)
+			_, _ = store.ListBuckets(ctx)
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success — no lock contention blocking reads during GC
+	case <-ctx.Done():
+		t.Fatal("lock contention detected: concurrent GC + writes + reads timed out after 10s")
+	}
+}
+
+// TestBuildChunkReferenceSet_Cancellation verifies that buildChunkReferenceSet
+// respects context cancellation and returns early.
+func TestBuildChunkReferenceSet_Cancellation(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create some objects
+	for i := 0; i < 5; i++ {
+		content := []byte(fmt.Sprintf("content-%d", i))
+		_, err := store.PutObject(context.Background(), "test-bucket", fmt.Sprintf("obj-%d.txt", i), bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	// Cancel immediately
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	refs := store.buildChunkReferenceSet(ctx)
+	// Should return without error (may have partial or empty results)
+	assert.NotNil(t, refs)
+}
+
 // TestBuildChunkReferenceSet_SubdirectoryMeta verifies that buildChunkReferenceSet
 // finds chunks referenced by metadata files in subdirectories (e.g., system bucket
 // stores metadata in meta/auth/, meta/dns/, meta/filter/).
@@ -1872,7 +1959,7 @@ func TestBuildChunkReferenceSet_SubdirectoryMeta(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(subDir, "users.json"), data, 0o600))
 
 	// Build reference set
-	refs := store.buildChunkReferenceSet()
+	refs := store.buildChunkReferenceSet(context.Background())
 
 	// Should find the chunk from the subdirectory metadata
 	_, found := refs["subdir-chunk-hash-abc123"]

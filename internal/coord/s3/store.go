@@ -373,17 +373,14 @@ func (s *Store) QuotaStats() *QuotaStats {
 }
 
 // calculateQuotaUsage scans all chunks and updates quota tracking.
-// This is called during initialization before the store is accessible to other
-// goroutines, but we hold the mutex for defense in depth and future-proofing.
+// Uses s.dataDir (immutable after construction) for the filesystem walk,
+// and QuotaManager.SetUsed has its own internal mutex.
 func (s *Store) calculateQuotaUsage() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.cas == nil {
 		return nil
 	}
 
-	// Calculate total chunk storage size (shared across all buckets)
+	// s.dataDir is immutable after init — no lock needed for the walk.
 	chunksDir := filepath.Join(s.dataDir, "chunks")
 	var totalSize int64
 	_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
@@ -2767,13 +2764,26 @@ func (s *Store) RunGarbageCollection(ctx context.Context) GCStats {
 	// Record start time to avoid deleting chunks created during GC
 	gcStartTime := time.Now()
 
-	// Phase 1: Prune expired versions across all buckets
-	// This uses the original per-object pruning which is safe for concurrent access
-	s.pruneAllExpiredVersionsSimple(ctx, &stats)
+	// Phase 1: Prune expired versions across all buckets.
+	// Returns chunks from pruned versions that may now be unreferenced.
+	chunksToCheck := s.pruneAllExpiredVersionsSimple(ctx, &stats)
 
-	// Phase 2: Build reference set AFTER pruning (read-only)
-	// This ensures we capture the current state after version deletion
-	referencedChunks := s.buildChunkReferenceSet()
+	// Phase 2: Build reference set ONCE after pruning (lock-free filesystem scan).
+	// This single scan serves both pruned-version chunk cleanup and orphan detection,
+	// avoiding the previous double-scan that held RLock for extended periods.
+	referencedChunks := s.buildChunkReferenceSet(ctx)
+
+	// Phase 2b: Delete chunks from pruned versions that are no longer referenced
+	for _, hash := range chunksToCheck {
+		select {
+		case <-ctx.Done():
+			return stats
+		default:
+		}
+		if _, ok := referencedChunks[hash]; !ok {
+			_ = s.cas.DeleteChunk(ctx, hash)
+		}
+	}
 
 	// Phase 3: Delete orphaned chunks (not in reference set)
 	// CAS has its own locking; we don't need Store lock here
@@ -2790,12 +2800,14 @@ func (s *Store) RunGarbageCollection(ctx context.Context) GCStats {
 }
 
 // buildChunkReferenceSet scans all objects and versions to find referenced chunks.
-// Uses RLock to allow concurrent reads during the scan.
-func (s *Store) buildChunkReferenceSet() map[string]struct{} {
+// No Store lock is needed because:
+//   - s.dataDir is immutable after construction
+//   - All file writes use syncedWriteFile (atomic temp+rename), so reads always
+//     see complete content
+//   - Chunks written during the scan are newer than gcStartTime and will be
+//     skipped by deleteOrphanedChunks
+func (s *Store) buildChunkReferenceSet(ctx context.Context) map[string]struct{} {
 	referencedChunks := make(map[string]struct{})
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
 	bucketEntries, err := os.ReadDir(bucketsDir)
@@ -2804,6 +2816,11 @@ func (s *Store) buildChunkReferenceSet() map[string]struct{} {
 	}
 
 	for _, bucketEntry := range bucketEntries {
+		select {
+		case <-ctx.Done():
+			return referencedChunks
+		default:
+		}
 		if !bucketEntry.IsDir() {
 			continue
 		}
@@ -2812,6 +2829,11 @@ func (s *Store) buildChunkReferenceSet() map[string]struct{} {
 		// Scan current objects (walk to include subdirectories like meta/auth/, meta/dns/)
 		metaDir := filepath.Join(bucketsDir, bucket, "meta")
 		_ = filepath.Walk(metaDir, func(path string, info os.FileInfo, err error) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
 				return nil
 			}
@@ -2831,6 +2853,11 @@ func (s *Store) buildChunkReferenceSet() map[string]struct{} {
 		// Scan versions
 		versionsDir := filepath.Join(bucketsDir, bucket, "versions")
 		_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
 				return nil
 			}
@@ -2849,14 +2876,15 @@ func (s *Store) buildChunkReferenceSet() map[string]struct{} {
 }
 
 // pruneAllExpiredVersionsSimple prunes expired versions across all buckets.
-// Takes brief write locks per object to minimize contention.
-// Chunk reference checks and deletions are done outside the lock to avoid
-// holding the mutex during expensive global filesystem scans.
-func (s *Store) pruneAllExpiredVersionsSimple(ctx context.Context, stats *GCStats) {
+// Takes brief read locks per object to minimize contention.
+// Returns chunks from pruned versions that may now be unreferenced;
+// the caller is responsible for building a reference set and deleting
+// unreferenced chunks (avoiding duplicate filesystem scans).
+func (s *Store) pruneAllExpiredVersionsSimple(ctx context.Context, stats *GCStats) []string {
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
 	bucketEntries, err := os.ReadDir(bucketsDir)
 	if err != nil {
-		return
+		return nil
 	}
 
 	// Collect all chunks from pruned versions for deferred cleanup
@@ -2865,7 +2893,7 @@ func (s *Store) pruneAllExpiredVersionsSimple(ctx context.Context, stats *GCStat
 	for _, bucketEntry := range bucketEntries {
 		select {
 		case <-ctx.Done():
-			return
+			return allChunksToCheck
 		default:
 		}
 		if !bucketEntry.IsDir() {
@@ -2894,37 +2922,24 @@ func (s *Store) pruneAllExpiredVersionsSimple(ctx context.Context, stats *GCStat
 		for _, key := range objectKeys {
 			select {
 			case <-ctx.Done():
-				return
+				return allChunksToCheck
 			default:
 			}
 			stats.ObjectsScanned++
 
-			// Brief lock for this object's pruning
-			s.mu.Lock()
+			// Brief RLock: pruneExpiredVersions only reads config fields
+			// (versionRetentionPolicy, maxVersionsPerObject, versionRetentionDays)
+			// and does filesystem ops on unique version file paths.
+			s.mu.RLock()
 			pruned, chunksToCheck := s.pruneExpiredVersions(ctx, bucket, key)
-			s.mu.Unlock()
+			s.mu.RUnlock()
 
 			stats.VersionsPruned += pruned
 			allChunksToCheck = append(allChunksToCheck, chunksToCheck...)
 		}
 	}
 
-	// Delete unreferenced chunks WITHOUT holding the lock.
-	// Build the reference set once (single scan) rather than calling
-	// isChunkReferencedGlobally per chunk (which would be O(chunks × buckets × objects)).
-	if s.cas != nil && len(allChunksToCheck) > 0 {
-		referencedChunks := s.buildChunkReferenceSet()
-		for _, hash := range allChunksToCheck {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			if _, ok := referencedChunks[hash]; !ok {
-				_ = s.cas.DeleteChunk(ctx, hash)
-			}
-		}
-	}
+	return allChunksToCheck
 }
 
 // deleteOrphanedChunks deletes chunks not in the reference set.
