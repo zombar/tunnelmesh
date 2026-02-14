@@ -735,6 +735,19 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 }
 
 // StartPeriodicCleanup starts the background cleanup goroutine for S3 storage.
+// gcStaggerDelay computes a deterministic stagger delay (0-29 min) based on the
+// coordinator name hash, to avoid all coordinators running GC simultaneously.
+// The window is ≤50% of the GC interval (1h) to ensure predictable cleanup cadence.
+func gcStaggerDelay(coordName string) time.Duration {
+	if coordName == "" {
+		coordName = "coordinator"
+	}
+	h := fnv.New32a()
+	h.Write([]byte(coordName))
+	return time.Duration(h.Sum32()%1800) * time.Second
+}
+
+// StartPeriodicCleanup launches a background goroutine for S3 storage maintenance.
 // It periodically:
 //   - Purges tombstoned objects past their retention period
 //   - Tombstones content in expired file shares
@@ -745,11 +758,7 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 		return
 	}
 
-	// Stagger GC start time based on coordinator name hash
-	// to avoid all coordinators running GC simultaneously
-	h := fnv.New32a()
-	h.Write([]byte(s.cfg.Name))
-	stagger := time.Duration(h.Sum32()%3600) * time.Second // 0-59 min delay
+	stagger := gcStaggerDelay(s.cfg.Name)
 
 	log.Info().Str("coordinator", s.cfg.Name).Dur("stagger", stagger).Msg("GC stagger delay computed")
 
@@ -792,7 +801,8 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 				gcStats := s.s3Store.RunGarbageCollection(ctx)
 				gcDuration := time.Since(gcStart).Seconds()
 
-				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 || gcStats.ChunksSkippedShared > 0 {
+				// Log when cleanup occurred or chunks were skipped (indicates multi-coordinator or recent-upload activity)
+				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 || gcStats.ChunksSkippedShared > 0 || gcStats.ChunksSkippedGracePeriod > 0 {
 					log.Info().
 						Str("coordinator", s.cfg.Name).
 						Int("versions_pruned", gcStats.VersionsPruned).

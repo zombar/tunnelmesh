@@ -1597,3 +1597,38 @@ func TestServer_AdminPeers_GlobPatterns(t *testing.T) {
 		})
 	}
 }
+
+func TestGCStaggerDelay(t *testing.T) {
+	maxStagger := 30 * time.Minute
+
+	t.Run("within range", func(t *testing.T) {
+		names := []string{"coord1", "coord2", "coord3", "us-east-1", "eu-west-2"}
+		for _, name := range names {
+			d := gcStaggerDelay(name)
+			assert.GreaterOrEqual(t, d, time.Duration(0), "stagger for %q should be >= 0", name)
+			assert.Less(t, d, maxStagger, "stagger for %q should be < 30min", name)
+		}
+	})
+
+	t.Run("deterministic", func(t *testing.T) {
+		d1 := gcStaggerDelay("coord1")
+		d2 := gcStaggerDelay("coord1")
+		assert.Equal(t, d1, d2, "same name should produce same stagger")
+	})
+
+	t.Run("different names produce different staggers", func(t *testing.T) {
+		d1 := gcStaggerDelay("coord1")
+		d2 := gcStaggerDelay("coord2")
+		d3 := gcStaggerDelay("coord3")
+		// At least two of three should differ (hash collisions are theoretically possible but extremely unlikely)
+		assert.False(t, d1 == d2 && d2 == d3, "different coordinator names should produce different staggers")
+	})
+
+	t.Run("empty name falls back", func(t *testing.T) {
+		d := gcStaggerDelay("")
+		assert.GreaterOrEqual(t, d, time.Duration(0))
+		assert.Less(t, d, maxStagger)
+		// Empty name should use "coordinator" fallback
+		assert.Equal(t, gcStaggerDelay("coordinator"), d)
+	})
+}
