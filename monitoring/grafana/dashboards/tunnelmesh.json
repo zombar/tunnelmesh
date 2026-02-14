@@ -2272,13 +2272,17 @@
       "pluginVersion": "12.3.2",
       "targets": [
         {
+          "editorMode": "code",
           "expr": "tunnelmesh_s3_logical_bytes",
-          "legendFormat": "Logical (before dedup)",
+          "legendFormat": "{{ peer }} - Logical (before dedup)",
+          "range": true,
           "refId": "A"
         },
         {
+          "editorMode": "code",
           "expr": "tunnelmesh_s3_chunk_storage_bytes",
-          "legendFormat": "Physical (after dedup)",
+          "legendFormat": "{{ peer }} - Physical (after dedup)",
+          "range": true,
           "refId": "B"
         }
       ],
