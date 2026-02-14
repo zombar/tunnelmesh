@@ -97,7 +97,7 @@ func InitS3Metrics(registry prometheus.Registerer) *S3Metrics {
 
 			StorageBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
 				Name: "tunnelmesh_s3_storage_bytes",
-				Help: "Total bytes stored in S3",
+				Help: "Total physical bytes stored in S3 (after deduplication)",
 			}),
 
 			QuotaBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
