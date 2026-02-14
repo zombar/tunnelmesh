@@ -560,13 +560,16 @@ func (s *Store) DeleteBucket(ctx context.Context, bucket string) error {
 		return ErrBucketNotFound
 	}
 
-	// Check if bucket is empty (only contains dirs and _meta.json)
-	objects, _, _, err := s.listObjectsUnsafe(bucket, "", "", 1)
+	// Check if bucket has any live (non-tombstoned) objects.
+	// Tombstoned objects don't block deletion — they'll be removed with the bucket directory.
+	objects, _, _, err := s.listObjectsUnsafe(bucket, "", "", 0)
 	if err != nil {
 		return err
 	}
-	if len(objects) > 0 {
-		return ErrBucketNotEmpty
+	for _, obj := range objects {
+		if !obj.IsTombstoned() {
+			return ErrBucketNotEmpty
+		}
 	}
 
 	// Remove bucket directory.
@@ -1856,9 +1859,22 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 	chunksToCheck = append(chunksToCheck, meta.Chunks...)
 	chunksToCheck = append(chunksToCheck, versionChunks...)
 
-	// Remove current metadata
+	// Remove current metadata.
+	// On Windows, file handles may be transiently held by OS processes
+	// (antivirus, search indexer), causing Remove to fail. Retry briefly.
 	metaPath := s.objectMetaPath(bucket, key)
-	_ = os.Remove(metaPath)
+	retries := 1
+	if runtime.GOOS == "windows" {
+		retries = 5
+	}
+	for i := 0; i < retries; i++ {
+		if err := os.Remove(metaPath); err == nil || os.IsNotExist(err) {
+			break
+		}
+		if i < retries-1 {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
 
 	// Release quota
 	if s.quota != nil && meta.Size > 0 {
