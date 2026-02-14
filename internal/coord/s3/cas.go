@@ -130,6 +130,13 @@ func (c *CAS) WriteChunk(ctx context.Context, data []byte) (string, error) {
 
 	if err := os.Rename(tmpPath, chunkPath); err != nil {
 		_ = os.Remove(tmpPath)
+		// On Windows, rename over an existing file fails with "Access is
+		// denied." Since convergent encryption guarantees identical content,
+		// a concurrent writer already placed the correct file — treat as
+		// successful dedup.
+		if fileExists(chunkPath) {
+			return hash, nil
+		}
 		return "", fmt.Errorf("rename chunk: %w", err)
 	}
 
