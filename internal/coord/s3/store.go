@@ -2695,8 +2695,10 @@ func (s *Store) GetCASStats() CASStats {
 		return stats
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	// No lock needed: s.dataDir is immutable after construction, all writes
+	// use atomic temp+rename (syncedWriteFile), and these are approximate
+	// gauge metrics refreshed every 60s where brief races are acceptable.
+	// This avoids RLock contention that starves concurrent PutObject writers.
 
 	// Count chunks and their sizes
 	chunksDir := filepath.Join(s.dataDir, "chunks")

@@ -89,6 +89,7 @@ type Simulator struct {
 	sharePrefix string                  // Peer name prefix for share bucket names
 
 	// Execution state
+	generated bool
 	startTime time.Time
 	tasks     []WorkloadTask
 	attempts  map[string][]AdversaryAttempt // Map character ID to attempts
@@ -212,7 +213,12 @@ func (s *Simulator) shareBucketName(shareName string) string {
 }
 
 // GenerateScenario generates all tasks, attempts, and workflows for the scenario.
+// It is idempotent: subsequent calls after the first are no-ops.
 func (s *Simulator) GenerateScenario(ctx context.Context) error {
+	if s.generated {
+		return nil
+	}
+
 	var err error
 
 	// Generate workload tasks
@@ -253,6 +259,7 @@ func (s *Simulator) GenerateScenario(ctx context.Context) error {
 		s.metrics.WorkflowTestsRun = len(s.workflows)
 	}
 
+	s.generated = true
 	return nil
 }
 

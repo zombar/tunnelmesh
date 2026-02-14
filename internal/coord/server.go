@@ -776,8 +776,7 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 		defer ticker.Stop()
 
 		// Update metrics on startup
-		s.updateCASMetrics()
-		s.updateStorageMetrics()
+		s.updateS3Metrics()
 		s.collectAndPersistCapacity(ctx)
 
 		// Wait for stagger delay before first GC run.
@@ -830,9 +829,8 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 					metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
 				}
 
-				// Update CAS and storage metrics after GC
-				s.updateCASMetrics()
-				s.updateStorageMetrics()
+				// Update S3 metrics after GC
+				s.updateS3Metrics()
 
 				// Collect and persist local capacity, then load peer snapshots
 				s.collectAndPersistCapacity(ctx)
@@ -853,8 +851,7 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-metricsTicker.C:
-				s.updateCASMetrics()
-				s.updateStorageMetrics()
+				s.updateS3Metrics()
 			}
 		}
 	}()
@@ -891,26 +888,9 @@ func (s *Server) StartReplicator() error {
 	return nil
 }
 
-// updateCASMetrics collects and updates CAS/chunking metrics.
-func (s *Server) updateCASMetrics() {
-	if s.s3Store == nil {
-		return
-	}
-
-	casStats := s.s3Store.GetCASStats()
-	if metrics := s3.GetS3Metrics(); metrics != nil {
-		metrics.UpdateCASMetrics(
-			casStats.ChunkCount,
-			casStats.ChunkBytes,
-			casStats.LogicalBytes,
-			casStats.VersionCount,
-		)
-	}
-}
-
-// updateStorageMetrics updates storage-related Prometheus gauges (buckets, objects,
-// storage bytes, quota, registered users). Called alongside updateCASMetrics.
-func (s *Server) updateStorageMetrics() {
+// updateS3Metrics collects CAS stats once and updates all S3-related Prometheus
+// gauges (chunks, objects, storage bytes, quota, registered users).
+func (s *Server) updateS3Metrics() {
 	if s.s3Store == nil {
 		return
 	}
@@ -918,6 +898,14 @@ func (s *Server) updateStorageMetrics() {
 	if metrics == nil {
 		return
 	}
+
+	casStats := s.s3Store.GetCASStats()
+	metrics.UpdateCASMetrics(
+		casStats.ChunkCount,
+		casStats.ChunkBytes,
+		casStats.LogicalBytes,
+		casStats.VersionCount,
+	)
 
 	buckets, err := s.s3Store.ListBuckets(context.Background())
 	if err != nil {
@@ -927,8 +915,6 @@ func (s *Server) updateStorageMetrics() {
 	for _, b := range buckets {
 		storageBytes += b.SizeBytes
 	}
-
-	casStats := s.s3Store.GetCASStats()
 
 	var quotaBytes int64
 	if qs := s.s3Store.QuotaStats(); qs != nil {
@@ -2376,8 +2362,7 @@ func (s *Server) SetMetricsRegistry(registry prometheus.Registerer) {
 	// StartPeriodicCleanup may have already run its startup update before
 	// the registry was set, so those updates would have been silently skipped.
 	go func() {
-		s.updateCASMetrics()
-		s.updateStorageMetrics()
+		s.updateS3Metrics()
 		s.collectAndPersistCapacity(context.Background())
 	}()
 

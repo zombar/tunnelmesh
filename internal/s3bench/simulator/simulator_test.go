@@ -477,6 +477,55 @@ func TestScenarioSummary_String(t *testing.T) {
 	t.Logf("Summary:\n%s", summaryStr)
 }
 
+func TestGenerateScenario_Idempotent(t *testing.T) {
+	ai := &scenarios.AlienInvasion{}
+	config := DefaultConfig(ai)
+	config.TimeScale = 100.0
+	config.EnableWorkflows = true
+
+	sim, err := NewSimulator(config)
+	if err != nil {
+		t.Fatalf("NewSimulator() error = %v", err)
+	}
+
+	ctx := context.Background()
+
+	// First call generates scenario
+	if err := sim.GenerateScenario(ctx); err != nil {
+		t.Fatalf("GenerateScenario() first call error = %v", err)
+	}
+
+	tasksAfterFirst := len(sim.tasks)
+	workflowsAfterFirst := len(sim.workflows)
+	adversaryAfterFirst := 0
+	for _, attempts := range sim.attempts {
+		adversaryAfterFirst += len(attempts)
+	}
+
+	if tasksAfterFirst == 0 {
+		t.Fatal("expected tasks to be generated")
+	}
+
+	// Second call should be a no-op
+	if err := sim.GenerateScenario(ctx); err != nil {
+		t.Fatalf("GenerateScenario() second call error = %v", err)
+	}
+
+	if len(sim.tasks) != tasksAfterFirst {
+		t.Errorf("tasks doubled: got %d after second call, want %d", len(sim.tasks), tasksAfterFirst)
+	}
+	if len(sim.workflows) != workflowsAfterFirst {
+		t.Errorf("workflows doubled: got %d after second call, want %d", len(sim.workflows), workflowsAfterFirst)
+	}
+	adversaryAfterSecond := 0
+	for _, attempts := range sim.attempts {
+		adversaryAfterSecond += len(attempts)
+	}
+	if adversaryAfterSecond != adversaryAfterFirst {
+		t.Errorf("adversary attempts doubled: got %d after second call, want %d", adversaryAfterSecond, adversaryAfterFirst)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && findSubstring(s, substr))
 }
