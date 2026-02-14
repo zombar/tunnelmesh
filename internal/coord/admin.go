@@ -2340,14 +2340,19 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// If this is a forwarded request and the bucket still doesn't exist, create it
 	// using the owner from the forwarding coordinator. This handles the race condition
 	// where share metadata hasn't been replicated yet.
-	if bucketOwner := r.Header.Get("X-TunnelMesh-Bucket-Owner"); bucketOwner != "" {
-		if _, err := s.s3Store.HeadBucket(r.Context(), bucket); err != nil {
-			if createErr := s.s3Store.CreateBucket(r.Context(), bucket, bucketOwner, 2, nil); createErr != nil {
-				if !errors.Is(createErr, s3.ErrBucketExists) {
-					log.Warn().Err(createErr).Str("bucket", bucket).Msg("auto-create bucket from forwarded header failed")
+	// Only trust the bucket owner header on forwarded requests (X-TunnelMesh-Forwarded
+	// is set by our own forwardS3Request). External clients cannot spoof this because
+	// the forwarded header is checked at the dispatch level before reaching here.
+	if r.Header.Get("X-TunnelMesh-Forwarded") != "" {
+		if bucketOwner := r.Header.Get("X-TunnelMesh-Bucket-Owner"); bucketOwner != "" {
+			if _, err := s.s3Store.HeadBucket(r.Context(), bucket); err != nil {
+				if createErr := s.s3Store.CreateBucket(r.Context(), bucket, bucketOwner, 2, nil); createErr != nil {
+					if !errors.Is(createErr, s3.ErrBucketExists) {
+						log.Warn().Err(createErr).Str("bucket", bucket).Msg("auto-create bucket from forwarded header failed")
+					}
+				} else {
+					log.Info().Str("bucket", bucket).Str("owner", bucketOwner).Msg("auto-created bucket from forwarded write")
 				}
-			} else {
-				log.Info().Str("bucket", bucket).Str("owner", bucketOwner).Msg("auto-created bucket from forwarded write")
 			}
 		}
 	}
@@ -2373,12 +2378,12 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// Chunks are already stored by PutObject above — ReplicateObject reads them from CAS
 	// and only sends chunks the remote peer doesn't already have.
 	//
-	// Uses context.Background() intentionally: replication must complete even if the
-	// HTTP client disconnects, since partial replication would leave the cluster inconsistent.
+	// Uses WithoutCancel so replication completes even after the HTTP response is sent,
+	// while preserving trace context from the original request.
 	// 60s timeout accounts for chunk transfer + metadata send + cleanup across all peers.
 	if s.replicator != nil {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
 			defer cancel()
 
 			peers := s.replicator.GetPeers()
@@ -2472,10 +2477,11 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, r *http.Request, bu
 	}
 
 	// Replicate delete to other coordinators asynchronously.
-	// Use background context — r.Context() is canceled once the response is sent.
+	// Uses WithoutCancel so replication completes after the HTTP response is sent,
+	// while preserving trace context from the original request.
 	if s.replicator != nil {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
 			defer cancel()
 			if err := s.replicator.ReplicateDelete(ctx, bucket, key); err != nil {
 				log.Error().Err(err).

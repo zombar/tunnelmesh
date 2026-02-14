@@ -1101,15 +1101,17 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		// Trust the CA from registration (not the locally-generated CA) since all
 		// coordinator certs are signed by the primary's CA. Include our own cert
 		// for client authentication.
-		if caPEM, caErr := os.ReadFile(tlsMgr.CAPath()); caErr == nil {
-			caPool := x509.NewCertPool()
-			caPool.AppendCertsFromPEM(caPEM)
-			srv.SetMeshTLS(&tls.Config{
-				Certificates: []tls.Certificate{tlsCert},
-				RootCAs:      caPool,
-				MinVersion:   tls.VersionTLS12,
-			})
+		caPEM, caErr := os.ReadFile(tlsMgr.CAPath())
+		if caErr != nil {
+			return fmt.Errorf("failed to load mesh CA for inter-coordinator TLS: %w", caErr)
 		}
+		caPool := x509.NewCertPool()
+		caPool.AppendCertsFromPEM(caPEM)
+		srv.SetMeshTLS(&tls.Config{
+			Certificates: []tls.Certificate{tlsCert},
+			RootCAs:      caPool,
+			MinVersion:   tls.VersionTLS12,
+		})
 
 		{
 			// Start admin HTTPS server if enabled

@@ -281,6 +281,7 @@ func (r *DistributedChunkReader) fetchChunk(idx int) ([]byte, error) {
 	// Fall back to all known peers when registry has no ownership info
 	// (ownership gossip may not be implemented yet)
 	if len(owners) == 0 && r.replicator != nil {
+		r.logger.Debug().Str("chunk", chunkHash).Msg("no chunk owners found in registry, trying all peers")
 		owners = r.replicator.GetPeers()
 	}
 
