@@ -76,6 +76,22 @@ func classifyS3StatusWithError(httpStatus int, err error) string {
 	return classifyS3Status(httpStatus)
 }
 
+// withMetrics wraps an S3 handler with metrics instrumentation.
+// The handler function receives a statusRecorder as its http.ResponseWriter,
+// and metrics are automatically recorded when the handler returns.
+func (s *Server) withMetrics(w http.ResponseWriter, operation string, fn func(http.ResponseWriter)) {
+	startTime := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	defer func() {
+		if s.metrics != nil {
+			duration := time.Since(startTime).Seconds()
+			status := classifyS3Status(rec.getStatus())
+			s.metrics.RecordRequest(operation, status, duration)
+		}
+	}()
+	fn(rec)
+}
+
 // RequestForwarder can forward S3 requests to the correct primary coordinator.
 type RequestForwarder interface {
 	// ForwardS3Request forwards the request if this coordinator is not the primary
@@ -177,40 +193,42 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 // handleService handles service-level operations (GET /).
 func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		s.writeError(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "Method not allowed")
-		return
-	}
+	s.withMetrics(w, "ListBuckets", func(rec http.ResponseWriter) {
+		if r.Method != http.MethodGet {
+			s.writeError(rec, http.StatusMethodNotAllowed, "MethodNotAllowed", "Method not allowed")
+			return
+		}
 
-	// Authorize: list buckets
-	userID, err := s.authorizer.AuthorizeRequest(r, "list", "buckets", "", "")
-	if err != nil {
-		s.handleAuthError(w, err)
-		return
-	}
+		// Authorize: list buckets
+		userID, err := s.authorizer.AuthorizeRequest(r, "list", "buckets", "", "")
+		if err != nil {
+			s.handleAuthError(rec, err)
+			return
+		}
 
-	buckets, err := s.store.ListBuckets(r.Context())
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
-		return
-	}
+		buckets, err := s.store.ListBuckets(r.Context())
+		if err != nil {
+			s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
+			return
+		}
 
-	// Build XML response
-	resp := ListAllMyBucketsResult{
-		Owner: Owner{
-			ID:          userID,
-			DisplayName: userID,
-		},
-	}
+		// Build XML response
+		resp := ListAllMyBucketsResult{
+			Owner: Owner{
+				ID:          userID,
+				DisplayName: userID,
+			},
+		}
 
-	for _, b := range buckets {
-		resp.Buckets.Bucket = append(resp.Buckets.Bucket, BucketInfo{
-			Name:         b.Name,
-			CreationDate: b.CreatedAt.Format(time.RFC3339),
-		})
-	}
+		for _, b := range buckets {
+			resp.Buckets.Bucket = append(resp.Buckets.Bucket, BucketInfo{
+				Name:         b.Name,
+				CreationDate: b.CreatedAt.Format(time.RFC3339),
+			})
+		}
 
-	s.writeXML(w, http.StatusOK, resp)
+		s.writeXML(rec, http.StatusOK, resp)
+	})
 }
 
 // handleBucket handles bucket-level operations.
@@ -261,190 +279,200 @@ func (s *Server) handleObject(w http.ResponseWriter, r *http.Request, bucket, ke
 
 // createBucket handles PUT /{bucket}.
 func (s *Server) createBucket(w http.ResponseWriter, r *http.Request, bucket string) {
-	userID, err := s.authorizer.AuthorizeRequest(r, "create", "buckets", bucket, "")
-	if err != nil {
-		s.handleAuthError(w, err)
-		return
-	}
-
-	if err := s.store.CreateBucket(r.Context(), bucket, userID, 2, nil); err != nil {
-		if errors.Is(err, ErrBucketExists) {
-			s.writeError(w, http.StatusConflict, "BucketAlreadyExists", "Bucket already exists")
+	s.withMetrics(w, "CreateBucket", func(rec http.ResponseWriter) {
+		userID, err := s.authorizer.AuthorizeRequest(r, "create", "buckets", bucket, "")
+		if err != nil {
+			s.handleAuthError(rec, err)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
-		return
-	}
 
-	w.WriteHeader(http.StatusOK)
+		if err := s.store.CreateBucket(r.Context(), bucket, userID, 2, nil); err != nil {
+			if errors.Is(err, ErrBucketExists) {
+				s.writeError(rec, http.StatusConflict, "BucketAlreadyExists", "Bucket already exists")
+				return
+			}
+			s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
+			return
+		}
+
+		rec.WriteHeader(http.StatusOK)
+	})
 }
 
 // deleteBucket handles DELETE /{bucket}.
 func (s *Server) deleteBucket(w http.ResponseWriter, r *http.Request, bucket string) {
-	_, err := s.authorizer.AuthorizeRequest(r, "delete", "buckets", bucket, "")
-	if err != nil {
-		s.handleAuthError(w, err)
-		return
-	}
-
-	if err := s.store.DeleteBucket(r.Context(), bucket); err != nil {
-		switch {
-		case errors.Is(err, ErrBucketNotFound):
-			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
-		case errors.Is(err, ErrBucketNotEmpty):
-			s.writeError(w, http.StatusConflict, "BucketNotEmpty", "Bucket is not empty")
-		default:
-			s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
+	s.withMetrics(w, "DeleteBucket", func(rec http.ResponseWriter) {
+		_, err := s.authorizer.AuthorizeRequest(r, "delete", "buckets", bucket, "")
+		if err != nil {
+			s.handleAuthError(rec, err)
+			return
 		}
-		return
-	}
 
-	w.WriteHeader(http.StatusNoContent)
+		if err := s.store.DeleteBucket(r.Context(), bucket); err != nil {
+			switch {
+			case errors.Is(err, ErrBucketNotFound):
+				s.writeError(rec, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+			case errors.Is(err, ErrBucketNotEmpty):
+				s.writeError(rec, http.StatusConflict, "BucketNotEmpty", "Bucket is not empty")
+			default:
+				s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
+			}
+			return
+		}
+
+		rec.WriteHeader(http.StatusNoContent)
+	})
 }
 
 // headBucket handles HEAD /{bucket}.
 func (s *Server) headBucket(w http.ResponseWriter, r *http.Request, bucket string) {
-	_, err := s.authorizer.AuthorizeRequest(r, "get", "buckets", bucket, "")
-	if err != nil {
-		s.handleAuthError(w, err)
-		return
-	}
-
-	if _, err := s.store.HeadBucket(r.Context(), bucket); err != nil {
-		if errors.Is(err, ErrBucketNotFound) {
-			w.WriteHeader(http.StatusNotFound)
+	s.withMetrics(w, "HeadBucket", func(rec http.ResponseWriter) {
+		_, err := s.authorizer.AuthorizeRequest(r, "get", "buckets", bucket, "")
+		if err != nil {
+			s.handleAuthError(rec, err)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
-		return
-	}
 
-	w.WriteHeader(http.StatusOK)
+		if _, err := s.store.HeadBucket(r.Context(), bucket); err != nil {
+			if errors.Is(err, ErrBucketNotFound) {
+				rec.WriteHeader(http.StatusNotFound)
+				return
+			}
+			s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
+			return
+		}
+
+		rec.WriteHeader(http.StatusOK)
+	})
 }
 
 // listObjects handles GET /{bucket} (V1).
 func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket string) {
-	userID, err := s.authorizer.AuthorizeRequest(r, "list", "objects", bucket, "")
-	if err != nil {
-		s.handleAuthError(w, err)
-		return
-	}
-
-	prefix := r.URL.Query().Get("prefix")
-	marker := r.URL.Query().Get("marker")
-	maxKeys := 1000 // default
-	if mk := r.URL.Query().Get("max-keys"); mk != "" {
-		if parsed, err := strconv.Atoi(mk); err == nil && parsed > 0 && parsed <= 1000 {
-			maxKeys = parsed
-		}
-	}
-
-	objects, isTruncated, nextMarker, err := s.store.ListObjects(r.Context(), bucket, prefix, marker, maxKeys)
-	if err != nil {
-		if errors.Is(err, ErrBucketNotFound) {
-			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+	s.withMetrics(w, "ListObjects", func(rec http.ResponseWriter) {
+		userID, err := s.authorizer.AuthorizeRequest(r, "list", "objects", bucket, "")
+		if err != nil {
+			s.handleAuthError(rec, err)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
-		return
-	}
 
-	// Filter objects by allowed prefixes
-	allowedPrefixes := s.authorizer.GetAllowedPrefixes(userID, bucket)
-	if allowedPrefixes != nil {
-		objects = filterByPrefixes(objects, allowedPrefixes)
-	}
-
-	resp := ListBucketResult{
-		Name:        bucket,
-		Prefix:      prefix,
-		Marker:      marker,
-		MaxKeys:     maxKeys,
-		IsTruncated: isTruncated,
-		NextMarker:  nextMarker,
-	}
-
-	for _, obj := range objects {
-		info := ObjectInfo{
-			Key:          obj.Key,
-			LastModified: obj.LastModified.Format(time.RFC3339),
-			ETag:         obj.ETag,
-			Size:         obj.Size,
+		prefix := r.URL.Query().Get("prefix")
+		marker := r.URL.Query().Get("marker")
+		maxKeys := 1000 // default
+		if mk := r.URL.Query().Get("max-keys"); mk != "" {
+			if parsed, err := strconv.Atoi(mk); err == nil && parsed > 0 && parsed <= 1000 {
+				maxKeys = parsed
+			}
 		}
-		if obj.Expires != nil {
-			info.Expires = obj.Expires.Format(time.RFC3339)
-		}
-		resp.Contents = append(resp.Contents, info)
-	}
 
-	s.writeXML(w, http.StatusOK, resp)
+		objects, isTruncated, nextMarker, err := s.store.ListObjects(r.Context(), bucket, prefix, marker, maxKeys)
+		if err != nil {
+			if errors.Is(err, ErrBucketNotFound) {
+				s.writeError(rec, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+				return
+			}
+			s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
+			return
+		}
+
+		// Filter objects by allowed prefixes
+		allowedPrefixes := s.authorizer.GetAllowedPrefixes(userID, bucket)
+		if allowedPrefixes != nil {
+			objects = filterByPrefixes(objects, allowedPrefixes)
+		}
+
+		resp := ListBucketResult{
+			Name:        bucket,
+			Prefix:      prefix,
+			Marker:      marker,
+			MaxKeys:     maxKeys,
+			IsTruncated: isTruncated,
+			NextMarker:  nextMarker,
+		}
+
+		for _, obj := range objects {
+			info := ObjectInfo{
+				Key:          obj.Key,
+				LastModified: obj.LastModified.Format(time.RFC3339),
+				ETag:         obj.ETag,
+				Size:         obj.Size,
+			}
+			if obj.Expires != nil {
+				info.Expires = obj.Expires.Format(time.RFC3339)
+			}
+			resp.Contents = append(resp.Contents, info)
+		}
+
+		s.writeXML(rec, http.StatusOK, resp)
+	})
 }
 
 // listObjectsV2 handles GET /{bucket}?list-type=2.
 func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
-	userID, err := s.authorizer.AuthorizeRequest(r, "list", "objects", bucket, "")
-	if err != nil {
-		s.handleAuthError(w, err)
-		return
-	}
-
-	prefix := r.URL.Query().Get("prefix")
-	startAfter := r.URL.Query().Get("start-after")
-	continuationToken := r.URL.Query().Get("continuation-token")
-	maxKeys := 1000 // default
-	if mk := r.URL.Query().Get("max-keys"); mk != "" {
-		if parsed, err := strconv.Atoi(mk); err == nil && parsed > 0 && parsed <= 1000 {
-			maxKeys = parsed
-		}
-	}
-
-	// continuation-token takes precedence over start-after
-	marker := startAfter
-	if continuationToken != "" {
-		marker = continuationToken
-	}
-
-	objects, isTruncated, nextMarker, err := s.store.ListObjects(r.Context(), bucket, prefix, marker, maxKeys)
-	if err != nil {
-		if errors.Is(err, ErrBucketNotFound) {
-			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+	s.withMetrics(w, "ListObjectsV2", func(rec http.ResponseWriter) {
+		userID, err := s.authorizer.AuthorizeRequest(r, "list", "objects", bucket, "")
+		if err != nil {
+			s.handleAuthError(rec, err)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
-		return
-	}
 
-	// Filter objects by allowed prefixes
-	allowedPrefixes := s.authorizer.GetAllowedPrefixes(userID, bucket)
-	if allowedPrefixes != nil {
-		objects = filterByPrefixes(objects, allowedPrefixes)
-	}
-
-	resp := ListBucketResultV2{
-		Name:                  bucket,
-		Prefix:                prefix,
-		StartAfter:            startAfter,
-		ContinuationToken:     continuationToken,
-		MaxKeys:               maxKeys,
-		KeyCount:              len(objects),
-		IsTruncated:           isTruncated,
-		NextContinuationToken: nextMarker,
-	}
-
-	for _, obj := range objects {
-		info := ObjectInfo{
-			Key:          obj.Key,
-			LastModified: obj.LastModified.Format(time.RFC3339),
-			ETag:         obj.ETag,
-			Size:         obj.Size,
+		prefix := r.URL.Query().Get("prefix")
+		startAfter := r.URL.Query().Get("start-after")
+		continuationToken := r.URL.Query().Get("continuation-token")
+		maxKeys := 1000 // default
+		if mk := r.URL.Query().Get("max-keys"); mk != "" {
+			if parsed, err := strconv.Atoi(mk); err == nil && parsed > 0 && parsed <= 1000 {
+				maxKeys = parsed
+			}
 		}
-		if obj.Expires != nil {
-			info.Expires = obj.Expires.Format(time.RFC3339)
-		}
-		resp.Contents = append(resp.Contents, info)
-	}
 
-	s.writeXML(w, http.StatusOK, resp)
+		// continuation-token takes precedence over start-after
+		marker := startAfter
+		if continuationToken != "" {
+			marker = continuationToken
+		}
+
+		objects, isTruncated, nextMarker, err := s.store.ListObjects(r.Context(), bucket, prefix, marker, maxKeys)
+		if err != nil {
+			if errors.Is(err, ErrBucketNotFound) {
+				s.writeError(rec, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+				return
+			}
+			s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
+			return
+		}
+
+		// Filter objects by allowed prefixes
+		allowedPrefixes := s.authorizer.GetAllowedPrefixes(userID, bucket)
+		if allowedPrefixes != nil {
+			objects = filterByPrefixes(objects, allowedPrefixes)
+		}
+
+		resp := ListBucketResultV2{
+			Name:                  bucket,
+			Prefix:                prefix,
+			StartAfter:            startAfter,
+			ContinuationToken:     continuationToken,
+			MaxKeys:               maxKeys,
+			KeyCount:              len(objects),
+			IsTruncated:           isTruncated,
+			NextContinuationToken: nextMarker,
+		}
+
+		for _, obj := range objects {
+			info := ObjectInfo{
+				Key:          obj.Key,
+				LastModified: obj.LastModified.Format(time.RFC3339),
+				ETag:         obj.ETag,
+				Size:         obj.Size,
+			}
+			if obj.Expires != nil {
+				info.Expires = obj.Expires.Format(time.RFC3339)
+			}
+			resp.Contents = append(resp.Contents, info)
+		}
+
+		s.writeXML(rec, http.StatusOK, resp)
+	})
 }
 
 // getObject handles GET /{bucket}/{key}.
@@ -452,8 +480,9 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key s
 	startTime := time.Now()
 	rec := &statusRecorder{ResponseWriter: w}
 	var storeErr error // Capture error for metrics classification
+	var forwarded bool
 	defer func() {
-		if s.metrics != nil {
+		if s.metrics != nil && !forwarded {
 			duration := time.Since(startTime).Seconds()
 			status := classifyS3StatusWithError(rec.getStatus(), storeErr)
 			s.metrics.RecordRequest("GetObject", status, duration)
@@ -471,6 +500,7 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key s
 		// Try forwarding to primary if not found locally
 		if (errors.Is(err, ErrObjectNotFound) || errors.Is(err, ErrBucketNotFound)) && s.forwarder != nil {
 			if s.forwarder.ForwardS3Request(w, r, bucket, key, "9000") {
+				forwarded = true
 				return
 			}
 		}
@@ -568,33 +598,46 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 
 // deleteObject handles DELETE /{bucket}/{key}.
 func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	_, err := s.authorizer.AuthorizeRequest(r, "delete", "objects", bucket, key)
-	if err != nil {
-		s.handleAuthError(w, err)
-		return
-	}
-
-	if err := s.store.DeleteObject(r.Context(), bucket, key); err != nil {
-		switch {
-		case errors.Is(err, ErrBucketNotFound):
-			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
-		case errors.Is(err, ErrObjectNotFound):
-			w.WriteHeader(http.StatusNoContent)
+	s.withMetrics(w, "DeleteObject", func(rec http.ResponseWriter) {
+		_, err := s.authorizer.AuthorizeRequest(r, "delete", "objects", bucket, key)
+		if err != nil {
+			s.handleAuthError(rec, err)
 			return
-		default:
-			s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
 		}
-		return
-	}
 
-	w.WriteHeader(http.StatusNoContent)
+		if err := s.store.DeleteObject(r.Context(), bucket, key); err != nil {
+			switch {
+			case errors.Is(err, ErrBucketNotFound):
+				s.writeError(rec, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+			case errors.Is(err, ErrObjectNotFound):
+				rec.WriteHeader(http.StatusNoContent)
+				return
+			default:
+				s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
+			}
+			return
+		}
+
+		rec.WriteHeader(http.StatusNoContent)
+	})
 }
 
 // headObject handles HEAD /{bucket}/{key}.
 func (s *Server) headObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	startTime := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	var forwarded bool
+	defer func() {
+		if s.metrics != nil && !forwarded {
+			duration := time.Since(startTime).Seconds()
+			status := classifyS3Status(rec.getStatus())
+			s.metrics.RecordRequest("HeadObject", status, duration)
+		}
+	}()
+
 	_, err := s.authorizer.AuthorizeRequest(r, "get", "objects", bucket, key)
 	if err != nil {
-		s.handleAuthError(w, err)
+		s.handleAuthError(rec, err)
 		return
 	}
 
@@ -603,30 +646,31 @@ func (s *Server) headObject(w http.ResponseWriter, r *http.Request, bucket, key 
 		// Try forwarding to primary if not found locally
 		if (errors.Is(err, ErrObjectNotFound) || errors.Is(err, ErrBucketNotFound)) && s.forwarder != nil {
 			if s.forwarder.ForwardS3Request(w, r, bucket, key, "9000") {
+				forwarded = true
 				return
 			}
 		}
 		switch {
 		case errors.Is(err, ErrBucketNotFound):
-			w.WriteHeader(http.StatusNotFound)
+			rec.WriteHeader(http.StatusNotFound)
 		case errors.Is(err, ErrObjectNotFound):
-			w.WriteHeader(http.StatusNotFound)
+			rec.WriteHeader(http.StatusNotFound)
 		default:
-			w.WriteHeader(http.StatusInternalServerError)
+			rec.WriteHeader(http.StatusInternalServerError)
 		}
 		return
 	}
 
-	w.Header().Set("Content-Type", meta.ContentType)
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", meta.Size))
-	w.Header().Set("ETag", meta.ETag)
-	w.Header().Set("Last-Modified", meta.LastModified.Format(http.TimeFormat))
+	rec.Header().Set("Content-Type", meta.ContentType)
+	rec.Header().Set("Content-Length", fmt.Sprintf("%d", meta.Size))
+	rec.Header().Set("ETag", meta.ETag)
+	rec.Header().Set("Last-Modified", meta.LastModified.Format(http.TimeFormat))
 
 	for k, v := range meta.Metadata {
-		w.Header().Set(k, v)
+		rec.Header().Set(k, v)
 	}
 
-	w.WriteHeader(http.StatusOK)
+	rec.WriteHeader(http.StatusOK)
 }
 
 // handleAuthError writes the appropriate error response for auth errors.
