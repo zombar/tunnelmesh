@@ -894,3 +894,53 @@ func TestServerMetrics(t *testing.T) {
 		})
 	}
 }
+
+func TestMetricsOnCorrectRegistry(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics, _ := newTestMetrics(t)
+	reg.MustRegister(metrics.RequestsTotal)
+
+	metrics.RecordRequest("GetObject", "success", 0.1)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	found := false
+	for _, f := range families {
+		if f.GetName() == "tunnelmesh_s3_requests_total" {
+			found = true
+		}
+	}
+	assert.True(t, found, "S3 request metrics should be on the custom registry")
+}
+
+func TestSetMetricsWiresIntoServer(t *testing.T) {
+	store := newTestStoreWithCASForServer(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "b", "alice", 2, nil))
+	auth := &mockAuthorizer{userID: "alice", allowAll: true}
+
+	// Create server without metrics
+	server := NewServer(store, auth, nil)
+
+	// Make a request — should work without metrics (no panic)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Now wire in metrics via SetMetrics
+	metrics, reg := newTestMetrics(t)
+	server.SetMetrics(metrics)
+
+	// Make another request — should now record metrics
+	req = httptest.NewRequest(http.MethodHead, "/b", nil)
+	w = httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	count := getMetricCount(families, "tunnelmesh_s3_requests_total", "HeadBucket", "success")
+	assert.Equal(t, 1.0, count, "HeadBucket metric should be recorded after SetMetrics")
+}

@@ -1,12 +1,19 @@
 package s3
 
 import (
+	"sync"
+	"sync/atomic"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// s3MetricsInstance is the singleton instance of S3 metrics.
-var s3MetricsInstance *S3Metrics
+// s3MetricsOnce prevents double-registration panics from promauto.
+var s3MetricsOnce sync.Once
+
+// s3MetricsPtr is the singleton instance of S3 metrics, accessed atomically
+// for safe concurrent reads from background goroutines.
+var s3MetricsPtr atomic.Pointer[S3Metrics]
 
 // S3Metrics holds all Prometheus metrics for the S3 service.
 type S3Metrics struct {
@@ -49,141 +56,145 @@ type S3Metrics struct {
 }
 
 // InitS3Metrics initializes all S3 metrics on the given registry.
-// The registry must not be nil. Metrics are registered and the singleton is
-// updated so that GetS3Metrics() returns the new instance.
+// Must be called exactly once with the correct registry (enforced by sync.Once).
+// The instance is stored atomically for safe concurrent reads via GetS3Metrics().
 func InitS3Metrics(registry prometheus.Registerer) *S3Metrics {
 	if registry == nil {
 		registry = prometheus.DefaultRegisterer
 	}
-	s3MetricsInstance = &S3Metrics{
-		RequestsTotal: promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
-			Name: "tunnelmesh_s3_requests_total",
-			Help: "Total S3 requests by operation and status",
-		}, []string{"operation", "status"}),
+	s3MetricsOnce.Do(func() {
+		m := &S3Metrics{
+			RequestsTotal: promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_requests_total",
+				Help: "Total S3 requests by operation and status",
+			}, []string{"operation", "status"}),
 
-		RequestDuration: promauto.With(registry).NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "tunnelmesh_s3_request_duration_seconds",
-			Help:    "S3 request duration in seconds",
-			Buckets: prometheus.DefBuckets,
-		}, []string{"operation"}),
+			RequestDuration: promauto.With(registry).NewHistogramVec(prometheus.HistogramOpts{
+				Name:    "tunnelmesh_s3_request_duration_seconds",
+				Help:    "S3 request duration in seconds",
+				Buckets: prometheus.DefBuckets,
+			}, []string{"operation"}),
 
-		BytesUploaded: promauto.With(registry).NewCounter(prometheus.CounterOpts{
-			Name: "tunnelmesh_s3_bytes_uploaded_total",
-			Help: "Total bytes uploaded to S3",
-		}),
+			BytesUploaded: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_bytes_uploaded_total",
+				Help: "Total bytes uploaded to S3",
+			}),
 
-		BytesDownloaded: promauto.With(registry).NewCounter(prometheus.CounterOpts{
-			Name: "tunnelmesh_s3_bytes_downloaded_total",
-			Help: "Total bytes downloaded from S3",
-		}),
+			BytesDownloaded: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_bytes_downloaded_total",
+				Help: "Total bytes downloaded from S3",
+			}),
 
-		BucketsTotal: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_buckets_total",
-			Help: "Total number of S3 buckets",
-		}),
+			BucketsTotal: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_buckets_total",
+				Help: "Total number of S3 buckets",
+			}),
 
-		ObjectsTotal: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_objects_total",
-			Help: "Total number of S3 objects",
-		}),
+			ObjectsTotal: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_objects_total",
+				Help: "Total number of S3 objects",
+			}),
 
-		StorageBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_storage_bytes",
-			Help: "Total bytes stored in S3",
-		}),
+			StorageBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_storage_bytes",
+				Help: "Total bytes stored in S3",
+			}),
 
-		QuotaBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_quota_bytes",
-			Help: "S3 storage quota in bytes (0 = unlimited)",
-		}),
+			QuotaBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_quota_bytes",
+				Help: "S3 storage quota in bytes (0 = unlimited)",
+			}),
 
-		QuotaUsedPct: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_quota_used_percent",
-			Help: "Percentage of S3 quota used",
-		}),
+			QuotaUsedPct: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_quota_used_percent",
+				Help: "Percentage of S3 quota used",
+			}),
 
-		RegisteredUsers: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_registered_users",
-			Help: "Number of registered S3 users",
-		}),
+			RegisteredUsers: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_registered_users",
+				Help: "Number of registered S3 users",
+			}),
 
-		// CAS/Chunking metrics
-		ChunksTotal: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_chunks_total",
-			Help: "Total number of content-addressed chunks",
-		}),
+			// CAS/Chunking metrics
+			ChunksTotal: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_chunks_total",
+				Help: "Total number of content-addressed chunks",
+			}),
 
-		ChunkStorageBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_chunk_storage_bytes",
-			Help: "Actual bytes stored in chunks (after deduplication)",
-		}),
+			ChunkStorageBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_chunk_storage_bytes",
+				Help: "Actual bytes stored in chunks (after deduplication)",
+			}),
 
-		LogicalBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_logical_bytes",
-			Help: "Logical bytes stored (before deduplication)",
-		}),
+			LogicalBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_logical_bytes",
+				Help: "Logical bytes stored (before deduplication)",
+			}),
 
-		DedupRatio: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_dedup_ratio",
-			Help: "Deduplication ratio (logical/physical bytes, >1 means space savings)",
-		}),
+			DedupRatio: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_dedup_ratio",
+				Help: "Deduplication ratio (logical/physical bytes, >1 means space savings)",
+			}),
 
-		VersionsTotal: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_versions_total",
-			Help: "Total number of object versions",
-		}),
+			VersionsTotal: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_versions_total",
+				Help: "Total number of object versions",
+			}),
 
-		// GC metrics
-		GCRunsTotal: promauto.With(registry).NewCounter(prometheus.CounterOpts{
-			Name: "tunnelmesh_s3_gc_runs_total",
-			Help: "Total number of garbage collection runs",
-		}),
+			// GC metrics
+			GCRunsTotal: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_gc_runs_total",
+				Help: "Total number of garbage collection runs",
+			}),
 
-		GCVersionsPruned: promauto.With(registry).NewCounter(prometheus.CounterOpts{
-			Name: "tunnelmesh_s3_gc_versions_pruned_total",
-			Help: "Total number of versions pruned by garbage collection",
-		}),
+			GCVersionsPruned: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_gc_versions_pruned_total",
+				Help: "Total number of versions pruned by garbage collection",
+			}),
 
-		GCChunksDeleted: promauto.With(registry).NewCounter(prometheus.CounterOpts{
-			Name: "tunnelmesh_s3_gc_chunks_deleted_total",
-			Help: "Total number of orphaned chunks deleted by garbage collection",
-		}),
+			GCChunksDeleted: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_gc_chunks_deleted_total",
+				Help: "Total number of orphaned chunks deleted by garbage collection",
+			}),
 
-		GCBytesReclaimed: promauto.With(registry).NewCounter(prometheus.CounterOpts{
-			Name: "tunnelmesh_s3_gc_bytes_reclaimed_total",
-			Help: "Total bytes reclaimed by garbage collection",
-		}),
+			GCBytesReclaimed: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_gc_bytes_reclaimed_total",
+				Help: "Total bytes reclaimed by garbage collection",
+			}),
 
-		GCDurationSeconds: promauto.With(registry).NewHistogram(prometheus.HistogramOpts{
-			Name:    "tunnelmesh_s3_gc_duration_seconds",
-			Help:    "Garbage collection duration in seconds",
-			Buckets: []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120},
-		}),
+			GCDurationSeconds: promauto.With(registry).NewHistogram(prometheus.HistogramOpts{
+				Name:    "tunnelmesh_s3_gc_duration_seconds",
+				Help:    "Garbage collection duration in seconds",
+				Buckets: []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120},
+			}),
 
-		// Volume metrics
-		VolumeTotalBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_volume_total_bytes",
-			Help: "Total filesystem capacity in bytes",
-		}),
+			// Volume metrics
+			VolumeTotalBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_volume_total_bytes",
+				Help: "Total filesystem capacity in bytes",
+			}),
 
-		VolumeUsedBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_volume_used_bytes",
-			Help: "Used filesystem space in bytes",
-		}),
+			VolumeUsedBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_volume_used_bytes",
+				Help: "Used filesystem space in bytes",
+			}),
 
-		VolumeAvailableBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Name: "tunnelmesh_s3_volume_available_bytes",
-			Help: "Available filesystem space in bytes (non-root)",
-		}),
-	}
+			VolumeAvailableBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_volume_available_bytes",
+				Help: "Available filesystem space in bytes (non-root)",
+			}),
+		}
+		s3MetricsPtr.Store(m)
+	})
 
-	return s3MetricsInstance
+	return s3MetricsPtr.Load()
 }
 
 // GetS3Metrics returns the singleton S3 metrics instance.
 // Returns nil if metrics have not been initialized.
+// Safe for concurrent use from multiple goroutines.
 func GetS3Metrics() *S3Metrics {
-	return s3MetricsInstance
+	return s3MetricsPtr.Load()
 }
 
 // RecordRequest records a request metric.

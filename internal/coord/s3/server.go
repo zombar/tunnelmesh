@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -80,13 +81,14 @@ func classifyS3StatusWithError(httpStatus int, err error) string {
 // The handler function receives a statusRecorder as its http.ResponseWriter,
 // and metrics are automatically recorded when the handler returns.
 func (s *Server) withMetrics(w http.ResponseWriter, operation string, fn func(http.ResponseWriter)) {
+	m := s.metrics.Load()
 	startTime := time.Now()
 	rec := &statusRecorder{ResponseWriter: w}
 	defer func() {
-		if s.metrics != nil {
+		if m != nil {
 			duration := time.Since(startTime).Seconds()
 			status := classifyS3Status(rec.getStatus())
-			s.metrics.RecordRequest(operation, status, duration)
+			m.RecordRequest(operation, status, duration)
 		}
 	}()
 	fn(rec)
@@ -105,7 +107,7 @@ type RequestForwarder interface {
 type Server struct {
 	store      *Store
 	authorizer Authorizer
-	metrics    *S3Metrics
+	metrics    atomic.Pointer[S3Metrics]
 	recoverer  BucketRecoverer
 	forwarder  RequestForwarder
 }
@@ -138,19 +140,23 @@ func (s *Server) SetRequestForwarder(f RequestForwarder) {
 	s.forwarder = f
 }
 
-// SetMetrics sets or replaces the metrics instance on the server.
+// SetMetrics atomically sets or replaces the metrics instance on the server.
+// Safe to call while HTTP handlers are running.
 func (s *Server) SetMetrics(m *S3Metrics) {
-	s.metrics = m
+	s.metrics.Store(m)
 }
 
 // NewServer creates a new S3 server.
-// If metrics is nil, metrics will not be recorded.
+// If metrics is nil, metrics will not be recorded until SetMetrics is called.
 func NewServer(store *Store, authorizer Authorizer, metrics *S3Metrics) *Server {
-	return &Server{
+	srv := &Server{
 		store:      store,
 		authorizer: authorizer,
-		metrics:    metrics,
 	}
+	if metrics != nil {
+		srv.metrics.Store(metrics)
+	}
+	return srv
 }
 
 // Handler returns the HTTP handler for S3 requests.
@@ -482,15 +488,16 @@ func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket st
 
 // getObject handles GET /{bucket}/{key}.
 func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	m := s.metrics.Load()
 	startTime := time.Now()
 	rec := &statusRecorder{ResponseWriter: w}
 	var storeErr error // Capture error for metrics classification
 	var forwarded bool
 	defer func() {
-		if s.metrics != nil && !forwarded {
+		if m != nil && !forwarded {
 			duration := time.Since(startTime).Seconds()
 			status := classifyS3StatusWithError(rec.getStatus(), storeErr)
-			s.metrics.RecordRequest("GetObject", status, duration)
+			m.RecordRequest("GetObject", status, duration)
 		}
 	}()
 
@@ -537,21 +544,22 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key s
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to stream object")
 	}
-	if s.metrics != nil && n > 0 {
-		s.metrics.RecordDownload(n)
+	if m != nil && n > 0 {
+		m.RecordDownload(n)
 	}
 }
 
 // putObject handles PUT /{bucket}/{key}.
 func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	m := s.metrics.Load()
 	startTime := time.Now()
 	rec := &statusRecorder{ResponseWriter: w}
 	var storeErr error // Capture error for metrics classification
 	defer func() {
-		if s.metrics != nil {
+		if m != nil {
 			duration := time.Since(startTime).Seconds()
 			status := classifyS3StatusWithError(rec.getStatus(), storeErr)
-			s.metrics.RecordRequest("PutObject", status, duration)
+			m.RecordRequest("PutObject", status, duration)
 		}
 	}()
 
@@ -596,8 +604,8 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 	rec.Header().Set("ETag", meta.ETag)
 	rec.WriteHeader(http.StatusOK)
 
-	if s.metrics != nil && meta.Size > 0 {
-		s.metrics.RecordUpload(meta.Size)
+	if m != nil && meta.Size > 0 {
+		m.RecordUpload(meta.Size)
 	}
 }
 
@@ -629,14 +637,15 @@ func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request, bucket, ke
 
 // headObject handles HEAD /{bucket}/{key}.
 func (s *Server) headObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	m := s.metrics.Load()
 	startTime := time.Now()
 	rec := &statusRecorder{ResponseWriter: w}
 	var forwarded bool
 	defer func() {
-		if s.metrics != nil && !forwarded {
+		if m != nil && !forwarded {
 			duration := time.Since(startTime).Seconds()
 			status := classifyS3Status(rec.getStatus())
-			s.metrics.RecordRequest("HeadObject", status, duration)
+			m.RecordRequest("HeadObject", status, duration)
 		}
 	}()
 
