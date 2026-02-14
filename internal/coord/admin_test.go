@@ -1394,3 +1394,106 @@ func TestForwardS3Request_ProxyHeaders(t *testing.T) {
 	assert.Equal(t, "true", receivedReq.Header.Get("X-TunnelMesh-Forwarded"))
 	assert.Equal(t, http.MethodPut, receivedReq.Method)
 }
+
+func TestS3GC_MethodNotAllowed(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/gc", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestS3GC_PurgeAllTombstoned(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Create and tombstone objects
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "a.txt", bytes.NewReader([]byte("aaa")), 3, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = srv.s3Store.PutObject(context.Background(), "test-bucket", "b.txt", bytes.NewReader([]byte("bbb")), 3, "text/plain", nil)
+	require.NoError(t, err)
+
+	err = srv.s3Store.TombstoneObject(context.Background(), "test-bucket", "a.txt")
+	require.NoError(t, err)
+	err = srv.s3Store.TombstoneObject(context.Background(), "test-bucket", "b.txt")
+	require.NoError(t, err)
+
+	// Trigger GC with purge_all_tombstoned
+	body := bytes.NewReader([]byte(`{"purge_all_tombstoned": true}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/s3/gc", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var result map[string]interface{}
+	err = json.NewDecoder(rec.Body).Decode(&result)
+	require.NoError(t, err)
+
+	// Should have purged both tombstoned objects
+	assert.Equal(t, float64(2), result["tombstoned_purged"])
+	assert.Contains(t, result, "versions_pruned")
+	assert.Contains(t, result, "chunks_deleted")
+	assert.Contains(t, result, "bytes_reclaimed")
+}
+
+func TestS3GC_WithoutPurgeAll(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Create and tombstone an object (recently, so retention won't expire it)
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "recent.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+	require.NoError(t, err)
+	err = srv.s3Store.TombstoneObject(context.Background(), "test-bucket", "recent.txt")
+	require.NoError(t, err)
+
+	// Set retention to 90 days — recent tombstone should NOT be purged
+	srv.s3Store.SetTombstoneRetentionDays(90)
+
+	body := bytes.NewReader([]byte(`{}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/s3/gc", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var result map[string]interface{}
+	err = json.NewDecoder(rec.Body).Decode(&result)
+	require.NoError(t, err)
+
+	// Recent tombstone should not have been purged
+	assert.Equal(t, float64(0), result["tombstoned_purged"])
+}
+
+func TestS3GC_EmptyBody(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// POST with no body should work (defaults to no purge_all)
+	req := httptest.NewRequest(http.MethodPost, "/api/s3/gc", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var result map[string]interface{}
+	err := json.NewDecoder(rec.Body).Decode(&result)
+	require.NoError(t, err)
+	assert.Contains(t, result, "tombstoned_purged")
+}
+
+func TestS3GC_ConcurrentReturns429(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Hold the GC lock to simulate an in-progress GC
+	srv.gcMu.Lock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/s3/gc", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	srv.gcMu.Unlock()
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+}

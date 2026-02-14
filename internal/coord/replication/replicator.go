@@ -1362,10 +1362,16 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 		default:
 		}
 
-		// Read chunk data from local CAS
+		// Read chunk data from local CAS. If the chunk was cleaned up by a
+		// concurrent CleanupNonAssignedChunks (e.g. another object shares this
+		// chunk hash via CAS dedup), fall back to fetching from a peer.
 		chunkData, err := r.s3.ReadChunk(ctx, chunkHash)
 		if err != nil {
-			return fmt.Errorf("read chunk %s: %w", chunkHash, err)
+			localErr := err
+			chunkData, err = r.fetchChunkFromPeers(ctx, chunkHash)
+			if err != nil {
+				return fmt.Errorf("read chunk %s: local: %w, peers: %w", chunkHash, localErr, err)
+			}
 		}
 
 		// Get chunk metadata
@@ -1436,6 +1442,42 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 		Msg("Completed chunk-level replication with metadata")
 
 	return nil
+}
+
+// fetchChunkFromPeers tries to fetch a chunk from any available peer.
+// Used as a fallback when a chunk has been cleaned up locally by a concurrent
+// CleanupNonAssignedChunks from another object's replication.
+func (r *Replicator) fetchChunkFromPeers(ctx context.Context, chunkHash string) ([]byte, error) {
+	peers := r.GetPeers()
+	if len(peers) == 0 {
+		return nil, fmt.Errorf("chunk not found locally and no peers available")
+	}
+
+	r.logger.Debug().
+		Str("chunk", truncateHashForLog(chunkHash)).
+		Int("peers", len(peers)).
+		Msg("Chunk not found locally during replication, fetching from peers")
+
+	var lastErr error
+	for _, peerID := range peers {
+		data, err := r.FetchChunk(ctx, peerID, chunkHash)
+		if err != nil {
+			r.logger.Debug().Err(err).
+				Str("peer", peerID).
+				Str("chunk", truncateHashForLog(chunkHash)).
+				Msg("Peer chunk fetch failed, trying next")
+			lastErr = err
+			continue
+		}
+		// Cache locally for future reads
+		if werr := r.s3.WriteChunkDirect(ctx, chunkHash, data); werr != nil {
+			r.logger.Warn().Err(werr).
+				Str("chunk", truncateHashForLog(chunkHash)).
+				Msg("Failed to cache remotely-fetched chunk locally")
+		}
+		return data, nil
+	}
+	return nil, fmt.Errorf("chunk %s not found on any peer: %w", chunkHash, lastErr)
 }
 
 // sendReplicateChunk sends a chunk replication message and waits for ACK.
