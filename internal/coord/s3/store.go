@@ -42,6 +42,13 @@ const MaxErasureCodingFileSize = 100 * 1024 * 1024 // 100 MB
 // chunk fetching loops (~400KB at average chunk size of 4KB).
 const contextCheckInterval = 100
 
+// windowsFileRetries is the number of retry attempts for file operations on Windows,
+// where antivirus or search indexer may transiently hold file handles.
+const windowsFileRetries = 5
+
+// windowsFileRetryDelay is the delay between file operation retries on Windows.
+const windowsFileRetryDelay = 50 * time.Millisecond
+
 // ErasureCodingPolicy defines the erasure coding configuration for a bucket.
 type ErasureCodingPolicy struct {
 	Enabled      bool `json:"enabled"`       // Whether erasure coding is enabled for new objects
@@ -578,7 +585,7 @@ func (s *Store) DeleteBucket(ctx context.Context, bucket string) error {
 	var removeErr error
 	retries := 1
 	if runtime.GOOS == "windows" {
-		retries = 5
+		retries = windowsFileRetries
 	}
 	for i := 0; i < retries; i++ {
 		removeErr = os.RemoveAll(bucketDir)
@@ -586,7 +593,7 @@ func (s *Store) DeleteBucket(ctx context.Context, bucket string) error {
 			return nil
 		}
 		if i < retries-1 {
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(windowsFileRetryDelay)
 		}
 	}
 	return fmt.Errorf("remove bucket: %w", removeErr)
@@ -1865,14 +1872,17 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 	metaPath := s.objectMetaPath(bucket, key)
 	retries := 1
 	if runtime.GOOS == "windows" {
-		retries = 5
+		retries = windowsFileRetries
 	}
 	for i := 0; i < retries; i++ {
-		if err := os.Remove(metaPath); err == nil || os.IsNotExist(err) {
+		if removeErr := os.Remove(metaPath); removeErr == nil || os.IsNotExist(removeErr) {
 			break
-		}
-		if i < retries-1 {
-			time.Sleep(50 * time.Millisecond)
+		} else if i < retries-1 {
+			s.logger.Warn().Err(removeErr).
+				Str("path", metaPath).
+				Int("attempt", i+1).
+				Msg("Failed to remove object metadata, retrying")
+			time.Sleep(windowsFileRetryDelay)
 		}
 	}
 
