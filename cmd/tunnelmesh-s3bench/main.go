@@ -336,7 +336,7 @@ func runScenario(cmd *cobra.Command, args []string) error {
 
 		// If we didn't get a prefix from creation (all already existed), derive from peer name
 		if sharePrefix == "" {
-			sharePrefix = "s3bench"
+			sharePrefix = meshInfo.PeerName
 		}
 	}
 
