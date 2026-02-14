@@ -138,6 +138,11 @@ func (s *Server) SetRequestForwarder(f RequestForwarder) {
 	s.forwarder = f
 }
 
+// SetMetrics sets or replaces the metrics instance on the server.
+func (s *Server) SetMetrics(m *S3Metrics) {
+	s.metrics = m
+}
+
 // NewServer creates a new S3 server.
 // If metrics is nil, metrics will not be recorded.
 func NewServer(store *Store, authorizer Authorizer, metrics *S3Metrics) *Server {

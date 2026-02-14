@@ -1113,12 +1113,9 @@ func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) erro
 	// Create RBAC authorizer for S3
 	rbacAuth := s3.NewRBACAuthorizer(s.s3Credentials, s.s3Authorizer)
 
-	// Initialize S3 metrics with the same registry as coordinator metrics
-	// Will use default registry if metricsRegistry is nil (standalone coordinator)
-	s3Metrics := s3.InitS3Metrics(s.metricsRegistry)
-
-	// Create S3 server
-	s.s3Server = s3.NewServer(store, rbacAuth, s3Metrics)
+	// Create S3 server (metrics are initialized later in SetMetricsRegistry
+	// when the correct Prometheus registry is available)
+	s.s3Server = s3.NewServer(store, rbacAuth, nil)
 
 	// Create system store for internal coordinator data
 	// Use a service peer ID for the coordinator
@@ -2312,6 +2309,15 @@ func (s *Server) broadcastCoordinatorList() {
 func (s *Server) SetMetricsRegistry(registry prometheus.Registerer) {
 	s.metricsRegistry = registry
 	s.coordMetrics = InitCoordMetrics(registry)
+
+	// Initialize S3 metrics on the correct registry and wire into the S3 server.
+	// This must happen here (not in initS3Storage) because the registry is not
+	// available during server construction.
+	s3Metrics := s3.InitS3Metrics(registry)
+	if s.s3Server != nil {
+		s.s3Server.SetMetrics(s3Metrics)
+	}
+
 	log.Debug().Msg("coordinator metrics initialized")
 }
 
