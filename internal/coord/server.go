@@ -927,10 +927,12 @@ func (s *Server) updateS3Metrics() {
 	if err != nil {
 		return
 	}
-	var storageBytes int64
-	for _, b := range buckets {
-		storageBytes += b.SizeBytes
-	}
+
+	// Use physical chunk bytes (post-dedup) as the headline storage metric.
+	// NOTE: This is intentionally the same value as tunnelmesh_s3_chunk_storage_bytes
+	// (set by UpdateCASMetrics above). storage_bytes is the headline/dashboard metric;
+	// chunk_storage_bytes lives in the CAS namespace for dedup analysis.
+	storageBytes := casStats.ChunkBytes
 
 	var quotaBytes int64
 	if qs := s.s3Store.QuotaStats(); qs != nil {
