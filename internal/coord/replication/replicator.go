@@ -1462,6 +1462,10 @@ func (r *Replicator) fetchChunkFromPeers(ctx context.Context, chunkHash string) 
 	for _, peerID := range peers {
 		data, err := r.FetchChunk(ctx, peerID, chunkHash)
 		if err != nil {
+			r.logger.Debug().Err(err).
+				Str("peer", peerID).
+				Str("chunk", truncateHashForLog(chunkHash)).
+				Msg("Peer chunk fetch failed, trying next")
 			lastErr = err
 			continue
 		}
