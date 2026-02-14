@@ -1459,6 +1459,7 @@ func TestCoordMeshIPs_CallbackAndGetter(t *testing.T) {
 	cfg := newTestConfig(t)
 	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	defer func() { _ = srv.Shutdown(context.Background()) }()
 
 	// Initially empty
 	assert.Empty(t, srv.GetCoordMeshIPs())

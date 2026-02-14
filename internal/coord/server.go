@@ -1594,7 +1594,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 		// Persist coordinator IPs to system store (replicated to all coordinators)
 		if s.s3SystemStore != nil {
+			s.wg.Add(1)
 			go func() {
+				defer s.wg.Done()
 				coordIPs := s.GetCoordMeshIPs()
 				if err := s.s3SystemStore.SaveCoordinatorIPs(context.Background(), coordIPs); err != nil {
 					log.Warn().Err(err).Msg("failed to persist coordinator IPs")
@@ -2113,7 +2115,9 @@ func (s *Server) SetCoordMeshIP(ip string) {
 
 	// Persist coordinator IPs to system store (replicated to all coordinators)
 	if s.s3SystemStore != nil {
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			if err := s.s3SystemStore.SaveCoordinatorIPs(context.Background(), ips); err != nil {
 				log.Warn().Err(err).Msg("failed to persist coordinator IPs")
 			}
