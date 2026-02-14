@@ -8,7 +8,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -130,9 +129,8 @@ func TestErasureCodingReadPath_Reconstruction(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, data, got, "reconstructed data should match original with %d missing shards", missing)
 
-			// Wait briefly for background caching goroutine to complete
-			// (it writes reconstructed chunks to CAS asynchronously)
-			time.Sleep(200 * time.Millisecond)
+			// Wait for background caching goroutine to complete
+			store.WaitBackground()
 		})
 	}
 }
@@ -248,7 +246,7 @@ func TestErasureCodingReadPath_ParityOnlyReconstruction(t *testing.T) {
 	assert.Equal(t, data, got, "should reconstruct from parity shards alone")
 
 	// Wait for background caching goroutine
-	time.Sleep(200 * time.Millisecond)
+	store.WaitBackground()
 }
 
 // TestErasureCodingReadPath_MixedShardReconstruction tests reconstruction with
@@ -286,7 +284,7 @@ func TestErasureCodingReadPath_MixedShardReconstruction(t *testing.T) {
 	assert.Equal(t, data, got, "should reconstruct with mixed available shards")
 
 	// Wait for background caching goroutine
-	time.Sleep(200 * time.Millisecond)
+	store.WaitBackground()
 }
 
 // TestErasureCodingReadPath_MetadataIntegrity verifies that erasure coding metadata
@@ -528,7 +526,7 @@ func TestErasureCodingReadPath_DistributedFetchFallbackToReconstruction(t *testi
 	assert.Equal(t, data, got, "should reconstruct via RS after failed distributed fetch")
 
 	// Wait for background caching goroutine
-	time.Sleep(200 * time.Millisecond)
+	store.WaitBackground()
 }
 
 // TestErasureCodingReadPath_NoDistributedWithoutReplicator tests that without
@@ -575,7 +573,7 @@ func TestErasureCodingReadPath_NoDistributedWithoutReplicator(t *testing.T) {
 	assert.Equal(t, data, got, "should reconstruct via RS without distributed fetch capability")
 
 	// Wait for background caching goroutine
-	time.Sleep(200 * time.Millisecond)
+	store.WaitBackground()
 }
 
 // TestErasureCodingReadPath_DistributedFetchHashMismatch tests that corrupt chunks
@@ -630,5 +628,5 @@ func TestErasureCodingReadPath_DistributedFetchHashMismatch(t *testing.T) {
 	assert.Equal(t, data, got, "should reconstruct via RS after rejecting corrupt remote chunks")
 
 	// Wait for background caching goroutine
-	time.Sleep(200 * time.Millisecond)
+	store.WaitBackground()
 }
