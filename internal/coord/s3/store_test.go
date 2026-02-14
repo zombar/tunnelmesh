@@ -2278,3 +2278,69 @@ func TestStore_VolumeStats(t *testing.T) {
 	assert.GreaterOrEqual(t, used, int64(0), "used should be non-negative")
 	assert.Greater(t, available, int64(0), "available should be positive")
 }
+
+func TestGetCASStats_LogicalBytesUsesChunkMetadata(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Put two identical objects (same content = dedup opportunity)
+	content := []byte("deduplicated content for stats test")
+	_, err := store.PutObject(ctx, "test-bucket", "file1.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+	_, err = store.PutObject(ctx, "test-bucket", "file2.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	stats := store.GetCASStats()
+
+	assert.Equal(t, 2, stats.ObjectCount, "should have 2 objects")
+	assert.Greater(t, stats.ChunkBytes, int64(0), "should have chunk bytes on disk")
+	assert.Greater(t, stats.LogicalBytes, int64(0), "should have logical bytes")
+	// LogicalBytes should be >= ChunkBytes (dedup means physical <= logical)
+	assert.GreaterOrEqual(t, stats.LogicalBytes, stats.ChunkBytes,
+		"logical bytes (%d) should be >= chunk bytes (%d) — dedup should reduce physical storage",
+		stats.LogicalBytes, stats.ChunkBytes)
+}
+
+func TestGetCASStats_LogicalBytesFallbackForLegacyObjects(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Put an object normally to get its metadata file path
+	content := []byte("legacy test content")
+	_, err := store.PutObject(ctx, "test-bucket", "legacy.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Simulate a legacy object by stripping ChunkMetadata from the stored meta
+	metaDir := filepath.Join(store.DataDir(), "buckets", "test-bucket", "meta")
+	err = filepath.Walk(metaDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		var meta ObjectMeta
+		if jsonErr := json.Unmarshal(data, &meta); jsonErr != nil {
+			return jsonErr
+		}
+		meta.ChunkMetadata = nil // Simulate legacy object with no chunk metadata
+		updated, jsonErr := json.Marshal(meta)
+		if jsonErr != nil {
+			return jsonErr
+		}
+		return os.WriteFile(path, updated, 0o644)
+	})
+	require.NoError(t, err)
+
+	stats := store.GetCASStats()
+
+	assert.Equal(t, 1, stats.ObjectCount)
+	// Should fall back to meta.Size for legacy objects
+	assert.Equal(t, int64(len(content)), stats.LogicalBytes,
+		"legacy objects without ChunkMetadata should use meta.Size as fallback")
+}

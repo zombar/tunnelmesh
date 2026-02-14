@@ -2735,7 +2735,15 @@ func (s *Store) GetCASStats() CASStats {
 			}
 			var meta ObjectMeta
 			if json.Unmarshal(data, &meta) == nil {
-				stats.LogicalBytes += meta.Size
+				if len(meta.ChunkMetadata) > 0 {
+					for _, chunkHash := range meta.Chunks {
+						if cm, ok := meta.ChunkMetadata[chunkHash]; ok {
+							stats.LogicalBytes += cm.Size
+						}
+					}
+				} else {
+					stats.LogicalBytes += meta.Size
+				}
 			}
 			return nil
 		})
