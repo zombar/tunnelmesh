@@ -76,13 +76,13 @@ func classifyS3StatusWithError(httpStatus int, err error) string {
 	return classifyS3Status(httpStatus)
 }
 
-// WriteForwarder can forward S3 write requests to the correct primary coordinator.
-type WriteForwarder interface {
-	// ForwardS3Write forwards the request if this coordinator is not the primary
+// RequestForwarder can forward S3 requests to the correct primary coordinator.
+type RequestForwarder interface {
+	// ForwardS3Request forwards the request if this coordinator is not the primary
 	// for the given bucket/key. The port parameter specifies the target port on the
 	// remote coordinator (e.g. "9000" for S3 API, "" for default HTTPS 443).
 	// Returns true if the request was forwarded.
-	ForwardS3Write(w http.ResponseWriter, r *http.Request, bucket, key, port string) (forwarded bool)
+	ForwardS3Request(w http.ResponseWriter, r *http.Request, bucket, key, port string) (forwarded bool)
 }
 
 // Server provides an S3-compatible HTTP interface.
@@ -91,7 +91,7 @@ type Server struct {
 	authorizer Authorizer
 	metrics    *S3Metrics
 	recoverer  BucketRecoverer
-	forwarder  WriteForwarder
+	forwarder  RequestForwarder
 }
 
 // Authorizer is the interface for checking S3 permissions.
@@ -117,8 +117,8 @@ func (s *Server) SetBucketRecoverer(r BucketRecoverer) {
 	s.recoverer = r
 }
 
-// SetWriteForwarder sets the write forwarder for distributing writes across coordinators.
-func (s *Server) SetWriteForwarder(f WriteForwarder) {
+// SetRequestForwarder sets the request forwarder for distributing requests across coordinators.
+func (s *Server) SetRequestForwarder(f RequestForwarder) {
 	s.forwarder = f
 }
 
@@ -237,6 +237,14 @@ func (s *Server) handleBucket(w http.ResponseWriter, r *http.Request, bucket str
 
 // handleObject handles object-level operations.
 func (s *Server) handleObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	// Forward writes and deletes proactively to primary coordinator.
+	// Reads try local first, then forward on miss (inside getObject/headObject).
+	if (r.Method == http.MethodPut || r.Method == http.MethodDelete) && s.forwarder != nil {
+		if s.forwarder.ForwardS3Request(w, r, bucket, key, "9000") {
+			return
+		}
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		s.getObject(w, r, bucket, key)
@@ -460,6 +468,12 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key s
 
 	reader, meta, err := s.store.GetObject(r.Context(), bucket, key)
 	if err != nil {
+		// Try forwarding to primary if not found locally
+		if (errors.Is(err, ErrObjectNotFound) || errors.Is(err, ErrBucketNotFound)) && s.forwarder != nil {
+			if s.forwarder.ForwardS3Request(w, r, bucket, key, "9000") {
+				return
+			}
+		}
 		storeErr = err // Capture for metrics
 		switch {
 		case errors.Is(err, ErrBucketNotFound):
@@ -510,13 +524,6 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 	if err != nil {
 		s.handleAuthError(rec, err)
 		return
-	}
-
-	// Forward to primary coordinator if we're not the owner (S3 API on port 9000)
-	if s.forwarder != nil {
-		if s.forwarder.ForwardS3Write(w, r, bucket, key, "9000") {
-			return
-		}
 	}
 
 	contentType := r.Header.Get("Content-Type")
@@ -593,6 +600,12 @@ func (s *Server) headObject(w http.ResponseWriter, r *http.Request, bucket, key 
 
 	meta, err := s.store.HeadObject(r.Context(), bucket, key)
 	if err != nil {
+		// Try forwarding to primary if not found locally
+		if (errors.Is(err, ErrObjectNotFound) || errors.Is(err, ErrBucketNotFound)) && s.forwarder != nil {
+			if s.forwarder.ForwardS3Request(w, r, bucket, key, "9000") {
+				return
+			}
+		}
 		switch {
 		case errors.Is(err, ErrBucketNotFound):
 			w.WriteHeader(http.StatusNotFound)

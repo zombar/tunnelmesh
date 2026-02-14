@@ -2211,6 +2211,16 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 
 // handleS3Object handles GET/PUT/DELETE for a specific object.
 func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	// Forward writes and deletes proactively to primary coordinator.
+	// Reads try local first, then forward on miss (see handleS3GetObject/handleS3HeadObject).
+	if (r.Method == http.MethodPut || r.Method == http.MethodDelete) &&
+		r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+		if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
+			s.forwardS3Request(w, r, target, bucket)
+			return
+		}
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		// Check for versionId query param
@@ -2218,23 +2228,32 @@ func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, 
 		if versionID != "" {
 			s.handleS3GetObjectVersion(r.Context(), w, bucket, key, versionID)
 		} else {
-			s.handleS3GetObject(r.Context(), w, bucket, key)
+			s.handleS3GetObject(w, r, bucket, key)
 		}
 	case http.MethodPut:
 		s.handleS3PutObject(w, r, bucket, key)
 	case http.MethodDelete:
 		s.handleS3DeleteObject(w, r, bucket, key)
 	case http.MethodHead:
-		s.handleS3HeadObject(r.Context(), w, bucket, key)
+		s.handleS3HeadObject(w, r, bucket, key)
 	default:
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 // handleS3GetObject returns the object content.
-func (s *Server) handleS3GetObject(ctx context.Context, w http.ResponseWriter, bucket, key string) {
-	reader, meta, err := s.s3Store.GetObject(ctx, bucket, key)
+// Tries local storage first; forwards to primary coordinator on miss.
+func (s *Server) handleS3GetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	reader, meta, err := s.s3Store.GetObject(r.Context(), bucket, key)
 	if err != nil {
+		// Try forwarding to primary if not found locally
+		if (errors.Is(err, s3.ErrObjectNotFound) || errors.Is(err, s3.ErrBucketNotFound)) &&
+			r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+			if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
+				s.forwardS3Request(w, r, target, bucket)
+				return
+			}
+		}
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)
@@ -2301,14 +2320,6 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 		return
 	}
 
-	// Forward to primary coordinator if we're not the owner
-	if r.Header.Get("X-TunnelMesh-Forwarded") == "" {
-		if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
-			s.forwardS3Write(w, r, target)
-			return
-		}
-	}
-
 	contentType := r.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/octet-stream"
@@ -2323,6 +2334,21 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	if s.fileShareMgr != nil {
 		if err := s.fileShareMgr.EnsureBucketForShare(r.Context(), bucket); err != nil {
 			log.Warn().Err(err).Str("bucket", bucket).Msg("bucket recovery attempt failed")
+		}
+	}
+
+	// If this is a forwarded request and the bucket still doesn't exist, create it
+	// using the owner from the forwarding coordinator. This handles the race condition
+	// where share metadata hasn't been replicated yet.
+	if bucketOwner := r.Header.Get("X-TunnelMesh-Bucket-Owner"); bucketOwner != "" {
+		if _, err := s.s3Store.HeadBucket(r.Context(), bucket); err != nil {
+			if createErr := s.s3Store.CreateBucket(r.Context(), bucket, bucketOwner, 2, nil); createErr != nil {
+				if !errors.Is(createErr, s3.ErrBucketExists) {
+					log.Warn().Err(createErr).Str("bucket", bucket).Msg("auto-create bucket from forwarded header failed")
+				}
+			} else {
+				log.Info().Str("bucket", bucket).Str("owner", bucketOwner).Msg("auto-created bucket from forwarded write")
+			}
 		}
 	}
 
@@ -2464,9 +2490,18 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, r *http.Request, bu
 }
 
 // handleS3HeadObject returns object metadata.
-func (s *Server) handleS3HeadObject(ctx context.Context, w http.ResponseWriter, bucket, key string) {
-	meta, err := s.s3Store.HeadObject(ctx, bucket, key)
+// Tries local storage first; forwards to primary coordinator on miss.
+func (s *Server) handleS3HeadObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	meta, err := s.s3Store.HeadObject(r.Context(), bucket, key)
 	if err != nil {
+		// Try forwarding to primary if not found locally
+		if (errors.Is(err, s3.ErrBucketNotFound) || errors.Is(err, s3.ErrObjectNotFound)) &&
+			r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+			if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
+				s.forwardS3Request(w, r, target, bucket)
+				return
+			}
+		}
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound), errors.Is(err, s3.ErrObjectNotFound):
 			w.WriteHeader(http.StatusNotFound)
@@ -3015,24 +3050,35 @@ func (s *Server) objectPrimaryCoordinator(bucket, key string) string {
 	return primary
 }
 
-// forwardS3Write proxies an S3 write request to the target coordinator.
-func (s *Server) forwardS3Write(w http.ResponseWriter, r *http.Request, targetIP string) {
+// forwardS3Request proxies an S3 request to the target coordinator.
+// bucket is used to include the bucket owner in the forwarded request so the
+// target can create the bucket on-the-fly (avoids race with share replication).
+func (s *Server) forwardS3Request(w http.ResponseWriter, r *http.Request, targetIP, bucket string) {
+	// Look up bucket owner to include in forwarded request
+	var bucketOwner string
+	if meta, err := s.s3Store.HeadBucket(r.Context(), bucket); err == nil {
+		bucketOwner = meta.Owner
+	}
+
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "https"
 			req.URL.Host = targetIP
 			req.Host = targetIP
 			req.Header.Set("X-TunnelMesh-Forwarded", "true")
+			if bucketOwner != "" {
+				req.Header.Set("X-TunnelMesh-Bucket-Owner", bucketOwner)
+			}
 		},
 		Transport: s.s3ForwardTransport,
 	}
 	proxy.ServeHTTP(w, r)
 }
 
-// ForwardS3Write implements s3.WriteForwarder. It checks if the given bucket/key
+// ForwardS3Request implements s3.RequestForwarder. It checks if the given bucket/key
 // should be handled by a different coordinator and forwards the request if so.
 // The port parameter specifies the target port (e.g. "9000" for S3 API, "" for default 443).
-func (s *Server) ForwardS3Write(w http.ResponseWriter, r *http.Request, bucket, key, port string) bool {
+func (s *Server) ForwardS3Request(w http.ResponseWriter, r *http.Request, bucket, key, port string) bool {
 	if r.Header.Get("X-TunnelMesh-Forwarded") != "" {
 		return false
 	}
@@ -3043,6 +3089,6 @@ func (s *Server) ForwardS3Write(w http.ResponseWriter, r *http.Request, bucket, 
 	if port != "" {
 		target = net.JoinHostPort(target, port)
 	}
-	s.forwardS3Write(w, r, target)
+	s.forwardS3Request(w, r, target, bucket)
 	return true
 }

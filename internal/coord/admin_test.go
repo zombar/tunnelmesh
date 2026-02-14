@@ -1346,7 +1346,7 @@ func TestObjectPrimaryCoordinator_Self(t *testing.T) {
 	assert.Less(t, selfCount, 100, "self should not be primary for all keys")
 }
 
-func TestForwardS3Write_LoopPrevention(t *testing.T) {
+func TestForwardS3Request_LoopPrevention(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 	srv, err := NewServer(context.Background(), cfg)
@@ -1360,11 +1360,11 @@ func TestForwardS3Write_LoopPrevention(t *testing.T) {
 	req.Header.Set("X-TunnelMesh-Forwarded", "true")
 	rec := httptest.NewRecorder()
 
-	forwarded := srv.ForwardS3Write(rec, req, "b", "k", "")
+	forwarded := srv.ForwardS3Request(rec, req, "b", "k", "")
 	assert.False(t, forwarded, "forwarded requests should be handled locally")
 }
 
-func TestForwardS3Write_ProxyHeaders(t *testing.T) {
+func TestForwardS3Request_ProxyHeaders(t *testing.T) {
 	// Start a test server to receive the proxied request
 	var receivedReq *http.Request
 	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1388,7 +1388,7 @@ func TestForwardS3Write_ProxyHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/b/objects/k", bytes.NewReader([]byte("hello")))
 	rec := httptest.NewRecorder()
 
-	srv.forwardS3Write(rec, req, backendAddr)
+	srv.forwardS3Request(rec, req, backendAddr, "b")
 
 	require.NotNil(t, receivedReq, "backend should have received the request")
 	assert.Equal(t, "true", receivedReq.Header.Get("X-TunnelMesh-Forwarded"))
