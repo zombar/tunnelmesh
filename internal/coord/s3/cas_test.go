@@ -2,6 +2,8 @@ package s3
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -125,4 +127,102 @@ func TestCAS_WriteReadDeleteRoundTrip(t *testing.T) {
 	// Read should fail
 	_, err = cas.ReadChunk(ctx, hash)
 	assert.Error(t, err)
+}
+
+func TestCAS_WriteChunkDedup(t *testing.T) {
+	cas := newTestCAS(t)
+	ctx := context.Background()
+
+	data := []byte("dedup test data")
+
+	// First write creates the chunk
+	hash1, err := cas.WriteChunk(ctx, data)
+	require.NoError(t, err)
+
+	// Second write should hit the dedup fast path (file already exists)
+	hash2, err := cas.WriteChunk(ctx, data)
+	require.NoError(t, err)
+	assert.Equal(t, hash1, hash2)
+}
+
+func TestCAS_WriteChunkBadDir(t *testing.T) {
+	// Point CAS at a non-existent path to exercise the CreateTemp error path.
+	// We create the CAS normally, then remove the chunksDir out from under it.
+	masterKey := [32]byte{1, 2, 3}
+	tmpDir := t.TempDir()
+
+	cas, err := NewCAS(tmpDir, masterKey)
+	require.NoError(t, err)
+
+	// Remove the entire chunks directory and replace with a regular file
+	// so MkdirAll and CreateTemp both fail
+	require.NoError(t, os.RemoveAll(cas.chunksDir))
+	require.NoError(t, os.WriteFile(cas.chunksDir, []byte("not a dir"), 0644))
+
+	_, err = cas.WriteChunk(context.Background(), []byte("data"))
+	assert.Error(t, err)
+}
+
+func TestCAS_TotalSize(t *testing.T) {
+	cas := newTestCAS(t)
+	ctx := context.Background()
+
+	// Empty store
+	size, err := cas.TotalSize(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), size)
+
+	// Write some chunks
+	_, err = cas.WriteChunk(ctx, []byte("chunk one"))
+	require.NoError(t, err)
+	_, err = cas.WriteChunk(ctx, []byte("chunk two"))
+	require.NoError(t, err)
+
+	size, err = cas.TotalSize(ctx)
+	require.NoError(t, err)
+	assert.Greater(t, size, int64(0))
+}
+
+func TestCAS_DeleteChunkNonExistent(t *testing.T) {
+	cas := newTestCAS(t)
+	// Deleting a non-existent chunk should succeed (no-op)
+	err := cas.DeleteChunk(context.Background(), "nonexistent-hash")
+	assert.NoError(t, err)
+}
+
+func TestCAS_ChunkSizeNotFound(t *testing.T) {
+	cas := newTestCAS(t)
+	_, err := cas.ChunkSize(context.Background(), "nonexistent-hash")
+	assert.Error(t, err)
+}
+
+func TestCAS_ReadChunkNotFound(t *testing.T) {
+	cas := newTestCAS(t)
+	_, err := cas.ReadChunk(context.Background(), "nonexistent-hash")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "chunk not found")
+}
+
+func TestCAS_NoOrphanedTempFiles(t *testing.T) {
+	cas := newTestCAS(t)
+	ctx := context.Background()
+
+	// Write several chunks
+	for i := 0; i < 10; i++ {
+		data := []byte("chunk data " + string(rune('0'+i)))
+		_, err := cas.WriteChunk(ctx, data)
+		require.NoError(t, err)
+	}
+
+	// Walk the chunks dir and ensure no .tmp files remain
+	err := filepath.Walk(cas.chunksDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() {
+			assert.NotContains(t, info.Name(), ".tmp", "orphaned temp file found: %s", path)
+		}
+		return nil
+	})
+	require.NoError(t, err)
 }

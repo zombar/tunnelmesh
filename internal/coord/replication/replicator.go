@@ -232,19 +232,23 @@ func NewReplicator(config Config) *Replicator {
 	ctx, cancel := context.WithCancel(parentCtx)
 
 	r := &Replicator{
-		nodeID:                 config.NodeID,
-		transport:              config.Transport,
-		s3:                     config.S3Store,
-		state:                  NewState(config.NodeID),
-		chunkRegistry:          config.ChunkRegistry, // Optional (nil if not using chunk-level replication)
-		logger:                 config.Logger.With().Str("component", "replicator").Logger(),
-		maxPendingOperations:   config.MaxPendingOperations,
-		ackTimeout:             config.AckTimeout,
-		applyTimeout:           config.ApplyTimeout,
-		ackSendTimeout:         config.AckSendTimeout,
-		syncRequestTimeout:     config.SyncRequestTimeout,
-		syncResponseTimeout:    config.SyncResponseTimeout,
-		chunkAckTimeout:        config.ChunkAckTimeout,
+		nodeID:               config.NodeID,
+		transport:            config.Transport,
+		s3:                   config.S3Store,
+		state:                NewState(config.NodeID),
+		chunkRegistry:        config.ChunkRegistry, // Optional (nil if not using chunk-level replication)
+		logger:               config.Logger.With().Str("component", "replicator").Logger(),
+		maxPendingOperations: config.MaxPendingOperations,
+		ackTimeout:           config.AckTimeout,
+		applyTimeout:         config.ApplyTimeout,
+		ackSendTimeout:       config.AckSendTimeout,
+		syncRequestTimeout:   config.SyncRequestTimeout,
+		syncResponseTimeout:  config.SyncResponseTimeout,
+		chunkAckTimeout:      config.ChunkAckTimeout,
+		// Semaphore to bound concurrent async ACK sends. Cap of 100 allows
+		// high parallelism for typical replication bursts while limiting
+		// goroutine memory overhead (~8KB stack each). When full, callers
+		// fall back to synchronous send rather than queueing indefinitely.
 		ackSendSem:             make(chan struct{}, 100),
 		rateLimiter:            rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst),
 		peers:                  make(map[string]bool),

@@ -1813,3 +1813,36 @@ func (t *blockingSendTransport) simulateReceive(from string, data []byte) error 
 	}
 	return t.handler(from, data)
 }
+
+func TestAsyncSendAck_SemaphoreFallback(t *testing.T) {
+	// Fill the semaphore to capacity and verify that asyncSendAck falls
+	// back to synchronous send without dropping the ACK.
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+
+	r := NewReplicator(Config{
+		NodeID:    "coord-test",
+		Transport: transport,
+		S3Store:   s3Store,
+		Logger:    zerolog.Nop(),
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	// Fill the semaphore completely
+	for i := 0; i < cap(r.ackSendSem); i++ {
+		r.ackSendSem <- struct{}{}
+	}
+
+	// asyncSendAck should fall back to synchronous send (default branch)
+	vv := VersionVector{"coord-test": 1}
+	r.asyncSendAck("msg-fallback", "coord-peer", true, "", vv)
+
+	// Verify the ACK was still sent (sync fallback)
+	sentData := transport.getLastSent("coord-peer")
+	assert.NotNil(t, sentData, "ACK should be sent synchronously when semaphore is full")
+
+	// Drain the semaphore
+	for i := 0; i < cap(r.ackSendSem); i++ {
+		<-r.ackSendSem
+	}
+}
