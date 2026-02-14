@@ -1096,6 +1096,11 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 			return fmt.Errorf("failed to load TLS certificate for coordinator services: %w", err)
 		}
 
+		// Set coordinator's own cert as client cert for inter-coordinator
+		// communication (replication, write forwarding). This allows
+		// receiving coordinators to authenticate the sender via TLS.
+		srv.SetClientCert(&tlsCert)
+
 		{
 			// Start admin HTTPS server if enabled
 			// Admin always uses port 443 (standard HTTPS) on mesh IP for consistency

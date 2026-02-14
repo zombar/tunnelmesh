@@ -435,6 +435,19 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	return srv, nil
 }
 
+// SetClientCert configures the coordinator's own TLS certificate as a client
+// certificate on all inter-coordinator transports. This allows other coordinators
+// to authenticate this coordinator via TLS client cert verification.
+// Must be called before any inter-coordinator requests are sent.
+func (s *Server) SetClientCert(cert *tls.Certificate) {
+	if s.s3ForwardTransport != nil && s.s3ForwardTransport.TLSClientConfig != nil {
+		s.s3ForwardTransport.TLSClientConfig.Certificates = []tls.Certificate{*cert}
+	}
+	if s.meshTransport != nil {
+		s.meshTransport.SetClientCert(cert)
+	}
+}
+
 // refreshPeerNameCache reloads the peer ID -> name mapping from storage.
 // This is called during server startup and when peers are added/updated.
 func (s *Server) refreshPeerNameCache() error {
