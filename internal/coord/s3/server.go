@@ -177,21 +177,31 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 // handleService handles service-level operations (GET /).
 func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	defer func() {
+		if s.metrics != nil {
+			duration := time.Since(startTime).Seconds()
+			status := classifyS3Status(rec.getStatus())
+			s.metrics.RecordRequest("ListBuckets", status, duration)
+		}
+	}()
+
 	if r.Method != http.MethodGet {
-		s.writeError(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "Method not allowed")
+		s.writeError(rec, http.StatusMethodNotAllowed, "MethodNotAllowed", "Method not allowed")
 		return
 	}
 
 	// Authorize: list buckets
 	userID, err := s.authorizer.AuthorizeRequest(r, "list", "buckets", "", "")
 	if err != nil {
-		s.handleAuthError(w, err)
+		s.handleAuthError(rec, err)
 		return
 	}
 
 	buckets, err := s.store.ListBuckets(r.Context())
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
+		s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
 		return
 	}
 
@@ -210,7 +220,7 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	s.writeXML(w, http.StatusOK, resp)
+	s.writeXML(rec, http.StatusOK, resp)
 }
 
 // handleBucket handles bucket-level operations.
@@ -261,72 +271,112 @@ func (s *Server) handleObject(w http.ResponseWriter, r *http.Request, bucket, ke
 
 // createBucket handles PUT /{bucket}.
 func (s *Server) createBucket(w http.ResponseWriter, r *http.Request, bucket string) {
+	startTime := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	defer func() {
+		if s.metrics != nil {
+			duration := time.Since(startTime).Seconds()
+			status := classifyS3Status(rec.getStatus())
+			s.metrics.RecordRequest("CreateBucket", status, duration)
+		}
+	}()
+
 	userID, err := s.authorizer.AuthorizeRequest(r, "create", "buckets", bucket, "")
 	if err != nil {
-		s.handleAuthError(w, err)
+		s.handleAuthError(rec, err)
 		return
 	}
 
 	if err := s.store.CreateBucket(r.Context(), bucket, userID, 2, nil); err != nil {
 		if errors.Is(err, ErrBucketExists) {
-			s.writeError(w, http.StatusConflict, "BucketAlreadyExists", "Bucket already exists")
+			s.writeError(rec, http.StatusConflict, "BucketAlreadyExists", "Bucket already exists")
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
+		s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	rec.WriteHeader(http.StatusOK)
 }
 
 // deleteBucket handles DELETE /{bucket}.
 func (s *Server) deleteBucket(w http.ResponseWriter, r *http.Request, bucket string) {
+	startTime := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	defer func() {
+		if s.metrics != nil {
+			duration := time.Since(startTime).Seconds()
+			status := classifyS3Status(rec.getStatus())
+			s.metrics.RecordRequest("DeleteBucket", status, duration)
+		}
+	}()
+
 	_, err := s.authorizer.AuthorizeRequest(r, "delete", "buckets", bucket, "")
 	if err != nil {
-		s.handleAuthError(w, err)
+		s.handleAuthError(rec, err)
 		return
 	}
 
 	if err := s.store.DeleteBucket(r.Context(), bucket); err != nil {
 		switch {
 		case errors.Is(err, ErrBucketNotFound):
-			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+			s.writeError(rec, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
 		case errors.Is(err, ErrBucketNotEmpty):
-			s.writeError(w, http.StatusConflict, "BucketNotEmpty", "Bucket is not empty")
+			s.writeError(rec, http.StatusConflict, "BucketNotEmpty", "Bucket is not empty")
 		default:
-			s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
+			s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
 		}
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	rec.WriteHeader(http.StatusNoContent)
 }
 
 // headBucket handles HEAD /{bucket}.
 func (s *Server) headBucket(w http.ResponseWriter, r *http.Request, bucket string) {
+	startTime := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	defer func() {
+		if s.metrics != nil {
+			duration := time.Since(startTime).Seconds()
+			status := classifyS3Status(rec.getStatus())
+			s.metrics.RecordRequest("HeadBucket", status, duration)
+		}
+	}()
+
 	_, err := s.authorizer.AuthorizeRequest(r, "get", "buckets", bucket, "")
 	if err != nil {
-		s.handleAuthError(w, err)
+		s.handleAuthError(rec, err)
 		return
 	}
 
 	if _, err := s.store.HeadBucket(r.Context(), bucket); err != nil {
 		if errors.Is(err, ErrBucketNotFound) {
-			w.WriteHeader(http.StatusNotFound)
+			rec.WriteHeader(http.StatusNotFound)
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
+		s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	rec.WriteHeader(http.StatusOK)
 }
 
 // listObjects handles GET /{bucket} (V1).
 func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket string) {
+	startTime := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	defer func() {
+		if s.metrics != nil {
+			duration := time.Since(startTime).Seconds()
+			status := classifyS3Status(rec.getStatus())
+			s.metrics.RecordRequest("ListObjects", status, duration)
+		}
+	}()
+
 	userID, err := s.authorizer.AuthorizeRequest(r, "list", "objects", bucket, "")
 	if err != nil {
-		s.handleAuthError(w, err)
+		s.handleAuthError(rec, err)
 		return
 	}
 
@@ -342,10 +392,10 @@ func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket stri
 	objects, isTruncated, nextMarker, err := s.store.ListObjects(r.Context(), bucket, prefix, marker, maxKeys)
 	if err != nil {
 		if errors.Is(err, ErrBucketNotFound) {
-			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+			s.writeError(rec, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
+		s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
 		return
 	}
 
@@ -377,14 +427,24 @@ func (s *Server) listObjects(w http.ResponseWriter, r *http.Request, bucket stri
 		resp.Contents = append(resp.Contents, info)
 	}
 
-	s.writeXML(w, http.StatusOK, resp)
+	s.writeXML(rec, http.StatusOK, resp)
 }
 
 // listObjectsV2 handles GET /{bucket}?list-type=2.
 func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
+	startTime := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	defer func() {
+		if s.metrics != nil {
+			duration := time.Since(startTime).Seconds()
+			status := classifyS3Status(rec.getStatus())
+			s.metrics.RecordRequest("ListObjectsV2", status, duration)
+		}
+	}()
+
 	userID, err := s.authorizer.AuthorizeRequest(r, "list", "objects", bucket, "")
 	if err != nil {
-		s.handleAuthError(w, err)
+		s.handleAuthError(rec, err)
 		return
 	}
 
@@ -407,10 +467,10 @@ func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket st
 	objects, isTruncated, nextMarker, err := s.store.ListObjects(r.Context(), bucket, prefix, marker, maxKeys)
 	if err != nil {
 		if errors.Is(err, ErrBucketNotFound) {
-			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+			s.writeError(rec, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
 			return
 		}
-		s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
+		s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
 		return
 	}
 
@@ -444,7 +504,7 @@ func (s *Server) listObjectsV2(w http.ResponseWriter, r *http.Request, bucket st
 		resp.Contents = append(resp.Contents, info)
 	}
 
-	s.writeXML(w, http.StatusOK, resp)
+	s.writeXML(rec, http.StatusOK, resp)
 }
 
 // getObject handles GET /{bucket}/{key}.
@@ -568,33 +628,53 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 
 // deleteObject handles DELETE /{bucket}/{key}.
 func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	startTime := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	defer func() {
+		if s.metrics != nil {
+			duration := time.Since(startTime).Seconds()
+			status := classifyS3Status(rec.getStatus())
+			s.metrics.RecordRequest("DeleteObject", status, duration)
+		}
+	}()
+
 	_, err := s.authorizer.AuthorizeRequest(r, "delete", "objects", bucket, key)
 	if err != nil {
-		s.handleAuthError(w, err)
+		s.handleAuthError(rec, err)
 		return
 	}
 
 	if err := s.store.DeleteObject(r.Context(), bucket, key); err != nil {
 		switch {
 		case errors.Is(err, ErrBucketNotFound):
-			s.writeError(w, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+			s.writeError(rec, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
 		case errors.Is(err, ErrObjectNotFound):
-			w.WriteHeader(http.StatusNoContent)
+			rec.WriteHeader(http.StatusNoContent)
 			return
 		default:
-			s.writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
+			s.writeError(rec, http.StatusInternalServerError, "InternalError", err.Error())
 		}
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	rec.WriteHeader(http.StatusNoContent)
 }
 
 // headObject handles HEAD /{bucket}/{key}.
 func (s *Server) headObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	startTime := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	defer func() {
+		if s.metrics != nil {
+			duration := time.Since(startTime).Seconds()
+			status := classifyS3Status(rec.getStatus())
+			s.metrics.RecordRequest("HeadObject", status, duration)
+		}
+	}()
+
 	_, err := s.authorizer.AuthorizeRequest(r, "get", "objects", bucket, key)
 	if err != nil {
-		s.handleAuthError(w, err)
+		s.handleAuthError(rec, err)
 		return
 	}
 
@@ -608,25 +688,25 @@ func (s *Server) headObject(w http.ResponseWriter, r *http.Request, bucket, key 
 		}
 		switch {
 		case errors.Is(err, ErrBucketNotFound):
-			w.WriteHeader(http.StatusNotFound)
+			rec.WriteHeader(http.StatusNotFound)
 		case errors.Is(err, ErrObjectNotFound):
-			w.WriteHeader(http.StatusNotFound)
+			rec.WriteHeader(http.StatusNotFound)
 		default:
-			w.WriteHeader(http.StatusInternalServerError)
+			rec.WriteHeader(http.StatusInternalServerError)
 		}
 		return
 	}
 
-	w.Header().Set("Content-Type", meta.ContentType)
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", meta.Size))
-	w.Header().Set("ETag", meta.ETag)
-	w.Header().Set("Last-Modified", meta.LastModified.Format(http.TimeFormat))
+	rec.Header().Set("Content-Type", meta.ContentType)
+	rec.Header().Set("Content-Length", fmt.Sprintf("%d", meta.Size))
+	rec.Header().Set("ETag", meta.ETag)
+	rec.Header().Set("Last-Modified", meta.LastModified.Format(http.TimeFormat))
 
 	for k, v := range meta.Metadata {
-		w.Header().Set(k, v)
+		rec.Header().Set(k, v)
 	}
 
-	w.WriteHeader(http.StatusOK)
+	rec.WriteHeader(http.StatusOK)
 }
 
 // handleAuthError writes the appropriate error response for auth errors.
