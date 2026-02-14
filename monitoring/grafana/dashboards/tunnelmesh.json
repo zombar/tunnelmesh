@@ -2567,6 +2567,187 @@
             "mode": "absolute",
             "steps": [
               {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 97
+      },
+      "id": 48,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "expr": "tunnelmesh_s3_volume_total_bytes",
+          "legendFormat": "Total",
+          "refId": "A"
+        },
+        {
+          "expr": "tunnelmesh_s3_volume_used_bytes",
+          "legendFormat": "Used",
+          "refId": "B"
+        }
+      ],
+      "title": "Volume Total vs Used",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1073741824
+              },
+              {
+                "color": "green",
+                "value": 5368709120
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 97
+      },
+      "id": 49,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "expr": "tunnelmesh_s3_volume_available_bytes",
+          "legendFormat": "Available",
+          "refId": "A"
+        }
+      ],
+      "title": "Volume Available",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 97
+      },
+      "id": 50,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "expr": "tunnelmesh_s3_volume_used_bytes / tunnelmesh_s3_volume_total_bytes * 100",
+          "legendFormat": "Usage %",
+          "refId": "A"
+        }
+      ],
+      "title": "Volume Usage %",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
                 "color": "red",
                 "value": null
               },
@@ -2588,7 +2769,7 @@
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 97
+        "y": 101
       },
       "id": 38,
       "options": {
@@ -2649,7 +2830,7 @@
         "h": 4,
         "w": 6,
         "x": 6,
-        "y": 97
+        "y": 101
       },
       "id": 39,
       "options": {
@@ -2710,7 +2891,7 @@
         "h": 4,
         "w": 6,
         "x": 12,
-        "y": 97
+        "y": 101
       },
       "id": 40,
       "options": {
@@ -2767,7 +2948,7 @@
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 97
+        "y": 101
       },
       "id": 41,
       "options": {
@@ -2852,7 +3033,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 101
+        "y": 105
       },
       "id": 42,
       "options": {
@@ -2938,7 +3119,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 101
+        "y": 105
       },
       "id": 43,
       "options": {
@@ -2992,7 +3173,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 109
+        "y": 113
       },
       "id": 44,
       "options": {
@@ -3082,7 +3263,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 109
+        "y": 113
       },
       "id": 45,
       "options": {
@@ -3144,7 +3325,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 117
+        "y": 121
       },
       "id": 47,
       "options": {
@@ -3179,7 +3360,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 125
+        "y": 129
       },
       "id": 17,
       "options": {

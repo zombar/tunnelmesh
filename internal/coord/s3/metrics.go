@@ -46,6 +46,11 @@ type S3Metrics struct {
 	GCChunksDeleted   prometheus.Counter   // tunnelmesh_s3_gc_chunks_deleted_total
 	GCBytesReclaimed  prometheus.Counter   // tunnelmesh_s3_gc_bytes_reclaimed_total
 	GCDurationSeconds prometheus.Histogram // tunnelmesh_s3_gc_duration_seconds
+
+	// Volume metrics (filesystem-level)
+	VolumeTotalBytes     prometheus.Gauge // tunnelmesh_s3_volume_total_bytes
+	VolumeUsedBytes      prometheus.Gauge // tunnelmesh_s3_volume_used_bytes
+	VolumeAvailableBytes prometheus.Gauge // tunnelmesh_s3_volume_available_bytes
 }
 
 // InitS3Metrics initializes all S3 metrics.
@@ -159,6 +164,22 @@ func InitS3Metrics(registry prometheus.Registerer) *S3Metrics {
 				Help:    "Garbage collection duration in seconds",
 				Buckets: []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120},
 			}),
+
+			// Volume metrics
+			VolumeTotalBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_volume_total_bytes",
+				Help: "Total filesystem capacity in bytes",
+			}),
+
+			VolumeUsedBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_volume_used_bytes",
+				Help: "Used filesystem space in bytes",
+			}),
+
+			VolumeAvailableBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_volume_available_bytes",
+				Help: "Available filesystem space in bytes (non-root)",
+			}),
 		}
 	})
 
@@ -220,6 +241,13 @@ func (m *S3Metrics) UpdateCASMetrics(chunks int, chunkBytes, logicalBytes int64,
 	} else {
 		m.DedupRatio.Set(1.0)
 	}
+}
+
+// UpdateVolumeMetrics updates filesystem volume gauges.
+func (m *S3Metrics) UpdateVolumeMetrics(totalBytes, usedBytes, availableBytes int64) {
+	m.VolumeTotalBytes.Set(float64(totalBytes))
+	m.VolumeUsedBytes.Set(float64(usedBytes))
+	m.VolumeAvailableBytes.Set(float64(availableBytes))
 }
 
 // RecordGCRun records garbage collection metrics.

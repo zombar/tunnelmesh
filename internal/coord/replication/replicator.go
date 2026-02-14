@@ -51,6 +51,11 @@ type ChunkMetadata struct {
 	VersionVector map[string]uint64
 }
 
+// CapacityChecker checks whether a coordinator has sufficient storage capacity.
+type CapacityChecker interface {
+	HasCapacityFor(coordinatorName string, bytes int64) bool
+}
+
 // S3Store defines the interface for S3 storage operations.
 type S3Store interface {
 	// Get retrieves an object from S3
@@ -106,6 +111,7 @@ type Replicator struct {
 	s3                   S3Store
 	state                *State
 	chunkRegistry        ChunkRegistryInterface // Distributed chunk ownership tracking (Phase 4)
+	capacityChecker      CapacityChecker        // Optional capacity pre-flight checker
 	logger               zerolog.Logger
 	maxPendingOperations int // Maximum pending ACKs (0 = unlimited)
 
@@ -176,6 +182,7 @@ type Config struct {
 	Transport            Transport
 	S3Store              S3Store
 	ChunkRegistry        ChunkRegistryInterface // Optional: distributed chunk ownership tracking (Phase 4)
+	CapacityChecker      CapacityChecker        // Optional: nil = no capacity checks
 	Logger               zerolog.Logger
 	AckTimeout           time.Duration   // How long to wait for ACK before retrying (default: 10s)
 	RetryInterval        time.Duration   // How long to wait before retrying failed replication (default: 30s)
@@ -237,6 +244,7 @@ func NewReplicator(config Config) *Replicator {
 		s3:                   config.S3Store,
 		state:                NewState(config.NodeID),
 		chunkRegistry:        config.ChunkRegistry, // Optional (nil if not using chunk-level replication)
+		capacityChecker:      config.CapacityChecker,
 		logger:               config.Logger.With().Str("component", "replicator").Logger(),
 		maxPendingOperations: config.MaxPendingOperations,
 		ackTimeout:           config.AckTimeout,
@@ -1361,6 +1369,11 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 		}
 	}
 
+	// Pre-flight capacity check
+	if err := r.checkPeerCapacity(peerID, bucket, key, chunksToReplicate, meta); err != nil {
+		return err
+	}
+
 	if len(chunksToReplicate) == 0 {
 		// Still send metadata even if all chunks were already there
 		metaJSON, err := json.Marshal(meta)
@@ -1564,6 +1577,30 @@ func (r *Replicator) sendReplicateChunk(ctx context.Context, peerID string, payl
 	return nil
 }
 
+// checkPeerCapacity performs a pre-flight capacity check before replication.
+// Returns nil if the check passes or if no capacity checker is configured (fail-open).
+func (r *Replicator) checkPeerCapacity(peerID, bucket, key string, chunks []string, meta *ObjectMeta) error {
+	if r.capacityChecker == nil || len(chunks) == 0 {
+		return nil
+	}
+	var estimatedBytes int64
+	for _, chunkHash := range chunks {
+		if cm := meta.ChunkMetadata[chunkHash]; cm != nil {
+			estimatedBytes += cm.Size
+		}
+	}
+	if estimatedBytes > 0 && !r.capacityChecker.HasCapacityFor(peerID, estimatedBytes) {
+		r.logger.Warn().
+			Str("peer", peerID).
+			Str("bucket", bucket).
+			Str("key", key).
+			Int64("estimated_bytes", estimatedBytes).
+			Msg("Peer near capacity, skipping replication")
+		return fmt.Errorf("peer %s near capacity: need %d bytes", peerID, estimatedBytes)
+	}
+	return nil
+}
+
 // truncateHash returns first 8 chars of hash for logging, or full hash if shorter.
 func truncateHashForLog(hash string) string {
 	if len(hash) > 8 {
@@ -1587,6 +1624,15 @@ func (r *Replicator) handleReplicateChunk(msg *Message) error {
 		Int("total", payload.TotalChunks).
 		Str("from", msg.From).
 		Msg("Received chunk replication")
+
+	// Check local capacity before writing
+	if r.capacityChecker != nil && !r.capacityChecker.HasCapacityFor(r.nodeID, int64(len(payload.ChunkData))) {
+		r.logger.Warn().
+			Str("chunk", truncateHashForLog(payload.ChunkHash)).
+			Int("bytes", len(payload.ChunkData)).
+			Msg("Storage capacity exceeded, rejecting chunk")
+		return r.sendChunkAck(msg.ID, msg.From, payload.Bucket, payload.Key, payload.ChunkHash, payload.ChunkIndex, false, "storage capacity exceeded")
+	}
 
 	// Store chunk in local CAS
 	if err := r.s3.WriteChunkDirect(r.ctx, payload.ChunkHash, payload.ChunkData); err != nil {
