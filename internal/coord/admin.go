@@ -1810,6 +1810,13 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Serialize GC operations — only one can run at a time
+	if !s.gcMu.TryLock() {
+		s.jsonError(w, "garbage collection already in progress", http.StatusTooManyRequests)
+		return
+	}
+	defer s.gcMu.Unlock()
+
 	var req struct {
 		PurgeAllTombstoned bool `json:"purge_all_tombstoned"`
 	}
@@ -1829,12 +1836,14 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 	gcStats := s.s3Store.RunGarbageCollection(r.Context())
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"tombstoned_purged": tombstonedPurged,
 		"versions_pruned":   gcStats.VersionsPruned,
 		"chunks_deleted":    gcStats.ChunksDeleted,
 		"bytes_reclaimed":   gcStats.BytesReclaimed,
-	})
+	}); err != nil {
+		log.Error().Err(err).Msg("failed to encode GC stats response")
+	}
 }
 
 // Security: This endpoint is registered on adminMux which is only served over HTTPS

@@ -1482,3 +1482,18 @@ func TestS3GC_EmptyBody(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, result, "tombstoned_purged")
 }
+
+func TestS3GC_ConcurrentReturns429(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Hold the GC lock to simulate an in-progress GC
+	srv.gcMu.Lock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/s3/gc", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	srv.gcMu.Unlock()
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+}

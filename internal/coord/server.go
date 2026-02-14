@@ -107,6 +107,8 @@ type Server struct {
 	filter       *routing.PacketFilter // Global packet filter
 	filterSaveMu sync.Mutex            // Protects SaveFilterRules from concurrent calls
 	filterTimer  *time.Timer           // Timer for debouncing filter saves
+	// S3 GC serialization
+	gcMu sync.Mutex // Prevents concurrent GC runs via /api/s3/gc
 	// Docker orchestration (when coordinator joins mesh)
 	dockerMgr *docker.Manager // Docker manager (nil if Docker not enabled)
 	// Peer name cache for owner display (cached to avoid LoadPeers() on every request)

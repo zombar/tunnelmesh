@@ -1969,7 +1969,6 @@ func (s *Store) PurgeTombstonedObjects(ctx context.Context) int {
 // PurgeAllTombstonedObjects removes all tombstoned objects regardless of retention period.
 // Returns the number of objects purged.
 func (s *Store) PurgeAllTombstonedObjects(ctx context.Context) int {
-	cutoff := time.Now().UTC()
 	purgedCount := 0
 
 	buckets, err := s.ListBuckets(ctx)
@@ -1998,7 +1997,7 @@ func (s *Store) PurgeAllTombstonedObjects(ctx context.Context) int {
 			}
 
 			for _, obj := range objects {
-				if obj.IsTombstoned() && obj.TombstonedAt.Before(cutoff) {
+				if obj.IsTombstoned() {
 					if err := s.PurgeObject(ctx, bucket.Name, obj.Key); err == nil {
 						purgedCount++
 					}
