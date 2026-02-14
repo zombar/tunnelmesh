@@ -302,6 +302,9 @@ func (s *Server) setupAdminRoutes() {
 		}
 	})
 
+	// S3 garbage collection (on-demand)
+	s.adminMux.HandleFunc("/api/s3/gc", s.handleS3GC)
+
 	// S3 proxy for explorer
 	s.adminMux.HandleFunc("/api/s3/", s.handleS3Proxy)
 
@@ -1795,6 +1798,45 @@ func validateS3Name(name string) error {
 
 // handleS3Proxy routes S3 explorer API requests.
 //
+// handleS3GC triggers on-demand S3 garbage collection.
+func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.s3Store == nil {
+		s.jsonError(w, "S3 storage not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		PurgeAllTombstoned bool `json:"purge_all_tombstoned"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	// Phase 1: Purge tombstoned objects
+	var tombstonedPurged int
+	if req.PurgeAllTombstoned {
+		tombstonedPurged = s.s3Store.PurgeAllTombstonedObjects(r.Context())
+	} else {
+		tombstonedPurged = s.s3Store.PurgeTombstonedObjects(r.Context())
+	}
+
+	// Phase 2: Run full GC (version pruning + orphan chunk cleanup)
+	gcStats := s.s3Store.RunGarbageCollection(r.Context())
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"tombstoned_purged": tombstonedPurged,
+		"versions_pruned":   gcStats.VersionsPruned,
+		"chunks_deleted":    gcStats.ChunksDeleted,
+		"bytes_reclaimed":   gcStats.BytesReclaimed,
+	})
+}
+
 // Security: This endpoint is registered on adminMux which is only served over HTTPS
 // on the coordinator's mesh IP (via Server.setupAdminRoutes). It is NOT accessible
 // from the public internet. All requests are authenticated via mTLS - the client

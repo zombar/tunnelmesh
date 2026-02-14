@@ -966,6 +966,9 @@ func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) erro
 	store.SetDefaultObjectExpiryDays(cfg.Coordinator.S3.ObjectExpiryDays)
 	store.SetDefaultShareExpiryDays(cfg.Coordinator.S3.ShareExpiryDays)
 
+	// Set tombstone retention config
+	store.SetTombstoneRetentionDays(cfg.Coordinator.S3.TombstoneRetentionDays)
+
 	// Set version retention config
 	store.SetVersionRetentionDays(cfg.Coordinator.S3.VersionRetentionDays)
 	store.SetMaxVersionsPerObject(cfg.Coordinator.S3.MaxVersionsPerObject)
