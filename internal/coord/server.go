@@ -840,6 +840,24 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 			}
 		}
 	}()
+
+	// Refresh storage/CAS gauges every 60s so dashboards stay current
+	// between the hourly GC cycles.
+	metricsTicker := time.NewTicker(60 * time.Second)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer metricsTicker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-metricsTicker.C:
+				s.updateCASMetrics()
+				s.updateStorageMetrics()
+			}
+		}
+	}()
 }
 
 // StartReplicator starts the replication engine if enabled.

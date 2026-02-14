@@ -2954,6 +2954,7 @@
       "targets": [
         {
           "expr": "rate(tunnelmesh_docker_stats_collection_total[5m]) / (rate(tunnelmesh_docker_stats_collection_total[5m]) + rate(tunnelmesh_docker_stats_collection_errors_total[5m]))",
+          "legendFormat": "{{peer}}",
           "refId": "A"
         }
       ],
@@ -3020,6 +3021,7 @@
       "targets": [
         {
           "expr": "rate(tunnelmesh_docker_stats_persistence_total[5m]) / (rate(tunnelmesh_docker_stats_persistence_total[5m]) + rate(tunnelmesh_docker_stats_persistence_errors_total[5m]))",
+          "legendFormat": "{{peer}}",
           "refId": "A"
         }
       ],
@@ -3117,72 +3119,6 @@
       ],
       "title": "Docker Stats Collection Latency (p95)",
       "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "yellow",
-                "value": 300
-              },
-              {
-                "color": "red",
-                "value": 600
-              }
-            ]
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 121
-      },
-      "id": 40,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.3.2",
-      "targets": [
-        {
-          "expr": "time() - tunnelmesh_network_stats_last_save_timestamp",
-          "refId": "A"
-        }
-      ],
-      "title": "Network Stats Last Save",
-      "type": "stat"
     },
     {
       "datasource": {
@@ -3495,73 +3431,6 @@
       ],
       "title": "Containers Collected",
       "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 5
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 137
-      },
-      "id": 47,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.3.2",
-      "targets": [
-        {
-          "expr": "sum by (stats_type) (increase(tunnelmesh_coordinator_stats_corruption_detected_total[1h]))",
-          "legendFormat": "{{stats_type}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Stats Corruption Events (Last Hour)",
-      "type": "stat"
     },
     {
       "datasource": {
