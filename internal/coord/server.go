@@ -413,6 +413,7 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 		// Initialize chunk registry for chunk-level replication (avoids buffering full objects)
 		chunkRegistry := replication.NewChunkRegistry(nodeID, nil)
 		srv.s3Store.SetChunkRegistry(chunkRegistry)
+		srv.s3Store.SetCoordinatorID(nodeID)
 
 		// Initialize replicator
 		srv.replicator = replication.NewReplicator(replication.Config{
@@ -744,6 +745,14 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 		return
 	}
 
+	// Stagger GC start time based on coordinator name hash
+	// to avoid all coordinators running GC simultaneously
+	h := fnv.New32a()
+	h.Write([]byte(s.cfg.Name))
+	stagger := time.Duration(h.Sum32()%3600) * time.Second // 0-59 min delay
+
+	log.Info().Str("coordinator", s.cfg.Name).Dur("stagger", stagger).Msg("GC stagger delay computed")
+
 	// Run cleanup every hour
 	ticker := time.NewTicker(1 * time.Hour)
 	s.wg.Add(1)
@@ -753,6 +762,13 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 
 		// Update metrics on startup
 		s.updateCASMetrics()
+
+		// Wait for stagger delay before first GC run
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(stagger):
+		}
 
 		for {
 			select {
@@ -776,12 +792,15 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 				gcStats := s.s3Store.RunGarbageCollection(ctx)
 				gcDuration := time.Since(gcStart).Seconds()
 
-				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 {
+				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 || gcStats.ChunksSkippedShared > 0 {
 					log.Info().
+						Str("coordinator", s.cfg.Name).
 						Int("versions_pruned", gcStats.VersionsPruned).
 						Int("chunks_deleted", gcStats.ChunksDeleted).
 						Int64("bytes_reclaimed", gcStats.BytesReclaimed).
 						Int("objects_scanned", gcStats.ObjectsScanned).
+						Int("chunks_skipped_shared", gcStats.ChunksSkippedShared).
+						Int("chunks_skipped_grace_period", gcStats.ChunksSkippedGracePeriod).
 						Msg("S3 garbage collection completed")
 				}
 
