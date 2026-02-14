@@ -1869,7 +1869,8 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// SECURITY FIX #1: Authenticate that the request is from a coordinator peer
+	// SECURITY FIX #1: Authenticate that the request is from a coordinator.
+	// First verify the sender has valid credentials (TLS cert or known mesh IP).
 	peerName := s.getRequestOwner(r)
 	if peerName == "" {
 		log.Warn().Str("remote_addr", r.RemoteAddr).Msg("replication request from unauthenticated peer")
@@ -1877,30 +1878,32 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Verify the peer is a coordinator.
-	// getRequestOwner may return a peer ID (hash) rather than a peer name,
-	// so we check both the name-keyed map and fall back to scanning by ID.
-	s.peersMu.RLock()
-	peerInfo, exists := s.peers[peerName]
-	if !exists {
-		for _, info := range s.peers {
-			if info.peerID == peerName {
-				peerInfo = info
-				exists = true
-				break
-			}
+	// Determine the sender's mesh IP and verify they are a coordinator.
+	// In a multi-coordinator mesh, coordinators may not all be in each other's
+	// s.peers map (e.g., the primary never "registers" with joining coordinators).
+	// The coordinator IP list is the authoritative source — all coordinators
+	// maintain it via the mesh discovery protocol.
+	from, _, _ := net.SplitHostPort(r.RemoteAddr)
+	isCoordinator := false
+	for _, ip := range s.GetCoordMeshIPs() {
+		if ip == from {
+			isCoordinator = true
+			break
 		}
 	}
-	s.peersMu.RUnlock()
 
-	if !exists {
-		log.Warn().Str("peer", peerName).Msg("replication request from unknown peer")
-		s.jsonError(w, "unknown peer", http.StatusForbidden)
-		return
+	// Fall back to checking s.peers for coordinators that registered with us
+	if !isCoordinator {
+		s.peersMu.RLock()
+		if info, ok := s.peers[peerName]; ok {
+			isCoordinator = info.peer.IsCoordinator
+			from = info.peer.MeshIP
+		}
+		s.peersMu.RUnlock()
 	}
 
-	if !peerInfo.peer.IsCoordinator {
-		log.Warn().Str("peer", peerName).Msg("replication request from non-coordinator peer")
+	if !isCoordinator {
+		log.Warn().Str("peer", peerName).Str("remote_addr", r.RemoteAddr).Msg("replication request from non-coordinator")
 		s.jsonError(w, "coordinator access required", http.StatusForbidden)
 		return
 	}
@@ -1928,11 +1931,7 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// SECURITY FIX #10: Use authenticated peer identity as sender, not spoofable header
-	// The peer's mesh IP is the authoritative source of truth
-	from := peerInfo.peer.MeshIP
-
-	// Handle via mesh transport
+	// Handle via mesh transport (from was determined during auth above)
 	if s.meshTransport != nil {
 		if err := s.meshTransport.HandleIncomingMessage(from, data); err != nil {
 			log.Warn().Err(err).Str("from", from).Str("peer", peerName).Msg("failed to handle replication message")
