@@ -1877,9 +1877,20 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Verify the peer is a coordinator
+	// Verify the peer is a coordinator.
+	// getRequestOwner may return a peer ID (hash) rather than a peer name,
+	// so we check both the name-keyed map and fall back to scanning by ID.
 	s.peersMu.RLock()
 	peerInfo, exists := s.peers[peerName]
+	if !exists {
+		for _, info := range s.peers {
+			if info.peerID == peerName {
+				peerInfo = info
+				exists = true
+				break
+			}
+		}
+	}
 	s.peersMu.RUnlock()
 
 	if !exists {
