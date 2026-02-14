@@ -425,6 +425,9 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 			MaxPendingOperations: 10000,
 		})
 
+		// Wire replicator into S3 store for distributed reads (fetching remote chunks)
+		srv.s3Store.SetReplicator(srv.replicator)
+
 		log.Info().
 			Str("node_id", nodeID).
 			Msg("replication engine initialized - coordinators will discover each other via peer list")

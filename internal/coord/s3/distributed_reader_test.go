@@ -50,6 +50,10 @@ func (m *mockReplicator) FetchChunk(ctx context.Context, peerID, chunkHash strin
 	return data, nil
 }
 
+func (m *mockReplicator) GetPeers() []string {
+	return []string{"peer-1", "peer-2"}
+}
+
 // mockChunkRegistry implements ChunkRegistryInterface for testing.
 type mockChunkRegistry struct {
 	owners map[string][]string // chunkHash -> []coordinatorID
@@ -329,7 +333,7 @@ func TestDistributedChunkReader_NoRegistry(t *testing.T) {
 	// Read should fail with appropriate error
 	_, err = io.ReadAll(reader)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no registry available")
+	assert.Contains(t, err.Error(), "no peers available")
 }
 
 // ==== New parallel fetch tests ====

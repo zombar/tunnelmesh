@@ -2445,11 +2445,11 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, r *http.Request, bu
 		return
 	}
 
-	// Replicate delete to other coordinators asynchronously
+	// Replicate delete to other coordinators asynchronously.
+	// Use background context — r.Context() is canceled once the response is sent.
 	if s.replicator != nil {
 		go func() {
-			// Use request context with timeout for proper cancellation propagation
-			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := s.replicator.ReplicateDelete(ctx, bucket, key); err != nil {
 				log.Error().Err(err).

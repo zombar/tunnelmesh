@@ -176,6 +176,7 @@ type ChunkRegistryInterface interface {
 // ReplicatorInterface defines the interface for chunk replication (to avoid import cycle).
 type ReplicatorInterface interface {
 	FetchChunk(ctx context.Context, peerID, chunkHash string) ([]byte, error)
+	GetPeers() []string
 }
 
 type Store struct {
