@@ -133,7 +133,7 @@ through the admin panel with QR codes for easy mobile setup.
 - Clients get mesh DNS names (e.g., `iphone.tunnelmesh`)
 - Managed via coordination server admin panel
 
-### Admin Interface
+## Admin Interface
 
 The admin interface is **only accessible from within the mesh** via HTTPS on the coordinator's mesh IP. Access it at
 `https://this.tm/` from any mesh peer.
@@ -146,7 +146,7 @@ your system trust store. This allows HTTPS connections to mesh services without 
 > (admin only). Most features work without admin access - you only need admin rights to configure
 > and manage the mesh.
 
-## What Requires Admin Access?
+### What Requires Admin Access?
 
 **Works Without Admin** (all peers):
 - Join mesh and establish encrypted tunnels
