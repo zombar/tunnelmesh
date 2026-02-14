@@ -40,8 +40,8 @@ func (r *statusRecorder) getStatus() int {
 	return r.status
 }
 
-// classifyS3Status converts HTTP status code to metric status string.
-func classifyS3Status(httpStatus int) string {
+// ClassifyS3Status converts HTTP status code to metric status string.
+func ClassifyS3Status(httpStatus int) string {
 	switch {
 	case httpStatus >= 200 && httpStatus < 300:
 		return "success"
@@ -58,9 +58,9 @@ func classifyS3Status(httpStatus int) string {
 	}
 }
 
-// classifyS3StatusWithError converts HTTP status and error to metric status string.
+// ClassifyS3StatusWithError converts HTTP status and error to metric status string.
 // This allows distinguishing between quota_exceeded and access_denied (both use 403).
-func classifyS3StatusWithError(httpStatus int, err error) string {
+func ClassifyS3StatusWithError(httpStatus int, err error) string {
 	// Check error type first for semantic classification
 	if err != nil {
 		switch {
@@ -74,7 +74,7 @@ func classifyS3StatusWithError(httpStatus int, err error) string {
 	}
 
 	// Fall back to HTTP status classification
-	return classifyS3Status(httpStatus)
+	return ClassifyS3Status(httpStatus)
 }
 
 // withMetrics wraps an S3 handler with metrics instrumentation.
@@ -87,7 +87,7 @@ func (s *Server) withMetrics(w http.ResponseWriter, operation string, fn func(ht
 	defer func() {
 		if m != nil {
 			duration := time.Since(startTime).Seconds()
-			status := classifyS3Status(rec.getStatus())
+			status := ClassifyS3Status(rec.getStatus())
 			m.RecordRequest(operation, status, duration)
 		}
 	}()
@@ -496,7 +496,7 @@ func (s *Server) getObject(w http.ResponseWriter, r *http.Request, bucket, key s
 	defer func() {
 		if m != nil && !forwarded {
 			duration := time.Since(startTime).Seconds()
-			status := classifyS3StatusWithError(rec.getStatus(), storeErr)
+			status := ClassifyS3StatusWithError(rec.getStatus(), storeErr)
 			m.RecordRequest("GetObject", status, duration)
 		}
 	}()
@@ -558,7 +558,7 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, bucket, key s
 	defer func() {
 		if m != nil {
 			duration := time.Since(startTime).Seconds()
-			status := classifyS3StatusWithError(rec.getStatus(), storeErr)
+			status := ClassifyS3StatusWithError(rec.getStatus(), storeErr)
 			m.RecordRequest("PutObject", status, duration)
 		}
 	}()
@@ -644,7 +644,7 @@ func (s *Server) headObject(w http.ResponseWriter, r *http.Request, bucket, key 
 	defer func() {
 		if m != nil && !forwarded {
 			duration := time.Since(startTime).Seconds()
-			status := classifyS3Status(rec.getStatus())
+			status := ClassifyS3Status(rec.getStatus())
 			m.RecordRequest("HeadObject", status, duration)
 		}
 	}()

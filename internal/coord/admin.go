@@ -31,6 +31,45 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
 
+// adminStatusRecorder wraps http.ResponseWriter to capture the status code for metrics.
+type adminStatusRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (r *adminStatusRecorder) WriteHeader(code int) {
+	if !r.wroteHeader {
+		r.status = code
+		r.wroteHeader = true
+		r.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (r *adminStatusRecorder) getStatus() int {
+	if r.status == 0 {
+		return http.StatusOK
+	}
+	return r.status
+}
+
+// withS3AdminMetrics wraps an admin S3 handler with metrics instrumentation.
+// Uses the shared S3 metrics singleton so admin API requests appear in the same
+// Prometheus metrics as direct S3 API requests.
+func (s *Server) withS3AdminMetrics(w http.ResponseWriter, operation string, fn func(http.ResponseWriter)) {
+	m := s3.GetS3Metrics()
+	startTime := time.Now()
+	rec := &adminStatusRecorder{ResponseWriter: w}
+	defer func() {
+		if m != nil {
+			duration := time.Since(startTime).Seconds()
+			status := s3.ClassifyS3Status(rec.getStatus())
+			m.RecordRequest(operation, status, duration)
+		}
+	}()
+	fn(rec)
+}
+
 // redirectToCanonicalDomain returns middleware that redirects .tm and .mesh requests
 // to the canonical .tunnelmesh domain.
 func redirectToCanonicalDomain(next http.Handler) http.Handler {
@@ -271,9 +310,13 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("/api/s3/buckets", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			s.handleListBuckets(w, r)
+			s.withS3AdminMetrics(w, "listBuckets", func(w http.ResponseWriter) {
+				s.handleListBuckets(w, r)
+			})
 		case http.MethodPost:
-			s.handleCreateBucket(w, r)
+			s.withS3AdminMetrics(w, "createBucket", func(w http.ResponseWriter) {
+				s.handleCreateBucket(w, r)
+			})
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -294,9 +337,13 @@ func (s *Server) setupAdminRoutes() {
 
 		switch r.Method {
 		case http.MethodGet:
-			s.handleGetBucket(w, r, bucket)
+			s.withS3AdminMetrics(w, "getBucket", func(w http.ResponseWriter) {
+				s.handleGetBucket(w, r, bucket)
+			})
 		case http.MethodPatch:
-			s.handleUpdateBucket(w, r, bucket)
+			s.withS3AdminMetrics(w, "updateBucket", func(w http.ResponseWriter) {
+				s.handleUpdateBucket(w, r, bucket)
+			})
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -1869,7 +1916,9 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 
 	// Route: /api/s3/buckets
 	if path == "buckets" || path == "" {
-		s.handleS3ListBuckets(w, r)
+		s.withS3AdminMetrics(w, "listBuckets", func(w http.ResponseWriter) {
+			s.handleS3ListBuckets(w, r)
+		})
 		return
 	}
 
@@ -1891,7 +1940,9 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 
 		if len(parts) == 1 || parts[1] == "" || parts[1] == "objects" {
 			// List objects in bucket
-			s.handleS3ListObjects(w, r, bucket)
+			s.withS3AdminMetrics(w, "listObjects", func(w http.ResponseWriter) {
+				s.handleS3ListObjects(w, r, bucket)
+			})
 			return
 		}
 		if strings.HasPrefix(parts[1], "objects/") {
@@ -1927,11 +1978,17 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 			// Route based on subresource
 			switch subresource {
 			case "versions":
-				s.handleS3ListVersions(w, r, bucket, key)
+				s.withS3AdminMetrics(w, "listVersions", func(w http.ResponseWriter) {
+					s.handleS3ListVersions(w, r, bucket, key)
+				})
 			case "restore":
-				s.handleS3RestoreVersion(w, r, bucket, key)
+				s.withS3AdminMetrics(w, "restoreVersion", func(w http.ResponseWriter) {
+					s.handleS3RestoreVersion(w, r, bucket, key)
+				})
 			case "undelete":
-				s.handleS3UndeleteObject(w, r, bucket, key)
+				s.withS3AdminMetrics(w, "undeleteObject", func(w http.ResponseWriter) {
+					s.handleS3UndeleteObject(w, r, bucket, key)
+				})
 			default:
 				s.handleS3Object(w, r, bucket, key)
 			}
@@ -2273,34 +2330,50 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 
 // handleS3Object handles GET/PUT/DELETE for a specific object.
 func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	// Forward writes and deletes proactively to primary coordinator.
-	// Reads try local first, then forward on miss (see handleS3GetObject/handleS3HeadObject).
-	if (r.Method == http.MethodPut || r.Method == http.MethodDelete) &&
-		r.Header.Get("X-TunnelMesh-Forwarded") == "" {
-		if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
-			s.forwardS3Request(w, r, target, bucket)
-			return
-		}
-	}
-
+	// Determine operation name for metrics
+	var operation string
 	switch r.Method {
 	case http.MethodGet:
-		// Check for versionId query param
-		versionID := r.URL.Query().Get("versionId")
-		if versionID != "" {
-			s.handleS3GetObjectVersion(r.Context(), w, bucket, key, versionID)
-		} else {
-			s.handleS3GetObject(w, r, bucket, key)
-		}
+		operation = "getObject"
 	case http.MethodPut:
-		s.handleS3PutObject(w, r, bucket, key)
+		operation = "putObject"
 	case http.MethodDelete:
-		s.handleS3DeleteObject(w, r, bucket, key)
+		operation = "deleteObject"
 	case http.MethodHead:
-		s.handleS3HeadObject(w, r, bucket, key)
+		operation = "headObject"
 	default:
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
+
+	s.withS3AdminMetrics(w, operation, func(w http.ResponseWriter) {
+		// Forward writes and deletes proactively to primary coordinator.
+		// Reads try local first, then forward on miss (see handleS3GetObject/handleS3HeadObject).
+		if (r.Method == http.MethodPut || r.Method == http.MethodDelete) &&
+			r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+			if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
+				s.forwardS3Request(w, r, target, bucket)
+				return
+			}
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			// Check for versionId query param
+			versionID := r.URL.Query().Get("versionId")
+			if versionID != "" {
+				s.handleS3GetObjectVersion(r.Context(), w, bucket, key, versionID)
+			} else {
+				s.handleS3GetObject(w, r, bucket, key)
+			}
+		case http.MethodPut:
+			s.handleS3PutObject(w, r, bucket, key)
+		case http.MethodDelete:
+			s.handleS3DeleteObject(w, r, bucket, key)
+		case http.MethodHead:
+			s.handleS3HeadObject(w, r, bucket, key)
+		}
+	})
 }
 
 // handleS3GetObject returns the object content.
