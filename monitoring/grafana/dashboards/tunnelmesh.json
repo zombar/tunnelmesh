@@ -18,6 +18,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
+  "id": 1,
   "links": [],
   "panels": [
     {
@@ -1080,7 +1081,13 @@
       "id": 13,
       "options": {
         "cellHeight": "sm",
-        "showHeader": true
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Version"
+          }
+        ]
       },
       "pluginVersion": "12.3.2",
       "targets": [
@@ -1306,7 +1313,7 @@
       "targets": [
         {
           "expr": "tunnelmesh_coordinator_udp_peer_latency_seconds",
-          "legendFormat": "{{source}} \u2192 {{target}}",
+          "legendFormat": "{{source}} → {{target}}",
           "refId": "A"
         }
       ],
@@ -1336,16 +1343,6 @@
           "color": {
             "mode": "palette-classic"
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
-          },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -1379,12 +1376,22 @@
             "thresholdsStyle": {
               "mode": "off"
             }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
           }
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 8,
         "x": 0,
         "y": 45
@@ -1397,7 +1404,7 @@
           ],
           "displayMode": "table",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -1408,8 +1415,10 @@
       "pluginVersion": "12.3.2",
       "targets": [
         {
+          "editorMode": "code",
           "expr": "tunnelmesh_s3_buckets_total",
-          "legendFormat": "Buckets",
+          "legendFormat": "{{ peer }}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1426,16 +1435,6 @@
           "color": {
             "mode": "palette-classic"
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
-          },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -1469,12 +1468,22 @@
             "thresholdsStyle": {
               "mode": "off"
             }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
           }
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 8,
         "x": 8,
         "y": 45
@@ -1487,7 +1496,7 @@
           ],
           "displayMode": "table",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -1498,8 +1507,10 @@
       "pluginVersion": "12.3.2",
       "targets": [
         {
+          "editorMode": "code",
           "expr": "tunnelmesh_s3_objects_total",
-          "legendFormat": "Objects",
+          "legendFormat": "{{ peer }}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1516,17 +1527,6 @@
           "color": {
             "mode": "palette-classic"
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
-          },
-          "unit": "bytes",
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -1560,12 +1560,23 @@
             "thresholdsStyle": {
               "mode": "off"
             }
-          }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "bytes"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 8,
         "x": 16,
         "y": 45
@@ -1578,7 +1589,7 @@
           ],
           "displayMode": "table",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -1589,8 +1600,10 @@
       "pluginVersion": "12.3.2",
       "targets": [
         {
+          "editorMode": "code",
           "expr": "tunnelmesh_s3_storage_bytes",
-          "legendFormat": "Storage",
+          "legendFormat": "{{ peer }}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1606,6 +1619,40 @@
         "defaults": {
           "color": {
             "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
           },
           "mappings": [],
           "thresholds": {
@@ -1625,49 +1672,15 @@
               }
             ]
           },
-          "unit": "percent",
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "showValues": false,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
+          "unit": "percent"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 12,
         "x": 0,
-        "y": 53
+        "y": 51
       },
       "id": 22,
       "options": {
@@ -1677,7 +1690,7 @@
           ],
           "displayMode": "table",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -1688,8 +1701,10 @@
       "pluginVersion": "12.3.2",
       "targets": [
         {
+          "editorMode": "code",
           "expr": "tunnelmesh_s3_quota_used_percent",
-          "legendFormat": "Quota %",
+          "legendFormat": "{{ peer }}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1706,16 +1721,6 @@
           "color": {
             "mode": "palette-classic"
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
-          },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -1749,15 +1754,25 @@
             "thresholdsStyle": {
               "mode": "off"
             }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
           }
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 12,
         "x": 12,
-        "y": 53
+        "y": 51
       },
       "id": 23,
       "options": {
@@ -1767,7 +1782,7 @@
           ],
           "displayMode": "table",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -1778,8 +1793,10 @@
       "pluginVersion": "12.3.2",
       "targets": [
         {
+          "editorMode": "code",
           "expr": "tunnelmesh_s3_registered_users",
-          "legendFormat": "Users",
+          "legendFormat": "{{ peer }}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1848,7 +1865,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 61
+        "y": 57
       },
       "id": 24,
       "options": {
@@ -1870,13 +1887,17 @@
       "pluginVersion": "12.3.2",
       "targets": [
         {
+          "editorMode": "code",
           "expr": "rate(tunnelmesh_s3_bytes_uploaded_total[1m])",
-          "legendFormat": "Upload",
+          "legendFormat": "{{ peer }} tx",
+          "range": true,
           "refId": "A"
         },
         {
+          "editorMode": "code",
           "expr": "rate(tunnelmesh_s3_bytes_downloaded_total[1m])",
-          "legendFormat": "Download",
+          "legendFormat": "{{ peer }} rx",
+          "range": true,
           "refId": "B"
         }
       ],
@@ -1945,7 +1966,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 61
+        "y": 57
       },
       "id": 25,
       "options": {
@@ -1985,6 +2006,40 @@
           "color": {
             "mode": "palette-classic"
           },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -2003,49 +2058,15 @@
               }
             ]
           },
-          "unit": "short",
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "showValues": false,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
+          "unit": "short"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 12,
         "x": 0,
-        "y": 69
+        "y": 65
       },
       "id": 27,
       "options": {
@@ -2055,7 +2076,7 @@
           ],
           "displayMode": "table",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -2066,8 +2087,10 @@
       "pluginVersion": "12.3.2",
       "targets": [
         {
+          "editorMode": "code",
           "expr": "tunnelmesh_s3_dedup_ratio",
-          "legendFormat": "Dedup Ratio",
+          "legendFormat": "{{ peer }}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -2084,17 +2107,6 @@
           "color": {
             "mode": "palette-classic"
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
-          },
-          "unit": "short",
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -2128,15 +2140,26 @@
             "thresholdsStyle": {
               "mode": "off"
             }
-          }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "short"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 6,
         "w": 12,
         "x": 12,
-        "y": 69
+        "y": 65
       },
       "id": 28,
       "options": {
@@ -2146,7 +2169,7 @@
           ],
           "displayMode": "table",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -2227,7 +2250,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 77
+        "y": 71
       },
       "id": 29,
       "options": {
@@ -2272,17 +2295,6 @@
           "color": {
             "mode": "palette-classic"
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
-          },
-          "unit": "short",
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -2316,7 +2328,18 @@
             "thresholdsStyle": {
               "mode": "off"
             }
-          }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "short"
         },
         "overrides": []
       },
@@ -2324,7 +2347,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 85
+        "y": 79
       },
       "id": 30,
       "options": {
@@ -2334,7 +2357,7 @@
           ],
           "displayMode": "table",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -2415,7 +2438,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 85
+        "y": 79
       },
       "id": 31,
       "options": {
@@ -2470,7 +2493,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 93
+        "y": 87
       },
       "id": 32,
       "options": {
@@ -2575,7 +2598,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 93
+        "y": 87
       },
       "id": 33,
       "options": {
@@ -2586,7 +2609,7 @@
           ],
           "displayMode": "table",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -2615,17 +2638,6 @@
           "color": {
             "mode": "palette-classic"
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
-          },
-          "unit": "short",
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -2659,7 +2671,18 @@
             "thresholdsStyle": {
               "mode": "off"
             }
-          }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "short"
         },
         "overrides": []
       },
@@ -2667,7 +2690,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 101
+        "y": 95
       },
       "id": 34,
       "options": {
@@ -2677,7 +2700,7 @@
           ],
           "displayMode": "table",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -2758,7 +2781,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 101
+        "y": 95
       },
       "id": 35,
       "options": {
@@ -2864,7 +2887,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 109
+        "y": 103
       },
       "id": 37,
       "options": {
@@ -2930,7 +2953,7 @@
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 117
+        "y": 111
       },
       "id": 38,
       "options": {
@@ -2997,7 +3020,7 @@
         "h": 4,
         "w": 6,
         "x": 6,
-        "y": 117
+        "y": 111
       },
       "id": 39,
       "options": {
@@ -3036,98 +3059,6 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "showValues": false,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 121
-      },
-      "id": 42,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "pluginVersion": "12.3.2",
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(tunnelmesh_docker_stats_collection_duration_seconds_bucket[5m])) by (le, peer))",
-          "legendFormat": "{{peer}} (p95)",
-          "refId": "A"
-        }
-      ],
-      "title": "Docker Stats Collection Latency (p95)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
             "mode": "thresholds"
           },
           "mappings": [],
@@ -3152,7 +3083,7 @@
         "h": 4,
         "w": 6,
         "x": 18,
-        "y": 121
+        "y": 111
       },
       "id": 41,
       "options": {
@@ -3241,10 +3172,102 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 10,
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 115
+      },
+      "id": 42,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.3.2",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(tunnelmesh_docker_stats_collection_duration_seconds_bucket[5m])) by (le, peer))",
+          "legendFormat": "{{peer}} (p95)",
+          "refId": "A"
+        }
+      ],
+      "title": "Docker Stats Collection Latency (p95)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
         "w": 12,
         "x": 12,
-        "y": 125
+        "y": 115
       },
       "id": 43,
       "options": {
@@ -3299,10 +3322,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 7,
         "w": 12,
         "x": 0,
-        "y": 129
+        "y": 124
       },
       "id": 44,
       "options": {
@@ -3399,10 +3422,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 10,
+        "h": 7,
         "w": 12,
         "x": 12,
-        "y": 135
+        "y": 124
       },
       "id": 45,
       "options": {
@@ -3413,7 +3436,7 @@
           ],
           "displayMode": "table",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -3445,7 +3468,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 145
+        "y": 131
       },
       "id": 17,
       "options": {
