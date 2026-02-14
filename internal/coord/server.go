@@ -1111,6 +1111,15 @@ func (s *Server) recoverCoordinatorState(ctx context.Context, cfg *config.PeerCo
 		// Note: peerInfo.aliases will be updated when peers reconnect
 		s.peersMu.Unlock()
 	}
+
+	// Recover coordinator IPs so full list is available before all coordinators re-register
+	if coordIPs, err := systemStore.LoadCoordinatorIPs(ctx); err == nil && len(coordIPs) > 0 {
+		log.Info().Strs("ips", coordIPs).Msg("recovering coordinator IPs")
+		s.storeCoordIPs(coordIPs)
+		if s.coordIPsCb != nil {
+			s.coordIPsCb(coordIPs)
+		}
+	}
 }
 
 // ensureBuiltinGroupBindings sets up the built-in group bindings if not already present.
@@ -1596,18 +1605,6 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 		// Broadcast updated coordinator list to all connected peers
 		go s.broadcastCoordinatorList()
-
-		// Persist coordinator IPs to system store (replicated to all coordinators)
-		if s.s3SystemStore != nil {
-			s.wg.Add(1)
-			go func() {
-				defer s.wg.Done()
-				coordIPs := s.GetCoordMeshIPs()
-				if err := s.s3SystemStore.SaveCoordinatorIPs(context.Background(), coordIPs); err != nil {
-					log.Warn().Err(err).Msg("failed to persist coordinator IPs")
-				}
-			}()
-		}
 	}
 
 	// Persist DNS data to S3 (async to avoid blocking registration)
@@ -2155,6 +2152,17 @@ func (s *Server) broadcastCoordinatorList() {
 
 	if len(ips) == 0 {
 		return
+	}
+
+	// Persist coordinator IPs to system store (replicated to all coordinators)
+	if s.s3SystemStore != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			if err := s.s3SystemStore.SaveCoordinatorIPs(context.Background(), ips); err != nil {
+				log.Warn().Err(err).Msg("failed to persist coordinator IPs")
+			}
+		}()
 	}
 
 	// Update local DNS resolver
