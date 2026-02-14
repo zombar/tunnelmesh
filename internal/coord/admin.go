@@ -1816,11 +1816,19 @@ type S3VolumeInfo struct {
 	AvailableBytes int64 `json:"available_bytes"`
 }
 
+// S3StorageInfo represents deduplication storage statistics.
+type S3StorageInfo struct {
+	PhysicalBytes int64   `json:"physical_bytes"` // Actual on-disk bytes (after dedup)
+	LogicalBytes  int64   `json:"logical_bytes"`  // Logical bytes (before dedup)
+	DedupRatio    float64 `json:"dedup_ratio"`    // logical/physical (>1 means savings)
+}
+
 // S3BucketsResponse is the response for the buckets list endpoint.
 type S3BucketsResponse struct {
 	Buckets []S3BucketInfo `json:"buckets"`
 	Quota   S3QuotaInfo    `json:"quota"`
 	Volume  *S3VolumeInfo  `json:"volume,omitempty"`
+	Storage *S3StorageInfo `json:"storage,omitempty"`
 }
 
 // validateS3Name validates a bucket or object key name to prevent path traversal.
@@ -1877,6 +1885,8 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
 
+	gcStart := time.Now()
+
 	// Phase 1: Purge tombstoned objects
 	var tombstonedPurged int
 	if req.PurgeAllTombstoned {
@@ -1887,6 +1897,23 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 
 	// Phase 2: Run full GC (version pruning + orphan chunk cleanup)
 	gcStats := s.s3Store.RunGarbageCollection(r.Context())
+	gcDuration := time.Since(gcStart).Seconds()
+
+	// Record GC metrics (same as periodic path in StartPeriodicCleanup)
+	if metrics := s3.GetS3Metrics(); metrics != nil {
+		metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
+	}
+
+	// Refresh storage gauges after GC
+	s.updateS3Metrics()
+
+	log.Info().
+		Int("tombstoned_purged", tombstonedPurged).
+		Int("versions_pruned", gcStats.VersionsPruned).
+		Int("chunks_deleted", gcStats.ChunksDeleted).
+		Int64("bytes_reclaimed", gcStats.BytesReclaimed).
+		Float64("duration_seconds", gcDuration).
+		Msg("manual S3 garbage collection completed")
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1894,6 +1921,7 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 		"versions_pruned":   gcStats.VersionsPruned,
 		"chunks_deleted":    gcStats.ChunksDeleted,
 		"bytes_reclaimed":   gcStats.BytesReclaimed,
+		"duration_seconds":  gcDuration,
 	}); err != nil {
 		log.Error().Err(err).Msg("failed to encode GC stats response")
 	}
@@ -2058,6 +2086,19 @@ func (s *Server) handleS3ListBuckets(w http.ResponseWriter, r *http.Request) {
 	// Add filesystem volume info
 	if total, used, avail, err := s.s3Store.VolumeStats(); err == nil {
 		resp.Volume = &S3VolumeInfo{TotalBytes: total, UsedBytes: used, AvailableBytes: avail}
+	}
+
+	// Add dedup storage stats
+	casStats := s.s3Store.GetCASStats()
+	dedupRatio := 1.0
+	if casStats.ChunkBytes > 0 {
+		// Clamp to >=1.0: transient states during GC can briefly have logical < physical
+		dedupRatio = max(1.0, float64(casStats.LogicalBytes)/float64(casStats.ChunkBytes))
+	}
+	resp.Storage = &S3StorageInfo{
+		PhysicalBytes: casStats.ChunkBytes,
+		LogicalBytes:  casStats.LogicalBytes,
+		DedupRatio:    dedupRatio,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

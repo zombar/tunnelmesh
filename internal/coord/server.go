@@ -806,14 +806,22 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 					}
 				}
 
-				// Run garbage collection on versions and orphaned chunks
-				gcStart := time.Now()
-				gcStats := s.s3Store.RunGarbageCollection(ctx)
-				gcDuration := time.Since(gcStart).Seconds()
+				// Serialize with manual GC — skip this cycle if manual GC is running
+				if !s.gcMu.TryLock() {
+					log.Debug().Msg("skipping periodic GC: manual GC in progress")
+				} else {
+					// Run garbage collection on versions and orphaned chunks
+					gcStart := time.Now()
+					gcStats := s.s3Store.RunGarbageCollection(ctx)
+					gcDuration := time.Since(gcStart).Seconds()
+					s.gcMu.Unlock()
 
-				// Log when cleanup occurred or chunks were skipped (indicates multi-coordinator or recent-upload activity)
-				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 || gcStats.ChunksSkippedShared > 0 || gcStats.ChunksSkippedGracePeriod > 0 {
-					log.Info().
+					// Log GC results: Info when work was done, Debug for no-ops
+					logEvent := log.Debug()
+					if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 || gcStats.ChunksSkippedShared > 0 || gcStats.ChunksSkippedGracePeriod > 0 {
+						logEvent = log.Info()
+					}
+					logEvent.
 						Str("coordinator", s.cfg.Name).
 						Int("versions_pruned", gcStats.VersionsPruned).
 						Int("chunks_deleted", gcStats.ChunksDeleted).
@@ -821,16 +829,17 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 						Int("objects_scanned", gcStats.ObjectsScanned).
 						Int("chunks_skipped_shared", gcStats.ChunksSkippedShared).
 						Int("chunks_skipped_grace_period", gcStats.ChunksSkippedGracePeriod).
+						Float64("duration_seconds", gcDuration).
 						Msg("S3 garbage collection completed")
-				}
 
-				// Record GC metrics
-				if metrics := s3.GetS3Metrics(); metrics != nil {
-					metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
-				}
+					// Record GC metrics
+					if metrics := s3.GetS3Metrics(); metrics != nil {
+						metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
+					}
 
-				// Update S3 metrics after GC
-				s.updateS3Metrics()
+					// Update S3 metrics after GC
+					s.updateS3Metrics()
+				}
 
 				// Collect and persist local capacity, then load peer snapshots
 				s.collectAndPersistCapacity(ctx)
@@ -911,10 +920,12 @@ func (s *Server) updateS3Metrics() {
 	if err != nil {
 		return
 	}
-	var storageBytes int64
-	for _, b := range buckets {
-		storageBytes += b.SizeBytes
-	}
+
+	// Use physical chunk bytes (post-dedup) as the headline storage metric.
+	// NOTE: This is intentionally the same value as tunnelmesh_s3_chunk_storage_bytes
+	// (set by UpdateCASMetrics above). storage_bytes is the headline/dashboard metric;
+	// chunk_storage_bytes lives in the CAS namespace for dedup analysis.
+	storageBytes := casStats.ChunkBytes
 
 	var quotaBytes int64
 	if qs := s.s3Store.QuotaStats(); qs != nil {

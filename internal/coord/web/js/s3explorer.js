@@ -808,6 +808,7 @@
             // Store quota info in state
             state.quota = data.quota || null;
             state.volume = data.volume || null;
+            state.storage = data.storage || null;
             return data.buckets || [];
         } catch (err) {
             console.error('Failed to fetch buckets:', err);
@@ -986,7 +987,7 @@
             else return;
         }
         bar.style.display = 'block';
-        bar.innerHTML =
+        let html =
             `<div style="display:flex;align-items:center;gap:10px;font-size:12px">` +
             `<span>Volume</span>` +
             `<div style="flex:1;height:8px;background:var(--bg-tertiary, #2a2a3e);position:relative">` +
@@ -994,6 +995,19 @@
             `<span>${pct}% used</span>` +
             `<span style="color:var(--text-secondary, #888)">${formatBytes(v.used_bytes)} / ${formatBytes(v.total_bytes)} (${formatBytes(v.available_bytes)} free)</span>` +
             `</div>`;
+        // Show dedup storage info when available
+        if (state.storage && state.storage.physical_bytes > 0) {
+            const s = state.storage;
+            const ratio = s.dedup_ratio.toFixed(1);
+            html +=
+                `<div style="font-size:11px;color:var(--text-secondary, #888);margin-top:4px">` +
+                `Storage: ${formatBytes(s.physical_bytes)} on disk` +
+                (s.logical_bytes !== s.physical_bytes
+                    ? ` (${formatBytes(s.logical_bytes)} logical, ${ratio}x dedup)`
+                    : '') +
+                `</div>`;
+        }
+        bar.innerHTML = html;
     }
 
     /* istanbul ignore next */

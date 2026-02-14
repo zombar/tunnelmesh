@@ -283,6 +283,12 @@ func TestS3Proxy_ListBuckets(t *testing.T) {
 	}
 	require.NotNil(t, testBucket)
 	assert.True(t, testBucket.Writable)
+
+	// Verify dedup storage info is present
+	require.NotNil(t, resp.Storage)
+	assert.GreaterOrEqual(t, resp.Storage.PhysicalBytes, int64(0))
+	assert.GreaterOrEqual(t, resp.Storage.LogicalBytes, int64(0))
+	assert.GreaterOrEqual(t, resp.Storage.DedupRatio, 1.0)
 }
 
 func TestS3Proxy_ListBuckets_SystemBucketReadOnly(t *testing.T) {
@@ -1437,6 +1443,7 @@ func TestS3GC_PurgeAllTombstoned(t *testing.T) {
 	assert.Contains(t, result, "versions_pruned")
 	assert.Contains(t, result, "chunks_deleted")
 	assert.Contains(t, result, "bytes_reclaimed")
+	assert.Contains(t, result, "duration_seconds")
 }
 
 func TestS3GC_WithoutPurgeAll(t *testing.T) {
