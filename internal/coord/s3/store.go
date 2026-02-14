@@ -1966,6 +1966,54 @@ func (s *Store) PurgeTombstonedObjects(ctx context.Context) int {
 	return purgedCount
 }
 
+// PurgeAllTombstonedObjects removes all tombstoned objects regardless of retention period.
+// Returns the number of objects purged.
+func (s *Store) PurgeAllTombstonedObjects(ctx context.Context) int {
+	purgedCount := 0
+
+	buckets, err := s.ListBuckets(ctx)
+	if err != nil {
+		return 0
+	}
+
+	for _, bucket := range buckets {
+		select {
+		case <-ctx.Done():
+			return purgedCount
+		default:
+		}
+
+		marker := ""
+		for {
+			select {
+			case <-ctx.Done():
+				return purgedCount
+			default:
+			}
+
+			objects, isTruncated, nextMarker, err := s.ListObjects(ctx, bucket.Name, "", marker, 1000)
+			if err != nil {
+				break
+			}
+
+			for _, obj := range objects {
+				if obj.IsTombstoned() {
+					if err := s.PurgeObject(ctx, bucket.Name, obj.Key); err == nil {
+						purgedCount++
+					}
+				}
+			}
+
+			if !isTruncated {
+				break
+			}
+			marker = nextMarker
+		}
+	}
+
+	return purgedCount
+}
+
 // ==== Phase 4: Chunk-Level Replication Interface Methods ====
 
 // GetObjectMeta retrieves object metadata without loading chunk data.
@@ -2706,10 +2754,10 @@ func (s *Store) RunGarbageCollection(ctx context.Context) GCStats {
 	s.deleteOrphanedChunks(ctx, &stats, referencedChunks, gcStartTime)
 
 	// Update quota if tracking
+	// Note: calculateQuotaUsage acquires s.mu.Lock() internally,
+	// so we must NOT hold the lock here.
 	if s.quota != nil {
-		s.mu.Lock()
 		_ = s.calculateQuotaUsage()
-		s.mu.Unlock()
 	}
 
 	return stats
