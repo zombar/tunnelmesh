@@ -15,7 +15,8 @@ func GetVolumeStats(path string) (total, used, available int64, err error) {
 	if err := unix.Statfs(path, &stat); err != nil {
 		return 0, 0, 0, fmt.Errorf("statfs %s: %w", path, err)
 	}
-	bsize := int64(stat.Bsize)
+	// Bsize is int64 on linux but uint32 on darwin — suppress unconvert for portability.
+	bsize := int64(stat.Bsize) //nolint:unconvert
 	total = int64(stat.Blocks) * bsize
 	available = int64(stat.Bavail) * bsize
 	used = total - int64(stat.Bfree)*bsize
