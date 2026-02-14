@@ -339,18 +339,16 @@ func (s *Server) setupAdminRoutes() {
 	s.adminMux.HandleFunc("/api/v1/relay/", s.handleRelay)
 	s.adminMux.HandleFunc("/api/v1/relay-status", s.handleRelayStatus)
 
-	// Expose metrics on admin interface for Prometheus scraping via mesh IP
-	// Use stored registry if available (when joined to mesh), otherwise use default handler
-	if s.metricsRegistry != nil {
-		// Type-assert to Gatherer since promhttp.HandlerFor needs both Registerer and Gatherer
+	// Expose metrics on admin interface for Prometheus scraping via mesh IP.
+	// Uses a lazy handler because metricsRegistry is nil at setup time and
+	// only set later via SetMetricsRegistry() after mesh join.
+	s.adminMux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		if gatherer, ok := s.metricsRegistry.(prometheus.Gatherer); ok {
-			s.adminMux.Handle("/metrics", promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{}))
+			promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{}).ServeHTTP(w, r)
 		} else {
-			s.adminMux.Handle("/metrics", promhttp.Handler())
+			promhttp.Handler().ServeHTTP(w, r)
 		}
-	} else {
-		s.adminMux.Handle("/metrics", promhttp.Handler())
-	}
+	})
 	// Expose debug trace endpoint on admin interface only (mesh-only access)
 	s.adminMux.HandleFunc("/debug/trace", s.handleTrace)
 
