@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2106,4 +2107,134 @@ func TestHandleReplicateChunk_CapacityOK(t *testing.T) {
 	data, readErr := s3Store.ReadChunk(context.Background(), "abc123")
 	assert.NoError(t, readErr, "chunk should be stored when capacity is OK")
 	assert.Equal(t, []byte("some chunk data"), data)
+}
+
+// blockingTransport is a mock transport that blocks sends until released,
+// allowing tests to verify concurrency limits.
+type blockingTransport struct {
+	mu         sync.Mutex
+	handler    func(from string, data []byte) error
+	blockCh    chan struct{} // Sends block until this channel is closed
+	concurrent atomic.Int32  // Current number of concurrent sends
+	maxSeen    atomic.Int32  // Peak concurrent sends observed
+}
+
+func newBlockingTransport() *blockingTransport {
+	return &blockingTransport{
+		blockCh: make(chan struct{}),
+	}
+}
+
+func (bt *blockingTransport) SendToCoordinator(ctx context.Context, coordMeshIP string, data []byte) error {
+	cur := bt.concurrent.Add(1)
+	defer bt.concurrent.Add(-1)
+
+	// Track peak concurrency
+	for {
+		old := bt.maxSeen.Load()
+		if cur <= old || bt.maxSeen.CompareAndSwap(old, cur) {
+			break
+		}
+	}
+
+	// Block until released or context cancelled
+	select {
+	case <-bt.blockCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (bt *blockingTransport) RegisterHandler(handler func(from string, data []byte) error) {
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	bt.handler = handler
+}
+
+func TestSendSemaphoreLimitsConcurrency(t *testing.T) {
+	const maxSends = 3
+	transport := newBlockingTransport()
+	s3Store := newMockS3Store()
+
+	r := NewReplicator(Config{
+		NodeID:             "coord-test",
+		Transport:          transport,
+		S3Store:            s3Store,
+		Logger:             zerolog.Nop(),
+		MaxConcurrentSends: maxSends,
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	r.AddPeer("peer-1")
+
+	// Store a test object
+	err := s3Store.Put(context.Background(), "bucket", "key", []byte("data"), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Launch more goroutines than the semaphore allows
+	const totalSends = 10
+	var wg sync.WaitGroup
+	started := make(chan struct{})
+
+	for i := 0; i < totalSends; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-started // Wait for all goroutines to be ready
+			ctx := context.Background()
+			// Use sendReplicateMessage directly (old-style full-object replication)
+			_ = r.sendReplicateMessage(ctx, "peer-1", ReplicatePayload{
+				Bucket:      "bucket",
+				Key:         "key",
+				Data:        []byte("data"),
+				ContentType: "text/plain",
+			})
+		}()
+	}
+
+	// Release all goroutines at once
+	close(started)
+
+	// Give goroutines time to hit the semaphore
+	time.Sleep(100 * time.Millisecond)
+
+	// The peak concurrent sends should be capped at maxSends
+	peak := transport.maxSeen.Load()
+	assert.LessOrEqual(t, peak, int32(maxSends),
+		"peak concurrent sends (%d) should not exceed MaxConcurrentSends (%d)", peak, maxSends)
+	assert.Greater(t, peak, int32(0), "at least one send should have started")
+
+	// Unblock all sends so goroutines can complete
+	close(transport.blockCh)
+	wg.Wait()
+}
+
+func TestSendSemaphoreRespectsContextCancellation(t *testing.T) {
+	transport := newBlockingTransport()
+	s3Store := newMockS3Store()
+
+	// Semaphore of size 1
+	r := NewReplicator(Config{
+		NodeID:             "coord-test",
+		Transport:          transport,
+		S3Store:            s3Store,
+		Logger:             zerolog.Nop(),
+		MaxConcurrentSends: 1,
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	// Fill the semaphore slot
+	err := r.acquireSendSlot(context.Background())
+	require.NoError(t, err)
+
+	// Try to acquire with an already-cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = r.acquireSendSlot(ctx)
+	assert.ErrorIs(t, err, context.Canceled)
+
+	// Release the slot
+	r.releaseSendSlot()
 }
