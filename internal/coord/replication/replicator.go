@@ -483,6 +483,13 @@ func (r *Replicator) handleIncomingMessage(from string, data []byte) error {
 		return fmt.Errorf("unmarshal message: %w", err)
 	}
 
+	// Override msg.From with the authenticated sender's mesh IP.
+	// msg.From contains the node ID (e.g., "coordinator-1") which is a
+	// hostname, but SendToCoordinator needs a mesh IP for the URL.
+	if from != "" {
+		msg.From = from
+	}
+
 	r.logger.Debug().
 		Str("type", string(msg.Type)).
 		Str("from", from).
