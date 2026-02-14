@@ -312,6 +312,7 @@ type GCStats struct {
 }
 
 // TriggerGC triggers on-demand garbage collection on the coordinator via POST /api/s3/gc.
+// Uses a longer HTTP timeout (10 minutes) since GC can be slow under sustained load.
 func (c *CoordinatorClient) TriggerGC(ctx context.Context, purgeAllTombstoned bool) (*GCStats, error) {
 	requestURL := fmt.Sprintf("%s/api/s3/gc", c.baseURL)
 
@@ -330,7 +331,14 @@ func (c *CoordinatorClient) TriggerGC(ctx context.Context, purgeAllTombstoned bo
 	req.Header.Set("Content-Type", "application/json")
 	c.setBasicAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	// GC can take several minutes under sustained load; use a dedicated client
+	// with a longer timeout instead of the default 60-second client.
+	gcClient := &http.Client{
+		Timeout:   10 * time.Minute,
+		Transport: c.httpClient.Transport,
+	}
+
+	resp, err := gcClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP POST %s: %w", requestURL, err)
 	}
