@@ -1589,6 +1589,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 		// Broadcast updated coordinator list to all connected peers
 		go s.broadcastCoordinatorList()
+
+		// Persist coordinator IPs to system store (replicated to all coordinators)
+		if s.s3SystemStore != nil {
+			go func() {
+				coordIPs := s.GetCoordMeshIPs()
+				if err := s.s3SystemStore.SaveCoordinatorIPs(context.Background(), coordIPs); err != nil {
+					log.Warn().Err(err).Msg("failed to persist coordinator IPs")
+				}
+			}()
+		}
 	}
 
 	// Persist DNS data to S3 (async to avoid blocking registration)
@@ -1879,10 +1889,12 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 	}
 
 	// Determine the sender's mesh IP and verify they are a coordinator.
-	// In a multi-coordinator mesh, coordinators may not all be in each other's
-	// s.peers map (e.g., the primary never "registers" with joining coordinators).
-	// The coordinator IP list is the authoritative source — all coordinators
-	// maintain it via the mesh discovery protocol.
+	// We check multiple sources because coordinators may not all be in each
+	// other's in-memory state (e.g., the primary never "registers" with joining
+	// coordinators). Sources checked in order:
+	// 1. In-memory coordinator IP list (fast, updated via mesh discovery)
+	// 2. s.peers map (coordinators that registered directly with us)
+	// 3. System store coordinator_ips.json (replicated to all coordinators)
 	from, _, _ := net.SplitHostPort(r.RemoteAddr)
 	isCoordinator := false
 	for _, ip := range s.GetCoordMeshIPs() {
@@ -1900,6 +1912,19 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 			from = info.peer.MeshIP
 		}
 		s.peersMu.RUnlock()
+	}
+
+	// Final fallback: check the persisted coordinator IP list from the system store.
+	// This is replicated across all coordinators and survives restarts.
+	if !isCoordinator && s.s3SystemStore != nil {
+		if coordIPs, err := s.s3SystemStore.LoadCoordinatorIPs(context.Background()); err == nil {
+			for _, ip := range coordIPs {
+				if ip == from {
+					isCoordinator = true
+					break
+				}
+			}
+		}
 	}
 
 	if !isCoordinator {
@@ -2120,6 +2145,15 @@ func (s *Server) SetCoordMeshIP(ip string) {
 	log.Info().Strs("ips", ips).Msg("coordinator mesh IPs set for 'this.tunnelmesh' resolution")
 	if s.coordIPsCb != nil {
 		s.coordIPsCb(ips)
+	}
+
+	// Persist coordinator IPs to system store (replicated to all coordinators)
+	if s.s3SystemStore != nil {
+		go func() {
+			if err := s.s3SystemStore.SaveCoordinatorIPs(context.Background(), ips); err != nil {
+				log.Warn().Err(err).Msg("failed to persist coordinator IPs")
+			}
+		}()
 	}
 }
 

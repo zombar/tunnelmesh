@@ -90,7 +90,8 @@ type FilterRulesData struct {
 
 // IP Allocator paths
 const (
-	IPAllocationsPath = "system/ip_allocations.json"
+	IPAllocationsPath  = "system/ip_allocations.json"
+	CoordinatorIPsPath = "system/coordinator_ips.json"
 )
 
 // IPAllocationsData stores IP allocator state for persistence.
@@ -424,6 +425,24 @@ func (ss *SystemStore) LoadIPAllocations(ctx context.Context) (*IPAllocationsDat
 	}
 
 	return &data, nil
+}
+
+// --- Coordinator IPs ---
+
+// SaveCoordinatorIPs persists the list of coordinator mesh IPs to the system bucket.
+// This is replicated to all coordinators, giving them an authoritative list
+// of all coordinator IPs regardless of registration order.
+func (ss *SystemStore) SaveCoordinatorIPs(ctx context.Context, ips []string) error {
+	return ss.saveJSONWithChecksum(ctx, CoordinatorIPsPath, ips)
+}
+
+// LoadCoordinatorIPs loads the coordinator IP list from the system bucket.
+func (ss *SystemStore) LoadCoordinatorIPs(ctx context.Context) ([]string, error) {
+	var ips []string
+	if err := ss.loadJSONWithChecksum(ctx, CoordinatorIPsPath, &ips, 3); err != nil {
+		return nil, err
+	}
+	return ips, nil
 }
 
 // --- Checksum-validated JSON helpers ---
