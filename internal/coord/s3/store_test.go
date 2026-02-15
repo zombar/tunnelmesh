@@ -2319,13 +2319,13 @@ func TestStore_VolumeStats(t *testing.T) {
 	assert.Greater(t, available, int64(0), "available should be positive")
 }
 
-func TestGetCASStats_LogicalBytesUsesChunkMetadata(t *testing.T) {
+func TestGetCASStats_LogicalBytesUsesMetaSize(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ctx := context.Background()
 
 	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
 
-	// Put a single unique object — ratio should be 1.0
+	// Put a single unique object — LogicalBytes should equal meta.Size (uncompressed)
 	content := []byte("unique content for stats test")
 	_, err := store.PutObject(ctx, "test-bucket", "file1.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
@@ -2334,25 +2334,21 @@ func TestGetCASStats_LogicalBytesUsesChunkMetadata(t *testing.T) {
 
 	assert.Equal(t, 1, stats.ObjectCount, "should have 1 object")
 	assert.Greater(t, stats.ChunkBytes, int64(0), "should have chunk bytes on disk")
-	assert.Greater(t, stats.LogicalBytes, int64(0), "should have logical bytes")
-	// For unique content, LogicalBytes should equal ChunkBytes (both use on-disk sizes)
-	assert.Equal(t, stats.ChunkBytes, stats.LogicalBytes,
-		"unique content: logical bytes (%d) should equal chunk bytes (%d) — ratio 1.0",
-		stats.LogicalBytes, stats.ChunkBytes)
+	assert.Equal(t, int64(len(content)), stats.LogicalBytes,
+		"LogicalBytes should equal meta.Size (uncompressed content size)")
 
-	// Put a second identical object (dedup) — LogicalBytes should be 2x ChunkBytes
+	// Put a second identical object (dedup) — LogicalBytes should be 2x content size
 	_, err = store.PutObject(ctx, "test-bucket", "file2.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
 	stats = store.GetCASStats()
 
 	assert.Equal(t, 2, stats.ObjectCount, "should have 2 objects")
-	assert.Equal(t, stats.LogicalBytes, 2*stats.ChunkBytes,
-		"deduplicated: logical bytes (%d) should be 2x chunk bytes (%d)",
-		stats.LogicalBytes, stats.ChunkBytes)
+	assert.Equal(t, int64(2*len(content)), stats.LogicalBytes,
+		"deduplicated: logical bytes should be 2x content size (both objects reference same data)")
 }
 
-func TestGetCASStats_LegacyObjectsUseChunkLookup(t *testing.T) {
+func TestGetCASStats_LegacyObjectsUseMetaSize(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ctx := context.Background()
 
@@ -2364,7 +2360,7 @@ func TestGetCASStats_LegacyObjectsUseChunkLookup(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate a legacy object by stripping ChunkMetadata from the stored meta
-	// The Chunks field is preserved, so on-disk lookup still works
+	// LogicalBytes should still work because it uses meta.Size, not chunk lookups
 	metaDir := filepath.Join(store.DataDir(), "buckets", "test-bucket", "meta")
 	err = filepath.Walk(metaDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil || info.IsDir() || filepath.Ext(path) != ".json" {
@@ -2387,12 +2383,15 @@ func TestGetCASStats_LegacyObjectsUseChunkLookup(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// Re-init stats from disk to pick up the modified metadata
+	store.initCASStats()
+
 	stats := store.GetCASStats()
 
 	assert.Equal(t, 1, stats.ObjectCount)
-	// Legacy objects still have Chunks list — LogicalBytes uses on-disk chunk sizes
-	assert.Equal(t, stats.ChunkBytes, stats.LogicalBytes,
-		"legacy objects should use on-disk chunk sizes via Chunks list lookup")
+	// LogicalBytes uses meta.Size which is always available regardless of ChunkMetadata
+	assert.Equal(t, int64(len(content)), stats.LogicalBytes,
+		"legacy objects should use meta.Size for LogicalBytes")
 }
 
 func TestGetCASStats_VersionCountAfterOverwrite(t *testing.T) {
@@ -2407,8 +2406,8 @@ func TestGetCASStats_VersionCountAfterOverwrite(t *testing.T) {
 	require.NoError(t, err)
 
 	statsAfterV1 := store.GetCASStats()
-	assert.Equal(t, statsAfterV1.ChunkBytes, statsAfterV1.LogicalBytes,
-		"after v1: logical should equal physical (unique content)")
+	assert.Equal(t, int64(len(v1)), statsAfterV1.LogicalBytes,
+		"after v1: logical bytes should equal content size")
 
 	// Overwrite with v2 — v1 is archived, its chunks remain on disk
 	v2 := []byte("version two with different content for test")
@@ -2417,10 +2416,8 @@ func TestGetCASStats_VersionCountAfterOverwrite(t *testing.T) {
 
 	statsAfterV2 := store.GetCASStats()
 	assert.Equal(t, 1, statsAfterV2.VersionCount, "should have 1 archived version")
-	// LogicalBytes only counts current objects (not version files) to avoid
-	// expensive I/O on every metrics refresh. ChunkBytes may exceed LogicalBytes
-	// while old version chunks await GC cleanup — this is expected and
-	// self-corrects after each GC cycle.
-	assert.Greater(t, statsAfterV2.ChunkBytes, statsAfterV2.LogicalBytes,
-		"after v2: physical > logical because version chunks await GC")
+	// LogicalBytes only counts current objects (not version files).
+	// After overwrite, LogicalBytes should equal the new content size.
+	assert.Equal(t, int64(len(v2)), statsAfterV2.LogicalBytes,
+		"after v2: logical bytes should equal v2 content size (only current objects)")
 }

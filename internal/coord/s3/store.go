@@ -1165,10 +1165,14 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 
 	metaPath := s.objectMetaPath(bucket, key)
 
-	// Check if object already exists (for quota update calculation and versioning)
+	// Check if object already exists (for quota update calculation, versioning, and stats)
 	var oldSize int64
+	var oldLogicalBytes int64
+	isNewObject := true
 	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
 		oldSize = oldMeta.Size
+		isNewObject = false
+		oldLogicalBytes = oldMeta.Size
 	}
 
 	// Check quota if configured (only if object is growing)
@@ -1430,6 +1434,12 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
 
+	// Update incremental object/logical stats
+	if isNewObject {
+		s.statsObjectCount.Add(1)
+	}
+	s.statsLogicalBytes.Add(size - oldLogicalBytes)
+
 	// Prune expired versions (lazy cleanup).
 	// Chunk GC for pruned versions is deferred to the periodic GC pass.
 	s.pruneExpiredVersions(ctx, bucket, key)
@@ -1508,14 +1518,7 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
 		oldSize = oldMeta.Size
 		isNewObject = false
-		// Compute old object's logical bytes from ChunkMetadata.CompressedSize
-		for _, chunkHash := range oldMeta.Chunks {
-			if cm, ok := oldMeta.ChunkMetadata[chunkHash]; ok && cm.CompressedSize > 0 {
-				oldLogicalBytes += cm.CompressedSize
-			} else if sz, szErr := s.cas.ChunkSize(ctx, chunkHash); szErr == nil {
-				oldLogicalBytes += sz
-			}
-		}
+		oldLogicalBytes = oldMeta.Size
 	}
 
 	// Check quota if configured (only if object is growing)
@@ -1543,7 +1546,6 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	var chunks []string
 	chunkMetadata := make(map[string]*ChunkMetadata)
 	var written int64
-	var objectLogicalBytes int64
 	md5Hasher := md5.New()
 	now := time.Now().UTC()
 
@@ -1581,7 +1583,7 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 			s.statsChunkBytes.Add(onDiskBytes)
 			chunkOnDiskSize = onDiskBytes
 		} else {
-			// Dedup hit — look up existing on-disk size for LogicalBytes
+			// Dedup hit — look up existing on-disk size for CompressedSize metadata
 			if sz, szErr := s.cas.ChunkSize(ctx, hash); szErr == nil {
 				chunkOnDiskSize = sz
 			}
@@ -1626,7 +1628,6 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 
 		chunks = append(chunks, chunkHash)
 		written += int64(len(chunk))
-		objectLogicalBytes += chunkOnDiskSize
 	}
 
 	// Generate ETag from MD5 hash of all data (S3-compatible format)
@@ -1699,7 +1700,7 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	if isNewObject {
 		s.statsObjectCount.Add(1)
 	}
-	s.statsLogicalBytes.Add(objectLogicalBytes - oldLogicalBytes)
+	s.statsLogicalBytes.Add(written - oldLogicalBytes)
 
 	// Prune expired versions (lazy cleanup).
 	// Chunk GC for pruned versions is deferred to the periodic GC pass.
@@ -1963,16 +1964,8 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 
 	// Decrement object count and logical bytes
 	s.statsObjectCount.Add(-1)
-	var objLogicalBytes int64
-	for _, chunkHash := range meta.Chunks {
-		if cm, ok := meta.ChunkMetadata[chunkHash]; ok && cm.CompressedSize > 0 {
-			objLogicalBytes += cm.CompressedSize
-		} else if sz, szErr := s.cas.ChunkSize(context.Background(), chunkHash); szErr == nil {
-			objLogicalBytes += sz
-		}
-	}
-	if objLogicalBytes > 0 {
-		s.statsLogicalBytes.Add(-objLogicalBytes)
+	if meta.Size > 0 {
+		s.statsLogicalBytes.Add(-meta.Size)
 	}
 
 	s.mu.Unlock()
@@ -2262,14 +2255,7 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
 		bucketMeta.SizeBytes -= oldMeta.Size
 		isNewObject = false
-		// Compute old object's logical bytes
-		for _, chunkHash := range oldMeta.Chunks {
-			if cm, ok := oldMeta.ChunkMetadata[chunkHash]; ok && cm.CompressedSize > 0 {
-				oldLogicalBytes += cm.CompressedSize
-			} else if sz, szErr := s.cas.ChunkSize(ctx, chunkHash); szErr == nil {
-				oldLogicalBytes += sz
-			}
-		}
+		oldLogicalBytes = oldMeta.Size
 	}
 
 	// Archive current version before overwriting — same as PutObject does.
@@ -2285,15 +2271,8 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 		return fmt.Errorf("write object meta: %w", writeErr)
 	}
 
-	// Compute LogicalBytes from imported object's ChunkMetadata
-	var newLogicalBytes int64
-	for _, chunkHash := range meta.Chunks {
-		if cm, ok := meta.ChunkMetadata[chunkHash]; ok && cm.CompressedSize > 0 {
-			newLogicalBytes += cm.CompressedSize
-		} else if size, sizeErr := s.cas.ChunkSize(ctx, chunkHash); sizeErr == nil {
-			newLogicalBytes += size
-		}
-	}
+	// Compute LogicalBytes from imported object's metadata size
+	newLogicalBytes := meta.Size
 
 	// Update incremental stats
 	if isNewObject {
@@ -2834,9 +2813,7 @@ func (s *Store) initCASStats() {
 	}
 
 	// Count chunks and their on-disk sizes (compressed+encrypted).
-	// Build a size map so LogicalBytes can use the same unit.
 	chunksDir := filepath.Join(s.dataDir, "chunks")
-	chunkSizes := make(map[string]int64)
 	var chunkCount int64
 	var chunkBytes int64
 	_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
@@ -2847,8 +2824,6 @@ func (s *Store) initCASStats() {
 		if strings.HasSuffix(info.Name(), ".tmp") {
 			return nil
 		}
-		hash := filepath.Base(path)
-		chunkSizes[hash] = info.Size()
 		chunkCount++
 		chunkBytes += info.Size()
 		return nil
@@ -2886,13 +2861,7 @@ func (s *Store) initCASStats() {
 			}
 			var meta ObjectMeta
 			if json.Unmarshal(data, &meta) == nil {
-				for _, chunkHash := range meta.Chunks {
-					if cm, ok := meta.ChunkMetadata[chunkHash]; ok && cm.CompressedSize > 0 {
-						logicalBytes += cm.CompressedSize
-					} else if size, ok := chunkSizes[chunkHash]; ok {
-						logicalBytes += size
-					}
-				}
+				logicalBytes += meta.Size
 			}
 			return nil
 		})
