@@ -2084,10 +2084,25 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		if parts[1] == "recyclebin" {
-			s.withS3AdminMetrics(w, "listRecycledObjects", func(w http.ResponseWriter) {
-				s.handleS3ListRecycledObjects(w, r, bucket)
-			})
+		if parts[1] == "recyclebin" || strings.HasPrefix(parts[1], "recyclebin/") {
+			rbPath := strings.TrimPrefix(parts[1], "recyclebin")
+			rbPath = strings.TrimPrefix(rbPath, "/")
+			if rbPath == "" {
+				s.withS3AdminMetrics(w, "listRecycledObjects", func(w http.ResponseWriter) {
+					s.handleS3ListRecycledObjects(w, r, bucket)
+				})
+			} else {
+				if decoded, err := url.PathUnescape(rbPath); err == nil {
+					rbPath = decoded
+				}
+				if err := validateS3Name(rbPath); err != nil {
+					s.jsonError(w, "invalid object key: "+err.Error(), http.StatusBadRequest)
+					return
+				}
+				s.withS3AdminMetrics(w, "getRecycledObject", func(w http.ResponseWriter) {
+					s.handleS3GetRecycledObject(w, r, bucket, rbPath)
+				})
+			}
 			return
 		}
 		if strings.HasPrefix(parts[1], "objects/") {
@@ -2977,6 +2992,35 @@ func (s *Server) handleS3ListRecycledObjects(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+// handleS3GetRecycledObject returns the content of a recycled object.
+func (s *Server) handleS3GetRecycledObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	reader, meta, err := s.s3Store.GetRecycledObject(r.Context(), bucket, key)
+	if err != nil {
+		switch {
+		case errors.Is(err, s3.ErrBucketNotFound):
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		case errors.Is(err, s3.ErrObjectNotFound):
+			s.jsonError(w, "recycled object not found", http.StatusNotFound)
+		default:
+			s.jsonError(w, "failed to get recycled object", http.StatusInternalServerError)
+		}
+		return
+	}
+	defer func() { _ = reader.Close() }()
+
+	w.Header().Set("Content-Type", meta.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	w.Header().Set("ETag", meta.ETag)
+	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
+
+	_, _ = io.Copy(w, reader)
 }
 
 // --- Panel Management API ---

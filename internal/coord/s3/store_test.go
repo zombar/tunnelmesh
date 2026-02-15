@@ -753,6 +753,64 @@ func TestRecycleBin_MultipleDeletesSameKey(t *testing.T) {
 	assert.Len(t, recycled, 2)
 }
 
+func TestGetRecycledObject(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	content := []byte("hello recycled world")
+	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Delete the object (moves to recycle bin)
+	err = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	// GetRecycledObject should return the content
+	reader, meta, err := store.GetRecycledObject(context.Background(), "test-bucket", "file.txt")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+
+	assert.Equal(t, "text/plain", meta.ContentType)
+	assert.Equal(t, int64(len(content)), meta.Size)
+
+	got, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, content, got)
+}
+
+func TestGetRecycledObject_NotFound(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	_, _, err := store.GetRecycledObject(context.Background(), "test-bucket", "nonexistent.txt")
+	assert.ErrorIs(t, err, ErrObjectNotFound)
+}
+
+func TestGetRecycledObject_ReturnsLatest(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create, delete, create with different content, delete again
+	v1 := []byte("version1")
+	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	require.NoError(t, err)
+	require.NoError(t, store.DeleteObject(context.Background(), "test-bucket", "file.txt"))
+
+	v2 := []byte("version2-latest")
+	_, err = store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	require.NoError(t, err)
+	require.NoError(t, store.DeleteObject(context.Background(), "test-bucket", "file.txt"))
+
+	// GetRecycledObject should return the most recent version
+	reader, _, err := store.GetRecycledObject(context.Background(), "test-bucket", "file.txt")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+
+	got, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, v2, got)
+}
+
 func TestDeleteObject_SecondDeleteReturnsNotFound(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
