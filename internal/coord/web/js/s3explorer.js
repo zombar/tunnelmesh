@@ -830,12 +830,16 @@
 
     async function fetchRecycledObjects(bucket, prefix = '') {
         try {
-            const resp = await fetch(`/api/s3/buckets/${encodeURIComponent(bucket)}/recyclebin`);
+            const params = new URLSearchParams();
+            if (prefix) params.set('prefix', prefix);
+            const qs = params.toString();
+            const url = `/api/s3/buckets/${encodeURIComponent(bucket)}/recyclebin${qs ? `?${qs}` : ''}`;
+            const resp = await fetch(url);
             if (!resp.ok) return [];
             const entries = await resp.json();
             if (!Array.isArray(entries)) return [];
-            // Client-side filter: only show objects directly under the current prefix
-            // (matching delimiter='/' behaviour of the objects endpoint)
+            // Server-side prefix filter returns all entries under the prefix;
+            // apply delimiter='/' logic client-side to show only direct children.
             return entries.filter((obj) => {
                 if (!obj.key.startsWith(prefix)) return false;
                 const remainder = obj.key.slice(prefix.length);
