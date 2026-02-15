@@ -35,7 +35,7 @@ func TestGC_DistributedAware(t *testing.T) {
 
 	// Create an orphaned chunk directly (not referenced by any object)
 	chunkData := []byte("Orphaned chunk data for testing")
-	chunkHash, err := store.cas.WriteChunk(ctx, chunkData)
+	chunkHash, _, err := store.cas.WriteChunk(ctx, chunkData)
 	require.NoError(t, err)
 
 	// Simulate: another coordinator (coord2) also owns this chunk
@@ -83,7 +83,7 @@ func TestGC_DeletesWhenSoleOwner(t *testing.T) {
 
 	// Create an orphaned chunk directly (not referenced by any object)
 	chunkData := []byte("Test data for sole owner GC")
-	chunkHash, err := store.cas.WriteChunk(ctx, chunkData)
+	chunkHash, _, err := store.cas.WriteChunk(ctx, chunkData)
 	require.NoError(t, err)
 
 	// We're the sole owner
@@ -169,7 +169,7 @@ func TestGC_NoRegistry(t *testing.T) {
 
 	// Create an orphaned chunk directly (not referenced by any object)
 	chunkData := []byte("Test data for no registry GC")
-	chunkHash, err := store.cas.WriteChunk(ctx, chunkData)
+	chunkHash, _, err := store.cas.WriteChunk(ctx, chunkData)
 	require.NoError(t, err)
 
 	// Age the chunk (set mod time to 2 hours ago to pass grace period)
@@ -213,15 +213,15 @@ func TestGC_MultipleOwners(t *testing.T) {
 
 	// Create 3 orphaned chunks directly (not referenced by any object)
 	chunk1Data := []byte("Chunk 1: sole owner")
-	chunk1Hash, err := store.cas.WriteChunk(ctx, chunk1Data)
+	chunk1Hash, _, err := store.cas.WriteChunk(ctx, chunk1Data)
 	require.NoError(t, err)
 
 	chunk2Data := []byte("Chunk 2: shared ownership")
-	chunk2Hash, err := store.cas.WriteChunk(ctx, chunk2Data)
+	chunk2Hash, _, err := store.cas.WriteChunk(ctx, chunk2Data)
 	require.NoError(t, err)
 
 	chunk3Data := []byte("Chunk 3: other coordinator only")
-	chunk3Hash, err := store.cas.WriteChunk(ctx, chunk3Data)
+	chunk3Hash, _, err := store.cas.WriteChunk(ctx, chunk3Data)
 	require.NoError(t, err)
 
 	// Simulate different ownership scenarios:
@@ -269,7 +269,7 @@ func TestGC_RegistryUnavailable(t *testing.T) {
 
 	// Create an orphaned chunk directly (not referenced by any object)
 	chunkData := []byte("Test data for registry failure")
-	chunkHash, err := store.cas.WriteChunk(ctx, chunkData)
+	chunkHash, _, err := store.cas.WriteChunk(ctx, chunkData)
 	require.NoError(t, err)
 
 	// Age the chunk (set mod time to 2 hours ago to pass grace period)
@@ -330,20 +330,20 @@ func TestGC_ErasureCodingParityShards(t *testing.T) {
 	// Manually create orphaned chunks simulating erasure-coded data
 	// Data chunks (simulating CDC-chunked data shards)
 	dataChunk1 := []byte("Data shard 1 chunk 1")
-	dataHash1, err := store.cas.WriteChunk(ctx, dataChunk1)
+	dataHash1, _, err := store.cas.WriteChunk(ctx, dataChunk1)
 	require.NoError(t, err)
 
 	dataChunk2 := []byte("Data shard 2 chunk 1")
-	dataHash2, err := store.cas.WriteChunk(ctx, dataChunk2)
+	dataHash2, _, err := store.cas.WriteChunk(ctx, dataChunk2)
 	require.NoError(t, err)
 
 	// Parity shards (stored whole)
 	parityShard1 := []byte("Parity shard 1 data")
-	parityHash1, err := store.cas.WriteChunk(ctx, parityShard1)
+	parityHash1, _, err := store.cas.WriteChunk(ctx, parityShard1)
 	require.NoError(t, err)
 
 	parityShard2 := []byte("Parity shard 2 data")
-	parityHash2, err := store.cas.WriteChunk(ctx, parityShard2)
+	parityHash2, _, err := store.cas.WriteChunk(ctx, parityShard2)
 	require.NoError(t, err)
 
 	// Age all chunks (set mod time to 2 hours ago to pass grace period)

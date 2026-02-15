@@ -164,7 +164,7 @@ func TestConcurrent_DistributedReads(t *testing.T) {
 
 	for i := 0; i < numChunks; i++ {
 		chunkData := []byte(fmt.Sprintf("Chunk %d ", i))
-		hash, err := cas.WriteChunk(ctx, chunkData)
+		hash, _, err := cas.WriteChunk(ctx, chunkData)
 		require.NoError(t, err)
 		chunks[i] = hash
 		expectedData = append(expectedData, chunkData...)

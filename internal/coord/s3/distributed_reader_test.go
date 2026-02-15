@@ -110,10 +110,10 @@ func TestDistributedChunkReader_AllChunksLocal(t *testing.T) {
 	chunk1 := []byte("Hello ")
 	chunk2 := []byte("World!")
 
-	hash1, err := cas.WriteChunk(ctx, chunk1)
+	hash1, _, err := cas.WriteChunk(ctx, chunk1)
 	require.NoError(t, err)
 
-	hash2, err := cas.WriteChunk(ctx, chunk2)
+	hash2, _, err := cas.WriteChunk(ctx, chunk2)
 	require.NoError(t, err)
 
 	// Create distributed reader (replicator is nil - not needed for local-only)
@@ -148,7 +148,7 @@ func TestDistributedChunkReader_FetchFromRemote(t *testing.T) {
 	chunk2 := []byte("Remote ")
 	chunk3 := []byte("Data!")
 
-	hash1, err := cas.WriteChunk(ctx, chunk1)
+	hash1, _, err := cas.WriteChunk(ctx, chunk1)
 	require.NoError(t, err)
 
 	// Hash chunk2 and chunk3 without writing locally
@@ -273,13 +273,13 @@ func TestDistributedChunkReader_PartialReads(t *testing.T) {
 	chunk2 := []byte("BBBB")
 	chunk3 := []byte("CCCC")
 
-	hash1, err := cas.WriteChunk(ctx, chunk1)
+	hash1, _, err := cas.WriteChunk(ctx, chunk1)
 	require.NoError(t, err)
 
-	hash2, err := cas.WriteChunk(ctx, chunk2)
+	hash2, _, err := cas.WriteChunk(ctx, chunk2)
 	require.NoError(t, err)
 
-	hash3, err := cas.WriteChunk(ctx, chunk3)
+	hash3, _, err := cas.WriteChunk(ctx, chunk3)
 	require.NoError(t, err)
 
 	// Create distributed reader
@@ -463,10 +463,10 @@ func TestDistributedChunkReader_MixedLocalRemote(t *testing.T) {
 	local2 := []byte("LOCAL2-")
 	remote2 := []byte("REMOTE2")
 
-	hashL1, err := cas.WriteChunk(ctx, local1)
+	hashL1, _, err := cas.WriteChunk(ctx, local1)
 	require.NoError(t, err)
 	hashR1 := ContentHash(remote1)
-	hashL2, err := cas.WriteChunk(ctx, local2)
+	hashL2, _, err := cas.WriteChunk(ctx, local2)
 	require.NoError(t, err)
 	hashR2 := ContentHash(remote2)
 
@@ -675,9 +675,9 @@ func TestDistributedChunkReader_SequentialFallback_NoReplicator(t *testing.T) {
 	chunk1 := []byte("A")
 	chunk2 := []byte("B")
 
-	hash1, err := cas.WriteChunk(ctx, chunk1)
+	hash1, _, err := cas.WriteChunk(ctx, chunk1)
 	require.NoError(t, err)
-	hash2, err := cas.WriteChunk(ctx, chunk2)
+	hash2, _, err := cas.WriteChunk(ctx, chunk2)
 	require.NoError(t, err)
 
 	// With replicator=nil, should use sequential path even with Parallelism > 1

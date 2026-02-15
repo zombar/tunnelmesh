@@ -1112,7 +1112,7 @@ func TestCAS_WriteAndReadChunk(t *testing.T) {
 	require.NoError(t, err)
 
 	data := []byte("hello content-addressable world")
-	hash, err := cas.WriteChunk(context.Background(), data)
+	hash, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 	assert.NotEmpty(t, hash)
 
@@ -1132,10 +1132,10 @@ func TestCAS_Deduplication(t *testing.T) {
 	data := []byte("duplicate me")
 
 	// Write same data twice
-	hash1, err := cas.WriteChunk(context.Background(), data)
+	hash1, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
-	hash2, err := cas.WriteChunk(context.Background(), data)
+	hash2, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	// Should return same hash (dedup)
@@ -1146,7 +1146,7 @@ func TestCAS_Deduplication(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write once more to verify it doesn't increase
-	_, err = cas.WriteChunk(context.Background(), data)
+	_, _, err = cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	totalSize2, err := cas.TotalSize(context.Background())
@@ -1164,7 +1164,7 @@ func TestCAS_ConvergentEncryption(t *testing.T) {
 	data := []byte("same plaintext should produce same ciphertext")
 
 	// Write the data
-	hash1, err := cas.WriteChunk(context.Background(), data)
+	hash1, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	// Get the encrypted size
@@ -1172,10 +1172,10 @@ func TestCAS_ConvergentEncryption(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete and rewrite
-	err = cas.DeleteChunk(context.Background(), hash1)
+	_, err = cas.DeleteChunk(context.Background(), hash1)
 	require.NoError(t, err)
 
-	hash2, err := cas.WriteChunk(context.Background(), data)
+	hash2, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	size2, err := cas.ChunkSize(context.Background(), hash2)
@@ -1205,12 +1205,12 @@ func TestCAS_DeleteChunk(t *testing.T) {
 	require.NoError(t, err)
 
 	data := []byte("delete me")
-	hash, err := cas.WriteChunk(context.Background(), data)
+	hash, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	assert.True(t, cas.ChunkExists(hash))
 
-	err = cas.DeleteChunk(context.Background(), hash)
+	_, err = cas.DeleteChunk(context.Background(), hash)
 	require.NoError(t, err)
 
 	assert.False(t, cas.ChunkExists(hash))

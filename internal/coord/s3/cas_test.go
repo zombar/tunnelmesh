@@ -34,7 +34,7 @@ func TestCAS_ConcurrentWriteSameHash(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			h, err := cas.WriteChunk(ctx, data)
+			h, _, err := cas.WriteChunk(ctx, data)
 			hashes[idx] = h
 			errs[idx] = err
 		}(i)
@@ -68,7 +68,7 @@ func TestCAS_ConcurrentWriteDifferentHashes(t *testing.T) {
 			defer wg.Done()
 			// Each goroutine writes unique data
 			data := []byte("unique content " + string(rune('A'+idx)))
-			h, err := cas.WriteChunk(ctx, data)
+			h, _, err := cas.WriteChunk(ctx, data)
 			hashes[idx] = h
 			errs[idx] = err
 		}(i)
@@ -101,7 +101,7 @@ func TestCAS_WriteReadDeleteRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	data := []byte("test chunk data")
-	hash, err := cas.WriteChunk(ctx, data)
+	hash, _, err := cas.WriteChunk(ctx, data)
 	require.NoError(t, err)
 
 	// Read back
@@ -118,7 +118,7 @@ func TestCAS_WriteReadDeleteRoundTrip(t *testing.T) {
 	assert.Greater(t, size, int64(0))
 
 	// Delete
-	err = cas.DeleteChunk(ctx, hash)
+	_, err = cas.DeleteChunk(ctx, hash)
 	require.NoError(t, err)
 
 	// Should not exist anymore
@@ -136,13 +136,15 @@ func TestCAS_WriteChunkDedup(t *testing.T) {
 	data := []byte("dedup test data")
 
 	// First write creates the chunk
-	hash1, err := cas.WriteChunk(ctx, data)
+	hash1, onDisk1, err := cas.WriteChunk(ctx, data)
 	require.NoError(t, err)
+	assert.Greater(t, onDisk1, int64(0), "first write should report on-disk bytes")
 
 	// Second write should hit the dedup fast path (file already exists)
-	hash2, err := cas.WriteChunk(ctx, data)
+	hash2, onDisk2, err := cas.WriteChunk(ctx, data)
 	require.NoError(t, err)
 	assert.Equal(t, hash1, hash2)
+	assert.Equal(t, int64(0), onDisk2, "dedup hit should report 0 on-disk bytes")
 }
 
 func TestCAS_WriteChunkBadDir(t *testing.T) {
@@ -159,7 +161,7 @@ func TestCAS_WriteChunkBadDir(t *testing.T) {
 	require.NoError(t, os.RemoveAll(cas.chunksDir))
 	require.NoError(t, os.WriteFile(cas.chunksDir, []byte("not a dir"), 0644))
 
-	_, err = cas.WriteChunk(context.Background(), []byte("data"))
+	_, _, err = cas.WriteChunk(context.Background(), []byte("data"))
 	assert.Error(t, err)
 }
 
@@ -173,9 +175,9 @@ func TestCAS_TotalSize(t *testing.T) {
 	assert.Equal(t, int64(0), size)
 
 	// Write some chunks
-	_, err = cas.WriteChunk(ctx, []byte("chunk one"))
+	_, _, err = cas.WriteChunk(ctx, []byte("chunk one"))
 	require.NoError(t, err)
-	_, err = cas.WriteChunk(ctx, []byte("chunk two"))
+	_, _, err = cas.WriteChunk(ctx, []byte("chunk two"))
 	require.NoError(t, err)
 
 	size, err = cas.TotalSize(ctx)
@@ -186,8 +188,9 @@ func TestCAS_TotalSize(t *testing.T) {
 func TestCAS_DeleteChunkNonExistent(t *testing.T) {
 	cas := newTestCAS(t)
 	// Deleting a non-existent chunk should succeed (no-op)
-	err := cas.DeleteChunk(context.Background(), "nonexistent-hash")
+	freed, err := cas.DeleteChunk(context.Background(), "nonexistent-hash")
 	assert.NoError(t, err)
+	assert.Equal(t, int64(0), freed)
 }
 
 func TestCAS_ChunkSizeNotFound(t *testing.T) {
@@ -210,7 +213,7 @@ func TestCAS_NoOrphanedTempFiles(t *testing.T) {
 	// Write several chunks
 	for i := 0; i < 10; i++ {
 		data := []byte("chunk data " + string(rune('0'+i)))
-		_, err := cas.WriteChunk(ctx, data)
+		_, _, err := cas.WriteChunk(ctx, data)
 		require.NoError(t, err)
 	}
 

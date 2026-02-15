@@ -299,7 +299,7 @@ func (r *DistributedChunkReader) fetchChunk(idx int) ([]byte, error) {
 		}
 
 		// Cache locally for future reads
-		if _, werr := r.localCAS.WriteChunk(r.ctx, chunkData); werr != nil {
+		if _, _, werr := r.localCAS.WriteChunk(r.ctx, chunkData); werr != nil {
 			r.logger.Warn().
 				Err(werr).
 				Str("chunk_hash", chunkHash[:8]+"...").
