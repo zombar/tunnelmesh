@@ -363,9 +363,11 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	// Shared transport for forwarding S3 writes to other coordinators.
 	// TLS config is set later by SetMeshTLS() with the registration CA.
 	srv.s3ForwardTransport = &http.Transport{
-		MaxIdleConns:       100,
-		IdleConnTimeout:    90 * time.Second,
-		DisableCompression: true, // S3 objects are often already compressed
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		DisableCompression:    true, // S3 objects are often already compressed
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 30 * time.Second,
 	}
 
 	// Initialize packet filter

@@ -2959,14 +2959,33 @@ func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, 
 		if (r.Method == http.MethodPut || r.Method == http.MethodDelete) &&
 			r.Header.Get("X-TunnelMesh-Forwarded") == "" {
 			if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
-				// Use a recorder to capture the response status so we can update
-				// peer listings immediately after a successful forwarded write.
-				rec := &forwardRecorder{ResponseWriter: w}
-				s.forwardS3Request(rec, r, target, bucket)
-				if rec.status == 0 || rec.status == http.StatusOK || rec.status == http.StatusNoContent {
-					s.updatePeerListingsAfterForward(bucket, key, r)
+				// Buffer body so we can retry locally if forward fails.
+				var bodyBuf []byte
+				if r.Body != nil {
+					var err error
+					bodyBuf, err = io.ReadAll(r.Body)
+					_ = r.Body.Close()
+					if err != nil {
+						s.jsonError(w, "failed to read request body", http.StatusInternalServerError)
+						return
+					}
+					r.Body = io.NopCloser(bytes.NewReader(bodyBuf))
 				}
-				return
+
+				rec := &discardResponseWriter{header: make(http.Header)}
+				s.forwardS3Request(rec, r, target, bucket)
+				if rec.status == http.StatusOK || rec.status == http.StatusNoContent {
+					w.WriteHeader(rec.status)
+					s.updatePeerListingsAfterForward(bucket, key, r)
+					return
+				}
+				// Forward failed — fall through to handle locally.
+				log.Warn().Str("target", target).Int("status", rec.status).
+					Str("bucket", bucket).Str("key", key).
+					Msg("S3 forward failed, handling locally")
+				if bodyBuf != nil {
+					r.Body = io.NopCloser(bytes.NewReader(bodyBuf))
+				}
 			}
 		}
 
@@ -3913,17 +3932,18 @@ func (s *Server) objectPrimaryCoordinator(bucket, key string) string {
 	return primary
 }
 
-// forwardRecorder wraps http.ResponseWriter to capture the status code
-// from a forwarded request without consuming the response body.
-type forwardRecorder struct {
-	http.ResponseWriter
+// discardResponseWriter captures the status code and headers from a
+// forwarded request while discarding the response body.  This allows the
+// caller to inspect the result and decide whether to use it or fall back
+// to local handling.
+type discardResponseWriter struct {
+	header http.Header
 	status int
 }
 
-func (r *forwardRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
-}
+func (d *discardResponseWriter) Header() http.Header         { return d.header }
+func (d *discardResponseWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (d *discardResponseWriter) WriteHeader(code int)        { d.status = code }
 
 // upsertObjectList returns a new slice with info replacing any existing entry with
 // the same key, or appended if no match exists.
