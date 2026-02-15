@@ -522,7 +522,7 @@ func cleanupMeshShares(ctx context.Context, client *mesh.CoordinatorClient, st s
 		}
 	}
 
-	// Trigger GC to purge tombstoned data and reclaim disk
+	// Trigger GC to purge recycled data and reclaim disk
 	log.Info().Msg("Triggering garbage collection...")
 	gcStats, err := client.TriggerGC(ctx, true)
 	if err != nil {

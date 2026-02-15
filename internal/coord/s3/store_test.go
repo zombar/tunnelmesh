@@ -374,8 +374,9 @@ func TestStoreDeleteObjectNotFound(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
 
+	// S3 semantics: deleting a non-existent object is idempotent (succeeds)
 	err := store.DeleteObject(context.Background(), "test-bucket", "nonexistent.txt")
-	assert.ErrorIs(t, err, ErrObjectNotFound)
+	assert.NoError(t, err)
 }
 
 func TestStoreDeleteObjectBucketNotFound(t *testing.T) {
@@ -768,9 +769,9 @@ func TestDeleteObject_SecondDeleteReturnsNotFound(t *testing.T) {
 	_, err = store.HeadObject(context.Background(), "test-bucket", "file.txt")
 	assert.ErrorIs(t, err, ErrObjectNotFound)
 
-	// Second delete: object not found (already recycled)
+	// Second delete: idempotent (S3 semantics — succeeds even though already recycled)
 	err = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
-	assert.ErrorIs(t, err, ErrObjectNotFound)
+	assert.NoError(t, err)
 }
 
 // --- Path Traversal Regression Tests ---

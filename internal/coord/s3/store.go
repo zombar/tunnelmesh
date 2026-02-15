@@ -1881,7 +1881,12 @@ func (s *Store) DeleteObject(ctx context.Context, bucket, key string) error {
 		return fmt.Errorf("invalid key: %w", err)
 	}
 
-	return s.RecycleObject(ctx, bucket, key)
+	err := s.RecycleObject(ctx, bucket, key)
+	// S3 semantics: delete is idempotent — deleting a non-existent object succeeds
+	if errors.Is(err, ErrObjectNotFound) {
+		return nil
+	}
+	return err
 }
 
 // recyclebinPath returns the path to a bucket's recycle bin directory.
@@ -2229,8 +2234,11 @@ func (s *Store) PurgeAllRecycled(ctx context.Context) int {
 }
 
 // PurgeAllRecycledInBucket removes all recycle bin entries for a specific bucket.
-// Used when hard-deleting a file share bucket.
+// Used when hard-deleting a file share bucket or via the per-bucket purge API.
 func (s *Store) PurgeAllRecycledInBucket(ctx context.Context, bucket string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	rbDir := s.recyclebinPath(bucket)
 	entries, err := os.ReadDir(rbDir)
 	if err != nil {
