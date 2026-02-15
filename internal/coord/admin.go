@@ -2523,6 +2523,7 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 
 // mergeObjectListings deduplicates object listings from multiple coordinators.
 // For duplicate keys, the entry with the most recent LastModified wins.
+// On equal timestamps, the local (first) entry is kept as an implicit tie-breaker.
 // Prefix entries (folders) are deduplicated by key; their sizes are summed.
 func mergeObjectListings(local, remote []S3ObjectInfo) []S3ObjectInfo {
 	if len(remote) == 0 {
@@ -3425,6 +3426,8 @@ func (s *Server) handleS3ListRecycledObjects(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	prefix := r.URL.Query().Get("prefix")
+
 	entries, err := s.s3Store.ListRecycledObjects(r.Context(), bucket)
 	if err != nil {
 		if errors.Is(err, s3.ErrBucketNotFound) {
@@ -3435,9 +3438,12 @@ func (s *Server) handleS3ListRecycledObjects(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Convert to S3ObjectInfo for consistent API response format
+	// Convert to S3ObjectInfo for consistent API response format, filtering by prefix
 	result := make([]S3ObjectInfo, 0, len(entries))
 	for _, entry := range entries {
+		if prefix != "" && !strings.HasPrefix(entry.OriginalKey, prefix) {
+			continue
+		}
 		info := S3ObjectInfo{
 			Key:          entry.OriginalKey,
 			Size:         entry.Meta.Size,
@@ -3451,6 +3457,16 @@ func (s *Server) handleS3ListRecycledObjects(w http.ResponseWriter, r *http.Requ
 	// Merge cached peer recycled listings from the system store listing index.
 	if r.Header.Get("X-TunnelMesh-Forwarded") == "" {
 		peerRecycled := s.getPeerRecycledListing(bucket)
+		if prefix != "" {
+			// Filter peer recycled entries by prefix
+			var filtered []S3ObjectInfo
+			for _, obj := range peerRecycled {
+				if strings.HasPrefix(obj.Key, prefix) {
+					filtered = append(filtered, obj)
+				}
+			}
+			peerRecycled = filtered
+		}
 		result = mergeObjectListings(result, peerRecycled)
 	}
 

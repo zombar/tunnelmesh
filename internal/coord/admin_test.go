@@ -1546,6 +1546,77 @@ func TestS3GC_ConcurrentReturns429(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
 }
 
+// --- Recycle Bin HTTP Handler Tests ---
+
+func TestS3Proxy_GetRecycledObject(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Upload and delete an object so it lands in the recycle bin
+	content := []byte("recoverable content")
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "deleted.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", "deleted.txt")
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/recyclebin/deleted.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "text/plain", rec.Header().Get("Content-Type"))
+
+	body, _ := io.ReadAll(rec.Body)
+	assert.Equal(t, content, body)
+}
+
+func TestS3Proxy_GetRecycledObject_NotFound(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/recyclebin/nonexistent.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestS3Proxy_GetRecycledObject_MethodNotAllowed(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/s3/buckets/test-bucket/recyclebin/file.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestS3Proxy_ListRecycledObjects_PrefixFilter(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Create and delete objects in different prefixes
+	for _, key := range []string{"docs/a.txt", "docs/b.txt", "src/main.go"} {
+		_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", key, bytes.NewReader([]byte("x")), 1, "text/plain", nil)
+		require.NoError(t, err)
+		err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", key)
+		require.NoError(t, err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/recyclebin?prefix=docs/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var objects []S3ObjectInfo
+	err := json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+
+	assert.Len(t, objects, 2)
+	for _, obj := range objects {
+		assert.True(t, strings.HasPrefix(obj.Key, "docs/"), "expected docs/ prefix, got: %s", obj.Key)
+	}
+}
+
 // --- Listing Index Tests ---
 
 func newTestServerWithListingIndex(t *testing.T) *Server {
