@@ -2394,3 +2394,32 @@ func TestGetCASStats_LegacyObjectsUseChunkLookup(t *testing.T) {
 	assert.Equal(t, stats.ChunkBytes, stats.LogicalBytes,
 		"legacy objects should use on-disk chunk sizes via Chunks list lookup")
 }
+
+func TestGetCASStats_VersionChunksIncludedInLogicalBytes(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Write v1 of a file
+	v1 := []byte("version one content for logical bytes test")
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt", bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	require.NoError(t, err)
+
+	statsAfterV1 := store.GetCASStats()
+	assert.Equal(t, statsAfterV1.ChunkBytes, statsAfterV1.LogicalBytes,
+		"after v1: logical should equal physical (unique content)")
+
+	// Overwrite with v2 — v1 is archived, its chunks remain on disk
+	v2 := []byte("version two with different content for test")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt", bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	require.NoError(t, err)
+
+	statsAfterV2 := store.GetCASStats()
+	assert.Equal(t, 1, statsAfterV2.VersionCount, "should have 1 archived version")
+	// ChunkBytes includes both v1 and v2 chunks on disk.
+	// LogicalBytes must also include version chunk references,
+	// otherwise Physical >> Logical which is nonsensical.
+	assert.Equal(t, statsAfterV2.ChunkBytes, statsAfterV2.LogicalBytes,
+		"after v2: logical should still equal physical — version chunks must be counted")
+}
