@@ -94,7 +94,7 @@ github.com/inconshreveable/mousetrap
 # github.com/kardianos/service v1.2.4
 ## explicit; go 1.23.0
 github.com/kardianos/service
-# github.com/klauspost/compress v1.18.3
+# github.com/klauspost/compress v1.18.4
 ## explicit; go 1.23
 github.com/klauspost/compress
 github.com/klauspost/compress/fse
