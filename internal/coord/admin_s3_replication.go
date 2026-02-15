@@ -90,7 +90,13 @@ func (s *Server) updatePeerListingsAfterForward(bucket, key string, r *http.Requ
 			newPL.Objects[bucket] = upsertObjectList(newPL.Objects[bucket], key, info)
 
 		case http.MethodDelete:
-			newPL.Objects[bucket], _ = removeFromObjectList(newPL.Objects[bucket], key)
+			var removed *S3ObjectInfo
+			newPL.Objects[bucket], removed = removeFromObjectList(newPL.Objects[bucket], key)
+			if removed != nil {
+				recycled := *removed
+				recycled.DeletedAt = time.Now().UTC().Format(time.RFC3339)
+				newPL.Recycled[bucket] = append(newPL.Recycled[bucket], recycled)
+			}
 		}
 
 		if s.peerListings.CompareAndSwap(old, newPL) {

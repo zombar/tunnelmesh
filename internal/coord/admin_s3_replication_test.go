@@ -44,6 +44,26 @@ func TestUpdatePeerListingsAfterForward_Delete(t *testing.T) {
 	pl := srv.peerListings.Load()
 	require.NotNil(t, pl)
 	assert.Empty(t, pl.Objects["test-bucket"])
+
+	// Verify the deleted object appears in the recycled list with a DeletedAt timestamp
+	recycled := pl.Recycled["test-bucket"]
+	require.Len(t, recycled, 1)
+	assert.Equal(t, "del.txt", recycled[0].Key)
+	assert.Equal(t, int64(10), recycled[0].Size)
+	assert.NotEmpty(t, recycled[0].DeletedAt)
+}
+
+func TestUpdatePeerListingsAfterForward_DeleteNonExistent(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Delete a key that was never added — recycled list should stay empty
+	delReq := httptest.NewRequest(http.MethodDelete, "/api/s3/buckets/test-bucket/objects/ghost.txt", nil)
+	srv.updatePeerListingsAfterForward("test-bucket", "ghost.txt", delReq)
+
+	pl := srv.peerListings.Load()
+	require.NotNil(t, pl)
+	assert.Empty(t, pl.Objects["test-bucket"])
+	assert.Empty(t, pl.Recycled["test-bucket"])
 }
 
 func TestDiscardResponseWriter_CapturesStatus(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 // listingIndex is published by each coordinator to the system store.
 type listingIndex struct {
 	Buckets map[string]*bucketListing `json:"buckets"`
+	Seq     uint64                    `json:"seq"` // Monotonic counter incremented on each incremental update
 }
 
 // bucketListing holds object and recycled entry listings for a single bucket.
@@ -79,6 +80,7 @@ func (s *Server) updateListingIndex(bucket, key string, info *S3ObjectInfo, op s
 			for k, v := range old.Buckets {
 				newIdx.Buckets[k] = v
 			}
+			newIdx.Seq = old.Seq
 		}
 
 		// Get or create bucket listing (copy-on-write for the bucket too)
@@ -117,6 +119,7 @@ func (s *Server) updateListingIndex(bucket, key string, info *S3ObjectInfo, op s
 		}
 
 		newIdx.Buckets[bucket] = &newBL
+		newIdx.Seq++ // Monotonic increment for reconcile staleness detection
 
 		// CAS to avoid lost updates from concurrent calls
 		if s.localListingIndex.CompareAndSwap(old, newIdx) {
@@ -306,6 +309,14 @@ func (s *Server) reconcileLocalIndex(ctx context.Context) {
 		return
 	}
 
+	// Capture the Seq before the filesystem scan. If incremental updates
+	// happen during the scan (Seq advances), this reconcile result is stale
+	// and we skip it — the next 60-second cycle will pick up any drift.
+	var preSeq uint64
+	if pre := s.localListingIndex.Load(); pre != nil {
+		preSeq = pre.Seq
+	}
+
 	buckets, err := s.s3Store.ListBuckets(ctx)
 	if err != nil {
 		log.Warn().Err(err).Msg("reconcile: failed to list buckets")
@@ -378,12 +389,22 @@ func (s *Server) reconcileLocalIndex(ctx context.Context) {
 		}
 	}
 
+	// If incremental updates happened during the scan, this reconcile result
+	// is stale — skip it. The next 60-second cycle will pick up any drift.
+	current := s.localListingIndex.Load()
+	if current != nil && current.Seq > preSeq {
+		return
+	}
+
 	// Compare with current index — only update if changed.
 	// Uses CAS to avoid overwriting concurrent incremental updates from updateListingIndex.
 	// If CAS fails, the incremental update wins and reconcile will catch up next cycle.
-	old := s.localListingIndex.Load()
-	if !listingIndexEqual(old, newIdx) {
-		if s.localListingIndex.CompareAndSwap(old, newIdx) {
+	// Preserve the current Seq value so incremental updates continue from the right base.
+	if current != nil {
+		newIdx.Seq = current.Seq
+	}
+	if !listingIndexEqual(current, newIdx) {
+		if s.localListingIndex.CompareAndSwap(current, newIdx) {
 			s.listingIndexDirty.Store(true)
 			// Signal the indexer to persist
 			select {

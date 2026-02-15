@@ -1475,6 +1475,59 @@ func TestConcurrent_MultipleKeys(t *testing.T) {
 	assert.Equal(t, numGoroutines, len(objects))
 }
 
+func TestConcurrent_PutDoesNotBlockList(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Seed an object so ListObjects has something to return
+	seed := []byte("seed-data")
+	_, err := store.PutObject(context.Background(), "test-bucket", "seed.txt", bytes.NewReader(seed), int64(len(seed)), "text/plain", nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const writers = 5
+	const writesPerWorker = 3
+	var wg sync.WaitGroup
+
+	// Start writers that upload to different keys
+	wg.Add(writers)
+	for i := 0; i < writers; i++ {
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < writesPerWorker; j++ {
+				content := []byte(strings.Repeat("w", 2000+id*100+j*50))
+				key := fmt.Sprintf("writer-%d-%d.txt", id, j)
+				_, putErr := store.PutObject(ctx, "test-bucket", key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+				if putErr != nil && ctx.Err() == nil {
+					t.Errorf("writer %d write %d: %v", id, j, putErr)
+				}
+			}
+		}(i)
+	}
+
+	// Concurrent reader — should never be blocked for longer than metadata I/O
+	listDone := make(chan struct{})
+	go func() {
+		defer close(listDone)
+		for i := 0; i < 20; i++ {
+			objs, _, _, listErr := store.ListObjects(ctx, "test-bucket", "", "", 100)
+			if listErr != nil && ctx.Err() == nil {
+				t.Errorf("list iteration %d: %v", i, listErr)
+				return
+			}
+			// Must always see at least the seed object
+			if len(objs) < 1 && ctx.Err() == nil {
+				t.Errorf("list iteration %d: expected at least 1 object, got %d", i, len(objs))
+			}
+		}
+	}()
+
+	wg.Wait()
+	<-listDone
+}
+
 func TestStreamingRead_LargeFile(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))

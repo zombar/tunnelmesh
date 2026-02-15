@@ -320,9 +320,9 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		log.Info().Str("access_key", creds.AccessKey).Msg("Derived S3 credentials")
 
 		// s3bench is a lightweight peer with no TUN interface — use the
-		// coordinator URL directly.  Replace scheme with https since the
-		// admin mux requires TLS.
-		adminURL := strings.Replace(coordinatorURL, "http://", "https://", 1)
+		// coordinator URL directly. The admin mux supports both HTTP and HTTPS;
+		// the user provides the correct scheme via --coordinator.
+		adminURL := coordinatorURL
 
 		log.Info().
 			Str("s3_endpoint", adminURL).
