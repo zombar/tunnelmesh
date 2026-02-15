@@ -2094,16 +2094,17 @@ func (s *Server) handleS3ListBuckets(w http.ResponseWriter, r *http.Request) {
 		resp.Volume = &S3VolumeInfo{TotalBytes: total, UsedBytes: used, AvailableBytes: avail}
 	}
 
-	// Add dedup storage stats
+	// Add dedup storage stats (total logical = live + versions + recyclebin)
 	casStats := s.s3Store.GetCASStats()
+	totalLogical := casStats.LogicalBytes + casStats.VersionBytes + casStats.RecycledBytes
 	dedupRatio := 1.0
 	if casStats.ChunkBytes > 0 {
 		// Clamp to >=1.0: transient states during GC can briefly have logical < physical
-		dedupRatio = max(1.0, float64(casStats.LogicalBytes)/float64(casStats.ChunkBytes))
+		dedupRatio = max(1.0, float64(totalLogical)/float64(casStats.ChunkBytes))
 	}
 	resp.Storage = &S3StorageInfo{
 		PhysicalBytes: casStats.ChunkBytes,
-		LogicalBytes:  casStats.LogicalBytes,
+		LogicalBytes:  totalLogical,
 		DedupRatio:    dedupRatio,
 	}
 

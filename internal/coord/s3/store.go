@@ -203,11 +203,13 @@ type Store struct {
 
 	// Incremental CAS stats — atomic for lock-free metrics reads.
 	// Initialized from filesystem walk at startup, updated at each mutation point.
-	statsChunkCount   atomic.Int64
-	statsChunkBytes   atomic.Int64 // on-disk (compressed+encrypted)
-	statsObjectCount  atomic.Int64
-	statsVersionCount atomic.Int64
-	statsLogicalBytes atomic.Int64 // on-disk chunk sizes summed per-object
+	statsChunkCount    atomic.Int64
+	statsChunkBytes    atomic.Int64 // on-disk (compressed+encrypted)
+	statsObjectCount   atomic.Int64
+	statsVersionCount  atomic.Int64
+	statsLogicalBytes  atomic.Int64 // live object sizes summed per-object
+	statsVersionBytes  atomic.Int64 // logical bytes in version files
+	statsRecycledBytes atomic.Int64 // logical bytes in recyclebin entries
 }
 
 // NewStore creates a new S3 store with the given data directory.
@@ -658,6 +660,41 @@ func (s *Store) ForceDeleteBucket(ctx context.Context, bucket string) error {
 			if s.quota != nil {
 				s.quota.Release(bucket, meta.Size)
 			}
+		}
+		return nil
+	})
+
+	// Decrement version bytes for all versions being removed
+	versionsDir := filepath.Join(bucketDir, "versions")
+	_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		var meta ObjectMeta
+		if json.Unmarshal(data, &meta) == nil {
+			s.statsVersionCount.Add(-1)
+			s.statsVersionBytes.Add(-meta.Size)
+		}
+		return nil
+	})
+
+	// Decrement recycled bytes for all recyclebin entries being removed
+	rbDir := filepath.Join(bucketDir, "recyclebin")
+	_ = filepath.Walk(rbDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		var entry RecycledEntry
+		if json.Unmarshal(data, &entry) == nil {
+			s.statsRecycledBytes.Add(-entry.Meta.Size)
 		}
 		return nil
 	})
@@ -1158,7 +1195,7 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 // NOTE: This is Phase 1 implementation with full buffering. Streaming encoder will be added in Phase 6.
 //
 //nolint:gocyclo // Complexity will be reduced when streaming encoder is added (Phase 6)
-func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string, metadata map[string]string, bucketMeta *BucketMeta) (*ObjectMeta, error) {
+func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string, metadata map[string]string, bucketMeta *BucketMeta) (*ObjectMeta, []string, error) {
 	// Caller must hold s.mu.Lock()
 
 	k := bucketMeta.ErasureCoding.DataShards
@@ -1168,7 +1205,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	// While validateErasureCodingPolicy already checked this, re-validate at upload time
 	// to prevent issues if metadata was corrupted or modified externally
 	if k < 1 || k > 32 || m < 1 || m > 32 || k+m > 64 {
-		return nil, fmt.Errorf("invalid erasure coding config: k=%d, m=%d (max 32 each, 64 total)", k, m)
+		return nil, nil, fmt.Errorf("invalid erasure coding config: k=%d, m=%d (max 32 each, 64 total)", k, m)
 	}
 
 	// Acquire semaphore to limit concurrent erasure coding operations (memory safety)
@@ -1177,7 +1214,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	case s.erasureCodingSemaphore <- struct{}{}:
 		defer func() { <-s.erasureCodingSemaphore }()
 	case <-ctx.Done():
-		return nil, fmt.Errorf("waiting for erasure coding slot: %w", ctx.Err())
+		return nil, nil, fmt.Errorf("waiting for erasure coding slot: %w", ctx.Err())
 	}
 
 	metaPath := s.objectMetaPath(bucket, key)
@@ -1196,27 +1233,27 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	if s.quota != nil && size > oldSize {
 		delta := size - oldSize
 		if !s.quota.CanAllocate(delta) {
-			return nil, ErrQuotaExceeded
+			return nil, nil, ErrQuotaExceeded
 		}
 	}
 
 	// Archive current version for version history
 	if err := s.archiveCurrentVersion(bucket, key); err != nil {
-		return nil, fmt.Errorf("archive current version: %w", err)
+		return nil, nil, fmt.Errorf("archive current version: %w", err)
 	}
 
 	// Create parent directories for metadata
 	if err := os.MkdirAll(filepath.Dir(metaPath), 0755); err != nil {
-		return nil, fmt.Errorf("create meta dir: %w", err)
+		return nil, nil, fmt.Errorf("create meta dir: %w", err)
 	}
 
 	// Buffer entire file into memory (required for Reed-Solomon encoding)
 	data, err := io.ReadAll(io.LimitReader(reader, size))
 	if err != nil {
-		return nil, fmt.Errorf("read file data: %w", err)
+		return nil, nil, fmt.Errorf("read file data: %w", err)
 	}
 	if int64(len(data)) != size {
-		return nil, fmt.Errorf("file size mismatch: expected %d bytes, got %d", size, len(data))
+		return nil, nil, fmt.Errorf("file size mismatch: expected %d bytes, got %d", size, len(data))
 	}
 
 	// Generate version ID before encoding (needed for tracking shards)
@@ -1225,14 +1262,14 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	// Check for cancellation before expensive encoding operation
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("context canceled before encoding: %w", ctx.Err())
+		return nil, nil, fmt.Errorf("context canceled before encoding: %w", ctx.Err())
 	default:
 	}
 
 	// Encode file into Reed-Solomon shards
 	dataShards, parityShards, err := EncodeFile(data, k, m)
 	if err != nil {
-		return nil, fmt.Errorf("encode file with erasure coding (k=%d,m=%d,size=%d): %w", k, m, size, err)
+		return nil, nil, fmt.Errorf("encode file with erasure coding (k=%d,m=%d,size=%d): %w", k, m, size, err)
 	}
 
 	// Calculate shard size for metadata
@@ -1294,13 +1331,13 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 				break
 			}
 			if err != nil {
-				return nil, fmt.Errorf("chunk data shard %d/%d (versionID=%s): %w", i, k, versionID, err)
+				return nil, nil, fmt.Errorf("chunk data shard %d/%d (versionID=%s): %w", i, k, versionID, err)
 			}
 
 			// Write chunk to CAS
 			_, onDiskBytes, err := s.cas.WriteChunk(ctx, chunk)
 			if err != nil {
-				return nil, fmt.Errorf("write data shard %d/%d chunk %s (versionID=%s): %w", i, k, chunkHash[:8], versionID, err)
+				return nil, nil, fmt.Errorf("write data shard %d/%d chunk %s (versionID=%s): %w", i, k, chunkHash[:8], versionID, err)
 			}
 
 			// Update incremental chunk stats
@@ -1361,7 +1398,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		// Write parity shard directly to CAS (it will compute SHA-256 hash)
 		parityHash, parityOnDiskBytes, err := s.cas.WriteChunk(ctx, shard)
 		if err != nil {
-			return nil, fmt.Errorf("write parity shard %d/%d (versionID=%s): %w", i, m, versionID, err)
+			return nil, nil, fmt.Errorf("write parity shard %d/%d (versionID=%s): %w", i, m, versionID, err)
 		}
 
 		// Update incremental chunk stats
@@ -1466,7 +1503,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 				s.quota.Release(bucket, size)
 			}
 		}
-		return nil, fmt.Errorf("marshal object meta: %w", err)
+		return nil, nil, fmt.Errorf("marshal object meta: %w", err)
 	}
 
 	if err := syncedWriteFile(metaPath, metaData, 0644); err != nil {
@@ -1478,7 +1515,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 				s.quota.Release(bucket, size)
 			}
 		}
-		return nil, fmt.Errorf("write object meta: %w", err)
+		return nil, nil, fmt.Errorf("write object meta: %w", err)
 	}
 
 	// Update incremental object/logical stats
@@ -1487,9 +1524,8 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	}
 	s.statsLogicalBytes.Add(size - oldLogicalBytes)
 
-	// Prune expired versions (lazy cleanup).
-	// Chunk GC for pruned versions is deferred to the periodic GC pass.
-	s.pruneExpiredVersions(ctx, bucket, key)
+	// Prune expired versions and capture chunk hashes for cleanup after unlock.
+	_, chunksToCheck := s.pruneExpiredVersions(ctx, bucket, key)
 
 	// Update bucket size
 	sizeDelta := size - oldSize
@@ -1503,7 +1539,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	// Mark as successful to prevent cleanup rollback
 	success = true
 
-	return &objMeta, nil
+	return &objMeta, chunksToCheck, nil
 }
 
 // PutObject writes an object to a bucket using CDC chunks stored in CAS.
@@ -1533,7 +1569,14 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var prunedChunks []string
+	defer func() {
+		s.mu.Unlock()
+		// Clean up pruned version chunks outside the lock (same as ImportObjectMeta path)
+		if len(prunedChunks) > 0 {
+			s.DeleteUnreferencedChunks(ctx, prunedChunks)
+		}
+	}()
 
 	// Check bucket exists and get metadata (including replication factor)
 	bucketMeta, err := s.getBucketMeta(bucket)
@@ -1552,7 +1595,9 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 
 	if useErasureCoding {
 		// Use erasure coding path (buffer entire file)
-		return s.putObjectWithErasureCoding(ctx, bucket, key, reader, size, contentType, metadata, bucketMeta)
+		meta, ecChunks, err := s.putObjectWithErasureCoding(ctx, bucket, key, reader, size, contentType, metadata, bucketMeta)
+		prunedChunks = ecChunks
+		return meta, err
 	}
 
 	// Use standard streaming path for non-erasure-coded objects or large files
@@ -1748,9 +1793,8 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	}
 	s.statsLogicalBytes.Add(written - oldLogicalBytes)
 
-	// Prune expired versions (lazy cleanup).
-	// Chunk GC for pruned versions is deferred to the periodic GC pass.
-	s.pruneExpiredVersions(ctx, bucket, key)
+	// Prune expired versions and capture chunk hashes for cleanup after unlock.
+	_, prunedChunks = s.pruneExpiredVersions(ctx, bucket, key)
 
 	// Update bucket size (new object adds to size, replacement adjusts delta)
 	sizeDelta := written - oldSize
@@ -1918,6 +1962,7 @@ func (s *Store) RecycleObject(ctx context.Context, bucket, key string) error {
 	if meta.Size > 0 {
 		s.statsLogicalBytes.Add(-meta.Size)
 	}
+	s.statsRecycledBytes.Add(meta.Size)
 
 	return nil
 }
@@ -2010,6 +2055,7 @@ func (s *Store) RestoreRecycledObject(ctx context.Context, bucket, key string) e
 	if bestEntry.Meta.Size > 0 {
 		s.statsLogicalBytes.Add(bestEntry.Meta.Size)
 	}
+	s.statsRecycledBytes.Add(-bestEntry.Meta.Size)
 
 	return nil
 }
@@ -2211,6 +2257,7 @@ func (s *Store) PurgeAllRecycledInBucket(ctx context.Context, bucket string) err
 
 		// Remove the entry
 		_ = os.Remove(entryPath)
+		s.statsRecycledBytes.Add(-entry.Meta.Size)
 
 		// Clean up unreferenced chunks
 		s.DeleteUnreferencedChunks(ctx, chunksToCheck)
@@ -2283,6 +2330,7 @@ func (s *Store) purgeRecycledEntries(ctx context.Context, cutoff *time.Time) int
 			}
 
 			purgedCount++
+			s.statsRecycledBytes.Add(-entry.Meta.Size)
 
 			// Clean up unreferenced chunks (outside any lock concern since PurgeObject does the same)
 			s.DeleteUnreferencedChunks(ctx, chunksToCheck)
@@ -2358,6 +2406,13 @@ func (s *Store) WriteChunkDirect(ctx context.Context, hash string, data []byte) 
 	if onDiskBytes > 0 {
 		s.statsChunkCount.Add(1)
 		s.statsChunkBytes.Add(onDiskBytes)
+	}
+
+	// Register chunk in distributed registry so GC can track ownership symmetrically.
+	// Without this, GC on replica coordinators can't confirm chunk ownership and
+	// skips deletion, causing storage to grow unbounded on replicas.
+	if s.chunkRegistry != nil {
+		_ = s.chunkRegistry.RegisterChunk(hash, int64(len(data)))
 	}
 
 	return nil
@@ -2722,6 +2777,7 @@ func (s *Store) archiveCurrentVersion(bucket, key string) error {
 	}
 
 	s.statsVersionCount.Add(1)
+	s.statsVersionBytes.Add(meta.Size)
 
 	return nil
 }
@@ -2894,6 +2950,7 @@ func (s *Store) pruneExpiredVersions(ctx context.Context, bucket, key string) (i
 		_ = os.Remove(v.path)
 		prunedCount++
 		s.statsVersionCount.Add(-1)
+		s.statsVersionBytes.Add(-v.meta.Size)
 
 		// Collect chunks for deferred GC (done outside the lock by caller)
 		for _, hash := range v.meta.Chunks {
@@ -2989,11 +3046,13 @@ func extractChunksFromRecycledEntry(data []byte) ([]string, error) {
 
 // CASStats holds statistics about content-addressed storage.
 type CASStats struct {
-	ChunkCount   int   // Total number of chunks
-	ChunkBytes   int64 // Total bytes in chunks (after dedup)
-	LogicalBytes int64 // Logical bytes (sum of object sizes, before dedup)
-	VersionCount int   // Total number of versions
-	ObjectCount  int   // Total number of current objects
+	ChunkCount    int   // Total number of chunks
+	ChunkBytes    int64 // Total bytes in chunks (after dedup)
+	LogicalBytes  int64 // Logical bytes (sum of live object sizes, before dedup)
+	VersionBytes  int64 // Logical bytes in version files
+	RecycledBytes int64 // Logical bytes in recyclebin entries
+	VersionCount  int   // Total number of versions
+	ObjectCount   int   // Total number of current objects
 }
 
 // initCASStats populates the atomic stat counters from a one-time filesystem walk.
@@ -3033,6 +3092,8 @@ func (s *Store) initCASStats() {
 	var objectCount int64
 	var versionCount int64
 	var logicalBytes int64
+	var versionBytes int64
+	var recycledBytes int64
 
 	for _, bucketEntry := range bucketEntries {
 		if !bucketEntry.IsDir() {
@@ -3058,13 +3119,38 @@ func (s *Store) initCASStats() {
 			return nil
 		})
 
-		// Count version files
+		// Count version files and their logical sizes
 		versionsDir := filepath.Join(bucketsDir, bucket, "versions")
 		_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
 				return nil
 			}
 			versionCount++
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			var meta ObjectMeta
+			if json.Unmarshal(data, &meta) == nil {
+				versionBytes += meta.Size
+			}
+			return nil
+		})
+
+		// Count recyclebin entries and their logical sizes
+		rbDir := filepath.Join(bucketsDir, bucket, "recyclebin")
+		_ = filepath.Walk(rbDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			var entry RecycledEntry
+			if json.Unmarshal(data, &entry) == nil {
+				recycledBytes += entry.Meta.Size
+			}
 			return nil
 		})
 	}
@@ -3072,6 +3158,8 @@ func (s *Store) initCASStats() {
 	s.statsObjectCount.Store(objectCount)
 	s.statsVersionCount.Store(versionCount)
 	s.statsLogicalBytes.Store(logicalBytes)
+	s.statsVersionBytes.Store(versionBytes)
+	s.statsRecycledBytes.Store(recycledBytes)
 }
 
 // GetCASStats returns statistics about content-addressed storage.
@@ -3082,11 +3170,13 @@ func (s *Store) GetCASStats() CASStats {
 	}
 
 	return CASStats{
-		ChunkCount:   int(s.statsChunkCount.Load()),
-		ChunkBytes:   s.statsChunkBytes.Load(),
-		ObjectCount:  int(s.statsObjectCount.Load()),
-		VersionCount: int(s.statsVersionCount.Load()),
-		LogicalBytes: s.statsLogicalBytes.Load(),
+		ChunkCount:    int(s.statsChunkCount.Load()),
+		ChunkBytes:    s.statsChunkBytes.Load(),
+		ObjectCount:   int(s.statsObjectCount.Load()),
+		VersionCount:  int(s.statsVersionCount.Load()),
+		LogicalBytes:  s.statsLogicalBytes.Load(),
+		VersionBytes:  s.statsVersionBytes.Load(),
+		RecycledBytes: s.statsRecycledBytes.Load(),
 	}
 }
 
@@ -3732,6 +3822,7 @@ func (s *Store) collectAndDeleteAllVersions(bucket, key string) []string {
 	// Collect all chunk hashes from versions
 	var chunks []string
 	var versionCount int64
+	var totalVersionBytes int64
 	seen := make(map[string]struct{})
 	entries, err := os.ReadDir(versionDir)
 	if err == nil {
@@ -3752,6 +3843,7 @@ func (s *Store) collectAndDeleteAllVersions(bucket, key string) []string {
 			}
 
 			versionCount++
+			totalVersionBytes += meta.Size
 			for _, h := range meta.Chunks {
 				if _, ok := seen[h]; !ok {
 					seen[h] = struct{}{}
@@ -3764,9 +3856,10 @@ func (s *Store) collectAndDeleteAllVersions(bucket, key string) []string {
 	// Remove version directory
 	_ = os.RemoveAll(versionDir)
 
-	// Decrement version count
+	// Decrement version count and version bytes
 	if versionCount > 0 {
 		s.statsVersionCount.Add(-versionCount)
+		s.statsVersionBytes.Add(-totalVersionBytes)
 	}
 
 	return chunks

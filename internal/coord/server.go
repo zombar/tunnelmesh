@@ -920,6 +920,8 @@ func (s *Server) updateS3Metrics() {
 		casStats.ChunkCount,
 		casStats.ChunkBytes,
 		casStats.LogicalBytes,
+		casStats.VersionBytes,
+		casStats.RecycledBytes,
 		casStats.VersionCount,
 	)
 

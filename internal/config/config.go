@@ -338,7 +338,7 @@ func LoadPeerConfig(path string) (*PeerConfig, error) {
 			cfg.Coordinator.S3.VersionRetentionDays = 30
 		}
 		if cfg.Coordinator.S3.MaxVersionsPerObject == 0 {
-			cfg.Coordinator.S3.MaxVersionsPerObject = 100
+			cfg.Coordinator.S3.MaxVersionsPerObject = 10
 		}
 		if cfg.Coordinator.S3.VersionRetention.RecentDays == 0 {
 			cfg.Coordinator.S3.VersionRetention.RecentDays = 7

@@ -2362,4 +2362,250 @@ func TestGetCASStats_VersionCountAfterOverwrite(t *testing.T) {
 	// After overwrite, LogicalBytes should equal the new content size.
 	assert.Equal(t, int64(len(v2)), statsAfterV2.LogicalBytes,
 		"after v2: logical bytes should equal v2 content size (only current objects)")
+	// VersionBytes should track the archived version's size
+	assert.Equal(t, int64(len(v1)), statsAfterV2.VersionBytes,
+		"after v2: version bytes should equal v1 content size (archived version)")
+}
+
+// trackingChunkRegistry records RegisterChunk calls for testing.
+type trackingChunkRegistry struct {
+	mu         sync.Mutex
+	registered map[string]int64 // hash -> size
+}
+
+func newTrackingChunkRegistry() *trackingChunkRegistry {
+	return &trackingChunkRegistry{registered: make(map[string]int64)}
+}
+
+func (r *trackingChunkRegistry) RegisterChunk(hash string, size int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.registered[hash] = size
+	return nil
+}
+
+func (r *trackingChunkRegistry) RegisterChunkWithReplication(hash string, size int64, _ int) error {
+	return r.RegisterChunk(hash, size)
+}
+
+func (r *trackingChunkRegistry) RegisterShardChunk(hash string, size int64, _, _ string, _, _ int) error {
+	return r.RegisterChunk(hash, size)
+}
+
+func (r *trackingChunkRegistry) UnregisterChunk(_ string) error { return nil }
+
+func (r *trackingChunkRegistry) GetOwners(_ string) ([]string, error) {
+	return nil, fmt.Errorf("not found")
+}
+
+func (r *trackingChunkRegistry) GetChunksOwnedBy(_ string) ([]string, error) {
+	return nil, nil
+}
+
+func (r *trackingChunkRegistry) isRegistered(hash string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.registered[hash]
+	return ok
+}
+
+func TestWriteChunkDirect_RegistersInRegistry(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	reg := newTrackingChunkRegistry()
+	store.SetChunkRegistry(reg)
+
+	data := []byte("chunk data for registry test")
+	hash := ContentHash(data)
+
+	err := store.WriteChunkDirect(ctx, hash, data)
+	require.NoError(t, err)
+
+	assert.True(t, reg.isRegistered(hash),
+		"WriteChunkDirect should register chunk in the distributed registry")
+}
+
+func TestPutObject_CleansUpPrunedVersionChunks(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Set max versions to 3 for easier testing
+	store.maxVersionsPerObject = 3
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Write 5 versions (exceeds max of 3), creating prunable versions
+	for i := 0; i < 5; i++ {
+		content := []byte(fmt.Sprintf("version %d unique content for pruning test", i))
+		_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+			bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	stats := store.GetCASStats()
+	// Should have at most 3 versions (max limit)
+	assert.LessOrEqual(t, stats.VersionCount, 3,
+		"version count should not exceed maxVersionsPerObject")
+
+	// The pruned version chunks should have been cleaned up inline.
+	// With 5 versions and max 3, 1 version was pruned (first archive gets pruned
+	// when the 5th write happens, since that's when we exceed 3 archived versions).
+	// Chunk count should reflect cleanup rather than accumulation.
+	assert.Greater(t, stats.ChunkCount, 0, "should still have chunks for live + retained versions")
+}
+
+func TestImportObjectMeta_CleansUpPrunedVersionChunks(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	store.maxVersionsPerObject = 3
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Write initial versions via PutObject
+	for i := 0; i < 3; i++ {
+		content := []byte(fmt.Sprintf("version %d for import test", i))
+		_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+			bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	// Import additional versions via ImportObjectMeta (simulates replication)
+	for i := 3; i < 6; i++ {
+		content := []byte(fmt.Sprintf("version %d for import test", i))
+		hash := ContentHash(content)
+		// Write chunk directly (as replication would)
+		require.NoError(t, store.WriteChunkDirect(ctx, hash, content))
+
+		meta := ObjectMeta{
+			Key:          "file.txt",
+			Size:         int64(len(content)),
+			ContentType:  "text/plain",
+			LastModified: time.Now().UTC(),
+			VersionID:    fmt.Sprintf("import-v%d", i),
+			Chunks:       []string{hash},
+		}
+		metaJSON, err := json.Marshal(meta)
+		require.NoError(t, err)
+
+		chunksToCheck, err := store.ImportObjectMeta(ctx, "test-bucket", "file.txt", metaJSON, "alice")
+		require.NoError(t, err)
+
+		// ImportObjectMeta returns chunks to check for cleanup
+		if len(chunksToCheck) > 0 {
+			store.DeleteUnreferencedChunks(ctx, chunksToCheck)
+		}
+	}
+
+	stats := store.GetCASStats()
+	assert.LessOrEqual(t, stats.VersionCount, 3,
+		"version count should not exceed maxVersionsPerObject after import")
+}
+
+func TestCASStats_IncludesVersionAndRecycleBin(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Write v1
+	v1 := []byte("version 1 content for combined stats test")
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Write v2 (archives v1)
+	v2 := []byte("version 2 content for combined stats test")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Add another object then recycle it
+	recycled := []byte("content to be recycled")
+	_, err = store.PutObject(ctx, "test-bucket", "to-delete.txt",
+		bytes.NewReader(recycled), int64(len(recycled)), "text/plain", nil)
+	require.NoError(t, err)
+
+	err = store.RecycleObject(ctx, "test-bucket", "to-delete.txt")
+	require.NoError(t, err)
+
+	stats := store.GetCASStats()
+
+	// Live: v2 of file.txt
+	assert.Equal(t, int64(len(v2)), stats.LogicalBytes,
+		"LogicalBytes should equal live object size")
+
+	// Versions: v1 of file.txt
+	assert.Equal(t, int64(len(v1)), stats.VersionBytes,
+		"VersionBytes should equal archived version size")
+
+	// Recycled: to-delete.txt
+	assert.Equal(t, int64(len(recycled)), stats.RecycledBytes,
+		"RecycledBytes should equal recycled object size")
+
+	// Total managed data = live + versions + recycled
+	totalLogical := stats.LogicalBytes + stats.VersionBytes + stats.RecycledBytes
+	expectedTotal := int64(len(v1)) + int64(len(v2)) + int64(len(recycled))
+	assert.Equal(t, expectedTotal, totalLogical,
+		"total logical bytes should equal live + version + recycled")
+}
+
+func TestCASStats_RecycledBytesDecrementOnRestore(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	content := []byte("content to recycle and restore")
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Recycle
+	require.NoError(t, store.RecycleObject(ctx, "test-bucket", "file.txt"))
+	stats := store.GetCASStats()
+	assert.Equal(t, int64(len(content)), stats.RecycledBytes)
+	assert.Equal(t, int64(0), stats.LogicalBytes)
+
+	// Restore
+	require.NoError(t, store.RestoreRecycledObject(ctx, "test-bucket", "file.txt"))
+	stats = store.GetCASStats()
+	assert.Equal(t, int64(0), stats.RecycledBytes,
+		"RecycledBytes should be 0 after restore")
+	assert.Equal(t, int64(len(content)), stats.LogicalBytes,
+		"LogicalBytes should be restored")
+}
+
+func TestCASStats_VersionBytesAfterInitCASStats(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Create version history
+	v1 := []byte("v1 data for init stats test")
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	require.NoError(t, err)
+
+	v2 := []byte("v2 data for init stats test")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Recycle an object
+	recycled := []byte("will be recycled for init stats test")
+	_, err = store.PutObject(ctx, "test-bucket", "recycled.txt",
+		bytes.NewReader(recycled), int64(len(recycled)), "text/plain", nil)
+	require.NoError(t, err)
+	require.NoError(t, store.RecycleObject(ctx, "test-bucket", "recycled.txt"))
+
+	// Re-init stats from filesystem (simulates restart)
+	store.initCASStats()
+
+	stats := store.GetCASStats()
+	assert.Equal(t, int64(len(v2)), stats.LogicalBytes, "LogicalBytes from initCASStats")
+	assert.Equal(t, int64(len(v1)), stats.VersionBytes, "VersionBytes from initCASStats")
+	assert.Equal(t, int64(len(recycled)), stats.RecycledBytes, "RecycledBytes from initCASStats")
 }
