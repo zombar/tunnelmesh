@@ -1224,20 +1224,17 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 //
 //nolint:gocyclo // Complexity will be reduced when streaming encoder is added (Phase 6)
 func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string, metadata map[string]string, bucketMeta *BucketMeta) (*ObjectMeta, error) {
-	// Caller must hold s.mu.Lock()
+	// Lock strategy: global lock is NOT held during the expensive read/encode/CAS-write
+	// phases. It is acquired only for the brief metadata operations at the end.
 
 	k := bucketMeta.ErasureCoding.DataShards
 	m := bucketMeta.ErasureCoding.ParityShards
 
-	// Validate shard configuration (defense against malicious/corrupted bucket metadata)
-	// While validateErasureCodingPolicy already checked this, re-validate at upload time
-	// to prevent issues if metadata was corrupted or modified externally
 	if k < 1 || k > 32 || m < 1 || m > 32 || k+m > 64 {
 		return nil, fmt.Errorf("invalid erasure coding config: k=%d, m=%d (max 32 each, 64 total)", k, m)
 	}
 
 	// Acquire semaphore to limit concurrent erasure coding operations (memory safety)
-	// Each operation buffers up to 100MB, so limiting concurrency prevents OOM
 	select {
 	case s.erasureCodingSemaphore <- struct{}{}:
 		defer func() { <-s.erasureCodingSemaphore }()
@@ -1247,35 +1244,9 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 
 	metaPath := s.objectMetaPath(bucket, key)
 
-	// Check if object already exists (for quota update calculation, versioning, and stats)
-	var oldSize int64
-	var oldLogicalBytes int64
-	isNewObject := true
-	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
-		oldSize = oldMeta.Size
-		isNewObject = false
-		oldLogicalBytes = oldMeta.Size
-	}
+	// Phase 1: Read + encode + write chunks to CAS without holding the global lock.
+	// CAS writes are content-addressed and use atomic rename, safe for concurrent access.
 
-	// Check quota if configured (only if object is growing)
-	if s.quota != nil && size > oldSize {
-		delta := size - oldSize
-		if !s.quota.CanAllocate(delta) {
-			return nil, ErrQuotaExceeded
-		}
-	}
-
-	// Archive current version for version history
-	if err := s.archiveCurrentVersion(bucket, key); err != nil {
-		return nil, fmt.Errorf("archive current version: %w", err)
-	}
-
-	// Create parent directories for metadata
-	if err := os.MkdirAll(filepath.Dir(metaPath), 0755); err != nil {
-		return nil, fmt.Errorf("create meta dir: %w", err)
-	}
-
-	// Buffer entire file into memory (required for Reed-Solomon encoding)
 	data, err := io.ReadAll(io.LimitReader(reader, size))
 	if err != nil {
 		return nil, fmt.Errorf("read file data: %w", err)
@@ -1284,23 +1255,19 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		return nil, fmt.Errorf("file size mismatch: expected %d bytes, got %d", size, len(data))
 	}
 
-	// Generate version ID before encoding (needed for tracking shards)
 	versionID := generateVersionID()
 
-	// Check for cancellation before expensive encoding operation
 	select {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("context canceled before encoding: %w", ctx.Err())
 	default:
 	}
 
-	// Encode file into Reed-Solomon shards
 	dataShards, parityShards, err := EncodeFile(data, k, m)
 	if err != nil {
 		return nil, fmt.Errorf("encode file with erasure coding (k=%d,m=%d,size=%d): %w", k, m, size, err)
 	}
 
-	// Calculate shard size for metadata
 	shardSize := int64(0)
 	if len(dataShards) > 0 && len(dataShards[0]) > 0 {
 		shardSize = int64(len(dataShards[0]))
@@ -1309,24 +1276,20 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	now := time.Now().UTC()
 	coordID := s.coordinatorID
 
-	// File-level version vector
 	fileVersionVector := make(map[string]uint64)
 	if coordID != "" {
 		fileVersionVector[coordID] = 1
 	}
 
-	// Track all chunks (data shard chunks + parity shards)
 	var chunks []string
 	chunkMetadata := make(map[string]*ChunkMetadata)
-	var dataHashes []string // Original CDC chunk hashes from data shards
+	var dataHashes []string
 	var parityHashes []string
 
 	// Cleanup on failure: remove all written chunks from CAS and registry
-	// This prevents orphaned data that would waste space until GC runs
 	var success bool
 	defer func() {
 		if !success && len(chunks) > 0 {
-			// Best-effort cleanup - errors are logged but not propagated
 			for _, hash := range chunks {
 				if freed, err := s.cas.DeleteChunk(context.Background(), hash); err != nil {
 					s.logger.Warn().Str("hash", hash[:8]).Err(err).Msg("failed to cleanup chunk during rollback")
@@ -1344,15 +1307,12 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	}()
 
 	// Process data shards: chunk them using CDC to preserve deduplication
-	// Each data shard is treated as a separate "mini-file" that gets chunked
 	md5Hasher := md5.New()
 	for i, shard := range dataShards {
-		// Hash the original data for ETag calculation
 		md5Hasher.Write(shard)
 
-		// Chunk this data shard using CDC
 		shardChunker := NewStreamingChunker(bytes.NewReader(shard))
-		chunkSeq := 0 // Track chunk order within this shard
+		chunkSeq := 0
 		for {
 			chunk, chunkHash, err := shardChunker.NextChunk()
 			if errors.Is(err, io.EOF) {
@@ -1362,13 +1322,11 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 				return nil, fmt.Errorf("chunk data shard %d/%d (versionID=%s): %w", i, k, versionID, err)
 			}
 
-			// Write chunk to CAS
 			_, onDiskBytes, err := s.cas.WriteChunk(ctx, chunk)
 			if err != nil {
 				return nil, fmt.Errorf("write data shard %d/%d chunk %s (versionID=%s): %w", i, k, chunkHash[:8], versionID, err)
 			}
 
-			// Update incremental chunk stats
 			var chunkOnDiskSize int64
 			if onDiskBytes > 0 {
 				s.statsChunkCount.Add(1)
@@ -1380,9 +1338,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 				}
 			}
 
-			// Register chunk ownership
 			if s.chunkRegistry != nil {
-				// Register as data shard chunk
 				if err := s.chunkRegistry.RegisterShardChunk(chunkHash, int64(len(chunk)), versionID, "data", i, bucketMeta.ReplicationFactor); err != nil {
 					if os.Getenv("DEBUG") != "" || os.Getenv("TUNNELMESH_DEBUG") != "" {
 						fmt.Fprintf(os.Stderr, "chunk registry warning: failed to register data shard chunk %s: %v\n", chunkHash[:8], err)
@@ -1390,7 +1346,6 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 				}
 			}
 
-			// Track chunk metadata
 			versionVector := make(map[string]uint64)
 			if coordID != "" {
 				versionVector[coordID] = 1
@@ -1420,16 +1375,13 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		}
 	}
 
-	// Process parity shards: store directly without CDC chunking
-	// (parity shards are already optimally sized and don't benefit from dedup)
+	// Process parity shards
 	for i, shard := range parityShards {
-		// Write parity shard directly to CAS (it will compute SHA-256 hash)
 		parityHash, parityOnDiskBytes, err := s.cas.WriteChunk(ctx, shard)
 		if err != nil {
 			return nil, fmt.Errorf("write parity shard %d/%d (versionID=%s): %w", i, m, versionID, err)
 		}
 
-		// Update incremental chunk stats
 		var parityOnDiskSize int64
 		if parityOnDiskBytes > 0 {
 			s.statsChunkCount.Add(1)
@@ -1441,7 +1393,6 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 			}
 		}
 
-		// Register parity shard ownership
 		if s.chunkRegistry != nil {
 			if err := s.chunkRegistry.RegisterShardChunk(parityHash, int64(len(shard)), versionID, "parity", i, bucketMeta.ReplicationFactor); err != nil {
 				if os.Getenv("DEBUG") != "" || os.Getenv("TUNNELMESH_DEBUG") != "" {
@@ -1450,7 +1401,6 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 			}
 		}
 
-		// Track parity shard metadata
 		versionVector := make(map[string]uint64)
 		if coordID != "" {
 			versionVector[coordID] = 1
@@ -1477,11 +1427,43 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		parityHashes = append(parityHashes, parityHash)
 	}
 
-	// Generate ETag from MD5 hash of original data (S3-compatible format)
 	hash := md5Hasher.Sum(nil)
 	etag := fmt.Sprintf("\"%s\"", hex.EncodeToString(hash))
 
-	// Update quota tracking
+	// Phase 2: Acquire global lock for the brief metadata operations only.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Re-check bucket exists (could have been deleted during encoding)
+	if _, err := s.getBucketMeta(bucket); err != nil {
+		return nil, err
+	}
+
+	// Check if object already exists (for quota update calculation, versioning, and stats)
+	var oldSize int64
+	var oldLogicalBytes int64
+	isNewObject := true
+	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
+		oldSize = oldMeta.Size
+		isNewObject = false
+		oldLogicalBytes = oldMeta.Size
+	}
+
+	if s.quota != nil && size > oldSize {
+		delta := size - oldSize
+		if !s.quota.CanAllocate(delta) {
+			return nil, ErrQuotaExceeded
+		}
+	}
+
+	if err := s.archiveCurrentVersion(bucket, key); err != nil {
+		return nil, fmt.Errorf("archive current version: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0755); err != nil {
+		return nil, fmt.Errorf("create meta dir: %w", err)
+	}
+
 	var quotaUpdated bool
 	if s.quota != nil {
 		if oldSize > 0 {
@@ -1492,10 +1474,9 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		quotaUpdated = true
 	}
 
-	// Create object metadata with erasure coding info
 	objMeta := ObjectMeta{
 		Key:           key,
-		Size:          size, // Original file size (before encoding)
+		Size:          size,
 		ContentType:   contentType,
 		ETag:          etag,
 		LastModified:  now,
@@ -1514,16 +1495,13 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		},
 	}
 
-	// Set expiry if configured (skip for system bucket)
 	if s.defaultObjectExpiryDays > 0 && bucket != SystemBucket {
 		expiry := now.AddDate(0, 0, s.defaultObjectExpiryDays)
 		objMeta.Expires = &expiry
 	}
 
-	// Serialize and write metadata
 	metaData, err := json.MarshalIndent(objMeta, "", "  ")
 	if err != nil {
-		// Rollback quota on failure
 		if quotaUpdated {
 			if oldSize > 0 {
 				s.quota.Update(bucket, size, oldSize)
@@ -1535,7 +1513,6 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	}
 
 	if err := syncedWriteFile(metaPath, metaData, 0644); err != nil {
-		// Rollback quota on failure
 		if quotaUpdated {
 			if oldSize > 0 {
 				s.quota.Update(bucket, size, oldSize)
@@ -1546,28 +1523,21 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
 
-	// Update incremental object/logical stats
 	if isNewObject {
 		s.statsObjectCount.Add(1)
 	}
 	s.statsLogicalBytes.Add(size - oldLogicalBytes)
 
-	// Prune expired versions. Chunk GC for pruned versions is deferred to the
-	// periodic GC pass which builds the reference set once (efficient batch).
 	s.pruneExpiredVersions(ctx, bucket, key)
 
-	// Update bucket size
 	sizeDelta := size - oldSize
 	if sizeDelta != 0 {
 		if err := s.updateBucketSize(bucket, sizeDelta); err != nil {
-			// Log error but don't fail the put operation
 			_ = err
 		}
 	}
 
-	// Mark as successful to prevent cleanup rollback
 	success = true
-
 	return &objMeta, nil
 }
 
@@ -1578,6 +1548,11 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 // This provides memory efficiency (peak usage ~64KB regardless of file size) but means
 // that partial uploads on failure will leave orphaned chunks in CAS until the next
 // garbage collection cycle. Orphaned chunks are cleaned up automatically during GC.
+//
+// Lock strategy: The global lock is held only for brief metadata reads and writes,
+// NOT during the potentially slow streaming I/O phase. CAS writes are inherently
+// safe for concurrent access (content-addressed, atomic rename). This allows
+// concurrent reads (ListObjects, GetObject) to proceed while uploads stream data.
 //
 // Context cancellation: If ctx is canceled mid-upload, the function returns immediately
 // but chunks already written to CAS will remain until GC cleanup.
@@ -1597,62 +1572,27 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		return nil, fmt.Errorf("CAS not initialized - call InitCAS first")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Check bucket exists and get metadata (including replication factor)
+	// Phase 1: Read bucket metadata under RLock (fast path)
+	s.mu.RLock()
 	bucketMeta, err := s.getBucketMeta(bucket)
 	if err != nil {
+		s.mu.RUnlock()
 		return nil, err
 	}
-
-	// Get bucket's replication factor for chunk registration
 	replicationFactor := bucketMeta.ReplicationFactor
-
-	// Check if erasure coding is enabled and file size is suitable
 	useErasureCoding := bucketMeta.ErasureCoding != nil &&
 		bucketMeta.ErasureCoding.Enabled &&
 		size > 0 &&
 		size <= MaxErasureCodingFileSize
+	s.mu.RUnlock()
 
 	if useErasureCoding {
-		// Use erasure coding path (buffer entire file)
 		return s.putObjectWithErasureCoding(ctx, bucket, key, reader, size, contentType, metadata, bucketMeta)
 	}
 
-	// Use standard streaming path for non-erasure-coded objects or large files
+	// Phase 2: Stream data through CDC chunker without holding the global lock.
+	// CAS writes are safe for concurrent access (content-addressed, atomic rename).
 	metaPath := s.objectMetaPath(bucket, key)
-
-	// Check if object already exists (for quota update calculation and versioning)
-	var oldSize int64
-	var oldLogicalBytes int64
-	isNewObject := true
-	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
-		oldSize = oldMeta.Size
-		isNewObject = false
-		oldLogicalBytes = oldMeta.Size
-	}
-
-	// Check quota if configured (only if object is growing)
-	if s.quota != nil && size > oldSize {
-		delta := size - oldSize
-		if !s.quota.CanAllocate(delta) {
-			return nil, ErrQuotaExceeded
-		}
-	}
-
-	// Archive current version for version history
-	if err := s.archiveCurrentVersion(bucket, key); err != nil {
-		return nil, fmt.Errorf("archive current version: %w", err)
-	}
-
-	// Create parent directories for metadata
-	if err := os.MkdirAll(filepath.Dir(metaPath), 0755); err != nil {
-		return nil, fmt.Errorf("create meta dir: %w", err)
-	}
-
-	// Stream data through CDC chunker (memory-efficient)
-	// For a 1GB file, this uses ~64KB peak memory instead of 1GB
 	streamChunker := NewStreamingChunker(reader)
 
 	var chunks []string
@@ -1661,8 +1601,7 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	md5Hasher := md5.New()
 	now := time.Now().UTC()
 
-	// Read coordinatorID once to avoid repeated field access
-	// Safe because s.mu.Lock() is already held (line 626)
+	// coordinatorID is set once at init and never changes — safe to read without lock
 	coordID := s.coordinatorID
 
 	for {
@@ -1687,15 +1626,13 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 			return nil, fmt.Errorf("write chunk %s: %w", chunkHash, err)
 		}
 
-		// Update incremental chunk stats
+		// Update incremental chunk stats (atomic — no lock needed)
 		var chunkOnDiskSize int64
 		if onDiskBytes > 0 {
-			// New chunk written
 			s.statsChunkCount.Add(1)
 			s.statsChunkBytes.Add(onDiskBytes)
 			chunkOnDiskSize = onDiskBytes
 		} else {
-			// Dedup hit — look up existing on-disk size for CompressedSize metadata
 			if sz, szErr := s.cas.ChunkSize(ctx, hash); szErr == nil {
 				chunkOnDiskSize = sz
 			}
@@ -1704,24 +1641,18 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		// Register chunk ownership in distributed registry with bucket's replication factor
 		if s.chunkRegistry != nil {
 			if err := s.chunkRegistry.RegisterChunkWithReplication(chunkHash, int64(len(chunk)), replicationFactor); err != nil {
-				// Don't fail upload if registry update fails (eventual consistency)
-				// but log to stderr in debug mode for troubleshooting
 				if os.Getenv("DEBUG") != "" || os.Getenv("TUNNELMESH_DEBUG") != "" {
 					fmt.Fprintf(os.Stderr, "chunk registry warning: failed to register %s: %v\n", chunkHash[:8], err)
 				}
 			}
 		}
 
-		// Update MD5 for ETag
 		md5Hasher.Write(chunk)
 
-		// Create per-chunk metadata with version vector
 		versionVector := make(map[string]uint64)
 		if coordID != "" {
-			versionVector[coordID] = 1 // Initial version
+			versionVector[coordID] = 1
 		}
-
-		// Create owners array (only if coordinator ID is set)
 		var owners []string
 		if coordID != "" {
 			owners = []string{coordID}
@@ -1741,9 +1672,51 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		written += int64(len(chunk))
 	}
 
-	// Generate ETag from MD5 hash of all data (S3-compatible format)
 	hash := md5Hasher.Sum(nil)
 	etag := fmt.Sprintf("\"%s\"", hex.EncodeToString(hash))
+
+	fileVersionVector := make(map[string]uint64)
+	if coordID != "" {
+		fileVersionVector[coordID] = 1
+	}
+
+	// Phase 3: Acquire global lock for the brief metadata write only.
+	// This section is fast (microseconds) — no streaming I/O.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Re-check bucket exists (could have been deleted during streaming)
+	if _, err := s.getBucketMeta(bucket); err != nil {
+		return nil, err
+	}
+
+	// Check if object already exists (for quota update calculation and versioning)
+	var oldSize int64
+	var oldLogicalBytes int64
+	isNewObject := true
+	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
+		oldSize = oldMeta.Size
+		isNewObject = false
+		oldLogicalBytes = oldMeta.Size
+	}
+
+	// Check quota if configured (only if object is growing)
+	if s.quota != nil && written > oldSize {
+		delta := written - oldSize
+		if !s.quota.CanAllocate(delta) {
+			return nil, ErrQuotaExceeded
+		}
+	}
+
+	// Archive current version for version history
+	if err := s.archiveCurrentVersion(bucket, key); err != nil {
+		return nil, fmt.Errorf("archive current version: %w", err)
+	}
+
+	// Create parent directories for metadata
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0755); err != nil {
+		return nil, fmt.Errorf("create meta dir: %w", err)
+	}
 
 	// Update quota tracking
 	var quotaUpdated bool
@@ -1756,13 +1729,6 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		quotaUpdated = true
 	}
 
-	// Create file-level version vector
-	fileVersionVector := make(map[string]uint64)
-	if coordID != "" {
-		fileVersionVector[coordID] = 1 // Initial version
-	}
-
-	// Write object metadata
 	objMeta := ObjectMeta{
 		Key:           key,
 		Size:          written,
@@ -1776,7 +1742,6 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		VersionVector: fileVersionVector,
 	}
 
-	// Set expiry if configured (skip for system bucket - internal data doesn't expire)
 	if s.defaultObjectExpiryDays > 0 && bucket != SystemBucket {
 		expiry := now.AddDate(0, 0, s.defaultObjectExpiryDays)
 		objMeta.Expires = &expiry
@@ -1784,10 +1749,9 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 
 	metaData, err := json.MarshalIndent(objMeta, "", "  ")
 	if err != nil {
-		// Rollback quota on failure
 		if quotaUpdated {
 			if oldSize > 0 {
-				s.quota.Update(bucket, written, oldSize) // Reverse the update
+				s.quota.Update(bucket, written, oldSize)
 			} else {
 				s.quota.Release(bucket, written)
 			}
@@ -1796,10 +1760,9 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	}
 
 	if err := syncedWriteFile(metaPath, metaData, 0644); err != nil {
-		// Rollback quota on failure
 		if quotaUpdated {
 			if oldSize > 0 {
-				s.quota.Update(bucket, written, oldSize) // Reverse the update
+				s.quota.Update(bucket, written, oldSize)
 			} else {
 				s.quota.Release(bucket, written)
 			}
@@ -1807,22 +1770,16 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
 
-	// Update incremental object/logical stats
 	if isNewObject {
 		s.statsObjectCount.Add(1)
 	}
 	s.statsLogicalBytes.Add(written - oldLogicalBytes)
 
-	// Prune expired versions. Chunk GC for pruned versions is deferred to the
-	// periodic GC pass which builds the reference set once (efficient batch).
 	s.pruneExpiredVersions(ctx, bucket, key)
 
-	// Update bucket size (new object adds to size, replacement adjusts delta)
 	sizeDelta := written - oldSize
 	if sizeDelta != 0 {
 		if err := s.updateBucketSize(bucket, sizeDelta); err != nil {
-			// Log error but don't fail the put operation
-			// Size will be recalculated on next server restart
 			_ = err
 		}
 	}
