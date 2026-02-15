@@ -50,6 +50,26 @@ const windowsFileRetries = 5
 // windowsFileRetryDelay is the delay between file operation retries on Windows.
 const windowsFileRetryDelay = 50 * time.Millisecond
 
+// removeWithRetry removes a file, retrying on Windows where antivirus or search
+// indexer may transiently hold file handles. Returns nil if the file doesn't exist.
+func removeWithRetry(path string) error {
+	retries := 1
+	if runtime.GOOS == "windows" {
+		retries = windowsFileRetries
+	}
+	var err error
+	for i := 0; i < retries; i++ {
+		err = os.Remove(path)
+		if err == nil || os.IsNotExist(err) {
+			return nil
+		}
+		if i < retries-1 {
+			time.Sleep(windowsFileRetryDelay)
+		}
+	}
+	return err
+}
+
 // ErasureCodingPolicy defines the erasure coding configuration for a bucket.
 type ErasureCodingPolicy struct {
 	Enabled      bool `json:"enabled"`       // Whether erasure coding is enabled for new objects
@@ -641,7 +661,9 @@ func (s *Store) ForceDeleteBucket(ctx context.Context, bucket string) error {
 		return nil // Idempotent
 	}
 
-	// Decrement stats for all objects being removed
+	// Decrement stats for all objects being removed.
+	// Corrupted files that can't be read/unmarshalled will cause stats drift
+	// until the next initCASStats on restart — log a warning so it's diagnosable.
 	metaDir := filepath.Join(bucketDir, "meta")
 	_ = filepath.Walk(metaDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
@@ -649,17 +671,20 @@ func (s *Store) ForceDeleteBucket(ctx context.Context, bucket string) error {
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
+			s.logger.Warn().Err(readErr).Str("path", path).Msg("ForceDeleteBucket: unreadable metadata, stats may drift")
 			return nil
 		}
 		var meta ObjectMeta
-		if json.Unmarshal(data, &meta) == nil {
-			s.statsObjectCount.Add(-1)
-			if meta.Size > 0 {
-				s.statsLogicalBytes.Add(-meta.Size)
-			}
-			if s.quota != nil {
-				s.quota.Release(bucket, meta.Size)
-			}
+		if json.Unmarshal(data, &meta) != nil {
+			s.logger.Warn().Str("path", path).Msg("ForceDeleteBucket: corrupted metadata, stats may drift")
+			return nil
+		}
+		s.statsObjectCount.Add(-1)
+		if meta.Size > 0 {
+			s.statsLogicalBytes.Add(-meta.Size)
+		}
+		if s.quota != nil {
+			s.quota.Release(bucket, meta.Size)
 		}
 		return nil
 	})
@@ -672,13 +697,16 @@ func (s *Store) ForceDeleteBucket(ctx context.Context, bucket string) error {
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
+			s.logger.Warn().Err(readErr).Str("path", path).Msg("ForceDeleteBucket: unreadable version metadata, stats may drift")
 			return nil
 		}
 		var meta ObjectMeta
-		if json.Unmarshal(data, &meta) == nil {
-			s.statsVersionCount.Add(-1)
-			s.statsVersionBytes.Add(-meta.Size)
+		if json.Unmarshal(data, &meta) != nil {
+			s.logger.Warn().Str("path", path).Msg("ForceDeleteBucket: corrupted version metadata, stats may drift")
+			return nil
 		}
+		s.statsVersionCount.Add(-1)
+		s.statsVersionBytes.Add(-meta.Size)
 		return nil
 	})
 
@@ -2042,7 +2070,9 @@ func (s *Store) RestoreRecycledObject(ctx context.Context, bucket, key string) e
 
 	// Remove recycle bin entry. If this fails, the entry is orphaned but harmless —
 	// the live object takes precedence, and the entry will be purged by retention.
-	if err := os.Remove(bestPath); err != nil && !os.IsNotExist(err) {
+	entryRemoved := true
+	if err := removeWithRetry(bestPath); err != nil {
+		entryRemoved = false
 		s.logger.Warn().Err(err).Str("path", bestPath).
 			Msg("failed to remove recyclebin entry after restore; entry will be purged by retention")
 	}
@@ -2062,7 +2092,11 @@ func (s *Store) RestoreRecycledObject(ctx context.Context, bucket, key string) e
 	if bestEntry.Meta.Size > 0 {
 		s.statsLogicalBytes.Add(bestEntry.Meta.Size)
 	}
-	s.statsRecycledBytes.Add(-bestEntry.Meta.Size)
+	// Only decrement recycled bytes if the entry was actually removed,
+	// otherwise stats drift until the next initCASStats on restart.
+	if entryRemoved {
+		s.statsRecycledBytes.Add(-bestEntry.Meta.Size)
+	}
 
 	return nil
 }
@@ -2265,10 +2299,14 @@ func (s *Store) PurgeAllRecycledInBucket(ctx context.Context, bucket string) err
 
 		// Delete version files
 		versionDir := filepath.Join(s.dataDir, "buckets", bucket, "versions", entry.OriginalKey)
-		_ = os.RemoveAll(versionDir)
+		if err := os.RemoveAll(versionDir); err != nil && !os.IsNotExist(err) {
+			s.logger.Warn().Err(err).Str("dir", versionDir).Msg("failed to remove version dir during recyclebin purge")
+		}
 
-		// Remove the entry
-		_ = os.Remove(entryPath)
+		// Remove the entry (retry on Windows where file handles may be held)
+		if err := removeWithRetry(entryPath); err != nil {
+			continue
+		}
 		s.statsRecycledBytes.Add(-entry.Meta.Size)
 	}
 
@@ -2335,10 +2373,12 @@ func (s *Store) purgeRecycledEntries(ctx context.Context, cutoff *time.Time) int
 
 			// Delete version files for this key
 			versionDir := filepath.Join(s.dataDir, "buckets", bucket.Name, "versions", entry.OriginalKey)
-			_ = os.RemoveAll(versionDir)
+			if err := os.RemoveAll(versionDir); err != nil && !os.IsNotExist(err) {
+				s.logger.Warn().Err(err).Str("dir", versionDir).Msg("failed to remove version dir during recyclebin purge")
+			}
 
-			// Remove the recyclebin entry
-			if err := os.Remove(entryPath); err != nil {
+			// Remove the recyclebin entry (retry on Windows where file handles may be held)
+			if err := removeWithRetry(entryPath); err != nil {
 				continue
 			}
 
