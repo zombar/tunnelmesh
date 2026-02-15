@@ -2073,7 +2073,7 @@ func TestImportObjectMeta_NewBucket(t *testing.T) {
 	metaJSON, err := json.Marshal(meta)
 	require.NoError(t, err)
 
-	err = store.ImportObjectMeta(ctx, "newbucket", "report.pdf", metaJSON, "alice")
+	_, err = store.ImportObjectMeta(ctx, "newbucket", "report.pdf", metaJSON, "alice")
 	require.NoError(t, err)
 
 	// Verify the metadata is readable
@@ -2107,7 +2107,7 @@ func TestImportObjectMeta_ExistingBucket(t *testing.T) {
 	metaJSON, err := json.Marshal(meta)
 	require.NoError(t, err)
 
-	err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
 	require.NoError(t, err)
 
 	got, err := store.GetObjectMeta(ctx, "mybucket", "doc.txt")
@@ -2119,7 +2119,7 @@ func TestImportObjectMeta_InvalidJSON(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ctx := context.Background()
 
-	err := store.ImportObjectMeta(ctx, "bucket", "key", []byte("not json"), "")
+	_, err := store.ImportObjectMeta(ctx, "bucket", "key", []byte("not json"), "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid object meta JSON")
 }
@@ -2131,7 +2131,7 @@ func TestImportObjectMeta_InvalidBucketName(t *testing.T) {
 	meta := ObjectMeta{Key: "test"}
 	metaJSON, _ := json.Marshal(meta)
 
-	err := store.ImportObjectMeta(ctx, "../escape", "test", metaJSON, "")
+	_, err := store.ImportObjectMeta(ctx, "../escape", "test", metaJSON, "")
 	assert.Error(t, err)
 }
 
@@ -2150,7 +2150,8 @@ func TestImportObjectMeta_ArchivesVersion(t *testing.T) {
 	}
 	metaJSON1, err := json.Marshal(meta1)
 	require.NoError(t, err)
-	require.NoError(t, store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON1, ""))
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON1, "")
+	require.NoError(t, err)
 
 	// Import second version (overwrites first)
 	meta2 := ObjectMeta{
@@ -2161,7 +2162,8 @@ func TestImportObjectMeta_ArchivesVersion(t *testing.T) {
 	}
 	metaJSON2, err := json.Marshal(meta2)
 	require.NoError(t, err)
-	require.NoError(t, store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON2, ""))
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON2, "")
+	require.NoError(t, err)
 
 	// Verify current version is meta2
 	got, err := store.GetObjectMeta(ctx, "mybucket", "doc.txt")

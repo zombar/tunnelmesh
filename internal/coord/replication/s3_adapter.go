@@ -177,13 +177,18 @@ func (a *S3StoreAdapter) WriteChunkDirect(ctx context.Context, hash string, data
 }
 
 // ImportObjectMeta writes object metadata directly (for replication receiver).
-func (a *S3StoreAdapter) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) error {
-	err := a.store.ImportObjectMeta(ctx, bucket, key, metaJSON, bucketOwner)
+func (a *S3StoreAdapter) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) ([]string, error) {
+	chunks, err := a.store.ImportObjectMeta(ctx, bucket, key, metaJSON, bucketOwner)
 	if err != nil {
-		return fmt.Errorf("import object meta: %w", err)
+		return nil, fmt.Errorf("import object meta: %w", err)
 	}
 
-	return nil
+	return chunks, nil
+}
+
+// DeleteUnreferencedChunks checks each chunk hash and deletes unreferenced ones.
+func (a *S3StoreAdapter) DeleteUnreferencedChunks(ctx context.Context, chunkHashes []string) int64 {
+	return a.store.DeleteUnreferencedChunks(ctx, chunkHashes)
 }
 
 // GetBucketReplicationFactor returns the replication factor for a bucket.

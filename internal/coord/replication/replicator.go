@@ -86,7 +86,12 @@ type S3Store interface {
 
 	// ImportObjectMeta writes object metadata directly (for replication receiver).
 	// bucketOwner is used when auto-creating the bucket (empty = "system").
-	ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) error
+	// Returns chunk hashes from pruned old versions that may now be unreferenced.
+	ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) ([]string, error)
+
+	// DeleteUnreferencedChunks checks each chunk hash and deletes unreferenced ones.
+	// Returns total bytes freed.
+	DeleteUnreferencedChunks(ctx context.Context, chunkHashes []string) int64
 
 	// DeleteChunk removes a chunk from CAS by hash (for cleanup after replication)
 	DeleteChunk(ctx context.Context, hash string) error
@@ -2102,13 +2107,28 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 	ctx, cancel := context.WithTimeout(r.ctx, r.applyTimeout)
 	defer cancel()
 
-	if err := r.s3.ImportObjectMeta(ctx, payload.Bucket, payload.Key, payload.MetaJSON, payload.BucketOwner); err != nil {
+	chunksToCheck, err := r.s3.ImportObjectMeta(ctx, payload.Bucket, payload.Key, payload.MetaJSON, payload.BucketOwner)
+	if err != nil {
 		r.logger.Error().Err(err).
 			Str("bucket", payload.Bucket).
 			Str("key", payload.Key).
 			Msg("Failed to import object metadata")
 		r.incrementErrorCount()
 		return fmt.Errorf("import object meta: %w", err)
+	}
+
+	// Clean up chunks from pruned old versions that are no longer referenced.
+	// This prevents orphaned chunks from accumulating on replica coordinators.
+	if len(chunksToCheck) > 0 {
+		freed := r.s3.DeleteUnreferencedChunks(ctx, chunksToCheck)
+		if freed > 0 {
+			r.logger.Debug().
+				Str("bucket", payload.Bucket).
+				Str("key", payload.Key).
+				Int64("bytes_freed", freed).
+				Int("chunks_checked", len(chunksToCheck)).
+				Msg("Cleaned up unreferenced chunks after metadata import")
+		}
 	}
 
 	r.logger.Info().

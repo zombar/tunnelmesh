@@ -1973,21 +1973,7 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 	// Phase 2: Delete unreferenced chunks WITHOUT holding the lock.
 	// This is best-effort: the object is already purged (metadata removed in Phase 1).
 	// If context is cancelled, orphaned chunks will be cleaned by the next GC cycle.
-	if s.cas != nil {
-		for _, hash := range chunksToCheck {
-			select {
-			case <-ctx.Done():
-				return nil // Object already purged; chunk cleanup deferred to GC
-			default:
-			}
-			if !s.isChunkReferencedGlobally(ctx, hash) {
-				if freed, err := s.cas.DeleteChunk(ctx, hash); err == nil && freed > 0 {
-					s.statsChunkCount.Add(-1)
-					s.statsChunkBytes.Add(-freed)
-				}
-			}
-		}
-	}
+	s.DeleteUnreferencedChunks(ctx, chunksToCheck)
 
 	return nil
 }
@@ -2190,19 +2176,19 @@ func (s *Store) WriteChunkDirect(ctx context.Context, hash string, data []byte) 
 // This is used by the replication receiver to create the metadata file so the
 // remote coordinator can serve reads for objects whose chunks arrive separately.
 // bucketOwner is used when auto-creating the bucket (empty string defaults to "system").
-func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) error {
+func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) ([]string, error) {
 	// Validate names
 	if err := validateName(bucket); err != nil {
-		return fmt.Errorf("invalid bucket name: %w", err)
+		return nil, fmt.Errorf("invalid bucket name: %w", err)
 	}
 	if err := validateName(key); err != nil {
-		return fmt.Errorf("invalid key: %w", err)
+		return nil, fmt.Errorf("invalid key: %w", err)
 	}
 
 	// Validate that metaJSON is valid ObjectMeta
 	var meta ObjectMeta
 	if err := json.Unmarshal(metaJSON, &meta); err != nil {
-		return fmt.Errorf("invalid object meta JSON: %w", err)
+		return nil, fmt.Errorf("invalid object meta JSON: %w", err)
 	}
 
 	s.mu.Lock()
@@ -2223,21 +2209,21 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 		}
 		bucketDir := s.bucketPath(bucket)
 		if mkErr := os.MkdirAll(filepath.Join(bucketDir, "meta"), 0755); mkErr != nil {
-			return fmt.Errorf("create bucket directories: %w", mkErr)
+			return nil, fmt.Errorf("create bucket directories: %w", mkErr)
 		}
 		bmData, marshalErr := json.Marshal(bucketMeta)
 		if marshalErr != nil {
-			return fmt.Errorf("marshal bucket meta: %w", marshalErr)
+			return nil, fmt.Errorf("marshal bucket meta: %w", marshalErr)
 		}
 		if writeErr := syncedWriteFile(s.bucketMetaPath(bucket), bmData, 0644); writeErr != nil {
-			return fmt.Errorf("write bucket meta: %w", writeErr)
+			return nil, fmt.Errorf("write bucket meta: %w", writeErr)
 		}
 	}
 
 	// Ensure meta directory exists
 	metaDir := filepath.Join(s.bucketPath(bucket), "meta")
 	if mkErr := os.MkdirAll(metaDir, 0755); mkErr != nil {
-		return fmt.Errorf("create meta directory: %w", mkErr)
+		return nil, fmt.Errorf("create meta directory: %w", mkErr)
 	}
 
 	// Write the object metadata file
@@ -2245,7 +2231,7 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 
 	// Ensure parent directory exists (for nested keys like "dir/file.txt")
 	if mkErr := os.MkdirAll(filepath.Dir(metaPath), 0755); mkErr != nil {
-		return fmt.Errorf("create meta parent directory: %w", mkErr)
+		return nil, fmt.Errorf("create meta parent directory: %w", mkErr)
 	}
 
 	// Check if object already exists (for idempotent retries)
@@ -2268,7 +2254,7 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 	}
 
 	if writeErr := syncedWriteFile(metaPath, metaJSON, 0644); writeErr != nil {
-		return fmt.Errorf("write object meta: %w", writeErr)
+		return nil, fmt.Errorf("write object meta: %w", writeErr)
 	}
 
 	// Compute LogicalBytes from imported object's metadata size
@@ -2281,19 +2267,48 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 	s.statsLogicalBytes.Add(newLogicalBytes - oldLogicalBytes)
 
 	// Prune expired versions inline (lazy cleanup), same as PutObject does.
-	s.pruneExpiredVersions(ctx, bucket, key)
+	// Return chunk hashes from pruned versions so the caller can clean up
+	// unreferenced chunks immediately (critical for replica coordinators).
+	_, chunksToCheck := s.pruneExpiredVersions(ctx, bucket, key)
 
 	// Update bucket size tracking (idempotent: old size subtracted above)
 	bucketMeta.SizeBytes += meta.Size
 	bmData, marshalErr := json.Marshal(bucketMeta)
 	if marshalErr != nil {
-		return fmt.Errorf("marshal bucket meta: %w", marshalErr)
+		return nil, fmt.Errorf("marshal bucket meta: %w", marshalErr)
 	}
 	if writeErr := syncedWriteFile(s.bucketMetaPath(bucket), bmData, 0644); writeErr != nil {
-		return fmt.Errorf("update bucket meta: %w", writeErr)
+		return nil, fmt.Errorf("update bucket meta: %w", writeErr)
 	}
 
-	return nil
+	return chunksToCheck, nil
+}
+
+// DeleteUnreferencedChunks checks each chunk hash against all objects and versions,
+// deleting any that are no longer referenced. Returns total bytes freed.
+// This is used after version pruning to immediately clean up orphaned chunks
+// rather than waiting for the next GC cycle.
+func (s *Store) DeleteUnreferencedChunks(ctx context.Context, chunkHashes []string) int64 {
+	if s.cas == nil || len(chunkHashes) == 0 {
+		return 0
+	}
+
+	var totalFreed int64
+	for _, hash := range chunkHashes {
+		select {
+		case <-ctx.Done():
+			return totalFreed
+		default:
+		}
+		if !s.isChunkReferencedGlobally(ctx, hash) {
+			if freed, err := s.cas.DeleteChunk(ctx, hash); err == nil && freed > 0 {
+				s.statsChunkCount.Add(-1)
+				s.statsChunkBytes.Add(-freed)
+				totalFreed += freed
+			}
+		}
+	}
+	return totalFreed
 }
 
 // DeleteChunk removes a chunk from CAS by its hash.
