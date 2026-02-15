@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1543,4 +1544,464 @@ func TestS3GC_ConcurrentReturns429(t *testing.T) {
 	srv.gcMu.Unlock()
 
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+}
+
+// --- Listing Index Tests ---
+
+func newTestServerWithListingIndex(t *testing.T) *Server {
+	t.Helper()
+	srv := newTestServerWithS3AndBucket(t)
+	srv.listingIndexNotify = make(chan struct{}, 1)
+	return srv
+}
+
+func TestUpdateListingIndex_Put(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	info := S3ObjectInfo{
+		Key:          "file.txt",
+		Size:         100,
+		LastModified: "2024-01-01T00:00:00Z",
+		ContentType:  "text/plain",
+	}
+	srv.updateListingIndex("test-bucket", "file.txt", &info, "put")
+
+	idx := srv.localListingIndex.Load()
+	require.NotNil(t, idx)
+	bl := idx.Buckets["test-bucket"]
+	require.NotNil(t, bl)
+	require.Len(t, bl.Objects, 1)
+	assert.Equal(t, "file.txt", bl.Objects[0].Key)
+	assert.Equal(t, int64(100), bl.Objects[0].Size)
+	assert.Equal(t, "text/plain", bl.Objects[0].ContentType)
+}
+
+func TestUpdateListingIndex_PutOverwrite(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	info1 := S3ObjectInfo{Key: "file.txt", Size: 100, LastModified: "2024-01-01T00:00:00Z"}
+	srv.updateListingIndex("test-bucket", "file.txt", &info1, "put")
+
+	info2 := S3ObjectInfo{Key: "file.txt", Size: 200, LastModified: "2024-02-01T00:00:00Z"}
+	srv.updateListingIndex("test-bucket", "file.txt", &info2, "put")
+
+	idx := srv.localListingIndex.Load()
+	bl := idx.Buckets["test-bucket"]
+	require.Len(t, bl.Objects, 1)
+	assert.Equal(t, int64(200), bl.Objects[0].Size)
+	assert.Equal(t, "2024-02-01T00:00:00Z", bl.Objects[0].LastModified)
+}
+
+func TestUpdateListingIndex_Delete(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	info := S3ObjectInfo{Key: "file.txt", Size: 100, LastModified: "2024-01-01T00:00:00Z"}
+	srv.updateListingIndex("test-bucket", "file.txt", &info, "put")
+
+	srv.updateListingIndex("test-bucket", "file.txt", nil, "delete")
+
+	idx := srv.localListingIndex.Load()
+	bl := idx.Buckets["test-bucket"]
+	assert.Empty(t, bl.Objects)
+	require.Len(t, bl.Recycled, 1)
+	assert.Equal(t, "file.txt", bl.Recycled[0].Key)
+	assert.NotEmpty(t, bl.Recycled[0].DeletedAt)
+}
+
+func TestUpdateListingIndex_DeleteNonexistent(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Should not panic when deleting a key that doesn't exist
+	srv.updateListingIndex("test-bucket", "nonexistent.txt", nil, "delete")
+
+	idx := srv.localListingIndex.Load()
+	require.NotNil(t, idx)
+}
+
+func TestUpdateListingIndex_Undelete(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	info := S3ObjectInfo{Key: "file.txt", Size: 100, LastModified: "2024-01-01T00:00:00Z"}
+	srv.updateListingIndex("test-bucket", "file.txt", &info, "put")
+	srv.updateListingIndex("test-bucket", "file.txt", nil, "delete")
+	srv.updateListingIndex("test-bucket", "file.txt", nil, "undelete")
+
+	idx := srv.localListingIndex.Load()
+	bl := idx.Buckets["test-bucket"]
+	require.Len(t, bl.Objects, 1)
+	assert.Equal(t, "file.txt", bl.Objects[0].Key)
+	assert.Empty(t, bl.Objects[0].DeletedAt, "DeletedAt should be cleared after undelete")
+	assert.Empty(t, bl.Recycled)
+}
+
+func TestUpdateListingIndex_SetsDirtyFlag(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	assert.False(t, srv.listingIndexDirty.Load())
+
+	info := S3ObjectInfo{Key: "file.txt", Size: 100}
+	srv.updateListingIndex("test-bucket", "file.txt", &info, "put")
+
+	assert.True(t, srv.listingIndexDirty.Load())
+}
+
+func TestUpdateListingIndex_CopyOnWrite(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	info1 := S3ObjectInfo{Key: "file1.txt", Size: 100}
+	srv.updateListingIndex("test-bucket", "file1.txt", &info1, "put")
+
+	// Capture the pointer before the concurrent update
+	before := srv.localListingIndex.Load()
+
+	// Concurrent updates should not corrupt the snapshot
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			info := S3ObjectInfo{Key: "concurrent.txt", Size: int64(n)}
+			srv.updateListingIndex("test-bucket", "concurrent.txt", &info, "put")
+		}(i)
+	}
+	wg.Wait()
+
+	// The old snapshot should still have exactly 1 object
+	require.Len(t, before.Buckets["test-bucket"].Objects, 1)
+	assert.Equal(t, "file1.txt", before.Buckets["test-bucket"].Objects[0].Key)
+}
+
+// --- filterByPrefixDelimiter Tests ---
+
+func TestFilterByPrefixDelimiter_NoFilter(t *testing.T) {
+	objs := []S3ObjectInfo{
+		{Key: "a.txt", Size: 10},
+		{Key: "b.txt", Size: 20},
+	}
+	result := filterByPrefixDelimiter(objs, "", "")
+	assert.Len(t, result, 2)
+}
+
+func TestFilterByPrefixDelimiter_PrefixOnly(t *testing.T) {
+	objs := []S3ObjectInfo{
+		{Key: "docs/readme.md", Size: 10},
+		{Key: "docs/guide.md", Size: 20},
+		{Key: "src/main.go", Size: 30},
+	}
+	result := filterByPrefixDelimiter(objs, "docs/", "")
+	assert.Len(t, result, 2)
+	for _, obj := range result {
+		assert.True(t, strings.HasPrefix(obj.Key, "docs/"))
+	}
+}
+
+func TestFilterByPrefixDelimiter_PrefixAndDelimiter(t *testing.T) {
+	objs := []S3ObjectInfo{
+		{Key: "file1.txt", Size: 10},
+		{Key: "folder/file2.txt", Size: 20},
+		{Key: "folder/file3.txt", Size: 30},
+	}
+	result := filterByPrefixDelimiter(objs, "", "/")
+
+	// Should have: file1.txt and folder/ prefix
+	assert.Len(t, result, 2)
+
+	byKey := make(map[string]S3ObjectInfo)
+	for _, obj := range result {
+		byKey[obj.Key] = obj
+	}
+
+	assert.Equal(t, int64(10), byKey["file1.txt"].Size)
+	assert.True(t, byKey["folder/"].IsPrefix)
+	assert.Equal(t, int64(50), byKey["folder/"].Size) // 20 + 30
+}
+
+func TestFilterByPrefixDelimiter_NestedFolders(t *testing.T) {
+	objs := []S3ObjectInfo{
+		{Key: "a/b/c/file.txt", Size: 10},
+		{Key: "a/b/d/file.txt", Size: 20},
+		{Key: "a/file.txt", Size: 30},
+	}
+	result := filterByPrefixDelimiter(objs, "a/", "/")
+
+	// Should have: a/file.txt and a/b/ prefix (grouping both c/ and d/)
+	assert.Len(t, result, 2)
+
+	byKey := make(map[string]S3ObjectInfo)
+	for _, obj := range result {
+		byKey[obj.Key] = obj
+	}
+
+	assert.Equal(t, int64(30), byKey["a/file.txt"].Size)
+	assert.True(t, byKey["a/b/"].IsPrefix)
+}
+
+func TestFilterByPrefixDelimiter_EmptyResult(t *testing.T) {
+	objs := []S3ObjectInfo{
+		{Key: "a.txt", Size: 10},
+	}
+	result := filterByPrefixDelimiter(objs, "nonexistent/", "")
+	assert.Empty(t, result)
+}
+
+// --- reconcileLocalIndex Tests ---
+
+func TestReconcileLocalIndex_PopulatesFromDisk(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Add objects directly to S3 store
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	srv.reconcileLocalIndex(context.Background())
+
+	idx := srv.localListingIndex.Load()
+	require.NotNil(t, idx)
+	bl := idx.Buckets["test-bucket"]
+	require.NotNil(t, bl)
+	require.Len(t, bl.Objects, 1)
+	assert.Equal(t, "file.txt", bl.Objects[0].Key)
+}
+
+func TestReconcileLocalIndex_IncludesRecycled(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	srv.reconcileLocalIndex(context.Background())
+
+	idx := srv.localListingIndex.Load()
+	bl := idx.Buckets["test-bucket"]
+	require.NotNil(t, bl)
+	assert.Empty(t, bl.Objects)
+	require.Len(t, bl.Recycled, 1)
+	assert.Equal(t, "file.txt", bl.Recycled[0].Key)
+	assert.NotEmpty(t, bl.Recycled[0].DeletedAt)
+}
+
+func TestReconcileLocalIndex_SkipsSystemBucket(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	srv.reconcileLocalIndex(context.Background())
+
+	idx := srv.localListingIndex.Load()
+	require.NotNil(t, idx)
+	_, exists := idx.Buckets[auth.SystemBucket]
+	assert.False(t, exists, "system bucket should be excluded from listing index")
+}
+
+func TestReconcileLocalIndex_DetectsReplicationArrivals(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// First reconcile — empty
+	srv.reconcileLocalIndex(context.Background())
+	idx := srv.localListingIndex.Load()
+	_, exists := idx.Buckets["test-bucket"]
+	assert.False(t, exists, "bucket should not be in index when empty")
+
+	// Simulate a replication arrival by adding an object directly
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "replicated.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Clear dirty flag to detect the change
+	srv.listingIndexDirty.Store(false)
+
+	srv.reconcileLocalIndex(context.Background())
+
+	idx = srv.localListingIndex.Load()
+	bl := idx.Buckets["test-bucket"]
+	require.NotNil(t, bl)
+	require.Len(t, bl.Objects, 1)
+	assert.Equal(t, "replicated.txt", bl.Objects[0].Key)
+}
+
+func TestReconcileLocalIndex_SetsDirtyOnChange(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// First reconcile with no objects — sets to something from nil
+	srv.reconcileLocalIndex(context.Background())
+	// Drain the notify channel
+	select {
+	case <-srv.listingIndexNotify:
+	default:
+	}
+	srv.listingIndexDirty.Store(false)
+
+	// Second reconcile with no changes — should NOT set dirty
+	srv.reconcileLocalIndex(context.Background())
+	assert.False(t, srv.listingIndexDirty.Load(), "dirty flag should not be set when nothing changed")
+
+	// Add an object and reconcile — SHOULD set dirty
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "new.txt", bytes.NewReader([]byte("x")), 1, "text/plain", nil)
+	require.NoError(t, err)
+
+	srv.reconcileLocalIndex(context.Background())
+	assert.True(t, srv.listingIndexDirty.Load(), "dirty flag should be set when index changes")
+}
+
+// --- Integration tests for listing with peer index ---
+
+func TestListObjects_MergesPeerListings(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Add a local object
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "local.txt", bytes.NewReader([]byte("local")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Populate peer listings via atomic pointer
+	pl := &peerListings{
+		Objects: map[string][]S3ObjectInfo{
+			"test-bucket": {
+				{Key: "peer.txt", Size: 42, LastModified: "2024-01-01T00:00:00Z", ContentType: "text/plain"},
+			},
+		},
+		Recycled: make(map[string][]S3ObjectInfo),
+	}
+	srv.peerListings.Store(pl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var objects []S3ObjectInfo
+	err = json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+
+	// Should have both local and peer objects
+	keys := make(map[string]bool)
+	for _, obj := range objects {
+		keys[obj.Key] = true
+	}
+	assert.True(t, keys["local.txt"], "should include local object")
+	assert.True(t, keys["peer.txt"], "should include peer object")
+}
+
+func TestListObjects_PeerListingsDedup(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Add a local object
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "shared.txt", bytes.NewReader([]byte("local")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Peer has the same key with a newer timestamp
+	pl := &peerListings{
+		Objects: map[string][]S3ObjectInfo{
+			"test-bucket": {
+				{Key: "shared.txt", Size: 99, LastModified: "2099-01-01T00:00:00Z"},
+			},
+		},
+		Recycled: make(map[string][]S3ObjectInfo),
+	}
+	srv.peerListings.Store(pl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	var objects []S3ObjectInfo
+	err = json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+
+	// Find the shared.txt entry — newer peer version should win
+	for _, obj := range objects {
+		if obj.Key == "shared.txt" {
+			assert.Equal(t, int64(99), obj.Size, "peer's newer entry should win dedup")
+			break
+		}
+	}
+}
+
+func TestListRecycledObjects_MergesPeerListings(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Add and delete a local object to create a recycled entry
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "deleted-local.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+	require.NoError(t, err)
+	err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", "deleted-local.txt")
+	require.NoError(t, err)
+
+	// Populate peer recycled listings
+	pl := &peerListings{
+		Objects: make(map[string][]S3ObjectInfo),
+		Recycled: map[string][]S3ObjectInfo{
+			"test-bucket": {
+				{Key: "deleted-peer.txt", Size: 10, DeletedAt: "2024-06-01T00:00:00Z"},
+			},
+		},
+	}
+	srv.peerListings.Store(pl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/recyclebin", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var objects []S3ObjectInfo
+	err = json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+
+	keys := make(map[string]bool)
+	for _, obj := range objects {
+		keys[obj.Key] = true
+	}
+	assert.True(t, keys["deleted-local.txt"], "should include local recycled object")
+	assert.True(t, keys["deleted-peer.txt"], "should include peer recycled object")
+}
+
+func TestListObjects_NoPeers(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+	require.NoError(t, err)
+
+	// peerListings is nil (no peers)
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var objects []S3ObjectInfo
+	err = json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+	assert.Len(t, objects, 1)
+	assert.Equal(t, "file.txt", objects[0].Key)
+}
+
+func TestListObjects_PrefixFilterOnPeerResults(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Peer has objects with various prefixes
+	pl := &peerListings{
+		Objects: map[string][]S3ObjectInfo{
+			"test-bucket": {
+				{Key: "docs/readme.md", Size: 10, LastModified: "2024-01-01T00:00:00Z"},
+				{Key: "docs/guide.md", Size: 20, LastModified: "2024-01-01T00:00:00Z"},
+				{Key: "src/main.go", Size: 30, LastModified: "2024-01-01T00:00:00Z"},
+			},
+		},
+		Recycled: make(map[string][]S3ObjectInfo),
+	}
+	srv.peerListings.Store(pl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects?prefix=docs/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	var objects []S3ObjectInfo
+	err := json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+
+	// Only docs/ entries should be included
+	for _, obj := range objects {
+		assert.True(t, strings.HasPrefix(obj.Key, "docs/"), "all results should have docs/ prefix, got: %s", obj.Key)
+	}
+	assert.Len(t, objects, 2)
 }

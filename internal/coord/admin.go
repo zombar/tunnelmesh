@@ -1803,6 +1803,23 @@ type S3ObjectInfo struct {
 	IsPrefix     bool   `json:"is_prefix,omitempty"` // True for "folder" prefixes
 }
 
+// listingIndex is published by each coordinator to the system store.
+type listingIndex struct {
+	Buckets map[string]*bucketListing `json:"buckets"`
+}
+
+// bucketListing holds object and recycled entry listings for a single bucket.
+type bucketListing struct {
+	Objects  []S3ObjectInfo `json:"objects,omitempty"`
+	Recycled []S3ObjectInfo `json:"recycled,omitempty"`
+}
+
+// peerListings holds pre-merged peer listing data for instant access.
+type peerListings struct {
+	Objects  map[string][]S3ObjectInfo // bucket -> objects from all peers
+	Recycled map[string][]S3ObjectInfo // bucket -> recycled from all peers
+}
+
 // S3BucketInfo represents an S3 bucket for the explorer API.
 type S3BucketInfo struct {
 	Name              string `json:"name"`
@@ -2476,11 +2493,12 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 		result = append(result, info)
 	}
 
-	// Aggregate listings from peer coordinators so objects stored on other
-	// coordinators (via write-forwarding) are visible in the explorer.
+	// Merge cached peer listings from the system store listing index.
+	// Peer data is maintained by the background indexer — no HTTP calls needed.
 	if r.Header.Get("X-TunnelMesh-Forwarded") == "" {
-		peerResults := s.fetchPeerListings(r.Context(), bucket, prefix, delimiter)
-		result = mergeObjectListings(result, peerResults)
+		peerObjs := s.getPeerObjectListing(bucket)
+		filtered := filterByPrefixDelimiter(peerObjs, prefix, delimiter)
+		result = mergeObjectListings(result, filtered)
 	}
 
 	// Calculate sizes for all folders (prefixes) found
@@ -2501,73 +2519,6 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
-}
-
-// fetchPeerListings fetches object listings from all peer coordinators in parallel.
-// Returns the merged list of remote objects. Errors are logged and skipped.
-func (s *Server) fetchPeerListings(ctx context.Context, bucket, prefix, delimiter string) []S3ObjectInfo {
-	ips := s.GetCoordMeshIPs()
-	if len(ips) <= 1 {
-		return nil
-	}
-
-	peerIPs := ips[1:] // Skip self (index 0)
-
-	type peerResult struct {
-		objects []S3ObjectInfo
-	}
-	results := make(chan peerResult, len(peerIPs))
-
-	fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	for _, ip := range peerIPs {
-		go func(peerIP string) {
-			params := url.Values{}
-			if prefix != "" {
-				params.Set("prefix", prefix)
-			}
-			if delimiter != "" {
-				params.Set("delimiter", delimiter)
-			}
-			listURL := fmt.Sprintf("https://%s:443/api/s3/buckets/%s/objects?%s",
-				peerIP, url.PathEscape(bucket), params.Encode())
-
-			req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, listURL, nil)
-			if err != nil {
-				results <- peerResult{}
-				return
-			}
-			req.Header.Set("X-TunnelMesh-Forwarded", "true")
-
-			resp, err := s.s3ForwardTransport.RoundTrip(req)
-			if err != nil {
-				log.Debug().Err(err).Str("peer", peerIP).Msg("failed to fetch peer listing")
-				results <- peerResult{}
-				return
-			}
-			defer func() { _ = resp.Body.Close() }()
-
-			if resp.StatusCode != http.StatusOK {
-				results <- peerResult{}
-				return
-			}
-
-			var objs []S3ObjectInfo
-			if err := json.NewDecoder(resp.Body).Decode(&objs); err != nil {
-				results <- peerResult{}
-				return
-			}
-			results <- peerResult{objects: objs}
-		}(ip)
-	}
-
-	var all []S3ObjectInfo
-	for range peerIPs {
-		res := <-results
-		all = append(all, res.objects...)
-	}
-	return all
 }
 
 // mergeObjectListings deduplicates object listings from multiple coordinators.
@@ -2604,6 +2555,379 @@ func mergeObjectListings(local, remote []S3ObjectInfo) []S3ObjectInfo {
 	}
 
 	return result
+}
+
+// updateListingIndex incrementally updates the local listing index after a write event.
+// It uses copy-on-write semantics so concurrent readers see a consistent snapshot.
+//
+//   - op = "put": upsert entry in objects list
+//   - op = "delete": remove from objects, add to recycled (with DeletedAt)
+//   - op = "undelete": remove from recycled, add to objects
+func (s *Server) updateListingIndex(bucket, key string, info *S3ObjectInfo, op string) {
+	for {
+		old := s.localListingIndex.Load()
+
+		// Build a new index as a shallow copy of the old one
+		newIdx := &listingIndex{Buckets: make(map[string]*bucketListing)}
+		if old != nil {
+			for k, v := range old.Buckets {
+				newIdx.Buckets[k] = v
+			}
+		}
+
+		// Get or create bucket listing (copy-on-write for the bucket too)
+		bl := newIdx.Buckets[bucket]
+		var newBL bucketListing
+		if bl != nil {
+			newBL.Objects = make([]S3ObjectInfo, len(bl.Objects))
+			copy(newBL.Objects, bl.Objects)
+			newBL.Recycled = make([]S3ObjectInfo, len(bl.Recycled))
+			copy(newBL.Recycled, bl.Recycled)
+		}
+
+		switch op {
+		case "put":
+			// Upsert: replace existing entry or append
+			found := false
+			for i, obj := range newBL.Objects {
+				if obj.Key == key {
+					if info != nil {
+						newBL.Objects[i] = *info
+					}
+					found = true
+					break
+				}
+			}
+			if !found && info != nil {
+				newBL.Objects = append(newBL.Objects, *info)
+			}
+
+		case "delete":
+			// Remove from objects
+			for i, obj := range newBL.Objects {
+				if obj.Key == key {
+					// Build recycled entry from the removed object
+					recycled := obj
+					recycled.DeletedAt = time.Now().UTC().Format(time.RFC3339)
+					newBL.Recycled = append(newBL.Recycled, recycled)
+					newBL.Objects = append(newBL.Objects[:i], newBL.Objects[i+1:]...)
+					break
+				}
+			}
+
+		case "undelete":
+			// Remove from recycled, add to objects
+			for i, obj := range newBL.Recycled {
+				if obj.Key == key {
+					restored := obj
+					restored.DeletedAt = ""
+					newBL.Objects = append(newBL.Objects, restored)
+					newBL.Recycled = append(newBL.Recycled[:i], newBL.Recycled[i+1:]...)
+					break
+				}
+			}
+		}
+
+		newIdx.Buckets[bucket] = &newBL
+
+		// CAS to avoid lost updates from concurrent calls
+		if s.localListingIndex.CompareAndSwap(old, newIdx) {
+			break
+		}
+		// Another goroutine updated the index concurrently — retry with fresh snapshot
+	}
+
+	s.listingIndexDirty.Store(true)
+
+	// Non-blocking signal to background indexer
+	select {
+	case s.listingIndexNotify <- struct{}{}:
+	default:
+	}
+}
+
+// getPeerObjectListing returns cached peer object listings for a bucket.
+func (s *Server) getPeerObjectListing(bucket string) []S3ObjectInfo {
+	pl := s.peerListings.Load()
+	if pl == nil {
+		return nil
+	}
+	return pl.Objects[bucket]
+}
+
+// getPeerRecycledListing returns cached peer recycled listings for a bucket.
+func (s *Server) getPeerRecycledListing(bucket string) []S3ObjectInfo {
+	pl := s.peerListings.Load()
+	if pl == nil {
+		return nil
+	}
+	return pl.Recycled[bucket]
+}
+
+// filterByPrefixDelimiter applies S3-style prefix/delimiter filtering to a flat object list.
+// With delimiter, objects beneath the prefix are grouped into "folder" prefixes.
+func filterByPrefixDelimiter(objs []S3ObjectInfo, prefix, delimiter string) []S3ObjectInfo {
+	if len(objs) == 0 {
+		return nil
+	}
+
+	var result []S3ObjectInfo
+	prefixSet := make(map[string]bool)
+
+	for _, obj := range objs {
+		// Skip entries that don't match the prefix
+		if prefix != "" && !strings.HasPrefix(obj.Key, prefix) {
+			continue
+		}
+
+		// If no delimiter, include all matching entries
+		if delimiter == "" {
+			result = append(result, obj)
+			continue
+		}
+
+		// Apply delimiter grouping
+		keyAfterPrefix := strings.TrimPrefix(obj.Key, prefix)
+		if idx := strings.Index(keyAfterPrefix, delimiter); idx >= 0 {
+			// This key contains the delimiter after the prefix → group as folder
+			commonPrefix := prefix + keyAfterPrefix[:idx+1]
+			if !prefixSet[commonPrefix] {
+				prefixSet[commonPrefix] = true
+				result = append(result, S3ObjectInfo{
+					Key:      commonPrefix,
+					Size:     obj.Size,
+					IsPrefix: true,
+				})
+			} else {
+				// Sum sizes for folder entries
+				for i := range result {
+					if result[i].Key == commonPrefix && result[i].IsPrefix {
+						result[i].Size += obj.Size
+						break
+					}
+				}
+			}
+		} else {
+			// No delimiter after prefix → include as-is
+			result = append(result, obj)
+		}
+	}
+
+	return result
+}
+
+// runListingIndexer runs the background goroutine that persists the local listing
+// index to the system store and loads peer indexes for merged reads.
+func (s *Server) runListingIndexer(ctx context.Context) {
+	persistTicker := time.NewTicker(10 * time.Second)
+	reconcileTicker := time.NewTicker(60 * time.Second)
+	defer persistTicker.Stop()
+	defer reconcileTicker.Stop()
+
+	var lastPersist time.Time
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-persistTicker.C:
+			if s.listingIndexDirty.Load() {
+				s.persistLocalIndex(ctx)
+				lastPersist = time.Now()
+			}
+			s.loadPeerIndexes(ctx)
+
+		case <-reconcileTicker.C:
+			s.reconcileLocalIndex(ctx)
+			s.loadPeerIndexes(ctx)
+
+		case <-s.listingIndexNotify:
+			// Debounce: skip if last persist was < 1s ago
+			if time.Since(lastPersist) < time.Second {
+				continue
+			}
+			if s.listingIndexDirty.Load() {
+				s.persistLocalIndex(ctx)
+				lastPersist = time.Now()
+			}
+			s.loadPeerIndexes(ctx)
+		}
+	}
+}
+
+// persistLocalIndex saves the local listing index to the system store.
+func (s *Server) persistLocalIndex(ctx context.Context) {
+	if s.s3SystemStore == nil {
+		return
+	}
+
+	idx := s.localListingIndex.Load()
+	if idx == nil {
+		return
+	}
+
+	ips := s.GetCoordMeshIPs()
+	if len(ips) == 0 {
+		return
+	}
+	selfIP := ips[0]
+
+	if err := s.s3SystemStore.SaveJSON(ctx, "listings/"+selfIP+".json", idx); err != nil {
+		log.Warn().Err(err).Msg("failed to persist listing index")
+		return
+	}
+	s.listingIndexDirty.Store(false)
+}
+
+// loadPeerIndexes loads replicated peer listing indexes from the system store
+// and merges them into the peerListings atomic pointer.
+func (s *Server) loadPeerIndexes(ctx context.Context) {
+	if s.s3SystemStore == nil {
+		return
+	}
+
+	ips := s.GetCoordMeshIPs()
+	if len(ips) <= 1 {
+		return
+	}
+
+	merged := &peerListings{
+		Objects:  make(map[string][]S3ObjectInfo),
+		Recycled: make(map[string][]S3ObjectInfo),
+	}
+
+	for _, peerIP := range ips[1:] {
+		var idx listingIndex
+		if err := s.s3SystemStore.LoadJSON(ctx, "listings/"+peerIP+".json", &idx); err != nil {
+			continue // Peer index not available yet
+		}
+		for bucket, bl := range idx.Buckets {
+			merged.Objects[bucket] = append(merged.Objects[bucket], bl.Objects...)
+			merged.Recycled[bucket] = append(merged.Recycled[bucket], bl.Recycled...)
+		}
+	}
+
+	s.peerListings.Store(merged)
+}
+
+// reconcileLocalIndex rebuilds the local listing index from a full filesystem scan.
+// This catches objects that arrived via replication or were removed by GC.
+func (s *Server) reconcileLocalIndex(ctx context.Context) {
+	if s.s3Store == nil {
+		return
+	}
+
+	buckets, err := s.s3Store.ListBuckets(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("reconcile: failed to list buckets")
+		return
+	}
+
+	newIdx := &listingIndex{Buckets: make(map[string]*bucketListing)}
+
+	for _, bkt := range buckets {
+		if bkt.Name == auth.SystemBucket {
+			continue
+		}
+
+		bl := &bucketListing{}
+
+		// List all objects (flat, no delimiter)
+		objects, _, _, err := s.s3Store.ListObjects(ctx, bkt.Name, "", "", 10000)
+		if err != nil {
+			log.Warn().Err(err).Str("bucket", bkt.Name).Msg("reconcile: failed to list objects")
+			continue
+		}
+
+		// Get owner name for the bucket
+		bucketMeta, _ := s.s3Store.HeadBucket(ctx, bkt.Name)
+		var ownerName string
+		if bucketMeta != nil && bucketMeta.Owner != "" {
+			ownerName = s.getPeerName(bucketMeta.Owner)
+		}
+
+		for _, obj := range objects {
+			info := S3ObjectInfo{
+				Key:          obj.Key,
+				Size:         obj.Size,
+				LastModified: obj.LastModified.Format(time.RFC3339),
+				Owner:        ownerName,
+				ContentType:  obj.ContentType,
+			}
+			if obj.Expires != nil {
+				info.Expires = obj.Expires.Format(time.RFC3339)
+			}
+			bl.Objects = append(bl.Objects, info)
+		}
+
+		// List recycled objects
+		recycled, err := s.s3Store.ListRecycledObjects(ctx, bkt.Name)
+		if err != nil {
+			log.Warn().Err(err).Str("bucket", bkt.Name).Msg("reconcile: failed to list recycled objects")
+		} else {
+			for _, entry := range recycled {
+				bl.Recycled = append(bl.Recycled, S3ObjectInfo{
+					Key:          entry.OriginalKey,
+					Size:         entry.Meta.Size,
+					LastModified: entry.Meta.LastModified.Format(time.RFC3339),
+					ContentType:  entry.Meta.ContentType,
+					DeletedAt:    entry.DeletedAt.Format(time.RFC3339),
+				})
+			}
+		}
+
+		if len(bl.Objects) > 0 || len(bl.Recycled) > 0 {
+			newIdx.Buckets[bkt.Name] = bl
+		}
+	}
+
+	// Compare with current index — only update if changed
+	old := s.localListingIndex.Load()
+	if !listingIndexEqual(old, newIdx) {
+		s.localListingIndex.Store(newIdx)
+		s.listingIndexDirty.Store(true)
+		// Signal the indexer to persist
+		select {
+		case s.listingIndexNotify <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// listingIndexEqual compares two listing indexes for equality.
+func listingIndexEqual(a, b *listingIndex) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if len(a.Buckets) != len(b.Buckets) {
+		return false
+	}
+	for name, aBL := range a.Buckets {
+		bBL, ok := b.Buckets[name]
+		if !ok {
+			return false
+		}
+		if len(aBL.Objects) != len(bBL.Objects) || len(aBL.Recycled) != len(bBL.Recycled) {
+			return false
+		}
+		for i, obj := range aBL.Objects {
+			if obj.Key != bBL.Objects[i].Key || obj.Size != bBL.Objects[i].Size ||
+				obj.LastModified != bBL.Objects[i].LastModified {
+				return false
+			}
+		}
+		for i, obj := range aBL.Recycled {
+			if obj.Key != bBL.Recycled[i].Key || obj.Size != bBL.Recycled[i].Size ||
+				obj.DeletedAt != bBL.Recycled[i].DeletedAt {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // handleS3Object handles GET/PUT/DELETE for a specific object.
@@ -2781,6 +3105,18 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 		return
 	}
 
+	// Update listing index incrementally
+	info := S3ObjectInfo{
+		Key:          meta.Key,
+		Size:         meta.Size,
+		LastModified: meta.LastModified.Format(time.RFC3339),
+		ContentType:  meta.ContentType,
+	}
+	if meta.Expires != nil {
+		info.Expires = meta.Expires.Format(time.RFC3339)
+	}
+	s.updateListingIndex(bucket, key, &info, "put")
+
 	// Replicate to other coordinators asynchronously using chunk-level replication.
 	// Chunks are already stored by PutObject above — ReplicateObject reads them from CAS
 	// and only sends chunks the remote peer doesn't already have.
@@ -2882,6 +3218,9 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, r *http.Request, bu
 		}
 		return
 	}
+
+	// Update listing index: move from objects to recycled
+	s.updateListingIndex(bucket, key, nil, "delete")
 
 	// Replicate delete to other coordinators asynchronously.
 	// Uses WithoutCancel so replication completes after the HTTP response is sent,
@@ -3026,6 +3365,15 @@ func (s *Server) handleS3RestoreVersion(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// Update listing index — triggers reconcile since we build info from RestoreVersion meta
+	restoredInfo := S3ObjectInfo{
+		Key:          meta.Key,
+		Size:         meta.Size,
+		LastModified: meta.LastModified.Format(time.RFC3339),
+		ContentType:  meta.ContentType,
+	}
+	s.updateListingIndex(bucket, key, &restoredInfo, "put")
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":     "restored",
@@ -3060,6 +3408,9 @@ func (s *Server) handleS3UndeleteObject(w http.ResponseWriter, r *http.Request, 
 		}
 		return
 	}
+
+	// Update listing index: move from recycled back to objects
+	s.updateListingIndex(bucket, key, nil, "undelete")
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -3097,72 +3448,14 @@ func (s *Server) handleS3ListRecycledObjects(w http.ResponseWriter, r *http.Requ
 		result = append(result, info)
 	}
 
-	// Aggregate recycled listings from peer coordinators
+	// Merge cached peer recycled listings from the system store listing index.
 	if r.Header.Get("X-TunnelMesh-Forwarded") == "" {
-		peerResults := s.fetchPeerRecycledListings(r.Context(), bucket)
-		result = mergeObjectListings(result, peerResults)
+		peerRecycled := s.getPeerRecycledListing(bucket)
+		result = mergeObjectListings(result, peerRecycled)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
-}
-
-// fetchPeerRecycledListings fetches recycled object listings from peer coordinators.
-func (s *Server) fetchPeerRecycledListings(ctx context.Context, bucket string) []S3ObjectInfo {
-	ips := s.GetCoordMeshIPs()
-	if len(ips) <= 1 {
-		return nil
-	}
-
-	peerIPs := ips[1:]
-
-	type peerResult struct {
-		objects []S3ObjectInfo
-	}
-	results := make(chan peerResult, len(peerIPs))
-
-	fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	for _, ip := range peerIPs {
-		go func(peerIP string) {
-			listURL := fmt.Sprintf("https://%s:443/api/s3/buckets/%s/recyclebin",
-				peerIP, url.PathEscape(bucket))
-
-			req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, listURL, nil)
-			if err != nil {
-				results <- peerResult{}
-				return
-			}
-			req.Header.Set("X-TunnelMesh-Forwarded", "true")
-
-			resp, err := s.s3ForwardTransport.RoundTrip(req)
-			if err != nil {
-				results <- peerResult{}
-				return
-			}
-			defer func() { _ = resp.Body.Close() }()
-
-			if resp.StatusCode != http.StatusOK {
-				results <- peerResult{}
-				return
-			}
-
-			var objs []S3ObjectInfo
-			if err := json.NewDecoder(resp.Body).Decode(&objs); err != nil {
-				results <- peerResult{}
-				return
-			}
-			results <- peerResult{objects: objs}
-		}(ip)
-	}
-
-	var all []S3ObjectInfo
-	for range peerIPs {
-		res := <-results
-		all = append(all, res.objects...)
-	}
-	return all
 }
 
 // handleS3GetRecycledObject returns the content of a recycled object.

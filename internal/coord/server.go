@@ -84,15 +84,19 @@ type Server struct {
 	serverStats        serverStats
 	relay              *relayManager
 	holePunch          *holePunchManager
-	wgStore            *wireguard.Store           // WireGuard client storage
-	ca                 *CertificateAuthority      // Internal CA for mesh TLS certs
-	version            string                     // Server version for admin display
-	sseHub             *sseHub                    // SSE hub for real-time dashboard updates
-	ipGeoCache         *IPGeoCache                // IP geolocation cache for location fallback
-	coordIPs           atomic.Pointer[coordIPSet] // Coordinator mesh IPs (original + sorted) for DNS and write forwarding
-	s3ForwardTransport *http.Transport            // Shared transport for S3 write forwarding (reuses connections)
-	coordMetrics       *CoordMetrics              // Prometheus metrics for coordinator
-	metricsRegistry    prometheus.Registerer      // Prometheus registry for metrics (shared with peer metrics)
+	wgStore            *wireguard.Store             // WireGuard client storage
+	ca                 *CertificateAuthority        // Internal CA for mesh TLS certs
+	version            string                       // Server version for admin display
+	sseHub             *sseHub                      // SSE hub for real-time dashboard updates
+	ipGeoCache         *IPGeoCache                  // IP geolocation cache for location fallback
+	coordIPs           atomic.Pointer[coordIPSet]   // Coordinator mesh IPs (original + sorted) for DNS and write forwarding
+	s3ForwardTransport *http.Transport              // Shared transport for S3 write forwarding (reuses connections)
+	peerListings       atomic.Pointer[peerListings] // Pre-merged peer listing data (from system store)
+	localListingIndex  atomic.Pointer[listingIndex] // This coordinator's own listing index (in-memory)
+	listingIndexDirty  atomic.Bool                  // Whether local index needs persisting
+	listingIndexNotify chan struct{}                // Signal for immediate persist+load cycle
+	coordMetrics       *CoordMetrics                // Prometheus metrics for coordinator
+	metricsRegistry    prometheus.Registerer        // Prometheus registry for metrics (shared with peer metrics)
 	// S3 storage
 	s3Store             *s3.Store            // S3 file-based storage
 	s3Server            *s3.Server           // S3 HTTP server
@@ -823,6 +827,16 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 		s.collectAndPersistCapacity(ctx)
 		s.loadPeerCapacitySnapshots(ctx)
 	}
+
+	// Initialize listing index channel and start background indexer
+	s.listingIndexNotify = make(chan struct{}, 1)
+	s.reconcileLocalIndex(ctx) // Populate index from disk on startup
+	s.loadPeerIndexes(ctx)     // Load any existing replicated peer data
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.runListingIndexer(ctx)
+	}()
 
 	s.wg.Add(1)
 	go func() {
