@@ -828,6 +828,25 @@
         }
     }
 
+    async function fetchRecycledObjects(bucket, prefix = '') {
+        try {
+            const resp = await fetch(`/api/s3/buckets/${encodeURIComponent(bucket)}/recyclebin`);
+            if (!resp.ok) return [];
+            const entries = await resp.json();
+            if (!Array.isArray(entries)) return [];
+            // Client-side filter: only show objects directly under the current prefix
+            // (matching delimiter='/' behaviour of the objects endpoint)
+            return entries.filter((obj) => {
+                if (!obj.key.startsWith(prefix)) return false;
+                const remainder = obj.key.slice(prefix.length);
+                return !remainder.includes('/');
+            });
+        } catch (err) {
+            console.error('Failed to fetch recycled objects:', err);
+            return [];
+        }
+    }
+
     async function getObject(bucket, key) {
         const resp = await fetch(`/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}`);
         if (!resp.ok) throw new Error(`Failed to get object: ${resp.status}`);
@@ -1090,17 +1109,31 @@
                 if (existingBtn) existingBtn.remove();
             }
 
-            // Show objects in current path
-            const objects = await fetchObjects(state.currentBucket, state.currentPath);
+            // Show objects in current path, including recycled objects
+            const [objects, recycled] = await Promise.all([
+                fetchObjects(state.currentBucket, state.currentPath),
+                fetchRecycledObjects(state.currentBucket, state.currentPath),
+            ]);
+
+            // Build set of live object keys to deduplicate recycled entries
+            const liveKeys = new Set(objects.filter((o) => !o.is_prefix).map((o) => o.key));
+
+            // Merge recycled objects that don't have a live counterpart
+            const merged = [...objects];
+            for (const rb of recycled) {
+                if (!liveKeys.has(rb.key)) {
+                    merged.push(rb);
+                }
+            }
 
             // Sort: folders first, then files
-            objects.sort((a, b) => {
+            merged.sort((a, b) => {
                 if (a.is_prefix && !b.is_prefix) return -1;
                 if (!a.is_prefix && b.is_prefix) return 1;
                 return a.key.localeCompare(b.key);
             });
 
-            items = objects
+            items = merged
                 .map((obj) => {
                     if (obj.is_prefix) {
                         const name = obj.key.replace(state.currentPath, '').replace(/\/$/, '');
@@ -1376,6 +1409,11 @@
             : null;
         const isReadOnly = !state.writable || isDeleted;
 
+        // Build content URL — recyclebin endpoint for deleted files, objects endpoint for live files
+        const contentBase = isDeleted
+            ? `/api/s3/buckets/${encodeURIComponent(bucket)}/recyclebin/${encodeURIComponent(key)}`
+            : `/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}`;
+
         // Clear selection when opening file
         state.selectedItems.clear();
         updateSelectionUI();
@@ -1395,7 +1433,7 @@
             if (viewer) viewer.style.display = 'none';
             if (preview) {
                 preview.style.display = 'flex';
-                preview.innerHTML = `<img src="/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}" alt="${escapeHtml(fileName)}">`;
+                preview.innerHTML = `<img src="${contentBase}" alt="${escapeHtml(fileName)}">`;
             }
             if (fileActions) fileActions.style.display = 'flex';
             if (saveBtn) saveBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
@@ -1405,7 +1443,9 @@
 
         // Try to open all other files as text
         try {
-            const { content } = await getObject(bucket, key);
+            const resp = await fetch(contentBase);
+            if (!resp.ok) throw new Error(`Failed to get object: ${resp.status}`);
+            const content = await resp.text();
 
             // Check if content is binary
             if (isBinaryContent(content)) {

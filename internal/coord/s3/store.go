@@ -2101,6 +2101,56 @@ func (s *Store) RestoreRecycledObject(ctx context.Context, bucket, key string) e
 	return nil
 }
 
+// GetRecycledObject retrieves the content of the most recently recycled entry for a key.
+func (s *Store) GetRecycledObject(ctx context.Context, bucket, key string) (io.ReadCloser, *ObjectMeta, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Check bucket exists
+	if _, err := s.getBucketMeta(bucket); err != nil {
+		return nil, nil, err
+	}
+
+	// Find the most recent recycled entry for this key
+	rbDir := s.recyclebinPath(bucket)
+	entries, err := os.ReadDir(rbDir)
+	if err != nil {
+		return nil, nil, ErrObjectNotFound
+	}
+
+	var bestEntry *RecycledEntry
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(rbDir, e.Name()))
+		if err != nil {
+			continue
+		}
+
+		var entry RecycledEntry
+		if err := json.Unmarshal(data, &entry); err != nil {
+			continue
+		}
+
+		if entry.OriginalKey != key {
+			continue
+		}
+
+		if bestEntry == nil || entry.DeletedAt.After(bestEntry.DeletedAt) {
+			entryCopy := entry
+			bestEntry = &entryCopy
+		}
+	}
+
+	if bestEntry == nil {
+		return nil, nil, ErrObjectNotFound
+	}
+
+	return s.getObjectContent(ctx, bucket, key, &bestEntry.Meta)
+}
+
 // ListRecycledObjects returns all recycled entries for a bucket.
 func (s *Store) ListRecycledObjects(ctx context.Context, bucket string) ([]RecycledEntry, error) {
 	s.mu.RLock()

@@ -328,15 +328,12 @@ func (s *Server) setupAdminRoutes() {
 		path = strings.TrimSuffix(path, "/")
 
 		// Handle per-bucket recycle bin purge: DELETE /api/s3/buckets/{bucket}/recyclebin
-		if strings.HasSuffix(path, "/recyclebin") {
+		// Only intercept DELETE; GET (list) and GET /{key} (content) are handled by handleS3Proxy.
+		if strings.HasSuffix(path, "/recyclebin") && r.Method == http.MethodDelete {
 			bucket := strings.TrimSuffix(path, "/recyclebin")
-			if r.Method == http.MethodDelete {
-				s.withS3AdminMetrics(w, "purgeRecycleBin", func(w http.ResponseWriter) {
-					s.handlePurgeBucketRecycleBin(w, r, bucket)
-				})
-			} else {
-				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			}
+			s.withS3AdminMetrics(w, "purgeRecycleBin", func(w http.ResponseWriter) {
+				s.handlePurgeBucketRecycleBin(w, r, bucket)
+			})
 			return
 		}
 
@@ -2084,10 +2081,25 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		if parts[1] == "recyclebin" {
-			s.withS3AdminMetrics(w, "listRecycledObjects", func(w http.ResponseWriter) {
-				s.handleS3ListRecycledObjects(w, r, bucket)
-			})
+		if parts[1] == "recyclebin" || strings.HasPrefix(parts[1], "recyclebin/") {
+			rbPath := strings.TrimPrefix(parts[1], "recyclebin")
+			rbPath = strings.TrimPrefix(rbPath, "/")
+			if rbPath == "" {
+				s.withS3AdminMetrics(w, "listRecycledObjects", func(w http.ResponseWriter) {
+					s.handleS3ListRecycledObjects(w, r, bucket)
+				})
+			} else {
+				if decoded, err := url.PathUnescape(rbPath); err == nil {
+					rbPath = decoded
+				}
+				if err := validateS3Name(rbPath); err != nil {
+					s.jsonError(w, "invalid object key: "+err.Error(), http.StatusBadRequest)
+					return
+				}
+				s.withS3AdminMetrics(w, "getRecycledObject", func(w http.ResponseWriter) {
+					s.handleS3GetRecycledObject(w, r, bucket, rbPath)
+				})
+			}
 			return
 		}
 		if strings.HasPrefix(parts[1], "objects/") {
@@ -2464,6 +2476,13 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 		result = append(result, info)
 	}
 
+	// Aggregate listings from peer coordinators so objects stored on other
+	// coordinators (via write-forwarding) are visible in the explorer.
+	if r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+		peerResults := s.fetchPeerListings(r.Context(), bucket, prefix, delimiter)
+		result = mergeObjectListings(result, peerResults)
+	}
+
 	// Calculate sizes for all folders (prefixes) found
 	for commonPrefix := range prefixSizes {
 		size, err := s.s3Store.CalculatePrefixSize(r.Context(), bucket, commonPrefix)
@@ -2482,6 +2501,109 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+// fetchPeerListings fetches object listings from all peer coordinators in parallel.
+// Returns the merged list of remote objects. Errors are logged and skipped.
+func (s *Server) fetchPeerListings(ctx context.Context, bucket, prefix, delimiter string) []S3ObjectInfo {
+	ips := s.GetCoordMeshIPs()
+	if len(ips) <= 1 {
+		return nil
+	}
+
+	peerIPs := ips[1:] // Skip self (index 0)
+
+	type peerResult struct {
+		objects []S3ObjectInfo
+	}
+	results := make(chan peerResult, len(peerIPs))
+
+	fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	for _, ip := range peerIPs {
+		go func(peerIP string) {
+			params := url.Values{}
+			if prefix != "" {
+				params.Set("prefix", prefix)
+			}
+			if delimiter != "" {
+				params.Set("delimiter", delimiter)
+			}
+			listURL := fmt.Sprintf("https://%s:443/api/s3/buckets/%s/objects?%s",
+				peerIP, url.PathEscape(bucket), params.Encode())
+
+			req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, listURL, nil)
+			if err != nil {
+				results <- peerResult{}
+				return
+			}
+			req.Header.Set("X-TunnelMesh-Forwarded", "true")
+
+			resp, err := s.s3ForwardTransport.RoundTrip(req)
+			if err != nil {
+				log.Debug().Err(err).Str("peer", peerIP).Msg("failed to fetch peer listing")
+				results <- peerResult{}
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != http.StatusOK {
+				results <- peerResult{}
+				return
+			}
+
+			var objs []S3ObjectInfo
+			if err := json.NewDecoder(resp.Body).Decode(&objs); err != nil {
+				results <- peerResult{}
+				return
+			}
+			results <- peerResult{objects: objs}
+		}(ip)
+	}
+
+	var all []S3ObjectInfo
+	for range peerIPs {
+		res := <-results
+		all = append(all, res.objects...)
+	}
+	return all
+}
+
+// mergeObjectListings deduplicates object listings from multiple coordinators.
+// For duplicate keys, the entry with the most recent LastModified wins.
+// Prefix entries (folders) are deduplicated by key; their sizes are summed.
+func mergeObjectListings(local, remote []S3ObjectInfo) []S3ObjectInfo {
+	if len(remote) == 0 {
+		return local
+	}
+
+	seen := make(map[string]int, len(local)) // key -> index in result
+	result := make([]S3ObjectInfo, 0, len(local)+len(remote))
+
+	for _, obj := range local {
+		seen[obj.Key] = len(result)
+		result = append(result, obj)
+	}
+
+	for _, obj := range remote {
+		if idx, exists := seen[obj.Key]; exists {
+			existing := result[idx]
+			if existing.IsPrefix {
+				// Sum folder sizes across coordinators
+				result[idx].Size += obj.Size
+			}
+			// For files, keep whichever has a newer LastModified
+			if !existing.IsPrefix && obj.LastModified > existing.LastModified {
+				result[idx] = obj
+			}
+			continue
+		}
+		seen[obj.Key] = len(result)
+		result = append(result, obj)
+	}
+
+	return result
 }
 
 // handleS3Object handles GET/PUT/DELETE for a specific object.
@@ -2975,8 +3097,101 @@ func (s *Server) handleS3ListRecycledObjects(w http.ResponseWriter, r *http.Requ
 		result = append(result, info)
 	}
 
+	// Aggregate recycled listings from peer coordinators
+	if r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+		peerResults := s.fetchPeerRecycledListings(r.Context(), bucket)
+		result = mergeObjectListings(result, peerResults)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+// fetchPeerRecycledListings fetches recycled object listings from peer coordinators.
+func (s *Server) fetchPeerRecycledListings(ctx context.Context, bucket string) []S3ObjectInfo {
+	ips := s.GetCoordMeshIPs()
+	if len(ips) <= 1 {
+		return nil
+	}
+
+	peerIPs := ips[1:]
+
+	type peerResult struct {
+		objects []S3ObjectInfo
+	}
+	results := make(chan peerResult, len(peerIPs))
+
+	fetchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	for _, ip := range peerIPs {
+		go func(peerIP string) {
+			listURL := fmt.Sprintf("https://%s:443/api/s3/buckets/%s/recyclebin",
+				peerIP, url.PathEscape(bucket))
+
+			req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, listURL, nil)
+			if err != nil {
+				results <- peerResult{}
+				return
+			}
+			req.Header.Set("X-TunnelMesh-Forwarded", "true")
+
+			resp, err := s.s3ForwardTransport.RoundTrip(req)
+			if err != nil {
+				results <- peerResult{}
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != http.StatusOK {
+				results <- peerResult{}
+				return
+			}
+
+			var objs []S3ObjectInfo
+			if err := json.NewDecoder(resp.Body).Decode(&objs); err != nil {
+				results <- peerResult{}
+				return
+			}
+			results <- peerResult{objects: objs}
+		}(ip)
+	}
+
+	var all []S3ObjectInfo
+	for range peerIPs {
+		res := <-results
+		all = append(all, res.objects...)
+	}
+	return all
+}
+
+// handleS3GetRecycledObject returns the content of a recycled object.
+func (s *Server) handleS3GetRecycledObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	reader, meta, err := s.s3Store.GetRecycledObject(r.Context(), bucket, key)
+	if err != nil {
+		switch {
+		case errors.Is(err, s3.ErrBucketNotFound):
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		case errors.Is(err, s3.ErrObjectNotFound):
+			s.jsonError(w, "recycled object not found", http.StatusNotFound)
+		default:
+			s.jsonError(w, "failed to get recycled object", http.StatusInternalServerError)
+		}
+		return
+	}
+	defer func() { _ = reader.Close() }()
+
+	w.Header().Set("Content-Type", meta.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	w.Header().Set("ETag", meta.ETag)
+	w.Header().Set("Last-Modified", meta.LastModified.UTC().Format(http.TimeFormat))
+
+	_, _ = io.Copy(w, reader)
 }
 
 // --- Panel Management API ---
