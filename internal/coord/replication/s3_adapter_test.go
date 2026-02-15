@@ -400,6 +400,98 @@ func TestS3StoreAdapter_Get_ReadError(t *testing.T) {
 	t.Skip("Read error path difficult to test without mocking")
 }
 
+func TestS3StoreAdapter_List_SkipsTombstonedObjects(t *testing.T) {
+	testStore := createTestS3Store(t)
+	adapter := NewS3StoreAdapter(testStore)
+
+	testBucket := "test-bucket"
+	ctx := context.Background()
+
+	err := testStore.CreateBucket(ctx, testBucket, "alice", 2, nil)
+	if err != nil {
+		t.Fatalf("failed to create bucket: %v", err)
+	}
+
+	// Add 3 objects
+	for _, key := range []string{"file1.txt", "file2.txt", "file3.txt"} {
+		_, err := testStore.PutObject(ctx, testBucket, key, bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+		if err != nil {
+			t.Fatalf("failed to put object %s: %v", key, err)
+		}
+	}
+
+	// Tombstone file2.txt
+	err = testStore.TombstoneObject(ctx, testBucket, "file2.txt")
+	if err != nil {
+		t.Fatalf("failed to tombstone object: %v", err)
+	}
+
+	// List should only return non-tombstoned objects
+	keys, err := adapter.List(ctx, testBucket)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(keys) != 2 {
+		t.Errorf("expected 2 keys (tombstoned excluded), got %d: %v", len(keys), keys)
+	}
+
+	keyMap := make(map[string]bool)
+	for _, key := range keys {
+		keyMap[key] = true
+	}
+
+	if keyMap["file2.txt"] {
+		t.Error("tombstoned object file2.txt should not appear in list")
+	}
+	if !keyMap["file1.txt"] || !keyMap["file3.txt"] {
+		t.Error("non-tombstoned objects should appear in list")
+	}
+}
+
+func TestS3StoreAdapter_ListBuckets_SkipsTombstonedBuckets(t *testing.T) {
+	testStore := createTestS3Store(t)
+	adapter := NewS3StoreAdapter(testStore)
+
+	ctx := context.Background()
+
+	// Create 3 buckets
+	for _, bucket := range []string{"bucket1", "bucket2", "bucket3"} {
+		err := testStore.CreateBucket(ctx, bucket, "alice", 2, nil)
+		if err != nil {
+			t.Fatalf("failed to create bucket %s: %v", bucket, err)
+		}
+	}
+
+	// Tombstone bucket2
+	err := testStore.TombstoneBucket(ctx, "bucket2")
+	if err != nil {
+		t.Fatalf("failed to tombstone bucket: %v", err)
+	}
+
+	// ListBuckets should only return non-tombstoned buckets
+	names, err := adapter.ListBuckets(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(names) != 2 {
+		t.Errorf("expected 2 buckets (tombstoned excluded), got %d: %v", len(names), names)
+	}
+
+	bucketMap := make(map[string]bool)
+	for _, name := range names {
+		bucketMap[name] = true
+	}
+
+	if bucketMap["bucket2"] {
+		t.Error("tombstoned bucket bucket2 should not appear in list")
+	}
+	if !bucketMap["bucket1"] || !bucketMap["bucket3"] {
+		t.Error("non-tombstoned buckets should appear in list")
+	}
+}
+
 // createTestS3Store creates a new S3 store for testing
 func createTestS3Store(t *testing.T) *s3.Store {
 	t.Helper()
