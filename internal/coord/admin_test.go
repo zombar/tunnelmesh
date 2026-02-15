@@ -368,6 +368,49 @@ func TestS3Proxy_ListObjects_WithDelimiter(t *testing.T) {
 	assert.True(t, hasPrefix, "should have folder/ prefix")
 }
 
+func TestMergeObjectListings(t *testing.T) {
+	local := []S3ObjectInfo{
+		{Key: "a.txt", Size: 10, LastModified: "2024-01-01T00:00:00Z"},
+		{Key: "b.txt", Size: 20, LastModified: "2024-01-01T00:00:00Z"},
+		{Key: "folder/", Size: 100, IsPrefix: true},
+	}
+	remote := []S3ObjectInfo{
+		{Key: "b.txt", Size: 25, LastModified: "2024-02-01T00:00:00Z"}, // newer duplicate
+		{Key: "c.txt", Size: 30, LastModified: "2024-01-01T00:00:00Z"}, // new
+		{Key: "folder/", Size: 50, IsPrefix: true},                     // folder duplicate
+	}
+
+	merged := mergeObjectListings(local, remote)
+
+	// Should have 4 entries: a.txt, b.txt (updated), folder/ (summed), c.txt
+	assert.Len(t, merged, 4)
+
+	byKey := make(map[string]S3ObjectInfo)
+	for _, obj := range merged {
+		byKey[obj.Key] = obj
+	}
+
+	// a.txt unchanged
+	assert.Equal(t, int64(10), byKey["a.txt"].Size)
+
+	// b.txt should have remote's newer version
+	assert.Equal(t, int64(25), byKey["b.txt"].Size)
+	assert.Equal(t, "2024-02-01T00:00:00Z", byKey["b.txt"].LastModified)
+
+	// c.txt from remote
+	assert.Equal(t, int64(30), byKey["c.txt"].Size)
+
+	// folder/ sizes summed
+	assert.Equal(t, int64(150), byKey["folder/"].Size)
+	assert.True(t, byKey["folder/"].IsPrefix)
+}
+
+func TestMergeObjectListings_EmptyRemote(t *testing.T) {
+	local := []S3ObjectInfo{{Key: "a.txt", Size: 10}}
+	merged := mergeObjectListings(local, nil)
+	assert.Equal(t, local, merged)
+}
+
 func TestS3Proxy_GetObject(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 
