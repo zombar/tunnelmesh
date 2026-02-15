@@ -833,8 +833,14 @@
             const resp = await fetch(`/api/s3/buckets/${encodeURIComponent(bucket)}/recyclebin`);
             if (!resp.ok) return [];
             const entries = await resp.json();
-            // Client-side prefix filter (recyclebin API doesn't support prefix filtering)
-            return entries.filter((obj) => !prefix || obj.key.startsWith(prefix));
+            if (!Array.isArray(entries)) return [];
+            // Client-side filter: only show objects directly under the current prefix
+            // (matching delimiter='/' behaviour of the objects endpoint)
+            return entries.filter((obj) => {
+                if (!obj.key.startsWith(prefix)) return false;
+                const remainder = obj.key.slice(prefix.length);
+                return !remainder.includes('/');
+            });
         } catch (err) {
             console.error('Failed to fetch recycled objects:', err);
             return [];

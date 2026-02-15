@@ -328,15 +328,12 @@ func (s *Server) setupAdminRoutes() {
 		path = strings.TrimSuffix(path, "/")
 
 		// Handle per-bucket recycle bin purge: DELETE /api/s3/buckets/{bucket}/recyclebin
-		if strings.HasSuffix(path, "/recyclebin") {
+		// Only intercept DELETE; GET (list) and GET /{key} (content) are handled by handleS3Proxy.
+		if strings.HasSuffix(path, "/recyclebin") && r.Method == http.MethodDelete {
 			bucket := strings.TrimSuffix(path, "/recyclebin")
-			if r.Method == http.MethodDelete {
-				s.withS3AdminMetrics(w, "purgeRecycleBin", func(w http.ResponseWriter) {
-					s.handlePurgeBucketRecycleBin(w, r, bucket)
-				})
-			} else {
-				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			}
+			s.withS3AdminMetrics(w, "purgeRecycleBin", func(w http.ResponseWriter) {
+				s.handlePurgeBucketRecycleBin(w, r, bucket)
+			})
 			return
 		}
 
