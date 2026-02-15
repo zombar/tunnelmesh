@@ -2673,7 +2673,7 @@ func filterByPrefixDelimiter(objs []S3ObjectInfo, prefix, delimiter string) []S3
 	}
 
 	var result []S3ObjectInfo
-	prefixSet := make(map[string]bool)
+	prefixIdx := make(map[string]int) // commonPrefix -> index in result (for O(1) size summation)
 
 	for _, obj := range objs {
 		// Skip entries that don't match the prefix
@@ -2692,21 +2692,15 @@ func filterByPrefixDelimiter(objs []S3ObjectInfo, prefix, delimiter string) []S3
 		if idx := strings.Index(keyAfterPrefix, delimiter); idx >= 0 {
 			// This key contains the delimiter after the prefix → group as folder
 			commonPrefix := prefix + keyAfterPrefix[:idx+1]
-			if !prefixSet[commonPrefix] {
-				prefixSet[commonPrefix] = true
+			if ri, exists := prefixIdx[commonPrefix]; !exists {
+				prefixIdx[commonPrefix] = len(result)
 				result = append(result, S3ObjectInfo{
 					Key:      commonPrefix,
 					Size:     obj.Size,
 					IsPrefix: true,
 				})
 			} else {
-				// Sum sizes for folder entries
-				for i := range result {
-					if result[i].Key == commonPrefix && result[i].IsPrefix {
-						result[i].Size += obj.Size
-						break
-					}
-				}
+				result[ri].Size += obj.Size
 			}
 		} else {
 			// No delimiter after prefix → include as-is
@@ -2730,6 +2724,10 @@ func (s *Server) runListingIndexer(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// Final persist to avoid losing recent writes on shutdown
+			if s.listingIndexDirty.Load() {
+				s.persistLocalIndex(context.Background())
+			}
 			return
 
 		case <-persistTicker.C:
@@ -2744,7 +2742,9 @@ func (s *Server) runListingIndexer(ctx context.Context) {
 			s.loadPeerIndexes(ctx)
 
 		case <-s.listingIndexNotify:
-			// Debounce: skip if last persist was < 1s ago
+			// Debounce: skip if last persist was < 1s ago.
+			// Under sustained burst writes, this means the notify path effectively
+			// degrades to the 10s persistTicker cadence, which is acceptable.
 			if time.Since(lastPersist) < time.Second {
 				continue
 			}
@@ -2834,13 +2834,6 @@ func (s *Server) reconcileLocalIndex(ctx context.Context) {
 
 		bl := &bucketListing{}
 
-		// List all objects (flat, no delimiter)
-		objects, _, _, err := s.s3Store.ListObjects(ctx, bkt.Name, "", "", 10000)
-		if err != nil {
-			log.Warn().Err(err).Str("bucket", bkt.Name).Msg("reconcile: failed to list objects")
-			continue
-		}
-
 		// Get owner name for the bucket
 		bucketMeta, _ := s.s3Store.HeadBucket(ctx, bkt.Name)
 		var ownerName string
@@ -2848,18 +2841,33 @@ func (s *Server) reconcileLocalIndex(ctx context.Context) {
 			ownerName = s.getPeerName(bucketMeta.Owner)
 		}
 
-		for _, obj := range objects {
-			info := S3ObjectInfo{
-				Key:          obj.Key,
-				Size:         obj.Size,
-				LastModified: obj.LastModified.Format(time.RFC3339),
-				Owner:        ownerName,
-				ContentType:  obj.ContentType,
+		// Paginate through all objects (ListObjects returns up to maxKeys per call)
+		var marker string
+		for {
+			objects, isTruncated, nextMarker, err := s.s3Store.ListObjects(ctx, bkt.Name, "", marker, 1000)
+			if err != nil {
+				log.Warn().Err(err).Str("bucket", bkt.Name).Msg("reconcile: failed to list objects")
+				break
 			}
-			if obj.Expires != nil {
-				info.Expires = obj.Expires.Format(time.RFC3339)
+
+			for _, obj := range objects {
+				info := S3ObjectInfo{
+					Key:          obj.Key,
+					Size:         obj.Size,
+					LastModified: obj.LastModified.Format(time.RFC3339),
+					Owner:        ownerName,
+					ContentType:  obj.ContentType,
+				}
+				if obj.Expires != nil {
+					info.Expires = obj.Expires.Format(time.RFC3339)
+				}
+				bl.Objects = append(bl.Objects, info)
 			}
-			bl.Objects = append(bl.Objects, info)
+
+			if !isTruncated {
+				break
+			}
+			marker = nextMarker
 		}
 
 		// List recycled objects
@@ -2883,20 +2891,24 @@ func (s *Server) reconcileLocalIndex(ctx context.Context) {
 		}
 	}
 
-	// Compare with current index — only update if changed
+	// Compare with current index — only update if changed.
+	// Uses CAS to avoid overwriting concurrent incremental updates from updateListingIndex.
+	// If CAS fails, the incremental update wins and reconcile will catch up next cycle.
 	old := s.localListingIndex.Load()
 	if !listingIndexEqual(old, newIdx) {
-		s.localListingIndex.Store(newIdx)
-		s.listingIndexDirty.Store(true)
-		// Signal the indexer to persist
-		select {
-		case s.listingIndexNotify <- struct{}{}:
-		default:
+		if s.localListingIndex.CompareAndSwap(old, newIdx) {
+			s.listingIndexDirty.Store(true)
+			// Signal the indexer to persist
+			select {
+			case s.listingIndexNotify <- struct{}{}:
+			default:
+			}
 		}
 	}
 }
 
 // listingIndexEqual compares two listing indexes for equality.
+// Uses map-based comparison so ordering differences don't cause false negatives.
 func listingIndexEqual(a, b *listingIndex) bool {
 	if a == nil && b == nil {
 		return true
@@ -2915,15 +2927,25 @@ func listingIndexEqual(a, b *listingIndex) bool {
 		if len(aBL.Objects) != len(bBL.Objects) || len(aBL.Recycled) != len(bBL.Recycled) {
 			return false
 		}
-		for i, obj := range aBL.Objects {
-			if obj.Key != bBL.Objects[i].Key || obj.Size != bBL.Objects[i].Size ||
-				obj.LastModified != bBL.Objects[i].LastModified {
+		// Build map from b's objects for O(1) lookup
+		bObjs := make(map[string]S3ObjectInfo, len(bBL.Objects))
+		for _, obj := range bBL.Objects {
+			bObjs[obj.Key] = obj
+		}
+		for _, obj := range aBL.Objects {
+			bObj, ok := bObjs[obj.Key]
+			if !ok || obj.Size != bObj.Size || obj.LastModified != bObj.LastModified {
 				return false
 			}
 		}
-		for i, obj := range aBL.Recycled {
-			if obj.Key != bBL.Recycled[i].Key || obj.Size != bBL.Recycled[i].Size ||
-				obj.DeletedAt != bBL.Recycled[i].DeletedAt {
+		// Build map from b's recycled for O(1) lookup
+		bRecycled := make(map[string]S3ObjectInfo, len(bBL.Recycled))
+		for _, obj := range bBL.Recycled {
+			bRecycled[obj.Key] = obj
+		}
+		for _, obj := range aBL.Recycled {
+			bObj, ok := bRecycled[obj.Key]
+			if !ok || obj.Size != bObj.Size || obj.DeletedAt != bObj.DeletedAt {
 				return false
 			}
 		}
@@ -3107,16 +3129,20 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	}
 
 	// Update listing index incrementally
-	info := S3ObjectInfo{
+	putInfo := S3ObjectInfo{
 		Key:          meta.Key,
 		Size:         meta.Size,
 		LastModified: meta.LastModified.Format(time.RFC3339),
 		ContentType:  meta.ContentType,
 	}
 	if meta.Expires != nil {
-		info.Expires = meta.Expires.Format(time.RFC3339)
+		putInfo.Expires = meta.Expires.Format(time.RFC3339)
 	}
-	s.updateListingIndex(bucket, key, &info, "put")
+	// Include owner from bucket metadata so listing index has it immediately
+	if bucketMeta, err := s.s3Store.HeadBucket(r.Context(), bucket); err == nil && bucketMeta.Owner != "" {
+		putInfo.Owner = s.getPeerName(bucketMeta.Owner)
+	}
+	s.updateListingIndex(bucket, key, &putInfo, "put")
 
 	// Replicate to other coordinators asynchronously using chunk-level replication.
 	// Chunks are already stored by PutObject above — ReplicateObject reads them from CAS
