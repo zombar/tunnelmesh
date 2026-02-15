@@ -742,21 +742,21 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 // StartPeriodicCleanup starts the background cleanup goroutine for S3 storage.
 // gcStaggerDelay computes a deterministic stagger delay based on the coordinator
 // name hash, to avoid all coordinators running GC simultaneously.
-// Returns 0 to 1799 seconds (0–29m59s), keeping the window under 50% of the
-// 1-hour GC interval to ensure predictable cleanup cadence.
+// Returns 0 to 149 seconds (0–2m29s), keeping the window under 50% of the
+// 5-minute GC interval to ensure predictable cleanup cadence.
 func gcStaggerDelay(coordName string) time.Duration {
 	if coordName == "" {
 		coordName = "coordinator"
 	}
 	h := fnv.New32a()
 	h.Write([]byte(coordName))
-	return time.Duration(h.Sum32()%1800) * time.Second
+	return time.Duration(h.Sum32()%150) * time.Second
 }
 
 // StartPeriodicCleanup launches a background goroutine for S3 storage maintenance.
 // It periodically:
-//   - Purges tombstoned objects past their retention period
-//   - Tombstones content in expired file shares
+//   - Purges recycled objects past their retention period
+//   - Purges content in expired file shares
 //   - Runs garbage collection on versions and orphaned chunks
 //   - Updates CAS metrics (dedup ratio, chunk count, etc.)
 func (s *Server) StartPeriodicCleanup(ctx context.Context) {
@@ -770,15 +770,22 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 
 	// GC cycle body — shared between first run and ticker runs
 	runGCCycle := func() {
-		// Purge tombstoned objects past retention period
-		if purged := s.s3Store.PurgeTombstonedObjects(ctx); purged > 0 {
-			log.Info().Int("count", purged).Msg("purged tombstoned S3 objects")
+		// Purge recycled objects past retention period
+		if purged := s.s3Store.PurgeRecycleBin(ctx); purged > 0 {
+			log.Info().Int("count", purged).Msg("purged recycled S3 objects")
 		}
 
-		// Tombstone content in expired file shares
+		// Purge content in expired file shares
 		if s.fileShareMgr != nil {
-			if tombstoned := s.fileShareMgr.TombstoneExpiredShareContents(ctx); tombstoned > 0 {
-				log.Info().Int("count", tombstoned).Msg("tombstoned expired file share content")
+			if purged := s.fileShareMgr.PurgeExpiredShareContents(ctx); purged > 0 {
+				log.Info().Int("count", purged).Msg("purged expired file share content")
+			}
+		}
+
+		// Purge orphaned file share buckets (shares deleted on another coordinator)
+		if s.fileShareMgr != nil {
+			if purged := s.fileShareMgr.PurgeOrphanedFileShareBuckets(ctx); purged > 0 {
+				log.Info().Int("count", purged).Msg("purged orphaned file share buckets")
 			}
 		}
 
@@ -792,21 +799,16 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 			gcDuration := time.Since(gcStart).Seconds()
 			s.gcMu.Unlock()
 
-			// Log GC results: Info when work was done, Debug for no-ops
-			logEvent := log.Debug()
-			if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 || gcStats.ChunksSkippedShared > 0 || gcStats.ChunksSkippedGracePeriod > 0 {
-				logEvent = log.Info()
-			}
-			logEvent.
+			// Always log GC at Info level so operators can confirm it's running
+			log.Info().
 				Str("coordinator", s.cfg.Name).
 				Int("versions_pruned", gcStats.VersionsPruned).
 				Int("chunks_deleted", gcStats.ChunksDeleted).
 				Int64("bytes_reclaimed", gcStats.BytesReclaimed).
 				Int("objects_scanned", gcStats.ObjectsScanned).
-				Int("chunks_skipped_shared", gcStats.ChunksSkippedShared).
 				Int("chunks_skipped_grace_period", gcStats.ChunksSkippedGracePeriod).
 				Float64("duration_seconds", gcDuration).
-				Msg("S3 garbage collection completed")
+				Msg("periodic S3 garbage collection completed")
 
 			// Record GC metrics
 			if metrics := s3.GetS3Metrics(); metrics != nil {
@@ -840,9 +842,9 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 		// Run first GC cycle immediately after stagger
 		runGCCycle()
 
-		// Create ticker AFTER stagger so the hourly cycle is properly offset.
-		// Each coordinator's cycle: stagger, stagger+1h, stagger+2h, ...
-		ticker := time.NewTicker(1 * time.Hour)
+		// Create ticker AFTER stagger so the cycle is properly offset.
+		// Each coordinator's cycle: stagger, stagger+5m, stagger+10m, ...
+		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 
 		for {
@@ -920,6 +922,8 @@ func (s *Server) updateS3Metrics() {
 		casStats.ChunkCount,
 		casStats.ChunkBytes,
 		casStats.LogicalBytes,
+		casStats.VersionBytes,
+		casStats.RecycledBytes,
 		casStats.VersionCount,
 	)
 
@@ -1150,8 +1154,8 @@ func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) erro
 	store.SetDefaultObjectExpiryDays(cfg.Coordinator.S3.ObjectExpiryDays)
 	store.SetDefaultShareExpiryDays(cfg.Coordinator.S3.ShareExpiryDays)
 
-	// Set tombstone retention config
-	store.SetTombstoneRetentionDays(cfg.Coordinator.S3.TombstoneRetentionDays)
+	// Set recycle bin retention config
+	store.SetRecycleBinRetentionDays(cfg.Coordinator.S3.RecycleBinRetentionDays)
 
 	// Set version retention config
 	store.SetVersionRetentionDays(cfg.Coordinator.S3.VersionRetentionDays)
@@ -1790,7 +1794,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist DNS data to S3 (async to avoid blocking registration)
-	go s.saveDNSData()
+	// Tracked by WaitGroup so Shutdown waits for completion before cleanup.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.saveDNSData()
+	}()
 
 	// Update replicator peer list if this is a coordinator
 	if peer.IsCoordinator && s.replicator != nil {
@@ -1866,8 +1875,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.updatePeerRecord(peerID, req.Name, req.PublicKey, isNewPeer)
 
 		// Auto-create peer share on first registration
+		// Tracked by WaitGroup so Shutdown waits for completion before cleanup.
 		if isNewPeer && s.fileShareMgr != nil {
-			go s.createPeerShare(peerID, req.Name)
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				s.createPeerShare(peerID, req.Name)
+			}()
 		}
 
 		// Check if peer is admin (for both new and existing peers)

@@ -12,7 +12,7 @@ import (
 type WorkflowType string
 
 const (
-	WorkflowDeletion    WorkflowType = "deletion"    // Test document deletion and tombstones
+	WorkflowDeletion    WorkflowType = "deletion"    // Test document deletion and recycle bin
 	WorkflowExpiration  WorkflowType = "expiration"  // Test document expiration enforcement
 	WorkflowPermissions WorkflowType = "permissions" // Test file share permission requests
 	WorkflowQuota       WorkflowType = "quota"       // Test file share quota enforcement
@@ -63,7 +63,7 @@ func NewWorkflowGenerator(s story.Story, timeScale float64) *WorkflowGenerator {
 }
 
 // GenerateDeletionWorkflow creates a deletion workflow test.
-// Scenario: Upload document → Delete → Verify tombstone → Attempt access (should fail) → Restore → Access (should work)
+// Scenario: Upload document → Delete → Verify moved to recycle bin → Attempt access (should fail) → Restore → Access (should work)
 func (w *WorkflowGenerator) GenerateDeletionWorkflow(storyTime time.Duration, actor story.Character) WorkflowTest {
 	w.testCount++
 
@@ -85,7 +85,7 @@ func (w *WorkflowGenerator) GenerateDeletionWorkflow(storyTime time.Duration, ac
 			ValidationChecks: []string{
 				"document_uploaded",
 				"document_deleted",
-				"tombstone_created",
+				"recycled",
 				"access_denied_after_delete",
 				"document_restored",
 				"access_granted_after_restore",

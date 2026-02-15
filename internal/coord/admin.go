@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -325,6 +326,19 @@ func (s *Server) setupAdminRoutes() {
 		// Extract bucket name from path
 		path := strings.TrimPrefix(r.URL.Path, "/api/s3/buckets/")
 		path = strings.TrimSuffix(path, "/")
+
+		// Handle per-bucket recycle bin purge: DELETE /api/s3/buckets/{bucket}/recyclebin
+		if strings.HasSuffix(path, "/recyclebin") {
+			bucket := strings.TrimSuffix(path, "/recyclebin")
+			if r.Method == http.MethodDelete {
+				s.withS3AdminMetrics(w, "purgeRecycleBin", func(w http.ResponseWriter) {
+					s.handlePurgeBucketRecycleBin(w, r, bucket)
+				})
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
 
 		// If path contains additional segments (e.g., "mybucket/objects"),
 		// delegate to S3 proxy handler instead of bucket management
@@ -1785,9 +1799,9 @@ type S3ObjectInfo struct {
 	Key          string `json:"key"`
 	Size         int64  `json:"size"`
 	LastModified string `json:"last_modified"`
-	Owner        string `json:"owner,omitempty"`         // Owner peer name (derived from bucket owner)
-	Expires      string `json:"expires,omitempty"`       // Optional expiration date
-	TombstonedAt string `json:"tombstoned_at,omitempty"` // When the object was deleted (tombstoned)
+	Owner        string `json:"owner,omitempty"`      // Owner peer name (derived from bucket owner)
+	Expires      string `json:"expires,omitempty"`    // Optional expiration date
+	DeletedAt    string `json:"deleted_at,omitempty"` // When the object was deleted (recycled)
 	ContentType  string `json:"content_type,omitempty"`
 	IsPrefix     bool   `json:"is_prefix,omitempty"` // True for "folder" prefixes
 }
@@ -1879,7 +1893,9 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 	defer s.gcMu.Unlock()
 
 	var req struct {
-		PurgeAllTombstoned bool `json:"purge_all_tombstoned"`
+		PurgeRecycleBin bool `json:"purge_recycle_bin"`
+		// Internal: set when forwarding to peers to prevent infinite recursion
+		NoForward bool `json:"no_forward"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -1887,16 +1903,26 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 
 	gcStart := time.Now()
 
-	// Phase 1: Purge tombstoned objects
-	var tombstonedPurged int
-	if req.PurgeAllTombstoned {
-		tombstonedPurged = s.s3Store.PurgeAllTombstonedObjects(r.Context())
-	} else {
-		tombstonedPurged = s.s3Store.PurgeTombstonedObjects(r.Context())
+	// Phase 0: Purge orphaned file share buckets before GC.
+	// When a share is deleted on one coordinator, ForceDeleteBucket only runs locally.
+	// Replica coordinators still have the bucket and objects. Reconcile by checking
+	// which fs+* buckets have no corresponding share and deleting them.
+	if s.fileShareMgr != nil {
+		if purged := s.fileShareMgr.PurgeOrphanedFileShareBuckets(r.Context()); purged > 0 {
+			log.Info().Int("count", purged).Msg("purged orphaned file share buckets during manual GC")
+		}
 	}
 
-	// Phase 2: Run full GC (version pruning + orphan chunk cleanup)
-	gcStats := s.s3Store.RunGarbageCollection(r.Context())
+	// Phase 1: Purge recycled objects
+	var recycledPurged int
+	if req.PurgeRecycleBin {
+		recycledPurged = s.s3Store.PurgeAllRecycled(r.Context())
+	} else {
+		recycledPurged = s.s3Store.PurgeRecycleBin(r.Context())
+	}
+
+	// Phase 2: Run full GC with no grace period (admin explicitly requested cleanup)
+	gcStats := s.s3Store.RunGarbageCollectionForce(r.Context())
 	gcDuration := time.Since(gcStart).Seconds()
 
 	// Record GC metrics (same as periodic path in StartPeriodicCleanup)
@@ -1908,23 +1934,108 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 	s.updateS3Metrics()
 
 	log.Info().
-		Int("tombstoned_purged", tombstonedPurged).
+		Int("recycled_purged", recycledPurged).
 		Int("versions_pruned", gcStats.VersionsPruned).
 		Int("chunks_deleted", gcStats.ChunksDeleted).
 		Int64("bytes_reclaimed", gcStats.BytesReclaimed).
 		Float64("duration_seconds", gcDuration).
 		Msg("manual S3 garbage collection completed")
 
+	// Phase 3: Forward GC to peer coordinators (unless this is already a forwarded request)
+	if !req.NoForward {
+		s.forwardGCToPeers(r.Context(), req.PurgeRecycleBin)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]interface{}{
-		"tombstoned_purged": tombstonedPurged,
-		"versions_pruned":   gcStats.VersionsPruned,
-		"chunks_deleted":    gcStats.ChunksDeleted,
-		"bytes_reclaimed":   gcStats.BytesReclaimed,
-		"duration_seconds":  gcDuration,
+		"recycled_purged":  recycledPurged,
+		"versions_pruned":  gcStats.VersionsPruned,
+		"chunks_deleted":   gcStats.ChunksDeleted,
+		"bytes_reclaimed":  gcStats.BytesReclaimed,
+		"duration_seconds": gcDuration,
 	}); err != nil {
 		log.Error().Err(err).Msg("failed to encode GC stats response")
 	}
+}
+
+// forwardGCToPeers sends GC requests to all peer coordinators in parallel.
+// Uses no_forward=true to prevent infinite recursion between peers.
+func (s *Server) forwardGCToPeers(ctx context.Context, purgeRecycleBin bool) {
+	if s.replicator == nil {
+		return
+	}
+
+	peers := s.replicator.GetPeers()
+	if len(peers) == 0 {
+		return
+	}
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"purge_recycle_bin": purgeRecycleBin,
+		"no_forward":        true,
+	})
+
+	// Share a single HTTP client across all peer requests for connection reuse
+	client := &http.Client{
+		Timeout: 10 * time.Minute,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // mesh-internal
+		},
+	}
+
+	var wg sync.WaitGroup
+	for _, peerIP := range peers {
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+
+			gcURL := fmt.Sprintf("https://%s:443/api/s3/gc", ip)
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, gcURL, bytes.NewReader(payload))
+			if err != nil {
+				log.Warn().Err(err).Str("peer", ip).Msg("failed to create GC forward request")
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Warn().Err(err).Str("peer", ip).Msg("failed to forward GC to peer")
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode == http.StatusOK {
+				log.Info().Str("peer", ip).Msg("GC forwarded to peer coordinator")
+			} else {
+				body, _ := io.ReadAll(resp.Body)
+				log.Warn().Str("peer", ip).Int("status", resp.StatusCode).Str("body", string(body)).Msg("peer GC returned non-OK")
+			}
+		}(peerIP)
+	}
+	wg.Wait()
+}
+
+// handlePurgeBucketRecycleBin purges all recycle bin entries for a specific bucket.
+// This allows users to empty a bucket's recycle bin before deleting the bucket,
+// since DeleteBucket blocks on non-empty recycle bins.
+//
+// DELETE /api/s3/buckets/{bucket}/recyclebin
+func (s *Server) handlePurgeBucketRecycleBin(w http.ResponseWriter, r *http.Request, bucket string) {
+	if s.s3Store == nil {
+		s.jsonError(w, "S3 storage not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := s.s3Store.PurgeAllRecycledInBucket(r.Context(), bucket); err != nil {
+		s.jsonError(w, fmt.Sprintf("purge recycle bin: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"bucket": bucket,
+		"purged": true,
+	})
 }
 
 // Security: This endpoint is registered on adminMux which is only served over HTTPS
@@ -1970,6 +2081,12 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 			// List objects in bucket
 			s.withS3AdminMetrics(w, "listObjects", func(w http.ResponseWriter) {
 				s.handleS3ListObjects(w, r, bucket)
+			})
+			return
+		}
+		if parts[1] == "recyclebin" {
+			s.withS3AdminMetrics(w, "listRecycledObjects", func(w http.ResponseWriter) {
+				s.handleS3ListRecycledObjects(w, r, bucket)
 			})
 			return
 		}
@@ -2088,16 +2205,17 @@ func (s *Server) handleS3ListBuckets(w http.ResponseWriter, r *http.Request) {
 		resp.Volume = &S3VolumeInfo{TotalBytes: total, UsedBytes: used, AvailableBytes: avail}
 	}
 
-	// Add dedup storage stats
+	// Add dedup storage stats (total logical = live + versions + recyclebin)
 	casStats := s.s3Store.GetCASStats()
+	totalLogical := casStats.LogicalBytes + casStats.VersionBytes + casStats.RecycledBytes
 	dedupRatio := 1.0
 	if casStats.ChunkBytes > 0 {
 		// Clamp to >=1.0: transient states during GC can briefly have logical < physical
-		dedupRatio = max(1.0, float64(casStats.LogicalBytes)/float64(casStats.ChunkBytes))
+		dedupRatio = max(1.0, float64(totalLogical)/float64(casStats.ChunkBytes))
 	}
 	resp.Storage = &S3StorageInfo{
 		PhysicalBytes: casStats.ChunkBytes,
-		LogicalBytes:  casStats.LogicalBytes,
+		LogicalBytes:  totalLogical,
 		DedupRatio:    dedupRatio,
 	}
 
@@ -2343,9 +2461,6 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 		if obj.Expires != nil {
 			info.Expires = obj.Expires.Format(time.RFC3339)
 		}
-		if obj.TombstonedAt != nil {
-			info.TombstonedAt = obj.TombstonedAt.Format(time.RFC3339)
-		}
 		result = append(result, info)
 	}
 
@@ -2487,12 +2602,6 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// Check bucket write permission (could be extended to full RBAC)
 	if bucket == auth.SystemBucket {
 		s.jsonError(w, "bucket is read-only", http.StatusForbidden)
-		return
-	}
-
-	// Check if object is tombstoned (read-only)
-	if existingMeta, err := s.s3Store.HeadObject(r.Context(), bucket, key); err == nil && existingMeta.IsTombstoned() {
-		s.jsonError(w, "object is deleted and read-only", http.StatusForbidden)
 		return
 	}
 
@@ -2802,7 +2911,7 @@ func (s *Server) handleS3RestoreVersion(w http.ResponseWriter, r *http.Request, 
 	})
 }
 
-// handleS3UndeleteObject restores a tombstoned (deleted) object.
+// handleS3UndeleteObject restores a recycled (deleted) object from the recycle bin.
 func (s *Server) handleS3UndeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	if r.Method != http.MethodPost {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -2815,13 +2924,13 @@ func (s *Server) handleS3UndeleteObject(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Untombstone the object
-	if err := s.s3Store.UntombstoneObject(r.Context(), bucket, key); err != nil {
+	// Restore from recycle bin
+	if err := s.s3Store.RestoreRecycledObject(r.Context(), bucket, key); err != nil {
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)
 		case errors.Is(err, s3.ErrObjectNotFound):
-			s.jsonError(w, "object not found", http.StatusNotFound)
+			s.jsonError(w, "object not found in recycle bin", http.StatusNotFound)
 		case errors.Is(err, s3.ErrAccessDenied):
 			s.jsonError(w, "access denied", http.StatusForbidden)
 		default:
@@ -2834,6 +2943,40 @@ func (s *Server) handleS3UndeleteObject(w http.ResponseWriter, r *http.Request, 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "restored",
 	})
+}
+
+// handleS3ListRecycledObjects returns recycled entries for a bucket.
+func (s *Server) handleS3ListRecycledObjects(w http.ResponseWriter, r *http.Request, bucket string) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	entries, err := s.s3Store.ListRecycledObjects(r.Context(), bucket)
+	if err != nil {
+		if errors.Is(err, s3.ErrBucketNotFound) {
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		} else {
+			s.jsonError(w, "failed to list recycled objects: "+err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Convert to S3ObjectInfo for consistent API response format
+	result := make([]S3ObjectInfo, 0, len(entries))
+	for _, entry := range entries {
+		info := S3ObjectInfo{
+			Key:          entry.OriginalKey,
+			Size:         entry.Meta.Size,
+			LastModified: entry.Meta.LastModified.Format(time.RFC3339),
+			ContentType:  entry.Meta.ContentType,
+			DeletedAt:    entry.DeletedAt.Format(time.RFC3339),
+		}
+		result = append(result, info)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // --- Panel Management API ---

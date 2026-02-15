@@ -478,8 +478,8 @@ func TestCoordinatorClient_TriggerGC(t *testing.T) {
 				t.Errorf("Expected /api/s3/gc, got %s", r.URL.Path)
 			}
 			body, _ := io.ReadAll(r.Body)
-			if !strings.Contains(string(body), "purge_all_tombstoned") {
-				t.Errorf("Expected purge_all_tombstoned in body, got %s", string(body))
+			if !strings.Contains(string(body), "purge_recycle_bin") {
+				t.Errorf("Expected purge_recycle_bin in body, got %s", string(body))
 			}
 			w.WriteHeader(status)
 			if response != "" {
@@ -489,7 +489,7 @@ func TestCoordinatorClient_TriggerGC(t *testing.T) {
 	}
 
 	t.Run("successful GC", func(t *testing.T) {
-		server := newGCServer(t, http.StatusOK, `{"tombstoned_purged":5,"versions_pruned":3,"chunks_deleted":10,"bytes_reclaimed":1048576}`)
+		server := newGCServer(t, http.StatusOK, `{"recycled_purged":5,"versions_pruned":3,"chunks_deleted":10,"bytes_reclaimed":1048576}`)
 		defer server.Close()
 
 		client := &CoordinatorClient{baseURL: server.URL, httpClient: server.Client(), accessKey: "test", secretKey: "test"}
@@ -497,7 +497,7 @@ func TestCoordinatorClient_TriggerGC(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
-		if stats.TombstonedPurged != 5 || stats.VersionsPruned != 3 || stats.ChunksDeleted != 10 || stats.BytesReclaimed != 1048576 {
+		if stats.RecycledPurged != 5 || stats.VersionsPruned != 3 || stats.ChunksDeleted != 10 || stats.BytesReclaimed != 1048576 {
 			t.Errorf("Unexpected stats: %+v", stats)
 		}
 	})
@@ -519,7 +519,7 @@ func TestCoordinatorClient_TriggerGC_SlowServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second) // Simulate slow GC
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"tombstoned_purged":1,"versions_pruned":0,"chunks_deleted":0,"bytes_reclaimed":0}`))
+		_, _ = w.Write([]byte(`{"recycled_purged":1,"versions_pruned":0,"chunks_deleted":0,"bytes_reclaimed":0}`))
 	}))
 	defer server.Close()
 
@@ -537,8 +537,8 @@ func TestCoordinatorClient_TriggerGC_SlowServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GC should not timeout with context-based timeout: %v", err)
 	}
-	if stats.TombstonedPurged != 1 {
-		t.Errorf("Expected TombstonedPurged=1, got %d", stats.TombstonedPurged)
+	if stats.RecycledPurged != 1 {
+		t.Errorf("Expected RecycledPurged=1, got %d", stats.RecycledPurged)
 	}
 }
 

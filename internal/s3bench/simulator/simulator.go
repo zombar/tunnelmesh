@@ -484,7 +484,7 @@ func (s *Simulator) executeTask(ctx context.Context, task *WorkloadTask) error {
 		}
 
 	case "delete":
-		// Delete document (creates tombstone)
+		// Delete document (moves to recycle bin)
 		err = s.executeDelete(ctx, store, session, bucketName, task)
 		if err == nil {
 			s.metricsLock.Lock()
@@ -647,7 +647,7 @@ func (s *Simulator) executeDelete(ctx context.Context, store *s3.Store, session 
 		return s.executeDeleteHTTP(ctx, session, bucket, task)
 	}
 
-	// Delete object (creates deletion marker/tombstone)
+	// Delete object (moves to recycle bin)
 	err := store.DeleteObject(context.Background(), bucket, task.Filename)
 	if err != nil {
 		return fmt.Errorf("deleting object %s/%s: %w", bucket, task.Filename, err)
@@ -894,7 +894,7 @@ func (s *Simulator) executeWorkflow(ctx context.Context, workflow WorkflowTest) 
 	}
 }
 
-// executeWorkflowDeletion tests document deletion and tombstone behavior.
+// executeWorkflowDeletion tests document deletion and recycle bin behavior.
 func (s *Simulator) executeWorkflowDeletion(ctx context.Context, store *s3.Store, session *UserSession, workflow WorkflowTest) (bool, error) {
 	bucket := s.shareBucketName("alien-public") // Use public bucket for test
 	docName := workflow.Parameters["document_name"].(string)
@@ -919,7 +919,7 @@ func (s *Simulator) executeWorkflowDeletion(ctx context.Context, store *s3.Store
 		return false, fmt.Errorf("deletion failed: %w", err)
 	}
 
-	// 4. Verify access is denied (tombstone) - should return ObjectNotFound or similar error
+	// 4. Verify access is denied (moved to recycle bin) - should return ObjectNotFound or similar error
 	_, _, err = store.GetObject(context.Background(), bucket, docName)
 	if err == nil {
 		// Document might still be accessible if it's just a deletion marker

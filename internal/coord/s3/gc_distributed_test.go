@@ -12,8 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestGC_DistributedAware tests that GC doesn't delete chunks owned by other coordinators.
-func TestGC_DistributedAware(t *testing.T) {
+// TestGC_DeletesUnreferencedChunksRegardlessOfRegistry tests that GC deletes
+// locally unreferenced chunks even if other coordinators own them in the registry.
+// Each coordinator independently manages its own storage; the reference set +
+// grace period is sufficient for safety.
+func TestGC_DeletesUnreferencedChunksRegardlessOfRegistry(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create store with chunk registry
@@ -28,7 +31,8 @@ func TestGC_DistributedAware(t *testing.T) {
 
 	// Create mock registry
 	mockReg := &mockChunkRegistry{
-		owners: make(map[string][]string),
+		owners:       make(map[string][]string),
+		localCoordID: "coord1",
 	}
 	store.SetChunkRegistry(mockReg)
 	store.SetCoordinatorID("coord1")
@@ -42,7 +46,6 @@ func TestGC_DistributedAware(t *testing.T) {
 	mockReg.owners[chunkHash] = []string{"coord1", "coord2"}
 
 	// Age the chunk (set mod time to 2 hours ago to pass grace period)
-	// Find the chunk file path
 	chunkPath := filepath.Join(store.dataDir, "chunks", chunkHash[:2], chunkHash)
 	twoHoursAgo := time.Now().Add(-2 * time.Hour)
 	err = os.Chtimes(chunkPath, twoHoursAgo, twoHoursAgo)
@@ -51,13 +54,16 @@ func TestGC_DistributedAware(t *testing.T) {
 	// Run GC
 	stats := store.RunGarbageCollection(ctx)
 
-	// Chunk should NOT be deleted (still owned by coord2)
-	assert.Equal(t, 0, stats.ChunksDeleted, "Should not delete shared chunks")
-	assert.Equal(t, 1, stats.ChunksSkippedShared, "Should skip shared chunks")
+	// Chunk should be deleted locally — not referenced by any local metadata.
+	// Other coordinators manage their own copies independently.
+	assert.Equal(t, 1, stats.ChunksDeleted, "Should delete locally unreferenced chunk")
 
-	// Verify chunk still exists
+	// Verify chunk was deleted from local CAS
 	_, err = store.cas.ReadChunk(ctx, chunkHash)
-	assert.NoError(t, err, "Chunk should still exist")
+	assert.Error(t, err, "Chunk should be deleted locally")
+
+	// Verify we unregistered ourselves from the registry
+	assert.NotContains(t, mockReg.owners[chunkHash], "coord1", "Should unregister self from registry")
 }
 
 // TestGC_DeletesWhenSoleOwner tests that GC deletes chunks when we're the only owner.
@@ -76,7 +82,8 @@ func TestGC_DeletesWhenSoleOwner(t *testing.T) {
 
 	// Create mock registry
 	mockReg := &mockChunkRegistry{
-		owners: make(map[string][]string),
+		owners:       make(map[string][]string),
+		localCoordID: "coord1",
 	}
 	store.SetChunkRegistry(mockReg)
 	store.SetCoordinatorID("coord1")
@@ -98,9 +105,8 @@ func TestGC_DeletesWhenSoleOwner(t *testing.T) {
 	// Run GC
 	stats := store.RunGarbageCollection(ctx)
 
-	// Chunk should be deleted (we're the sole owner)
-	assert.Equal(t, 1, stats.ChunksDeleted, "Should delete when sole owner")
-	assert.Equal(t, 0, stats.ChunksSkippedShared, "No shared chunks to skip")
+	// Chunk should be deleted (unreferenced locally)
+	assert.Equal(t, 1, stats.ChunksDeleted, "Should delete unreferenced chunk")
 
 	// Verify chunk was deleted
 	_, err = store.cas.ReadChunk(ctx, chunkHash)
@@ -181,16 +187,16 @@ func TestGC_NoRegistry(t *testing.T) {
 	// Run GC
 	stats := store.RunGarbageCollection(ctx)
 
-	// Chunk should be deleted (no registry to check)
+	// Chunk should be deleted (unreferenced locally)
 	assert.Equal(t, 1, stats.ChunksDeleted, "Should delete orphaned chunks without registry")
-	assert.Equal(t, 0, stats.ChunksSkippedShared, "No registry means no shared check")
 
 	// Verify chunk was deleted
 	_, err = store.cas.ReadChunk(ctx, chunkHash)
 	assert.Error(t, err, "Chunk should be deleted")
 }
 
-// TestGC_MultipleOwners tests GC with multiple owners in registry.
+// TestGC_MultipleOwners tests that GC deletes all locally unreferenced chunks
+// regardless of registry ownership, and unregisters self from each.
 func TestGC_MultipleOwners(t *testing.T) {
 	dir := t.TempDir()
 
@@ -206,7 +212,8 @@ func TestGC_MultipleOwners(t *testing.T) {
 
 	// Create mock registry
 	mockReg := &mockChunkRegistry{
-		owners: make(map[string][]string),
+		owners:       make(map[string][]string),
+		localCoordID: "coord1",
 	}
 	store.SetChunkRegistry(mockReg)
 	store.SetCoordinatorID("coord1")
@@ -224,10 +231,7 @@ func TestGC_MultipleOwners(t *testing.T) {
 	chunk3Hash, _, err := store.cas.WriteChunk(ctx, chunk3Data)
 	require.NoError(t, err)
 
-	// Simulate different ownership scenarios:
-	// Chunk 1: Only us (should be deleted)
-	// Chunk 2: Us + coord2 (should NOT be deleted)
-	// Chunk 3: Only coord2 (should NOT be deleted - we're out of sync)
+	// Different registry states — but all are locally unreferenced, so all should be deleted
 	mockReg.owners[chunk1Hash] = []string{"coord1"}
 	mockReg.owners[chunk2Hash] = []string{"coord1", "coord2"}
 	mockReg.owners[chunk3Hash] = []string{"coord2"}
@@ -243,9 +247,18 @@ func TestGC_MultipleOwners(t *testing.T) {
 	// Run GC
 	stats := store.RunGarbageCollection(ctx)
 
-	// Only chunk 1 should be deleted (sole owner)
-	assert.Equal(t, 1, stats.ChunksDeleted, "Should delete only sole-owned chunk")
-	assert.Equal(t, 2, stats.ChunksSkippedShared, "Should skip 2 shared chunks")
+	// All 3 chunks should be deleted (all locally unreferenced + past grace period)
+	assert.Equal(t, 3, stats.ChunksDeleted, "Should delete all locally unreferenced chunks")
+
+	// Verify all chunks were deleted from local CAS
+	for _, chunkHash := range []string{chunk1Hash, chunk2Hash, chunk3Hash} {
+		_, err := store.cas.ReadChunk(ctx, chunkHash)
+		assert.Error(t, err, "Chunk %s should be deleted", chunkHash[:8])
+	}
+
+	// Verify we unregistered from all chunks in the registry
+	assert.NotContains(t, mockReg.owners[chunk1Hash], "coord1")
+	assert.NotContains(t, mockReg.owners[chunk2Hash], "coord1")
 }
 
 // TestGC_RegistryUnavailable tests GC behavior when registry query fails.
