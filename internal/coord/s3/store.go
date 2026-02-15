@@ -30,9 +30,9 @@ import (
 // IMPORTANT: This assumes file uploads complete within this duration. For very large
 // files or slow networks, increase this value to prevent premature chunk deletion.
 //
-// Default: 1 hour (suitable for typical replication lag and upload durations)
-// For large file uploads: Consider 24 hours or more
-const GCGracePeriod = 1 * time.Hour
+// Default: 5 minutes (balanced between responsiveness and replication safety)
+// For large file uploads or high-latency networks: Consider 1 hour or more
+const GCGracePeriod = 5 * time.Minute
 
 // MaxErasureCodingFileSize is the maximum file size for erasure coding (Phase 1).
 // Files larger than this will use standard replication.
@@ -1195,7 +1195,7 @@ func (s *Store) getObjectContentWithErasureCoding(ctx context.Context, bucket, k
 // NOTE: This is Phase 1 implementation with full buffering. Streaming encoder will be added in Phase 6.
 //
 //nolint:gocyclo // Complexity will be reduced when streaming encoder is added (Phase 6)
-func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string, metadata map[string]string, bucketMeta *BucketMeta) (*ObjectMeta, []string, error) {
+func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string, metadata map[string]string, bucketMeta *BucketMeta) (*ObjectMeta, error) {
 	// Caller must hold s.mu.Lock()
 
 	k := bucketMeta.ErasureCoding.DataShards
@@ -1205,7 +1205,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	// While validateErasureCodingPolicy already checked this, re-validate at upload time
 	// to prevent issues if metadata was corrupted or modified externally
 	if k < 1 || k > 32 || m < 1 || m > 32 || k+m > 64 {
-		return nil, nil, fmt.Errorf("invalid erasure coding config: k=%d, m=%d (max 32 each, 64 total)", k, m)
+		return nil, fmt.Errorf("invalid erasure coding config: k=%d, m=%d (max 32 each, 64 total)", k, m)
 	}
 
 	// Acquire semaphore to limit concurrent erasure coding operations (memory safety)
@@ -1214,7 +1214,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	case s.erasureCodingSemaphore <- struct{}{}:
 		defer func() { <-s.erasureCodingSemaphore }()
 	case <-ctx.Done():
-		return nil, nil, fmt.Errorf("waiting for erasure coding slot: %w", ctx.Err())
+		return nil, fmt.Errorf("waiting for erasure coding slot: %w", ctx.Err())
 	}
 
 	metaPath := s.objectMetaPath(bucket, key)
@@ -1233,27 +1233,27 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	if s.quota != nil && size > oldSize {
 		delta := size - oldSize
 		if !s.quota.CanAllocate(delta) {
-			return nil, nil, ErrQuotaExceeded
+			return nil, ErrQuotaExceeded
 		}
 	}
 
 	// Archive current version for version history
 	if err := s.archiveCurrentVersion(bucket, key); err != nil {
-		return nil, nil, fmt.Errorf("archive current version: %w", err)
+		return nil, fmt.Errorf("archive current version: %w", err)
 	}
 
 	// Create parent directories for metadata
 	if err := os.MkdirAll(filepath.Dir(metaPath), 0755); err != nil {
-		return nil, nil, fmt.Errorf("create meta dir: %w", err)
+		return nil, fmt.Errorf("create meta dir: %w", err)
 	}
 
 	// Buffer entire file into memory (required for Reed-Solomon encoding)
 	data, err := io.ReadAll(io.LimitReader(reader, size))
 	if err != nil {
-		return nil, nil, fmt.Errorf("read file data: %w", err)
+		return nil, fmt.Errorf("read file data: %w", err)
 	}
 	if int64(len(data)) != size {
-		return nil, nil, fmt.Errorf("file size mismatch: expected %d bytes, got %d", size, len(data))
+		return nil, fmt.Errorf("file size mismatch: expected %d bytes, got %d", size, len(data))
 	}
 
 	// Generate version ID before encoding (needed for tracking shards)
@@ -1262,14 +1262,14 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	// Check for cancellation before expensive encoding operation
 	select {
 	case <-ctx.Done():
-		return nil, nil, fmt.Errorf("context canceled before encoding: %w", ctx.Err())
+		return nil, fmt.Errorf("context canceled before encoding: %w", ctx.Err())
 	default:
 	}
 
 	// Encode file into Reed-Solomon shards
 	dataShards, parityShards, err := EncodeFile(data, k, m)
 	if err != nil {
-		return nil, nil, fmt.Errorf("encode file with erasure coding (k=%d,m=%d,size=%d): %w", k, m, size, err)
+		return nil, fmt.Errorf("encode file with erasure coding (k=%d,m=%d,size=%d): %w", k, m, size, err)
 	}
 
 	// Calculate shard size for metadata
@@ -1331,13 +1331,13 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 				break
 			}
 			if err != nil {
-				return nil, nil, fmt.Errorf("chunk data shard %d/%d (versionID=%s): %w", i, k, versionID, err)
+				return nil, fmt.Errorf("chunk data shard %d/%d (versionID=%s): %w", i, k, versionID, err)
 			}
 
 			// Write chunk to CAS
 			_, onDiskBytes, err := s.cas.WriteChunk(ctx, chunk)
 			if err != nil {
-				return nil, nil, fmt.Errorf("write data shard %d/%d chunk %s (versionID=%s): %w", i, k, chunkHash[:8], versionID, err)
+				return nil, fmt.Errorf("write data shard %d/%d chunk %s (versionID=%s): %w", i, k, chunkHash[:8], versionID, err)
 			}
 
 			// Update incremental chunk stats
@@ -1398,7 +1398,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		// Write parity shard directly to CAS (it will compute SHA-256 hash)
 		parityHash, parityOnDiskBytes, err := s.cas.WriteChunk(ctx, shard)
 		if err != nil {
-			return nil, nil, fmt.Errorf("write parity shard %d/%d (versionID=%s): %w", i, m, versionID, err)
+			return nil, fmt.Errorf("write parity shard %d/%d (versionID=%s): %w", i, m, versionID, err)
 		}
 
 		// Update incremental chunk stats
@@ -1503,7 +1503,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 				s.quota.Release(bucket, size)
 			}
 		}
-		return nil, nil, fmt.Errorf("marshal object meta: %w", err)
+		return nil, fmt.Errorf("marshal object meta: %w", err)
 	}
 
 	if err := syncedWriteFile(metaPath, metaData, 0644); err != nil {
@@ -1515,7 +1515,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 				s.quota.Release(bucket, size)
 			}
 		}
-		return nil, nil, fmt.Errorf("write object meta: %w", err)
+		return nil, fmt.Errorf("write object meta: %w", err)
 	}
 
 	// Update incremental object/logical stats
@@ -1524,8 +1524,9 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	}
 	s.statsLogicalBytes.Add(size - oldLogicalBytes)
 
-	// Prune expired versions and capture chunk hashes for cleanup after unlock.
-	_, chunksToCheck := s.pruneExpiredVersions(ctx, bucket, key)
+	// Prune expired versions. Chunk GC for pruned versions is deferred to the
+	// periodic GC pass which builds the reference set once (efficient batch).
+	s.pruneExpiredVersions(ctx, bucket, key)
 
 	// Update bucket size
 	sizeDelta := size - oldSize
@@ -1539,7 +1540,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	// Mark as successful to prevent cleanup rollback
 	success = true
 
-	return &objMeta, chunksToCheck, nil
+	return &objMeta, nil
 }
 
 // PutObject writes an object to a bucket using CDC chunks stored in CAS.
@@ -1569,14 +1570,7 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	}
 
 	s.mu.Lock()
-	var prunedChunks []string
-	defer func() {
-		s.mu.Unlock()
-		// Clean up pruned version chunks outside the lock (same as ImportObjectMeta path)
-		if len(prunedChunks) > 0 {
-			s.DeleteUnreferencedChunks(ctx, prunedChunks)
-		}
-	}()
+	defer s.mu.Unlock()
 
 	// Check bucket exists and get metadata (including replication factor)
 	bucketMeta, err := s.getBucketMeta(bucket)
@@ -1595,9 +1589,7 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 
 	if useErasureCoding {
 		// Use erasure coding path (buffer entire file)
-		meta, ecChunks, err := s.putObjectWithErasureCoding(ctx, bucket, key, reader, size, contentType, metadata, bucketMeta)
-		prunedChunks = ecChunks
-		return meta, err
+		return s.putObjectWithErasureCoding(ctx, bucket, key, reader, size, contentType, metadata, bucketMeta)
 	}
 
 	// Use standard streaming path for non-erasure-coded objects or large files
@@ -1793,8 +1785,9 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	}
 	s.statsLogicalBytes.Add(written - oldLogicalBytes)
 
-	// Prune expired versions and capture chunk hashes for cleanup after unlock.
-	_, prunedChunks = s.pruneExpiredVersions(ctx, bucket, key)
+	// Prune expired versions. Chunk GC for pruned versions is deferred to the
+	// periodic GC pass which builds the reference set once (efficient batch).
+	s.pruneExpiredVersions(ctx, bucket, key)
 
 	// Update bucket size (new object adds to size, replacement adjusts delta)
 	sizeDelta := written - oldSize
@@ -2547,14 +2540,21 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 	return chunksToCheck, nil
 }
 
-// DeleteUnreferencedChunks checks each chunk hash against all objects and versions,
-// deleting any that are no longer referenced. Returns total bytes freed.
-// This is used after version pruning to immediately clean up orphaned chunks
-// rather than waiting for the next GC cycle.
+// DeleteUnreferencedChunks checks each chunk hash against all objects, versions,
+// and recyclebin entries, deleting any that are no longer referenced.
+// Returns total bytes freed.
+//
+// Uses buildChunkReferenceSet to build the reference set ONCE (O(N) filesystem
+// walk where N = total metadata files), then checks each chunk in O(1).
+// This replaces the old per-chunk isChunkReferencedGlobally which was O(N*K)
+// where K = len(chunkHashes) — causing CPU/memory spikes with many chunks.
 func (s *Store) DeleteUnreferencedChunks(ctx context.Context, chunkHashes []string) int64 {
 	if s.cas == nil || len(chunkHashes) == 0 {
 		return 0
 	}
+
+	// Build reference set once for all chunks (single filesystem walk).
+	referencedChunks := s.buildChunkReferenceSet(ctx)
 
 	var totalFreed int64
 	for _, hash := range chunkHashes {
@@ -2563,7 +2563,7 @@ func (s *Store) DeleteUnreferencedChunks(ctx context.Context, chunkHashes []stri
 			return totalFreed
 		default:
 		}
-		if !s.isChunkReferencedGlobally(ctx, hash) {
+		if _, referenced := referencedChunks[hash]; !referenced {
 			if freed, err := s.cas.DeleteChunk(ctx, hash); err == nil && freed > 0 {
 				s.statsChunkCount.Add(-1)
 				s.statsChunkBytes.Add(-freed)

@@ -742,15 +742,15 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 // StartPeriodicCleanup starts the background cleanup goroutine for S3 storage.
 // gcStaggerDelay computes a deterministic stagger delay based on the coordinator
 // name hash, to avoid all coordinators running GC simultaneously.
-// Returns 0 to 1799 seconds (0–29m59s), keeping the window under 50% of the
-// 1-hour GC interval to ensure predictable cleanup cadence.
+// Returns 0 to 149 seconds (0–2m29s), keeping the window under 50% of the
+// 5-minute GC interval to ensure predictable cleanup cadence.
 func gcStaggerDelay(coordName string) time.Duration {
 	if coordName == "" {
 		coordName = "coordinator"
 	}
 	h := fnv.New32a()
 	h.Write([]byte(coordName))
-	return time.Duration(h.Sum32()%1800) * time.Second
+	return time.Duration(h.Sum32()%150) * time.Second
 }
 
 // StartPeriodicCleanup launches a background goroutine for S3 storage maintenance.
@@ -840,9 +840,9 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 		// Run first GC cycle immediately after stagger
 		runGCCycle()
 
-		// Create ticker AFTER stagger so the hourly cycle is properly offset.
-		// Each coordinator's cycle: stagger, stagger+1h, stagger+2h, ...
-		ticker := time.NewTicker(1 * time.Hour)
+		// Create ticker AFTER stagger so the cycle is properly offset.
+		// Each coordinator's cycle: stagger, stagger+5m, stagger+10m, ...
+		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 
 		for {

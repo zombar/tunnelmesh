@@ -2449,10 +2449,9 @@ func TestPutObject_CleansUpPrunedVersionChunks(t *testing.T) {
 	assert.LessOrEqual(t, stats.VersionCount, 3,
 		"version count should not exceed maxVersionsPerObject")
 
-	// The pruned version chunks should have been cleaned up inline.
-	// With 5 versions and max 3, 1 version was pruned (first archive gets pruned
-	// when the 5th write happens, since that's when we exceed 3 archived versions).
-	// Chunk count should reflect cleanup rather than accumulation.
+	// Version pruning happens inline, but chunk cleanup is deferred to periodic GC
+	// (which builds the reference set once for efficiency). Chunks from pruned
+	// versions remain on disk until the next GC cycle.
 	assert.Greater(t, stats.ChunkCount, 0, "should still have chunks for live + retained versions")
 }
 
