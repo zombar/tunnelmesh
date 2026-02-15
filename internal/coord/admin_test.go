@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -507,10 +508,9 @@ func TestS3Proxy_DeleteObject(t *testing.T) {
 
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 
-	// Verify object is tombstoned (soft-deleted), not removed
-	meta, err := srv.s3Store.HeadObject(context.Background(), "test-bucket", "to-delete.txt")
-	require.NoError(t, err)
-	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
+	// Verify object is gone from live path (moved to recycle bin)
+	_, err = srv.s3Store.HeadObject(context.Background(), "test-bucket", "to-delete.txt")
+	assert.ErrorIs(t, err, s3.ErrObjectNotFound)
 }
 
 func TestS3Proxy_DeleteObject_SystemBucketForbidden(t *testing.T) {
@@ -1411,22 +1411,22 @@ func TestS3GC_MethodNotAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
 
-func TestS3GC_PurgeAllTombstoned(t *testing.T) {
+func TestS3GC_PurgeAllRecycled(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 
-	// Create and tombstone objects
+	// Create objects and move them to recycle bin
 	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "a.txt", bytes.NewReader([]byte("aaa")), 3, "text/plain", nil)
 	require.NoError(t, err)
 	_, err = srv.s3Store.PutObject(context.Background(), "test-bucket", "b.txt", bytes.NewReader([]byte("bbb")), 3, "text/plain", nil)
 	require.NoError(t, err)
 
-	err = srv.s3Store.TombstoneObject(context.Background(), "test-bucket", "a.txt")
+	err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", "a.txt")
 	require.NoError(t, err)
-	err = srv.s3Store.TombstoneObject(context.Background(), "test-bucket", "b.txt")
+	err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", "b.txt")
 	require.NoError(t, err)
 
-	// Trigger GC with purge_all_tombstoned
-	body := bytes.NewReader([]byte(`{"purge_all_tombstoned": true}`))
+	// Trigger GC with purge_recycle_bin
+	body := bytes.NewReader([]byte(`{"purge_recycle_bin": true}`))
 	req := httptest.NewRequest(http.MethodPost, "/api/s3/gc", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -1438,8 +1438,8 @@ func TestS3GC_PurgeAllTombstoned(t *testing.T) {
 	err = json.NewDecoder(rec.Body).Decode(&result)
 	require.NoError(t, err)
 
-	// Should have purged both tombstoned objects
-	assert.Equal(t, float64(2), result["tombstoned_purged"])
+	// Should have purged both recycled objects
+	assert.Equal(t, float64(2), result["recycled_purged"])
 	assert.Contains(t, result, "versions_pruned")
 	assert.Contains(t, result, "chunks_deleted")
 	assert.Contains(t, result, "bytes_reclaimed")
@@ -1449,14 +1449,14 @@ func TestS3GC_PurgeAllTombstoned(t *testing.T) {
 func TestS3GC_WithoutPurgeAll(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 
-	// Create and tombstone an object (recently, so retention won't expire it)
+	// Create and delete an object (recently, so retention won't expire it)
 	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "recent.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
 	require.NoError(t, err)
-	err = srv.s3Store.TombstoneObject(context.Background(), "test-bucket", "recent.txt")
+	err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", "recent.txt")
 	require.NoError(t, err)
 
-	// Set retention to 90 days — recent tombstone should NOT be purged
-	srv.s3Store.SetTombstoneRetentionDays(90)
+	// Set retention to 90 days — recent recycled entry should NOT be purged
+	srv.s3Store.SetRecycleBinRetentionDays(90)
 
 	body := bytes.NewReader([]byte(`{}`))
 	req := httptest.NewRequest(http.MethodPost, "/api/s3/gc", body)
@@ -1470,8 +1470,8 @@ func TestS3GC_WithoutPurgeAll(t *testing.T) {
 	err = json.NewDecoder(rec.Body).Decode(&result)
 	require.NoError(t, err)
 
-	// Recent tombstone should not have been purged
-	assert.Equal(t, float64(0), result["tombstoned_purged"])
+	// Recent recycled entry should not have been purged
+	assert.Equal(t, float64(0), result["recycled_purged"])
 }
 
 func TestS3GC_EmptyBody(t *testing.T) {
@@ -1487,7 +1487,7 @@ func TestS3GC_EmptyBody(t *testing.T) {
 	var result map[string]interface{}
 	err := json.NewDecoder(rec.Body).Decode(&result)
 	require.NoError(t, err)
-	assert.Contains(t, result, "tombstoned_purged")
+	assert.Contains(t, result, "recycled_purged")
 }
 
 func TestS3GC_ConcurrentReturns429(t *testing.T) {

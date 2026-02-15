@@ -1872,11 +1872,11 @@ a.logs-container {
     background: var(--color-bg-tertiary);
 }
 
-#s3-files tbody tr.s3-tombstoned {
+#s3-files tbody tr.s3-recycled {
     opacity: 0.5;
 }
 
-#s3-files tbody tr.s3-tombstoned:hover {
+#s3-files tbody tr.s3-recycled:hover {
     opacity: 0.7;
 }
 
@@ -2108,8 +2108,8 @@ a.logs-container {
     flex-shrink: 0;
 }
 
-/* Tombstoned files have red danger styling */
-.s3-readonly-badge.s3-readonly-tombstoned {
+/* Recycled (deleted) files have red danger styling */
+.s3-readonly-badge.s3-readonly-recycled {
     border-bottom-color: var(--color-accent-red);
     color: var(--color-accent-red);
     text-shadow: 0 0 8px rgb(239 68 68 / 0.4);
@@ -2581,7 +2581,7 @@ a.logs-container {
     border-color: var(--color-accent-blue);
 }
 
-.s3-icon-item.s3-tombstoned {
+.s3-icon-item.s3-recycled {
     opacity: 0.5;
 }
 
@@ -2615,7 +2615,7 @@ a.logs-container {
     accent-color: var(--color-accent-blue);
 }
 
-/* Badge (deleted/tombstoned) */
+/* Badge (deleted/recycled) */
 .s3-icon-item .s3-badge {
     position: absolute;
     top: 0.25rem;

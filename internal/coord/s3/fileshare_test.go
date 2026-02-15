@@ -180,14 +180,13 @@ func TestFileShareManager_Delete(t *testing.T) {
 	err = mgr.Delete(context.Background(), "temp")
 	require.NoError(t, err)
 
-	// Bucket is kept (for potential restore), but objects are tombstoned
+	// Bucket should be deleted entirely (objects purged, bucket removed)
 	_, err = store.HeadBucket(context.Background(), bucketName)
-	assert.NoError(t, err, "bucket should still exist for restore capability")
+	assert.ErrorIs(t, err, ErrBucketNotFound, "bucket should be removed after share delete")
 
-	// Object should be tombstoned
-	meta, err := store.HeadObject(context.Background(), bucketName, "file.txt")
-	require.NoError(t, err)
-	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
+	// Object should be gone
+	_, err = store.HeadObject(context.Background(), bucketName, "file.txt")
+	assert.ErrorIs(t, err, ErrBucketNotFound, "object should be gone after share delete")
 
 	// Verify share is removed from list
 	shares := mgr.List()
@@ -196,7 +195,7 @@ func TestFileShareManager_Delete(t *testing.T) {
 	}
 }
 
-func TestFileShareManager_DeleteAndRecreate_RestoresContent(t *testing.T) {
+func TestFileShareManager_DeleteAndRecreate_StartsFresh(t *testing.T) {
 	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
@@ -213,31 +212,22 @@ func TestFileShareManager_DeleteAndRecreate_RestoresContent(t *testing.T) {
 	_, err = store.PutObject(context.Background(), bucketName, "readme.txt", bytes.NewReader(testData), int64(len(testData)), "text/plain", nil)
 	require.NoError(t, err)
 
-	// Delete the share (tombstones content)
+	// Delete the share (purges all content and removes bucket)
 	err = mgr.Delete(context.Background(), "docs")
 	require.NoError(t, err)
 
-	// Verify content is tombstoned
-	meta, err := store.HeadObject(context.Background(), bucketName, "readme.txt")
-	require.NoError(t, err)
-	assert.True(t, meta.IsTombstoned())
+	// Bucket should be gone
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	assert.ErrorIs(t, err, ErrBucketNotFound)
 
-	// Recreate with same name (should restore content)
+	// Recreate with same name (should start fresh, no old content)
 	_, err = mgr.Create(context.Background(), "docs", "Restored docs", "bob", 0, nil)
 	require.NoError(t, err)
 
-	// Content should be restored (untombstoned)
-	meta, err = store.HeadObject(context.Background(), bucketName, "readme.txt")
+	// Bucket should exist again but be empty
+	objects, _, _, err := store.ListObjects(context.Background(), bucketName, "", "", 0)
 	require.NoError(t, err)
-	assert.False(t, meta.IsTombstoned(), "object should be untombstoned after recreate")
-
-	// Content should still be readable
-	reader, _, err := store.GetObject(context.Background(), bucketName, "readme.txt")
-	require.NoError(t, err)
-	defer func() { _ = reader.Close() }()
-	content, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	assert.Equal(t, "important data", string(content))
+	assert.Empty(t, objects, "recreated share should start with empty bucket")
 }
 
 func TestFileShareManager_Delete_RemovesPermissions(t *testing.T) {
@@ -387,7 +377,7 @@ func TestFileShare_IsExpired(t *testing.T) {
 	assert.False(t, never.IsExpired())
 }
 
-func TestFileShareManager_TombstoneExpiredShareContents(t *testing.T) {
+func TestFileShareManager_PurgeExpiredShareContents(t *testing.T) {
 	store := newTestStoreWithCASForFileshare(t)
 
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
@@ -412,14 +402,13 @@ func TestFileShareManager_TombstoneExpiredShareContents(t *testing.T) {
 	share.ExpiresAt = time.Now().Add(-24 * time.Hour)
 	mgr.mu.Unlock()
 
-	// Run tombstoning of expired share contents
-	count := mgr.TombstoneExpiredShareContents(context.Background())
-	assert.Equal(t, 1, count, "should tombstone 1 object")
+	// Run purging of expired share contents
+	count := mgr.PurgeExpiredShareContents(context.Background())
+	assert.Equal(t, 1, count, "should purge 1 object")
 
-	// Verify object is now tombstoned
-	obj, err := store.HeadObject(context.Background(), bucketName, "file.txt")
-	require.NoError(t, err)
-	assert.True(t, obj.IsTombstoned())
+	// Verify object is now gone (purged, not tombstoned)
+	_, err = store.HeadObject(context.Background(), bucketName, "file.txt")
+	assert.ErrorIs(t, err, ErrObjectNotFound)
 }
 
 func TestFileShareManager_RecreatesMissingBucketsOnLoad(t *testing.T) {

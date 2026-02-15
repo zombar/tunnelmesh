@@ -400,7 +400,7 @@ func TestS3StoreAdapter_Get_ReadError(t *testing.T) {
 	t.Skip("Read error path difficult to test without mocking")
 }
 
-func TestS3StoreAdapter_List_SkipsTombstonedObjects(t *testing.T) {
+func TestS3StoreAdapter_List_ExcludesDeletedObjects(t *testing.T) {
 	testStore := createTestS3Store(t)
 	adapter := NewS3StoreAdapter(testStore)
 
@@ -420,20 +420,20 @@ func TestS3StoreAdapter_List_SkipsTombstonedObjects(t *testing.T) {
 		}
 	}
 
-	// Tombstone file2.txt
-	err = testStore.TombstoneObject(ctx, testBucket, "file2.txt")
+	// Delete file2.txt (moves to recycle bin)
+	err = testStore.DeleteObject(ctx, testBucket, "file2.txt")
 	if err != nil {
-		t.Fatalf("failed to tombstone object: %v", err)
+		t.Fatalf("failed to delete object: %v", err)
 	}
 
-	// List should only return non-tombstoned objects
+	// List should only return live (non-deleted) objects
 	keys, err := adapter.List(ctx, testBucket)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if len(keys) != 2 {
-		t.Errorf("expected 2 keys (tombstoned excluded), got %d: %v", len(keys), keys)
+		t.Errorf("expected 2 keys (deleted excluded), got %d: %v", len(keys), keys)
 	}
 
 	keyMap := make(map[string]bool)
@@ -442,14 +442,14 @@ func TestS3StoreAdapter_List_SkipsTombstonedObjects(t *testing.T) {
 	}
 
 	if keyMap["file2.txt"] {
-		t.Error("tombstoned object file2.txt should not appear in list")
+		t.Error("deleted object file2.txt should not appear in list")
 	}
 	if !keyMap["file1.txt"] || !keyMap["file3.txt"] {
-		t.Error("non-tombstoned objects should appear in list")
+		t.Error("live objects should appear in list")
 	}
 }
 
-func TestS3StoreAdapter_ListBuckets_SkipsTombstonedBuckets(t *testing.T) {
+func TestS3StoreAdapter_ListBuckets_ExcludesDeletedBuckets(t *testing.T) {
 	testStore := createTestS3Store(t)
 	adapter := NewS3StoreAdapter(testStore)
 
@@ -463,20 +463,20 @@ func TestS3StoreAdapter_ListBuckets_SkipsTombstonedBuckets(t *testing.T) {
 		}
 	}
 
-	// Tombstone bucket2
-	err := testStore.TombstoneBucket(ctx, "bucket2")
+	// Delete bucket2 (empty bucket, can be deleted directly)
+	err := testStore.DeleteBucket(ctx, "bucket2")
 	if err != nil {
-		t.Fatalf("failed to tombstone bucket: %v", err)
+		t.Fatalf("failed to delete bucket: %v", err)
 	}
 
-	// ListBuckets should only return non-tombstoned buckets
+	// ListBuckets should only return existing buckets
 	names, err := adapter.ListBuckets(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if len(names) != 2 {
-		t.Errorf("expected 2 buckets (tombstoned excluded), got %d: %v", len(names), names)
+		t.Errorf("expected 2 buckets (deleted excluded), got %d: %v", len(names), names)
 	}
 
 	bucketMap := make(map[string]bool)
@@ -485,10 +485,10 @@ func TestS3StoreAdapter_ListBuckets_SkipsTombstonedBuckets(t *testing.T) {
 	}
 
 	if bucketMap["bucket2"] {
-		t.Error("tombstoned bucket bucket2 should not appear in list")
+		t.Error("deleted bucket bucket2 should not appear in list")
 	}
 	if !bucketMap["bucket1"] || !bucketMap["bucket3"] {
-		t.Error("non-tombstoned buckets should appear in list")
+		t.Error("existing buckets should appear in list")
 	}
 }
 

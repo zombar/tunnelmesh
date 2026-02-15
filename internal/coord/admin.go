@@ -1785,9 +1785,9 @@ type S3ObjectInfo struct {
 	Key          string `json:"key"`
 	Size         int64  `json:"size"`
 	LastModified string `json:"last_modified"`
-	Owner        string `json:"owner,omitempty"`         // Owner peer name (derived from bucket owner)
-	Expires      string `json:"expires,omitempty"`       // Optional expiration date
-	TombstonedAt string `json:"tombstoned_at,omitempty"` // When the object was deleted (tombstoned)
+	Owner        string `json:"owner,omitempty"`      // Owner peer name (derived from bucket owner)
+	Expires      string `json:"expires,omitempty"`    // Optional expiration date
+	DeletedAt    string `json:"deleted_at,omitempty"` // When the object was deleted (recycled)
 	ContentType  string `json:"content_type,omitempty"`
 	IsPrefix     bool   `json:"is_prefix,omitempty"` // True for "folder" prefixes
 }
@@ -1879,7 +1879,7 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 	defer s.gcMu.Unlock()
 
 	var req struct {
-		PurgeAllTombstoned bool `json:"purge_all_tombstoned"`
+		PurgeRecycleBin bool `json:"purge_recycle_bin"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -1887,12 +1887,12 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 
 	gcStart := time.Now()
 
-	// Phase 1: Purge tombstoned objects
-	var tombstonedPurged int
-	if req.PurgeAllTombstoned {
-		tombstonedPurged = s.s3Store.PurgeAllTombstonedObjects(r.Context())
+	// Phase 1: Purge recycled objects
+	var recycledPurged int
+	if req.PurgeRecycleBin {
+		recycledPurged = s.s3Store.PurgeAllRecycled(r.Context())
 	} else {
-		tombstonedPurged = s.s3Store.PurgeTombstonedObjects(r.Context())
+		recycledPurged = s.s3Store.PurgeRecycleBin(r.Context())
 	}
 
 	// Phase 2: Run full GC (version pruning + orphan chunk cleanup)
@@ -1908,7 +1908,7 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 	s.updateS3Metrics()
 
 	log.Info().
-		Int("tombstoned_purged", tombstonedPurged).
+		Int("recycled_purged", recycledPurged).
 		Int("versions_pruned", gcStats.VersionsPruned).
 		Int("chunks_deleted", gcStats.ChunksDeleted).
 		Int64("bytes_reclaimed", gcStats.BytesReclaimed).
@@ -1917,11 +1917,11 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]interface{}{
-		"tombstoned_purged": tombstonedPurged,
-		"versions_pruned":   gcStats.VersionsPruned,
-		"chunks_deleted":    gcStats.ChunksDeleted,
-		"bytes_reclaimed":   gcStats.BytesReclaimed,
-		"duration_seconds":  gcDuration,
+		"recycled_purged":  recycledPurged,
+		"versions_pruned":  gcStats.VersionsPruned,
+		"chunks_deleted":   gcStats.ChunksDeleted,
+		"bytes_reclaimed":  gcStats.BytesReclaimed,
+		"duration_seconds": gcDuration,
 	}); err != nil {
 		log.Error().Err(err).Msg("failed to encode GC stats response")
 	}
@@ -1970,6 +1970,12 @@ func (s *Server) handleS3Proxy(w http.ResponseWriter, r *http.Request) {
 			// List objects in bucket
 			s.withS3AdminMetrics(w, "listObjects", func(w http.ResponseWriter) {
 				s.handleS3ListObjects(w, r, bucket)
+			})
+			return
+		}
+		if parts[1] == "recyclebin" {
+			s.withS3AdminMetrics(w, "listRecycledObjects", func(w http.ResponseWriter) {
+				s.handleS3ListRecycledObjects(w, r, bucket)
 			})
 			return
 		}
@@ -2343,9 +2349,6 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 		if obj.Expires != nil {
 			info.Expires = obj.Expires.Format(time.RFC3339)
 		}
-		if obj.TombstonedAt != nil {
-			info.TombstonedAt = obj.TombstonedAt.Format(time.RFC3339)
-		}
 		result = append(result, info)
 	}
 
@@ -2487,12 +2490,6 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	// Check bucket write permission (could be extended to full RBAC)
 	if bucket == auth.SystemBucket {
 		s.jsonError(w, "bucket is read-only", http.StatusForbidden)
-		return
-	}
-
-	// Check if object is tombstoned (read-only)
-	if existingMeta, err := s.s3Store.HeadObject(r.Context(), bucket, key); err == nil && existingMeta.IsTombstoned() {
-		s.jsonError(w, "object is deleted and read-only", http.StatusForbidden)
 		return
 	}
 
@@ -2802,7 +2799,7 @@ func (s *Server) handleS3RestoreVersion(w http.ResponseWriter, r *http.Request, 
 	})
 }
 
-// handleS3UndeleteObject restores a tombstoned (deleted) object.
+// handleS3UndeleteObject restores a recycled (deleted) object from the recycle bin.
 func (s *Server) handleS3UndeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	if r.Method != http.MethodPost {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -2815,13 +2812,13 @@ func (s *Server) handleS3UndeleteObject(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Untombstone the object
-	if err := s.s3Store.UntombstoneObject(r.Context(), bucket, key); err != nil {
+	// Restore from recycle bin
+	if err := s.s3Store.RestoreRecycledObject(r.Context(), bucket, key); err != nil {
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)
 		case errors.Is(err, s3.ErrObjectNotFound):
-			s.jsonError(w, "object not found", http.StatusNotFound)
+			s.jsonError(w, "object not found in recycle bin", http.StatusNotFound)
 		case errors.Is(err, s3.ErrAccessDenied):
 			s.jsonError(w, "access denied", http.StatusForbidden)
 		default:
@@ -2834,6 +2831,40 @@ func (s *Server) handleS3UndeleteObject(w http.ResponseWriter, r *http.Request, 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "restored",
 	})
+}
+
+// handleS3ListRecycledObjects returns recycled entries for a bucket.
+func (s *Server) handleS3ListRecycledObjects(w http.ResponseWriter, r *http.Request, bucket string) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	entries, err := s.s3Store.ListRecycledObjects(r.Context(), bucket)
+	if err != nil {
+		if errors.Is(err, s3.ErrBucketNotFound) {
+			s.jsonError(w, "bucket not found", http.StatusNotFound)
+		} else {
+			s.jsonError(w, "failed to list recycled objects: "+err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Convert to S3ObjectInfo for consistent API response format
+	result := make([]S3ObjectInfo, 0, len(entries))
+	for _, entry := range entries {
+		info := S3ObjectInfo{
+			Key:          entry.OriginalKey,
+			Size:         entry.Meta.Size,
+			LastModified: entry.Meta.LastModified.Format(time.RFC3339),
+			ContentType:  entry.Meta.ContentType,
+			DeletedAt:    entry.DeletedAt.Format(time.RFC3339),
+		}
+		result = append(result, info)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // --- Panel Management API ---

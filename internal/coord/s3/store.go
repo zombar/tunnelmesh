@@ -62,15 +62,9 @@ type BucketMeta struct {
 	Name              string               `json:"name"`
 	CreatedAt         time.Time            `json:"created_at"`
 	Owner             string               `json:"owner"`                    // User ID who created the bucket
-	TombstonedAt      *time.Time           `json:"tombstoned_at,omitempty"`  // When bucket was soft-deleted
-	SizeBytes         int64                `json:"size_bytes"`               // Total size of non-tombstoned objects (updated incrementally)
+	SizeBytes         int64                `json:"size_bytes"`               // Total size of live objects (updated incrementally)
 	ReplicationFactor int                  `json:"replication_factor"`       // Number of replicas (1-3)
 	ErasureCoding     *ErasureCodingPolicy `json:"erasure_coding,omitempty"` // Erasure coding policy for new objects
-}
-
-// IsTombstoned returns true if the bucket has been soft-deleted.
-func (bm *BucketMeta) IsTombstoned() bool {
-	return bm.TombstonedAt != nil
 }
 
 // BucketMetadataUpdate contains mutable bucket metadata fields (admin-only).
@@ -112,7 +106,6 @@ type ObjectMeta struct {
 	ETag          string                    `json:"etag"` // MD5 hash of content
 	LastModified  time.Time                 `json:"last_modified"`
 	Expires       *time.Time                `json:"expires,omitempty"`        // Optional expiration date
-	TombstonedAt  *time.Time                `json:"tombstoned_at,omitempty"`  // When object was soft-deleted
 	Metadata      map[string]string         `json:"metadata,omitempty"`       // User-defined metadata
 	VersionID     string                    `json:"version_id,omitempty"`     // Version identifier
 	Chunks        []string                  `json:"chunks,omitempty"`         // Ordered list of chunk hashes (CAS)
@@ -130,9 +123,12 @@ type VersionInfo struct {
 	IsCurrent    bool      `json:"is_current"`
 }
 
-// IsTombstoned returns true if the object has been soft-deleted.
-func (m *ObjectMeta) IsTombstoned() bool {
-	return m.TombstonedAt != nil
+// RecycledEntry represents a deleted object in the recycle bin.
+type RecycledEntry struct {
+	ID          string     `json:"id"`           // UUID filename (without .json)
+	OriginalKey string     `json:"original_key"` // Object key before deletion
+	DeletedAt   time.Time  `json:"deleted_at"`   // When the object was deleted
+	Meta        ObjectMeta `json:"meta"`         // Full object metadata snapshot
 }
 
 // Store provides S3 storage with content-addressable chunks and versioning.
@@ -197,7 +193,7 @@ type Store struct {
 	logger                  zerolog.Logger         // Structured logger
 	defaultObjectExpiryDays int                    // Days until objects expire (0 = never)
 	defaultShareExpiryDays  int                    // Days until file shares expire (0 = never)
-	tombstoneRetentionDays  int                    // Days to retain tombstoned objects before purging (0 = never purge)
+	recyclebinRetentionDays int                    // Days to retain recycled objects before purging (0 = never purge)
 	versionRetentionDays    int                    // Days to retain object versions (0 = forever)
 	maxVersionsPerObject    int                    // Max versions to keep per object (0 = unlimited)
 	versionRetentionPolicy  VersionRetentionPolicy
@@ -594,16 +590,19 @@ func (s *Store) DeleteBucket(ctx context.Context, bucket string) error {
 		return ErrBucketNotFound
 	}
 
-	// Check if bucket has any live (non-tombstoned) objects.
-	// Tombstoned objects don't block deletion — they'll be removed with the bucket directory.
+	// Check if bucket has any live objects
 	objects, _, _, err := s.listObjectsUnsafe(bucket, "", "", 0)
 	if err != nil {
 		return err
 	}
-	for _, obj := range objects {
-		if !obj.IsTombstoned() {
-			return ErrBucketNotEmpty
-		}
+	if len(objects) > 0 {
+		return ErrBucketNotEmpty
+	}
+
+	// Check if bucket has recycle bin entries
+	recyclebinDir := filepath.Join(s.bucketPath(bucket), "recyclebin")
+	if entries, err := os.ReadDir(recyclebinDir); err == nil && len(entries) > 0 {
+		return fmt.Errorf("bucket has %d recycled objects: %w", len(entries), ErrBucketNotEmpty)
 	}
 
 	// Remove bucket directory.
@@ -626,46 +625,59 @@ func (s *Store) DeleteBucket(ctx context.Context, bucket string) error {
 	return fmt.Errorf("remove bucket: %w", removeErr)
 }
 
-// TombstoneBucket marks a bucket as soft-deleted.
-// All objects in a tombstoned bucket are treated as tombstoned.
-func (s *Store) TombstoneBucket(ctx context.Context, bucket string) error {
+// ForceDeleteBucket removes a bucket and all its contents without per-object purge.
+// This is used for file share deletion where orphaned chunk cleanup can be deferred
+// to the next GC cycle. Much faster than purging each object individually.
+func (s *Store) ForceDeleteBucket(ctx context.Context, bucket string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	meta, err := s.getBucketMeta(bucket)
-	if err != nil {
-		return err
+	bucketDir := s.bucketPath(bucket)
+
+	// Check if bucket exists
+	if _, err := os.Stat(bucketDir); os.IsNotExist(err) {
+		return nil // Idempotent
 	}
 
-	// Already tombstoned
-	if meta.IsTombstoned() {
+	// Decrement stats for all objects being removed
+	metaDir := filepath.Join(bucketDir, "meta")
+	_ = filepath.Walk(metaDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		var meta ObjectMeta
+		if json.Unmarshal(data, &meta) == nil {
+			s.statsObjectCount.Add(-1)
+			if meta.Size > 0 {
+				s.statsLogicalBytes.Add(-meta.Size)
+			}
+			if s.quota != nil {
+				s.quota.Release(bucket, meta.Size)
+			}
+		}
 		return nil
+	})
+
+	// Remove the entire bucket directory
+	var removeErr error
+	retries := 1
+	if runtime.GOOS == "windows" {
+		retries = windowsFileRetries
 	}
-
-	now := time.Now().UTC()
-	meta.TombstonedAt = &now
-
-	return s.writeBucketMeta(bucket, meta)
-}
-
-// UntombstoneBucket restores a tombstoned bucket.
-func (s *Store) UntombstoneBucket(ctx context.Context, bucket string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	meta, err := s.getBucketMeta(bucket)
-	if err != nil {
-		return err
+	for i := 0; i < retries; i++ {
+		removeErr = os.RemoveAll(bucketDir)
+		if removeErr == nil {
+			return nil
+		}
+		if i < retries-1 {
+			time.Sleep(windowsFileRetryDelay)
+		}
 	}
-
-	// Not tombstoned
-	if !meta.IsTombstoned() {
-		return nil
-	}
-
-	meta.TombstonedAt = nil
-
-	return s.writeBucketMeta(bucket, meta)
+	return fmt.Errorf("remove bucket: %w", removeErr)
 }
 
 // writeBucketMeta writes bucket metadata (caller must hold lock).
@@ -746,8 +758,7 @@ func (s *Store) ListBuckets(ctx context.Context) ([]BucketMeta, error) {
 	return buckets, nil
 }
 
-// CalculateBucketSize calculates the total size of all objects in a bucket (including tombstoned).
-// Tombstoned objects still consume disk space until purged, so they count toward size.
+// CalculateBucketSize calculates the total size of all live objects in a bucket.
 // Returns the total size in bytes, or 0 if the bucket doesn't exist or is empty.
 func (s *Store) CalculateBucketSize(ctx context.Context, bucketName string) (int64, error) {
 	s.mu.RLock()
@@ -766,7 +777,7 @@ func (s *Store) CalculateBucketSize(ctx context.Context, bucketName string) (int
 	return bucketMeta.SizeBytes, nil
 }
 
-// CalculatePrefixSize calculates the total size of all objects under a prefix (including tombstoned).
+// CalculatePrefixSize calculates the total size of all objects under a prefix.
 // This is used for displaying folder sizes in the S3 explorer.
 // Returns the total size in bytes.
 func (s *Store) CalculatePrefixSize(ctx context.Context, bucketName, prefix string) (int64, error) {
@@ -795,7 +806,7 @@ func (s *Store) CalculatePrefixSize(ctx context.Context, bucketName, prefix stri
 			return 0, fmt.Errorf("list objects: %w", err)
 		}
 
-		// Sum sizes of ALL objects (including tombstoned - they still consume disk space)
+		// Sum sizes of all live objects
 		for _, obj := range objects {
 			totalSize += obj.Size
 		}
@@ -1786,23 +1797,12 @@ func (s *Store) HeadObject(ctx context.Context, bucket, key string) (*ObjectMeta
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Check bucket exists and get tombstone state
-	bucketMeta, err := s.getBucketMeta(bucket)
-	if err != nil {
+	// Check bucket exists
+	if _, err := s.getBucketMeta(bucket); err != nil {
 		return nil, err
 	}
 
-	objMeta, err := s.getObjectMeta(bucket, key)
-	if err != nil {
-		return nil, err
-	}
-
-	// If bucket is tombstoned, mark object as tombstoned (virtually)
-	if bucketMeta.IsTombstoned() && objMeta.TombstonedAt == nil {
-		objMeta.TombstonedAt = bucketMeta.TombstonedAt
-	}
-
-	return objMeta, nil
+	return s.getObjectMeta(bucket, key)
 }
 
 // getObjectMeta reads object metadata (caller must hold lock).
@@ -1825,11 +1825,9 @@ func (s *Store) getObjectMeta(bucket, key string) (*ObjectMeta, error) {
 	return &meta, nil
 }
 
-// DeleteObject soft-deletes an object by tombstoning it.
-// Tombstoned objects are read-only and will be purged after the retention period.
-// DeleteObject soft-deletes (tombstones) an object on first call.
-// If the object is already tombstoned, it permanently purges it.
-// This allows "delete twice to permanently remove" UX pattern.
+// DeleteObject moves an object to the recycle bin.
+// The object is removed from the live path but its metadata is preserved in
+// recyclebin/{uuid}.json for recovery. Chunks and versions remain intact.
 func (s *Store) DeleteObject(ctx context.Context, bucket, key string) error {
 	// Validate names (defense in depth)
 	if err := validateName(bucket); err != nil {
@@ -1839,29 +1837,18 @@ func (s *Store) DeleteObject(ctx context.Context, bucket, key string) error {
 		return fmt.Errorf("invalid key: %w", err)
 	}
 
-	// Check if object or bucket is already tombstoned
-	bucketMeta, err := s.HeadBucket(ctx, bucket)
-	if err != nil {
-		return err
-	}
-
-	objMeta, err := s.HeadObject(ctx, bucket, key)
-	if err != nil {
-		return err
-	}
-
-	// If already tombstoned (object or bucket level), purge permanently
-	if objMeta.IsTombstoned() || bucketMeta.IsTombstoned() {
-		return s.PurgeObject(ctx, bucket, key)
-	}
-
-	// First delete: tombstone
-	return s.TombstoneObject(ctx, bucket, key)
+	return s.RecycleObject(ctx, bucket, key)
 }
 
-// TombstoneObject marks an object as tombstoned (soft-deleted).
-// The object data is preserved but marked for cleanup after the retention period.
-func (s *Store) TombstoneObject(ctx context.Context, bucket, key string) error {
+// recyclebinPath returns the path to a bucket's recycle bin directory.
+func (s *Store) recyclebinPath(bucket string) string {
+	return filepath.Join(s.bucketPath(bucket), "recyclebin")
+}
+
+// RecycleObject moves an object from the live path into the recycle bin.
+// The metadata is preserved in recyclebin/{uuid}.json for recovery.
+// Chunks and versions remain intact. Bucket SizeBytes and quota are updated.
+func (s *Store) RecycleObject(ctx context.Context, bucket, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1876,31 +1863,68 @@ func (s *Store) TombstoneObject(ctx context.Context, bucket, key string) error {
 		return err
 	}
 
-	// Already tombstoned
-	if meta.IsTombstoned() {
-		return nil
+	// Create recycle bin directory
+	rbDir := s.recyclebinPath(bucket)
+	if err := os.MkdirAll(rbDir, 0755); err != nil {
+		return fmt.Errorf("create recyclebin dir: %w", err)
 	}
 
-	// Set tombstone timestamp
-	now := time.Now().UTC()
-	meta.TombstonedAt = &now
+	// Generate UUID for recycle bin entry
+	var uuidBytes [16]byte
+	if _, err := cryptorand.Read(uuidBytes[:]); err != nil {
+		return fmt.Errorf("generate recyclebin UUID: %w", err)
+	}
+	entryID := hex.EncodeToString(uuidBytes[:])
 
-	// Write updated metadata
-	metaPath := s.objectMetaPath(bucket, key)
-	metaData, err := json.MarshalIndent(meta, "", "  ")
+	// Create recycled entry
+	entry := RecycledEntry{
+		ID:          entryID,
+		OriginalKey: key,
+		DeletedAt:   time.Now().UTC(),
+		Meta:        *meta,
+	}
+
+	// Write recycle bin entry
+	entryData, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal object meta: %w", err)
+		return fmt.Errorf("marshal recycled entry: %w", err)
 	}
 
-	if err := syncedWriteFile(metaPath, metaData, 0644); err != nil {
-		return fmt.Errorf("write object meta: %w", err)
+	entryPath := filepath.Join(rbDir, entryID+".json")
+	if err := syncedWriteFile(entryPath, entryData, 0644); err != nil {
+		return fmt.Errorf("write recycled entry: %w", err)
+	}
+
+	// Remove object from live path
+	metaPath := s.objectMetaPath(bucket, key)
+	if err := os.Remove(metaPath); err != nil && !os.IsNotExist(err) {
+		// Best-effort: remove the recycle bin entry since we failed to remove the live object
+		_ = os.Remove(entryPath)
+		return fmt.Errorf("remove live object meta: %w", err)
+	}
+
+	// Update bucket size
+	if meta.Size > 0 {
+		_ = s.updateBucketSize(bucket, -meta.Size)
+	}
+
+	// Release quota
+	if s.quota != nil && meta.Size > 0 {
+		s.quota.Release(bucket, meta.Size)
+	}
+
+	// Update stats
+	s.statsObjectCount.Add(-1)
+	if meta.Size > 0 {
+		s.statsLogicalBytes.Add(-meta.Size)
 	}
 
 	return nil
 }
 
-// UntombstoneObject restores a tombstoned object, making it accessible again.
-func (s *Store) UntombstoneObject(ctx context.Context, bucket, key string) error {
+// RestoreRecycledObject restores the most recent recycled entry for a key back to the live path.
+// Returns an error if a live object with that key already exists.
+func (s *Store) RestoreRecycledObject(ctx context.Context, bucket, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1909,32 +1933,126 @@ func (s *Store) UntombstoneObject(ctx context.Context, bucket, key string) error
 		return err
 	}
 
-	// Get object metadata
-	meta, err := s.getObjectMeta(bucket, key)
+	// Check if a live object with this key already exists
+	if _, err := s.getObjectMeta(bucket, key); err == nil {
+		return fmt.Errorf("cannot restore: live object %q already exists in bucket %q", key, bucket)
+	}
+
+	// Find the most recent recycled entry for this key
+	rbDir := s.recyclebinPath(bucket)
+	entries, err := os.ReadDir(rbDir)
 	if err != nil {
-		return err
+		return ErrObjectNotFound
 	}
 
-	// Not tombstoned
-	if !meta.IsTombstoned() {
-		return nil
+	var bestEntry *RecycledEntry
+	var bestPath string
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(rbDir, e.Name()))
+		if err != nil {
+			continue
+		}
+
+		var entry RecycledEntry
+		if err := json.Unmarshal(data, &entry); err != nil {
+			continue
+		}
+
+		if entry.OriginalKey != key {
+			continue
+		}
+
+		if bestEntry == nil || entry.DeletedAt.After(bestEntry.DeletedAt) {
+			entryCopy := entry
+			bestEntry = &entryCopy
+			bestPath = filepath.Join(rbDir, e.Name())
+		}
 	}
 
-	// Clear tombstone timestamp
-	meta.TombstonedAt = nil
+	if bestEntry == nil {
+		return ErrObjectNotFound
+	}
 
-	// Write updated metadata
+	// Restore metadata to live path
 	metaPath := s.objectMetaPath(bucket, key)
-	metaData, err := json.MarshalIndent(meta, "", "  ")
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0755); err != nil {
+		return fmt.Errorf("create meta dir: %w", err)
+	}
+
+	metaData, err := json.MarshalIndent(bestEntry.Meta, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal object meta: %w", err)
+		return fmt.Errorf("marshal restored meta: %w", err)
 	}
 
 	if err := syncedWriteFile(metaPath, metaData, 0644); err != nil {
-		return fmt.Errorf("write object meta: %w", err)
+		return fmt.Errorf("write restored meta: %w", err)
+	}
+
+	// Remove recycle bin entry
+	_ = os.Remove(bestPath)
+
+	// Update bucket size
+	if bestEntry.Meta.Size > 0 {
+		_ = s.updateBucketSize(bucket, bestEntry.Meta.Size)
+	}
+
+	// Restore quota
+	if s.quota != nil && bestEntry.Meta.Size > 0 {
+		s.quota.Allocate(bucket, bestEntry.Meta.Size)
+	}
+
+	// Update stats
+	s.statsObjectCount.Add(1)
+	if bestEntry.Meta.Size > 0 {
+		s.statsLogicalBytes.Add(bestEntry.Meta.Size)
 	}
 
 	return nil
+}
+
+// ListRecycledObjects returns all recycled entries for a bucket.
+func (s *Store) ListRecycledObjects(ctx context.Context, bucket string) ([]RecycledEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Check bucket exists
+	if _, err := s.getBucketMeta(bucket); err != nil {
+		return nil, err
+	}
+
+	rbDir := s.recyclebinPath(bucket)
+	entries, err := os.ReadDir(rbDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read recyclebin dir: %w", err)
+	}
+
+	var result []RecycledEntry
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(rbDir, e.Name()))
+		if err != nil {
+			continue
+		}
+
+		var entry RecycledEntry
+		if err := json.Unmarshal(data, &entry); err != nil {
+			continue
+		}
+
+		result = append(result, entry)
+	}
+
+	return result, nil
 }
 
 // PurgeObject permanently removes an object and all its versions from a bucket.
@@ -2019,25 +2137,26 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 	return nil
 }
 
-// SetTombstoneRetentionDays sets the number of days to retain tombstoned objects before purging.
-func (s *Store) SetTombstoneRetentionDays(days int) {
+// SetRecycleBinRetentionDays sets the number of days to retain recycled objects before purging.
+func (s *Store) SetRecycleBinRetentionDays(days int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.tombstoneRetentionDays = days
+	s.recyclebinRetentionDays = days
 }
 
-// TombstoneRetentionDays returns the configured tombstone retention period in days.
-func (s *Store) TombstoneRetentionDays() int {
+// RecycleBinRetentionDays returns the configured recycle bin retention period in days.
+func (s *Store) RecycleBinRetentionDays() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.tombstoneRetentionDays
+	return s.recyclebinRetentionDays
 }
 
-// PurgeTombstonedObjects removes all tombstoned objects older than the retention period.
-// Returns the number of objects purged.
-func (s *Store) PurgeTombstonedObjects(ctx context.Context) int {
+// PurgeRecycleBin removes all recycled objects older than the retention period.
+// For each: delete recyclebin entry, delete versions, delete unreferenced chunks.
+// Returns the number of entries purged.
+func (s *Store) PurgeRecycleBin(ctx context.Context) int {
 	s.mu.RLock()
-	retentionDays := s.tombstoneRetentionDays
+	retentionDays := s.recyclebinRetentionDays
 	s.mu.RUnlock()
 
 	if retentionDays <= 0 {
@@ -2045,58 +2164,64 @@ func (s *Store) PurgeTombstonedObjects(ctx context.Context) int {
 	}
 
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
-	purgedCount := 0
-
-	// List all buckets
-	buckets, err := s.ListBuckets(ctx)
-	if err != nil {
-		return 0
-	}
-
-	for _, bucket := range buckets {
-		// Check for cancellation
-		select {
-		case <-ctx.Done():
-			return purgedCount // Early exit on cancellation
-		default:
-		}
-
-		// Paginate through all objects in the bucket
-		marker := ""
-		for {
-			// Check for cancellation in pagination loop
-			select {
-			case <-ctx.Done():
-				return purgedCount // Early exit on cancellation
-			default:
-			}
-
-			objects, isTruncated, nextMarker, err := s.ListObjects(ctx, bucket.Name, "", marker, 1000)
-			if err != nil {
-				break
-			}
-
-			for _, obj := range objects {
-				if obj.IsTombstoned() && obj.TombstonedAt.Before(cutoff) {
-					if err := s.PurgeObject(ctx, bucket.Name, obj.Key); err == nil {
-						purgedCount++
-					}
-				}
-			}
-
-			if !isTruncated {
-				break
-			}
-			marker = nextMarker
-		}
-	}
-
-	return purgedCount
+	return s.purgeRecycledEntries(ctx, &cutoff)
 }
 
-// PurgeAllTombstonedObjects removes all tombstoned objects regardless of retention period.
-// Returns the number of objects purged.
-func (s *Store) PurgeAllTombstonedObjects(ctx context.Context) int {
+// PurgeAllRecycled removes all recycled objects regardless of retention period.
+// Returns the number of entries purged.
+func (s *Store) PurgeAllRecycled(ctx context.Context) int {
+	return s.purgeRecycledEntries(ctx, nil)
+}
+
+// PurgeAllRecycledInBucket removes all recycle bin entries for a specific bucket.
+// Used when hard-deleting a file share bucket.
+func (s *Store) PurgeAllRecycledInBucket(ctx context.Context, bucket string) error {
+	rbDir := filepath.Join(s.dataDir, "buckets", bucket, "recyclebin")
+	entries, err := os.ReadDir(rbDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read recyclebin: %w", err)
+	}
+
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+
+		entryPath := filepath.Join(rbDir, e.Name())
+		data, err := os.ReadFile(entryPath)
+		if err != nil {
+			continue
+		}
+
+		var entry RecycledEntry
+		if err := json.Unmarshal(data, &entry); err != nil {
+			continue
+		}
+
+		// Collect chunks for cleanup
+		chunksToCheck := make([]string, len(entry.Meta.Chunks))
+		copy(chunksToCheck, entry.Meta.Chunks)
+
+		// Delete version files
+		versionDir := filepath.Join(s.dataDir, "buckets", bucket, "versions", entry.OriginalKey)
+		_ = os.RemoveAll(versionDir)
+
+		// Remove the entry
+		_ = os.Remove(entryPath)
+
+		// Clean up unreferenced chunks
+		s.DeleteUnreferencedChunks(ctx, chunksToCheck)
+	}
+
+	return nil
+}
+
+// purgeRecycledEntries scans all buckets' recyclebin dirs and purges entries.
+// If cutoff is non-nil, only entries older than cutoff are purged.
+func (s *Store) purgeRecycledEntries(ctx context.Context, cutoff *time.Time) int {
 	purgedCount := 0
 
 	buckets, err := s.ListBuckets(ctx)
@@ -2111,31 +2236,56 @@ func (s *Store) PurgeAllTombstonedObjects(ctx context.Context) int {
 		default:
 		}
 
-		marker := ""
-		for {
+		rbDir := filepath.Join(s.dataDir, "buckets", bucket.Name, "recyclebin")
+		entries, err := os.ReadDir(rbDir)
+		if err != nil {
+			continue
+		}
+
+		for _, e := range entries {
 			select {
 			case <-ctx.Done():
 				return purgedCount
 			default:
 			}
 
-			objects, isTruncated, nextMarker, err := s.ListObjects(ctx, bucket.Name, "", marker, 1000)
+			if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+				continue
+			}
+
+			entryPath := filepath.Join(rbDir, e.Name())
+			data, err := os.ReadFile(entryPath)
 			if err != nil {
-				break
+				continue
 			}
 
-			for _, obj := range objects {
-				if obj.IsTombstoned() {
-					if err := s.PurgeObject(ctx, bucket.Name, obj.Key); err == nil {
-						purgedCount++
-					}
-				}
+			var entry RecycledEntry
+			if err := json.Unmarshal(data, &entry); err != nil {
+				continue
 			}
 
-			if !isTruncated {
-				break
+			// Check retention cutoff
+			if cutoff != nil && !entry.DeletedAt.Before(*cutoff) {
+				continue
 			}
-			marker = nextMarker
+
+			// Collect chunks to check for cleanup
+			chunksToCheck := make([]string, len(entry.Meta.Chunks))
+			copy(chunksToCheck, entry.Meta.Chunks)
+
+			// Delete version files for this key
+			versionDir := filepath.Join(s.dataDir, "buckets", bucket.Name, "versions", entry.OriginalKey)
+			_ = os.RemoveAll(versionDir)
+
+			// Remove the recyclebin entry
+			if err := os.Remove(entryPath); err != nil {
+				continue
+			}
+
+			purgedCount++
+
+			// Clean up unreferenced chunks (outside any lock concern since PurgeObject does the same)
+			s.DeleteUnreferencedChunks(ctx, chunksToCheck)
 		}
 	}
 
@@ -2377,27 +2527,12 @@ func (s *Store) ListObjects(ctx context.Context, bucket, prefix, marker string, 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Check bucket exists and get tombstone state
-	bucketMeta, err := s.getBucketMeta(bucket)
-	if err != nil {
+	// Check bucket exists
+	if _, err := s.getBucketMeta(bucket); err != nil {
 		return nil, false, "", err
 	}
 
-	objects, isTruncated, nextMarker, err := s.listObjectsUnsafe(bucket, prefix, marker, maxKeys)
-	if err != nil {
-		return nil, false, "", err
-	}
-
-	// If bucket is tombstoned, mark all objects as tombstoned (virtually)
-	if bucketMeta.IsTombstoned() {
-		for i := range objects {
-			if objects[i].TombstonedAt == nil {
-				objects[i].TombstonedAt = bucketMeta.TombstonedAt
-			}
-		}
-	}
-
-	return objects, isTruncated, nextMarker, nil
+	return s.listObjectsUnsafe(bucket, prefix, marker, maxKeys)
 }
 
 // listObjectsUnsafe lists objects without lock (caller must hold lock).
@@ -2786,69 +2921,70 @@ func (s *Store) isChunkReferencedGlobally(ctx context.Context, hash string) bool
 			continue
 		}
 		bucket := bucketEntry.Name()
+		bucketDir := filepath.Join(bucketsDir, bucket)
 
-		// Check all current objects in this bucket (walk to include subdirectories)
-		metaDir := filepath.Join(bucketsDir, bucket, "meta")
-		found := false
-		parseError := false
-		_ = filepath.Walk(metaDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
-				return nil
-			}
-			data, readErr := os.ReadFile(path)
-			if readErr != nil {
-				parseError = true
-				return filepath.SkipAll
-			}
-			var meta ObjectMeta
-			if unmarshalErr := json.Unmarshal(data, &meta); unmarshalErr != nil {
-				parseError = true
-				return filepath.SkipAll
-			}
-			for _, h := range meta.Chunks {
-				if h == hash {
-					found = true
-					return filepath.SkipAll
-				}
-			}
-			return nil
-		})
-		if found || parseError {
+		// Check live objects, versions, and recycle bin entries
+		if dirContainsChunkRef(filepath.Join(bucketDir, "meta"), hash, extractChunksFromObjectMeta) {
 			return true
 		}
-
-		// Check all versions directory
-		versionsDir := filepath.Join(bucketsDir, bucket, "versions")
-		found = false
-		parseError = false
-		_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
-				return nil
-			}
-			data, readErr := os.ReadFile(path)
-			if readErr != nil {
-				parseError = true
-				return filepath.SkipAll
-			}
-			var meta ObjectMeta
-			if unmarshalErr := json.Unmarshal(data, &meta); unmarshalErr != nil {
-				parseError = true
-				return filepath.SkipAll
-			}
-			for _, h := range meta.Chunks {
-				if h == hash {
-					found = true
-					return filepath.SkipAll
-				}
-			}
-			return nil
-		})
-		if found || parseError {
-			return true // Found or error - assume referenced
+		if dirContainsChunkRef(filepath.Join(bucketDir, "versions"), hash, extractChunksFromObjectMeta) {
+			return true
+		}
+		if dirContainsChunkRef(filepath.Join(bucketDir, "recyclebin"), hash, extractChunksFromRecycledEntry) {
+			return true
 		}
 	}
 
 	return false
+}
+
+// dirContainsChunkRef walks a directory and checks if any JSON file references the given chunk hash.
+// extractChunks parses a JSON file and returns chunk hashes it references.
+// Returns true if found or on parse error (fail-safe: assume referenced).
+func dirContainsChunkRef(dir, hash string, extractChunks func([]byte) ([]string, error)) bool {
+	found := false
+	parseError := false
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			parseError = true
+			return filepath.SkipAll
+		}
+		chunks, extractErr := extractChunks(data)
+		if extractErr != nil {
+			parseError = true
+			return filepath.SkipAll
+		}
+		for _, h := range chunks {
+			if h == hash {
+				found = true
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+	return found || parseError
+}
+
+// extractChunksFromObjectMeta parses ObjectMeta JSON and returns its chunk hashes.
+func extractChunksFromObjectMeta(data []byte) ([]string, error) {
+	var meta ObjectMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, err
+	}
+	return meta.Chunks, nil
+}
+
+// extractChunksFromRecycledEntry parses RecycledEntry JSON and returns its chunk hashes.
+func extractChunksFromRecycledEntry(data []byte) ([]string, error) {
+	var entry RecycledEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return nil, err
+	}
+	return entry.Meta.Chunks, nil
 }
 
 // CASStats holds statistics about content-addressed storage.
@@ -3088,6 +3224,27 @@ func (s *Store) buildChunkReferenceSet(ctx context.Context) map[string]struct{} 
 			var meta ObjectMeta
 			if json.Unmarshal(data, &meta) == nil {
 				for _, h := range meta.Chunks {
+					referencedChunks[h] = struct{}{}
+				}
+			}
+			return nil
+		})
+
+		// Scan recycle bin entries
+		recyclebinDir := filepath.Join(bucketsDir, bucket, "recyclebin")
+		_ = filepath.Walk(recyclebinDir, func(path string, info os.FileInfo, err error) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
+			}
+			data, _ := os.ReadFile(path)
+			var entry RecycledEntry
+			if json.Unmarshal(data, &entry) == nil {
+				for _, h := range entry.Meta.Chunks {
 					referencedChunks[h] = struct{}{}
 				}
 			}

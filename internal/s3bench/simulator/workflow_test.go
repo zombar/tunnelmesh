@@ -412,7 +412,7 @@ func TestWorkflowGenerator_ValidationChecks(t *testing.T) {
 			requiredChecks: []string{
 				"document_uploaded",
 				"document_deleted",
-				"tombstone_created",
+				"recycled",
 			},
 		},
 		{

@@ -530,7 +530,7 @@ func cleanupMeshShares(ctx context.Context, client *mesh.CoordinatorClient, st s
 	}
 
 	log.Info().
-		Int("tombstoned_purged", gcStats.TombstonedPurged).
+		Int("recycled_purged", gcStats.RecycledPurged).
 		Int("versions_pruned", gcStats.VersionsPruned).
 		Int("chunks_deleted", gcStats.ChunksDeleted).
 		Int64("bytes_reclaimed", gcStats.BytesReclaimed).

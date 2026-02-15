@@ -71,7 +71,6 @@ type FileShareOptions struct {
 
 // Create creates a new file share.
 // It creates the underlying bucket, sets up default permissions, and persists the share metadata.
-// If a bucket already exists (from a previously deleted share), it restores the tombstoned objects.
 // quotaBytes of 0 means unlimited (within global quota).
 func (m *FileShareManager) Create(ctx context.Context, name, description, ownerID string, quotaBytes int64, opts *FileShareOptions) (*FileShare, error) {
 	m.mu.Lock()
@@ -96,8 +95,6 @@ func (m *FileShareManager) Create(ctx context.Context, name, description, ownerI
 	bucketExists := false
 	if _, err := m.store.HeadBucket(ctx, bucketName); err == nil {
 		bucketExists = true
-		// Restore the bucket (O(1) - clears bucket tombstone flag)
-		_ = m.store.UntombstoneBucket(ctx, bucketName)
 	} else {
 		// Create new bucket
 		if err := m.store.CreateBucket(ctx, bucketName, ownerID, replicationFactor, nil); err != nil {
@@ -192,9 +189,11 @@ func (m *FileShareManager) Delete(ctx context.Context, name string) error {
 
 	bucketName := FileShareBucketPrefix + name
 
-	// Tombstone the bucket (soft delete - allows restore on recreate)
-	// This is O(1) - all objects in a tombstoned bucket are treated as tombstoned
-	_ = m.store.TombstoneBucket(ctx, bucketName)
+	// Hard delete: remove the entire bucket directory.
+	// File shares are admin-managed, so we skip per-object purge (which does
+	// expensive global chunk reference scans) and just delete the directory.
+	// Orphaned chunks will be cleaned up by the next periodic GC cycle.
+	_ = m.store.ForceDeleteBucket(ctx, bucketName)
 
 	// Remove group bindings for this bucket
 	for _, b := range m.authorizer.GroupBindings.List() {
@@ -353,9 +352,10 @@ func (m *FileShareManager) IsProtectedGroupBinding(binding *auth.GroupBinding) b
 	return binding.GroupName == auth.GroupEveryone
 }
 
-// TombstoneExpiredShareContents tombstones all objects in expired file shares.
-// Returns the number of objects tombstoned.
-func (m *FileShareManager) TombstoneExpiredShareContents(ctx context.Context) int {
+// PurgeExpiredShareContents purges all objects in expired file shares.
+// Expired share content doesn't need a recycle bin — the share itself has expired.
+// Returns the number of objects purged.
+func (m *FileShareManager) PurgeExpiredShareContents(ctx context.Context) int {
 	m.mu.RLock()
 	expiredShares := make([]*FileShare, 0)
 	for _, s := range m.shares {
@@ -365,7 +365,7 @@ func (m *FileShareManager) TombstoneExpiredShareContents(ctx context.Context) in
 	}
 	m.mu.RUnlock()
 
-	tombstonedCount := 0
+	purgedCount := 0
 	for _, share := range expiredShares {
 		bucketName := FileShareBucketPrefix + share.Name
 
@@ -378,12 +378,8 @@ func (m *FileShareManager) TombstoneExpiredShareContents(ctx context.Context) in
 			}
 
 			for _, obj := range objects {
-				// Skip already tombstoned objects
-				if obj.IsTombstoned() {
-					continue
-				}
-				if err := m.store.TombstoneObject(ctx, bucketName, obj.Key); err == nil {
-					tombstonedCount++
+				if err := m.store.PurgeObject(ctx, bucketName, obj.Key); err == nil {
+					purgedCount++
 				}
 			}
 
@@ -394,5 +390,5 @@ func (m *FileShareManager) TombstoneExpiredShareContents(ctx context.Context) in
 		}
 	}
 
-	return tombstonedCount
+	return purgedCount
 }

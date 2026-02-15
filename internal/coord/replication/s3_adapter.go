@@ -70,12 +70,8 @@ func (a *S3StoreAdapter) List(ctx context.Context, bucket string) ([]string, err
 			return nil, fmt.Errorf("list objects: %w", err)
 		}
 
-		// Collect keys from this page (skip tombstoned objects — they should
-		// not be sent during sync, as that would un-tombstone them on the receiver)
+		// Collect keys from this page (all objects in meta/ are live)
 		for _, obj := range objects {
-			if obj.IsTombstoned() {
-				continue
-			}
 			allKeys = append(allKeys, obj.Key)
 		}
 
@@ -115,9 +111,6 @@ func (a *S3StoreAdapter) ListBuckets(ctx context.Context) ([]string, error) {
 
 	names := make([]string, 0, len(buckets))
 	for _, bucket := range buckets {
-		if bucket.IsTombstoned() {
-			continue
-		}
 		names = append(names, bucket.Name)
 	}
 

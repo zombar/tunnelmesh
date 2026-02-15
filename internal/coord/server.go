@@ -755,8 +755,8 @@ func gcStaggerDelay(coordName string) time.Duration {
 
 // StartPeriodicCleanup launches a background goroutine for S3 storage maintenance.
 // It periodically:
-//   - Purges tombstoned objects past their retention period
-//   - Tombstones content in expired file shares
+//   - Purges recycled objects past their retention period
+//   - Purges content in expired file shares
 //   - Runs garbage collection on versions and orphaned chunks
 //   - Updates CAS metrics (dedup ratio, chunk count, etc.)
 func (s *Server) StartPeriodicCleanup(ctx context.Context) {
@@ -770,15 +770,15 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 
 	// GC cycle body — shared between first run and ticker runs
 	runGCCycle := func() {
-		// Purge tombstoned objects past retention period
-		if purged := s.s3Store.PurgeTombstonedObjects(ctx); purged > 0 {
-			log.Info().Int("count", purged).Msg("purged tombstoned S3 objects")
+		// Purge recycled objects past retention period
+		if purged := s.s3Store.PurgeRecycleBin(ctx); purged > 0 {
+			log.Info().Int("count", purged).Msg("purged recycled S3 objects")
 		}
 
-		// Tombstone content in expired file shares
+		// Purge content in expired file shares
 		if s.fileShareMgr != nil {
-			if tombstoned := s.fileShareMgr.TombstoneExpiredShareContents(ctx); tombstoned > 0 {
-				log.Info().Int("count", tombstoned).Msg("tombstoned expired file share content")
+			if purged := s.fileShareMgr.PurgeExpiredShareContents(ctx); purged > 0 {
+				log.Info().Int("count", purged).Msg("purged expired file share content")
 			}
 		}
 
@@ -1150,8 +1150,8 @@ func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) erro
 	store.SetDefaultObjectExpiryDays(cfg.Coordinator.S3.ObjectExpiryDays)
 	store.SetDefaultShareExpiryDays(cfg.Coordinator.S3.ShareExpiryDays)
 
-	// Set tombstone retention config
-	store.SetTombstoneRetentionDays(cfg.Coordinator.S3.TombstoneRetentionDays)
+	// Set recycle bin retention config
+	store.SetRecycleBinRetentionDays(cfg.Coordinator.S3.RecycleBinRetentionDays)
 
 	// Set version retention config
 	store.SetVersionRetentionDays(cfg.Coordinator.S3.VersionRetentionDays)

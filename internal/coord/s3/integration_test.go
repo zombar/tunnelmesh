@@ -409,9 +409,8 @@ func TestConcurrent_DeleteAndRead(t *testing.T) {
 		deleted.Load(), successfulReads.Load(), expectedMissing.Load())
 
 	// Verify store is still functional (don't check exact counts due to race timing)
-	objects, _, _, err := store.ListObjects(ctx, "test-bucket", "", "", 10000)
+	_, _, _, err := store.ListObjects(ctx, "test-bucket", "", "", 10000)
 	require.NoError(t, err)
-	assert.NotNil(t, objects)
 
 	// Verify we had concurrent activity
 	assert.Greater(t, deleted.Load(), int32(0))
@@ -463,19 +462,15 @@ func TestConcurrent_BucketOperations(t *testing.T) {
 			_, _ = io.Copy(io.Discard, reader)
 			_ = reader.Close()
 
-			// Delete object (creates tombstone)
+			// Delete object (moves to recycle bin)
 			err = store.DeleteObject(ctx, bucketName, key)
 			if err != nil {
 				errs <- fmt.Errorf("delete object: %w", err)
 				return
 			}
 
-			// Purge object (delete again to actually remove)
-			err = store.DeleteObject(ctx, bucketName, key)
-			if err != nil && !errors.Is(err, ErrObjectNotFound) {
-				errs <- fmt.Errorf("purge object: %w", err)
-				return
-			}
+			// Purge recycle bin so bucket can be deleted
+			_ = store.PurgeAllRecycledInBucket(ctx, bucketName)
 
 			// Delete bucket
 			err = store.DeleteBucket(ctx, bucketName)
