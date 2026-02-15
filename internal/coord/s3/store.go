@@ -2056,7 +2056,7 @@ func (s *Store) ListRecycledObjects(ctx context.Context, bucket string) ([]Recyc
 }
 
 // PurgeObject permanently removes an object and all its versions from a bucket.
-// This is used by the cleanup process for tombstoned objects past retention.
+// This is used by the cleanup process for recycled objects past retention.
 // Uses a two-phase approach: collect metadata and remove files under lock,
 // then check and delete chunks outside the lock to avoid holding the mutex
 // during expensive global filesystem scans.
@@ -2176,7 +2176,7 @@ func (s *Store) PurgeAllRecycled(ctx context.Context) int {
 // PurgeAllRecycledInBucket removes all recycle bin entries for a specific bucket.
 // Used when hard-deleting a file share bucket.
 func (s *Store) PurgeAllRecycledInBucket(ctx context.Context, bucket string) error {
-	rbDir := filepath.Join(s.dataDir, "buckets", bucket, "recyclebin")
+	rbDir := s.recyclebinPath(bucket)
 	entries, err := os.ReadDir(rbDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -2236,7 +2236,7 @@ func (s *Store) purgeRecycledEntries(ctx context.Context, cutoff *time.Time) int
 		default:
 		}
 
-		rbDir := filepath.Join(s.dataDir, "buckets", bucket.Name, "recyclebin")
+		rbDir := s.recyclebinPath(bucket.Name)
 		entries, err := os.ReadDir(rbDir)
 		if err != nil {
 			continue

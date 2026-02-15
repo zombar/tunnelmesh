@@ -118,6 +118,41 @@ func TestDeleteBucket_WithRecycleBinEntries(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestForceDeleteBucket(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Add objects
+	for i := 0; i < 5; i++ {
+		key := fmt.Sprintf("file-%d.txt", i)
+		data := []byte(fmt.Sprintf("content-%d", i))
+		_, err := store.PutObject(ctx, "test-bucket", key, bytes.NewReader(data), int64(len(data)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	// Delete some to create recycle bin entries
+	require.NoError(t, store.DeleteObject(ctx, "test-bucket", "file-0.txt"))
+	require.NoError(t, store.DeleteObject(ctx, "test-bucket", "file-1.txt"))
+
+	// Verify stats before
+	stats := store.GetCASStats()
+	assert.Greater(t, stats.ObjectCount, 0)
+
+	// ForceDeleteBucket should remove everything including recycle bin
+	err := store.ForceDeleteBucket(ctx, "test-bucket")
+	require.NoError(t, err)
+
+	// Bucket should be gone
+	_, err = store.HeadBucket(ctx, "test-bucket")
+	assert.ErrorIs(t, err, ErrBucketNotFound)
+
+	// Idempotent: calling again on non-existent bucket returns nil
+	err = store.ForceDeleteBucket(ctx, "test-bucket")
+	assert.NoError(t, err)
+}
+
 func TestStoreHeadBucketNotFound(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 
