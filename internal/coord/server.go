@@ -1790,7 +1790,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist DNS data to S3 (async to avoid blocking registration)
-	go s.saveDNSData()
+	// Tracked by WaitGroup so Shutdown waits for completion before cleanup.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.saveDNSData()
+	}()
 
 	// Update replicator peer list if this is a coordinator
 	if peer.IsCoordinator && s.replicator != nil {
@@ -1866,8 +1871,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.updatePeerRecord(peerID, req.Name, req.PublicKey, isNewPeer)
 
 		// Auto-create peer share on first registration
+		// Tracked by WaitGroup so Shutdown waits for completion before cleanup.
 		if isNewPeer && s.fileShareMgr != nil {
-			go s.createPeerShare(peerID, req.Name)
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				s.createPeerShare(peerID, req.Name)
+			}()
 		}
 
 		// Check if peer is admin (for both new and existing peers)
