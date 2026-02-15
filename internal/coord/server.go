@@ -782,6 +782,13 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 			}
 		}
 
+		// Purge orphaned file share buckets (shares deleted on another coordinator)
+		if s.fileShareMgr != nil {
+			if purged := s.fileShareMgr.PurgeOrphanedFileShareBuckets(ctx); purged > 0 {
+				log.Info().Int("count", purged).Msg("purged orphaned file share buckets")
+			}
+		}
+
 		// Serialize with manual GC — skip this cycle if manual GC is running
 		if !s.gcMu.TryLock() {
 			log.Debug().Msg("skipping periodic GC: manual GC in progress")

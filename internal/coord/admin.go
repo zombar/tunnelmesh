@@ -1903,6 +1903,16 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 
 	gcStart := time.Now()
 
+	// Phase 0: Purge orphaned file share buckets before GC.
+	// When a share is deleted on one coordinator, ForceDeleteBucket only runs locally.
+	// Replica coordinators still have the bucket and objects. Reconcile by checking
+	// which fs+* buckets have no corresponding share and deleting them.
+	if s.fileShareMgr != nil {
+		if purged := s.fileShareMgr.PurgeOrphanedFileShareBuckets(r.Context()); purged > 0 {
+			log.Info().Int("count", purged).Msg("purged orphaned file share buckets during manual GC")
+		}
+	}
+
 	// Phase 1: Purge recycled objects
 	var recycledPurged int
 	if req.PurgeRecycleBin {

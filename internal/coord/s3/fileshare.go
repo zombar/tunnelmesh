@@ -352,6 +352,54 @@ func (m *FileShareManager) IsProtectedGroupBinding(binding *auth.GroupBinding) b
 	return binding.GroupName == auth.GroupEveryone
 }
 
+// PurgeOrphanedFileShareBuckets deletes file share buckets (fs+*) that no longer
+// have a corresponding share. This handles the case where a share is deleted on
+// one coordinator but the bucket directory was only removed locally — replicas
+// still have the bucket and its objects, preventing GC from cleaning up chunks.
+// Reloads share config from the system store first to pick up cross-coordinator deletions.
+func (m *FileShareManager) PurgeOrphanedFileShareBuckets(ctx context.Context) int {
+	// Reload from system store to pick up share deletions from other coordinators
+	if m.systemStore != nil {
+		if shares, err := m.systemStore.LoadFileShares(ctx); err == nil {
+			m.mu.Lock()
+			m.shares = shares
+			m.mu.Unlock()
+		}
+	}
+
+	// Build set of active share bucket names
+	m.mu.RLock()
+	activeShareBuckets := make(map[string]struct{}, len(m.shares))
+	for _, s := range m.shares {
+		activeShareBuckets[FileShareBucketPrefix+s.Name] = struct{}{}
+	}
+	m.mu.RUnlock()
+
+	// List all buckets and find orphaned file share buckets
+	buckets, err := m.store.ListBuckets(ctx)
+	if err != nil {
+		return 0
+	}
+
+	purged := 0
+	for _, bucket := range buckets {
+		if !strings.HasPrefix(bucket.Name, FileShareBucketPrefix) {
+			continue
+		}
+		if _, active := activeShareBuckets[bucket.Name]; active {
+			continue
+		}
+		// Bucket has fs+ prefix but no corresponding share — orphaned
+		log.Info().Str("bucket", bucket.Name).Msg("purging orphaned file share bucket")
+		if err := m.store.ForceDeleteBucket(ctx, bucket.Name); err != nil {
+			log.Warn().Err(err).Str("bucket", bucket.Name).Msg("failed to purge orphaned file share bucket")
+		} else {
+			purged++
+		}
+	}
+	return purged
+}
+
 // PurgeExpiredShareContents purges all objects in expired file shares.
 // Expired share content doesn't need a recycle bin — the share itself has expired.
 // Returns the number of objects purged.
