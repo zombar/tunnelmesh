@@ -140,6 +140,9 @@ type Replicator struct {
 	// Async ACK sending
 	ackSendSem chan struct{} // Semaphore to bound concurrent async ACK sends
 
+	// Outbound send concurrency control
+	sendSem chan struct{} // Semaphore to limit concurrent outbound replication sends
+
 	// Rate limiting
 	rateLimiter *rate.Limiter // Limits incoming replication messages per second
 
@@ -194,6 +197,7 @@ type Config struct {
 	SyncRequestTimeout   time.Duration   // Timeout for handling sync requests (default: 5min)
 	SyncResponseTimeout  time.Duration   // Timeout for handling sync responses (default: 10min)
 	ChunkAckTimeout      time.Duration   // Timeout for chunk-level ACKs (default: 30s, Phase 4)
+	MaxConcurrentSends   int             // Maximum concurrent outbound replication sends (default: 20)
 	Context              context.Context // SECURITY FIX #3: Parent context for proper cancellation propagation
 }
 
@@ -229,6 +233,9 @@ func NewReplicator(config Config) *Replicator {
 	if config.ChunkAckTimeout == 0 {
 		config.ChunkAckTimeout = 30 * time.Second // Default: 30s for chunk ACKs
 	}
+	if config.MaxConcurrentSends == 0 {
+		config.MaxConcurrentSends = 20 // Default: 20 concurrent outbound replication sends
+	}
 
 	// SECURITY FIX #3: Use provided context or create a new one
 	// This allows proper context propagation and cancellation from parent
@@ -258,6 +265,7 @@ func NewReplicator(config Config) *Replicator {
 		// goroutine memory overhead (~8KB stack each). When full, callers
 		// fall back to synchronous send rather than queueing indefinitely.
 		ackSendSem:             make(chan struct{}, 100),
+		sendSem:                make(chan struct{}, config.MaxConcurrentSends),
 		rateLimiter:            rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst),
 		peers:                  make(map[string]bool),
 		pending:                make(map[string]*pendingReplication),
@@ -295,6 +303,22 @@ func (r *Replicator) Stop() error {
 	r.cancel()
 	r.wg.Wait()
 	return nil
+}
+
+// acquireSendSlot acquires a slot from the outbound send semaphore.
+// Returns nil on success, or the context error if the context is cancelled.
+func (r *Replicator) acquireSendSlot(ctx context.Context) error {
+	select {
+	case r.sendSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// releaseSendSlot releases a slot back to the outbound send semaphore.
+func (r *Replicator) releaseSendSlot() {
+	<-r.sendSem
 }
 
 // AddPeer adds a coordinator peer to replicate to.
@@ -472,8 +496,14 @@ func (r *Replicator) sendReplicateMessage(ctx context.Context, peer string, payl
 		return fmt.Errorf("dropped: pending operations limit reached")
 	}
 
-	// Send via transport
-	if err := r.transport.SendToCoordinator(ctx, peer, data); err != nil {
+	// Acquire send slot to limit concurrent outbound HTTP requests
+	if err := r.acquireSendSlot(ctx); err != nil {
+		r.removePendingACK(msgID)
+		return fmt.Errorf("acquire send slot: %w", err)
+	}
+	err = r.transport.SendToCoordinator(ctx, peer, data)
+	r.releaseSendSlot()
+	if err != nil {
 		r.removePendingACK(msgID)
 		return fmt.Errorf("send to coordinator: %w", err)
 	}
@@ -1558,8 +1588,14 @@ func (r *Replicator) sendReplicateChunk(ctx context.Context, peerID string, payl
 		return fmt.Errorf("dropped: pending chunk operations limit reached")
 	}
 
-	// Send via transport
-	if err := r.transport.SendToCoordinator(ctx, peerID, data); err != nil {
+	// Acquire send slot to limit concurrent outbound HTTP requests
+	if err := r.acquireSendSlot(ctx); err != nil {
+		r.removePendingChunkACK(msgID)
+		return fmt.Errorf("acquire send slot: %w", err)
+	}
+	err = r.transport.SendToCoordinator(ctx, peerID, data)
+	r.releaseSendSlot()
+	if err != nil {
 		r.removePendingChunkACK(msgID)
 		return fmt.Errorf("send to coordinator: %w", err)
 	}
@@ -2031,7 +2067,13 @@ func (r *Replicator) sendReplicateObjectMeta(ctx context.Context, peerID, bucket
 		return fmt.Errorf("marshal message: %w", err)
 	}
 
-	if err := r.transport.SendToCoordinator(ctx, peerID, data); err != nil {
+	// Acquire send slot to limit concurrent outbound HTTP requests
+	if err := r.acquireSendSlot(ctx); err != nil {
+		return fmt.Errorf("acquire send slot: %w", err)
+	}
+	err = r.transport.SendToCoordinator(ctx, peerID, data)
+	r.releaseSendSlot()
+	if err != nil {
 		return fmt.Errorf("send object meta to %s: %w", peerID, err)
 	}
 
