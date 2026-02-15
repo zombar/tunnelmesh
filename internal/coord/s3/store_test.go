@@ -1813,6 +1813,77 @@ func TestConcurrent_GCAndPurgeNoDeadlock(t *testing.T) {
 	}
 }
 
+// TestConcurrent_CalculatePrefixSizeNoDeadlock verifies that CalculatePrefixSize
+// doesn't deadlock when called concurrently with PutObject. Before the fix,
+// CalculatePrefixSize acquired RLock then called ListObjects which tried RLock
+// again — when a PutObject was pending Lock, Go's RWMutex blocked the nested
+// RLock, causing an indefinite hang (appeared as S3 Explorer silent failure).
+func TestConcurrent_CalculatePrefixSizeNoDeadlock(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Seed some objects under a folder prefix
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("folder/file-%d.txt", i)
+		content := []byte(fmt.Sprintf("content-%d-%s", i, strings.Repeat("x", 500)))
+		_, err := store.PutObject(context.Background(), "test-bucket", key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	// Concurrent PutObject (acquires write lock, triggers the contention)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				key := fmt.Sprintf("folder/new-%d-%d.txt", id, j)
+				content := []byte(fmt.Sprintf("new-content-%d-%d", id, j))
+				_, _ = store.PutObject(ctx, "test-bucket", key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+			}
+		}(i)
+	}
+
+	// Concurrent CalculatePrefixSize (previously deadlocked under RLock)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				_, _ = store.CalculatePrefixSize(ctx, "test-bucket", "folder/")
+			}
+		}()
+	}
+
+	// Concurrent ListObjects (shares RLock path)
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				_, _, _, _ = store.ListObjects(ctx, "test-bucket", "folder/", "", 100)
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success - no deadlock
+	case <-ctx.Done():
+		t.Fatal("deadlock detected: concurrent CalculatePrefixSize + PutObject timed out after 10s")
+	}
+}
+
 // TestConcurrent_GCDoesNotBlockReads verifies that GC's filesystem scan
 // (buildChunkReferenceSet) does not hold s.mu, allowing concurrent ListObjects
 // and PutObject to proceed without blocking. This is a regression test for the
