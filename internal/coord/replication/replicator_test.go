@@ -282,6 +282,15 @@ func (m *mockS3Store) DeleteChunk(ctx context.Context, hash string) error {
 	return nil
 }
 
+// PurgeObject permanently removes an object and its chunks (no tombstone).
+func (m *mockS3Store) PurgeObject(ctx context.Context, bucket, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.objects, m.makeKey(bucket, key))
+	return nil
+}
+
 // addObjectWithChunks adds an object with chunk-level metadata (helper for tests).
 func (m *mockS3Store) addObjectWithChunks(bucket, key string, chunks []string, chunkData map[string][]byte) {
 	m.mu.Lock()

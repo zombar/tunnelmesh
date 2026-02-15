@@ -1946,9 +1946,12 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 	// Phase 1: Hold lock briefly to collect chunk info and remove metadata
 	s.mu.Lock()
 
-	// Check bucket exists
+	// Check bucket exists — if bucket is missing, the object can't exist either
 	if _, err := s.getBucketMeta(bucket); err != nil {
 		s.mu.Unlock()
+		if errors.Is(err, ErrBucketNotFound) {
+			return nil // Idempotent: bucket doesn't exist, nothing to purge
+		}
 		return err
 	}
 
@@ -1956,6 +1959,9 @@ func (s *Store) PurgeObject(ctx context.Context, bucket, key string) error {
 	meta, err := s.getObjectMeta(bucket, key)
 	if err != nil {
 		s.mu.Unlock()
+		if errors.Is(err, ErrObjectNotFound) {
+			return nil // Idempotent: object doesn't exist, nothing to purge
+		}
 		return err
 	}
 

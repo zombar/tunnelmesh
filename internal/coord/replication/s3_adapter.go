@@ -209,3 +209,13 @@ func (a *S3StoreAdapter) DeleteChunk(ctx context.Context, hash string) error {
 
 	return nil
 }
+
+// PurgeObject permanently removes an object, its versions, and unreferenced chunks.
+func (a *S3StoreAdapter) PurgeObject(ctx context.Context, bucket, key string) error {
+	err := a.store.PurgeObject(ctx, bucket, key)
+	if err != nil {
+		return fmt.Errorf("purge object: %w", err)
+	}
+
+	return nil
+}
