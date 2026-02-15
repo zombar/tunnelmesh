@@ -2588,44 +2588,26 @@ func (s *Server) updateListingIndex(bucket, key string, info *S3ObjectInfo, op s
 
 		switch op {
 		case "put":
-			// Upsert: replace existing entry or append
-			found := false
-			for i, obj := range newBL.Objects {
-				if obj.Key == key {
-					if info != nil {
-						newBL.Objects[i] = *info
-					}
-					found = true
-					break
-				}
-			}
-			if !found && info != nil {
-				newBL.Objects = append(newBL.Objects, *info)
+			if info != nil {
+				newBL.Objects = upsertObjectList(newBL.Objects, key, *info)
 			}
 
 		case "delete":
-			// Remove from objects
-			for i, obj := range newBL.Objects {
-				if obj.Key == key {
-					// Build recycled entry from the removed object
-					recycled := obj
-					recycled.DeletedAt = time.Now().UTC().Format(time.RFC3339)
-					newBL.Recycled = append(newBL.Recycled, recycled)
-					newBL.Objects = append(newBL.Objects[:i], newBL.Objects[i+1:]...)
-					break
-				}
+			var removed *S3ObjectInfo
+			newBL.Objects, removed = removeFromObjectList(newBL.Objects, key)
+			if removed != nil {
+				recycled := *removed
+				recycled.DeletedAt = time.Now().UTC().Format(time.RFC3339)
+				newBL.Recycled = append(newBL.Recycled, recycled)
 			}
 
 		case "undelete":
-			// Remove from recycled, add to objects
-			for i, obj := range newBL.Recycled {
-				if obj.Key == key {
-					restored := obj
-					restored.DeletedAt = ""
-					newBL.Objects = append(newBL.Objects, restored)
-					newBL.Recycled = append(newBL.Recycled[:i], newBL.Recycled[i+1:]...)
-					break
-				}
+			var removed *S3ObjectInfo
+			newBL.Recycled, removed = removeFromObjectList(newBL.Recycled, key)
+			if removed != nil {
+				restored := *removed
+				restored.DeletedAt = ""
+				newBL.Objects = append(newBL.Objects, restored)
 			}
 		}
 
@@ -2977,7 +2959,13 @@ func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, 
 		if (r.Method == http.MethodPut || r.Method == http.MethodDelete) &&
 			r.Header.Get("X-TunnelMesh-Forwarded") == "" {
 			if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
-				s.forwardS3Request(w, r, target, bucket)
+				// Use a recorder to capture the response status so we can update
+				// peer listings immediately after a successful forwarded write.
+				rec := &forwardRecorder{ResponseWriter: w}
+				s.forwardS3Request(rec, r, target, bucket)
+				if rec.status == 0 || rec.status == http.StatusOK || rec.status == http.StatusNoContent {
+					s.updatePeerListingsAfterForward(bucket, key, r)
+				}
 				return
 			}
 		}
@@ -3923,6 +3911,98 @@ func (s *Server) objectPrimaryCoordinator(bucket, key string) string {
 		return ""
 	}
 	return primary
+}
+
+// forwardRecorder wraps http.ResponseWriter to capture the status code
+// from a forwarded request without consuming the response body.
+type forwardRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *forwardRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// upsertObjectList returns a new slice with info replacing any existing entry with
+// the same key, or appended if no match exists.
+func upsertObjectList(objs []S3ObjectInfo, key string, info S3ObjectInfo) []S3ObjectInfo {
+	result := make([]S3ObjectInfo, 0, len(objs)+1)
+	found := false
+	for _, obj := range objs {
+		if obj.Key == key {
+			result = append(result, info)
+			found = true
+		} else {
+			result = append(result, obj)
+		}
+	}
+	if !found {
+		result = append(result, info)
+	}
+	return result
+}
+
+// removeFromObjectList returns a new slice with the entry matching key removed.
+func removeFromObjectList(objs []S3ObjectInfo, key string) ([]S3ObjectInfo, *S3ObjectInfo) {
+	var removed *S3ObjectInfo
+	result := make([]S3ObjectInfo, 0, len(objs))
+	for _, obj := range objs {
+		if obj.Key == key && removed == nil {
+			o := obj
+			removed = &o
+		} else {
+			result = append(result, obj)
+		}
+	}
+	return result, removed
+}
+
+// updatePeerListingsAfterForward immediately updates the peerListings atomic pointer
+// after a successful forwarded write, so the listing handler shows the object without
+// waiting for the background indexer to persist and reload.
+func (s *Server) updatePeerListingsAfterForward(bucket, key string, r *http.Request) {
+	for {
+		old := s.peerListings.Load()
+
+		newPL := &peerListings{
+			Objects:  make(map[string][]S3ObjectInfo),
+			Recycled: make(map[string][]S3ObjectInfo),
+		}
+		if old != nil {
+			for k, v := range old.Objects {
+				newPL.Objects[k] = v
+			}
+			for k, v := range old.Recycled {
+				newPL.Recycled[k] = v
+			}
+		}
+
+		switch r.Method {
+		case http.MethodPut:
+			info := S3ObjectInfo{
+				Key:          key,
+				Size:         r.ContentLength,
+				LastModified: time.Now().UTC().Format(time.RFC3339),
+				ContentType:  r.Header.Get("Content-Type"),
+			}
+			if info.ContentType == "" {
+				info.ContentType = "application/octet-stream"
+			}
+			if bucketMeta, err := s.s3Store.HeadBucket(r.Context(), bucket); err == nil && bucketMeta.Owner != "" {
+				info.Owner = s.getPeerName(bucketMeta.Owner)
+			}
+			newPL.Objects[bucket] = upsertObjectList(newPL.Objects[bucket], key, info)
+
+		case http.MethodDelete:
+			newPL.Objects[bucket], _ = removeFromObjectList(newPL.Objects[bucket], key)
+		}
+
+		if s.peerListings.CompareAndSwap(old, newPL) {
+			break
+		}
+	}
 }
 
 // forwardS3Request proxies an S3 request to the target coordinator.
