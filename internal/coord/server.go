@@ -792,12 +792,8 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 			gcDuration := time.Since(gcStart).Seconds()
 			s.gcMu.Unlock()
 
-			// Log GC results: Info when work was done, Debug for no-ops
-			logEvent := log.Debug()
-			if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 || gcStats.ChunksSkippedGracePeriod > 0 {
-				logEvent = log.Info()
-			}
-			logEvent.
+			// Always log GC at Info level so operators can confirm it's running
+			log.Info().
 				Str("coordinator", s.cfg.Name).
 				Int("versions_pruned", gcStats.VersionsPruned).
 				Int("chunks_deleted", gcStats.ChunksDeleted).
@@ -805,7 +801,7 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 				Int("objects_scanned", gcStats.ObjectsScanned).
 				Int("chunks_skipped_grace_period", gcStats.ChunksSkippedGracePeriod).
 				Float64("duration_seconds", gcDuration).
-				Msg("S3 garbage collection completed")
+				Msg("periodic S3 garbage collection completed")
 
 			// Record GC metrics
 			if metrics := s3.GetS3Metrics(); metrics != nil {

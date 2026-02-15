@@ -3222,6 +3222,18 @@ type GCStats struct {
 //   - Phase 2: Rebuild reference set after pruning (RLock only)
 //   - Phase 3: Delete orphaned chunks (no Store lock, CAS has its own)
 func (s *Store) RunGarbageCollection(ctx context.Context) GCStats {
+	return s.runGC(ctx, false)
+}
+
+// RunGarbageCollectionForce performs a full GC pass, skipping the grace period.
+// Use this for explicitly triggered (manual) GC where the admin wants immediate
+// cleanup. The grace period is only needed for periodic GC to protect in-flight
+// uploads and replication.
+func (s *Store) RunGarbageCollectionForce(ctx context.Context) GCStats {
+	return s.runGC(ctx, true)
+}
+
+func (s *Store) runGC(ctx context.Context, skipGracePeriod bool) GCStats {
 	stats := GCStats{}
 
 	if s.cas == nil {
@@ -3257,7 +3269,7 @@ func (s *Store) RunGarbageCollection(ctx context.Context) GCStats {
 
 	// Phase 3: Delete orphaned chunks (not in reference set)
 	// CAS has its own locking; we don't need Store lock here
-	s.deleteOrphanedChunks(ctx, &stats, referencedChunks, gcStartTime)
+	s.deleteOrphanedChunks(ctx, &stats, referencedChunks, gcStartTime, skipGracePeriod)
 
 	// Update quota if tracking
 	// Note: calculateQuotaUsage acquires s.mu.Lock() internally,
@@ -3436,7 +3448,8 @@ func (s *Store) pruneAllExpiredVersionsSimple(ctx context.Context, stats *GCStat
 // deleteOrphanedChunks deletes chunks not in the reference set.
 // Uses CAS's own locking; doesn't need Store lock.
 // Skips chunks created after gcStartTime to avoid races.
-func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, referencedChunks map[string]struct{}, gcStartTime time.Time) {
+// When skipGracePeriod is true, the GCGracePeriod check is bypassed (for manual GC).
+func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, referencedChunks map[string]struct{}, gcStartTime time.Time, skipGracePeriod bool) {
 	chunksDir := filepath.Join(s.dataDir, "chunks")
 	_ = filepath.Walk(chunksDir, func(path string, info os.FileInfo, err error) error {
 		select {
@@ -3455,9 +3468,10 @@ func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, refere
 
 		// Grace period: Only delete chunks older than GCGracePeriod (Phase 6)
 		// This prevents deleting chunks that are being replicated or uploaded.
+		// Skipped for manual/forced GC where the admin wants immediate cleanup.
 		//
 		// See GCGracePeriod constant documentation for tuning guidance.
-		if time.Since(info.ModTime()) < GCGracePeriod {
+		if !skipGracePeriod && time.Since(info.ModTime()) < GCGracePeriod {
 			stats.ChunksSkippedGracePeriod++
 			return nil
 		}

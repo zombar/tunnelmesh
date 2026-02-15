@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -1893,6 +1894,8 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		PurgeRecycleBin bool `json:"purge_recycle_bin"`
+		// Internal: set when forwarding to peers to prevent infinite recursion
+		NoForward bool `json:"no_forward"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -1908,8 +1911,8 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 		recycledPurged = s.s3Store.PurgeRecycleBin(r.Context())
 	}
 
-	// Phase 2: Run full GC (version pruning + orphan chunk cleanup)
-	gcStats := s.s3Store.RunGarbageCollection(r.Context())
+	// Phase 2: Run full GC with no grace period (admin explicitly requested cleanup)
+	gcStats := s.s3Store.RunGarbageCollectionForce(r.Context())
 	gcDuration := time.Since(gcStart).Seconds()
 
 	// Record GC metrics (same as periodic path in StartPeriodicCleanup)
@@ -1928,6 +1931,11 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 		Float64("duration_seconds", gcDuration).
 		Msg("manual S3 garbage collection completed")
 
+	// Phase 3: Forward GC to peer coordinators (unless this is already a forwarded request)
+	if !req.NoForward {
+		s.forwardGCToPeers(r.Context(), req.PurgeRecycleBin)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"recycled_purged":  recycledPurged,
@@ -1938,6 +1946,61 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		log.Error().Err(err).Msg("failed to encode GC stats response")
 	}
+}
+
+// forwardGCToPeers sends GC requests to all peer coordinators in parallel.
+// Uses no_forward=true to prevent infinite recursion between peers.
+func (s *Server) forwardGCToPeers(ctx context.Context, purgeRecycleBin bool) {
+	if s.replicator == nil {
+		return
+	}
+
+	peers := s.replicator.GetPeers()
+	if len(peers) == 0 {
+		return
+	}
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"purge_recycle_bin": purgeRecycleBin,
+		"no_forward":        true,
+	})
+
+	var wg sync.WaitGroup
+	for _, peerIP := range peers {
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+
+			gcURL := fmt.Sprintf("https://%s:443/api/s3/gc", ip)
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, gcURL, bytes.NewReader(payload))
+			if err != nil {
+				log.Warn().Err(err).Str("peer", ip).Msg("failed to create GC forward request")
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+
+			client := &http.Client{
+				Timeout: 10 * time.Minute,
+				Transport: &http.Transport{
+					TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // mesh-internal
+				},
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Warn().Err(err).Str("peer", ip).Msg("failed to forward GC to peer")
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode == http.StatusOK {
+				log.Info().Str("peer", ip).Msg("GC forwarded to peer coordinator")
+			} else {
+				body, _ := io.ReadAll(resp.Body)
+				log.Warn().Str("peer", ip).Int("status", resp.StatusCode).Str("body", string(body)).Msg("peer GC returned non-OK")
+			}
+		}(peerIP)
+	}
+	wg.Wait()
 }
 
 // handlePurgeBucketRecycleBin purges all recycle bin entries for a specific bucket.
