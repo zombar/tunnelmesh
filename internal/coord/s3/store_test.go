@@ -2214,6 +2214,88 @@ func TestDeleteChunk_NonExistent(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestDeleteUnreferencedChunks(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Create a bucket and object referencing chunk1
+	require.NoError(t, store.CreateBucket(ctx, "mybucket", "alice", 1, nil))
+
+	chunk1 := []byte("referenced chunk data")
+	hash1 := ContentHash(chunk1)
+	require.NoError(t, store.WriteChunkDirect(ctx, hash1, chunk1))
+
+	chunk2 := []byte("orphaned chunk data!!")
+	hash2 := ContentHash(chunk2)
+	require.NoError(t, store.WriteChunkDirect(ctx, hash2, chunk2))
+
+	// Create an object that references only chunk1
+	meta := ObjectMeta{
+		Key:    "doc.txt",
+		Size:   int64(len(chunk1)),
+		Chunks: []string{hash1},
+	}
+	metaJSON, err := json.Marshal(meta)
+	require.NoError(t, err)
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
+	require.NoError(t, err)
+
+	// Record stats before cleanup
+	statsBefore := store.GetCASStats()
+
+	// Delete unreferenced chunks — chunk2 is orphaned, chunk1 is referenced
+	freed := store.DeleteUnreferencedChunks(ctx, []string{hash1, hash2})
+
+	// chunk2 should have been freed
+	assert.Greater(t, freed, int64(0), "should have freed bytes for orphaned chunk")
+
+	// Verify stats were decremented
+	statsAfter := store.GetCASStats()
+	assert.Equal(t, statsBefore.ChunkCount-1, statsAfter.ChunkCount, "chunk count should decrease by 1")
+	assert.Equal(t, statsBefore.ChunkBytes-freed, statsAfter.ChunkBytes, "chunk bytes should decrease by freed amount")
+
+	// chunk1 should still be readable (it's referenced)
+	_, err = store.ReadChunk(ctx, hash1)
+	assert.NoError(t, err)
+
+	// chunk2 should be gone
+	_, err = store.ReadChunk(ctx, hash2)
+	assert.Error(t, err)
+}
+
+func TestDeleteUnreferencedChunks_AllReferenced(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Write a chunk and reference it from an object
+	require.NoError(t, store.CreateBucket(ctx, "mybucket", "alice", 1, nil))
+
+	chunk := []byte("kept chunk data")
+	hash := ContentHash(chunk)
+	require.NoError(t, store.WriteChunkDirect(ctx, hash, chunk))
+
+	meta := ObjectMeta{
+		Key:    "doc.txt",
+		Size:   int64(len(chunk)),
+		Chunks: []string{hash},
+	}
+	metaJSON, err := json.Marshal(meta)
+	require.NoError(t, err)
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
+	require.NoError(t, err)
+
+	statsBefore := store.GetCASStats()
+
+	// All chunks are referenced — nothing should be freed
+	freed := store.DeleteUnreferencedChunks(ctx, []string{hash})
+	assert.Equal(t, int64(0), freed)
+
+	// Stats unchanged
+	statsAfter := store.GetCASStats()
+	assert.Equal(t, statsBefore.ChunkCount, statsAfter.ChunkCount)
+	assert.Equal(t, statsBefore.ChunkBytes, statsAfter.ChunkBytes)
+}
+
 func TestSyncedWriteFileAtomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.json")

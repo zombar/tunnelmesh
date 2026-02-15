@@ -875,11 +875,17 @@ func (s *Store) fetchChunkDistributed(ctx context.Context, chunkHash string) ([]
 		}
 
 		// 6. Cache locally and register ownership (best-effort)
-		if _, _, werr := s.cas.WriteChunk(ctx, data); werr != nil {
+		if _, onDiskBytes, werr := s.cas.WriteChunk(ctx, data); werr != nil {
 			s.logger.Warn().Err(werr).Str("hash", truncHash(chunkHash)).Msg("failed to cache remote chunk locally")
-		} else if s.chunkRegistry != nil {
-			if rerr := s.chunkRegistry.RegisterChunk(chunkHash, int64(len(data))); rerr != nil {
-				s.logger.Warn().Err(rerr).Str("hash", truncHash(chunkHash)).Msg("failed to register chunk ownership")
+		} else {
+			if onDiskBytes > 0 {
+				s.statsChunkCount.Add(1)
+				s.statsChunkBytes.Add(onDiskBytes)
+			}
+			if s.chunkRegistry != nil {
+				if rerr := s.chunkRegistry.RegisterChunk(chunkHash, int64(len(data))); rerr != nil {
+					s.logger.Warn().Err(rerr).Str("hash", truncHash(chunkHash)).Msg("failed to register chunk ownership")
+				}
 			}
 		}
 
@@ -1246,8 +1252,11 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		if !success && len(chunks) > 0 {
 			// Best-effort cleanup - errors are logged but not propagated
 			for _, hash := range chunks {
-				if _, err := s.cas.DeleteChunk(context.Background(), hash); err != nil {
+				if freed, err := s.cas.DeleteChunk(context.Background(), hash); err != nil {
 					s.logger.Warn().Str("hash", hash[:8]).Err(err).Msg("failed to cleanup chunk during rollback")
+				} else if freed > 0 {
+					s.statsChunkCount.Add(-1)
+					s.statsChunkBytes.Add(-freed)
 				}
 				if s.chunkRegistry != nil {
 					if err := s.chunkRegistry.UnregisterChunk(hash); err != nil {
@@ -1278,8 +1287,21 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 			}
 
 			// Write chunk to CAS
-			if _, _, err := s.cas.WriteChunk(ctx, chunk); err != nil {
+			_, onDiskBytes, err := s.cas.WriteChunk(ctx, chunk)
+			if err != nil {
 				return nil, fmt.Errorf("write data shard %d/%d chunk %s (versionID=%s): %w", i, k, chunkHash[:8], versionID, err)
+			}
+
+			// Update incremental chunk stats
+			var chunkOnDiskSize int64
+			if onDiskBytes > 0 {
+				s.statsChunkCount.Add(1)
+				s.statsChunkBytes.Add(onDiskBytes)
+				chunkOnDiskSize = onDiskBytes
+			} else {
+				if sz, szErr := s.cas.ChunkSize(ctx, chunkHash); szErr == nil {
+					chunkOnDiskSize = sz
+				}
 			}
 
 			// Register chunk ownership
@@ -1303,16 +1325,17 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 			}
 
 			chunkMetadata[chunkHash] = &ChunkMetadata{
-				Hash:          chunkHash,
-				Size:          int64(len(chunk)),
-				VersionVector: versionVector,
-				Owners:        owners,
-				FirstSeen:     now,
-				LastModified:  now,
-				ShardType:     "data",
-				ShardIndex:    i,
-				ChunkSequence: chunkSeq,
-				ParentFileID:  versionID,
+				Hash:           chunkHash,
+				Size:           int64(len(chunk)),
+				CompressedSize: chunkOnDiskSize,
+				VersionVector:  versionVector,
+				Owners:         owners,
+				FirstSeen:      now,
+				LastModified:   now,
+				ShardType:      "data",
+				ShardIndex:     i,
+				ChunkSequence:  chunkSeq,
+				ParentFileID:   versionID,
 			}
 
 			chunks = append(chunks, chunkHash)
@@ -1325,9 +1348,21 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	// (parity shards are already optimally sized and don't benefit from dedup)
 	for i, shard := range parityShards {
 		// Write parity shard directly to CAS (it will compute SHA-256 hash)
-		parityHash, _, err := s.cas.WriteChunk(ctx, shard)
+		parityHash, parityOnDiskBytes, err := s.cas.WriteChunk(ctx, shard)
 		if err != nil {
 			return nil, fmt.Errorf("write parity shard %d/%d (versionID=%s): %w", i, m, versionID, err)
+		}
+
+		// Update incremental chunk stats
+		var parityOnDiskSize int64
+		if parityOnDiskBytes > 0 {
+			s.statsChunkCount.Add(1)
+			s.statsChunkBytes.Add(parityOnDiskBytes)
+			parityOnDiskSize = parityOnDiskBytes
+		} else {
+			if sz, szErr := s.cas.ChunkSize(ctx, parityHash); szErr == nil {
+				parityOnDiskSize = sz
+			}
 		}
 
 		// Register parity shard ownership
@@ -1350,15 +1385,16 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 		}
 
 		chunkMetadata[parityHash] = &ChunkMetadata{
-			Hash:          parityHash,
-			Size:          int64(len(shard)),
-			VersionVector: versionVector,
-			Owners:        owners,
-			FirstSeen:     now,
-			LastModified:  now,
-			ShardType:     "parity",
-			ShardIndex:    i,
-			ParentFileID:  versionID,
+			Hash:           parityHash,
+			Size:           int64(len(shard)),
+			CompressedSize: parityOnDiskSize,
+			VersionVector:  versionVector,
+			Owners:         owners,
+			FirstSeen:      now,
+			LastModified:   now,
+			ShardType:      "parity",
+			ShardIndex:     i,
+			ParentFileID:   versionID,
 		}
 
 		chunks = append(chunks, parityHash)
@@ -1588,7 +1624,6 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 				chunkOnDiskSize = sz
 			}
 		}
-		_ = hash
 
 		// Register chunk ownership in distributed registry with bucket's replication factor
 		if s.chunkRegistry != nil {
@@ -3427,13 +3462,15 @@ func (s *Store) getObjectContent(ctx context.Context, bucket, key string, meta *
 	if s.replicator != nil && s.chunkRegistry != nil {
 		// Distributed reads: can fetch chunks from remote peers
 		reader := NewDistributedChunkReader(ctx, DistributedChunkReaderConfig{
-			Chunks:     meta.Chunks,
-			LocalCAS:   s.cas,
-			Registry:   s.chunkRegistry,
-			Replicator: s.replicator,
-			Logger:     s.logger,
-			TotalSize:  meta.Size,
-			Prefetch:   PrefetchConfig{WindowSize: 8, Parallelism: 4},
+			Chunks:          meta.Chunks,
+			LocalCAS:        s.cas,
+			Registry:        s.chunkRegistry,
+			Replicator:      s.replicator,
+			Logger:          s.logger,
+			TotalSize:       meta.Size,
+			Prefetch:        PrefetchConfig{WindowSize: 8, Parallelism: 4},
+			StatsChunkCount: &s.statsChunkCount,
+			StatsChunkBytes: &s.statsChunkBytes,
 		})
 		return reader, meta, nil
 	}

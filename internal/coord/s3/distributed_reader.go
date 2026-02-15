@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -36,16 +37,18 @@ type prefetchResult struct {
 // When Parallelism > 1 and a replicator is configured, chunks are prefetched in
 // parallel and reassembled in order.
 type DistributedChunkReader struct {
-	ctx        context.Context
-	cancel     context.CancelFunc // cancels prefetch goroutines
-	chunks     []string           // Ordered list of chunk hashes
-	localCAS   *CAS               // Local chunk storage
-	registry   ChunkRegistryInterface
-	replicator ReplicatorInterface
-	logger     zerolog.Logger
-	timeout    time.Duration
-	totalSize  int64
-	bytesRead  int64
+	ctx             context.Context
+	cancel          context.CancelFunc // cancels prefetch goroutines
+	chunks          []string           // Ordered list of chunk hashes
+	localCAS        *CAS               // Local chunk storage
+	registry        ChunkRegistryInterface
+	replicator      ReplicatorInterface
+	logger          zerolog.Logger
+	timeout         time.Duration
+	totalSize       int64
+	bytesRead       int64
+	statsChunkCount *atomic.Int64 // Incremental chunk count stats (optional)
+	statsChunkBytes *atomic.Int64 // Incremental chunk bytes stats (optional)
 
 	// Prefetch pipeline state
 	prefetchCfg PrefetchConfig
@@ -62,14 +65,16 @@ type DistributedChunkReader struct {
 
 // DistributedChunkReaderConfig contains configuration for the distributed chunk reader.
 type DistributedChunkReaderConfig struct {
-	Chunks     []string               // Ordered list of chunk hashes
-	LocalCAS   *CAS                   // Local chunk storage
-	Registry   ChunkRegistryInterface // Chunk ownership registry
-	Replicator ReplicatorInterface    // For remote chunk fetching
-	Logger     zerolog.Logger         // Structured logger (optional)
-	Timeout    time.Duration          // Timeout for remote chunk fetches
-	TotalSize  int64                  // Total file size
-	Prefetch   PrefetchConfig         // Parallel prefetch settings
+	Chunks          []string               // Ordered list of chunk hashes
+	LocalCAS        *CAS                   // Local chunk storage
+	Registry        ChunkRegistryInterface // Chunk ownership registry
+	Replicator      ReplicatorInterface    // For remote chunk fetching
+	Logger          zerolog.Logger         // Structured logger (optional)
+	Timeout         time.Duration          // Timeout for remote chunk fetches
+	TotalSize       int64                  // Total file size
+	Prefetch        PrefetchConfig         // Parallel prefetch settings
+	StatsChunkCount *atomic.Int64          // Incremental chunk count stats (optional)
+	StatsChunkBytes *atomic.Int64          // Incremental chunk bytes stats (optional)
 }
 
 // NewDistributedChunkReader creates a new distributed chunk reader.
@@ -90,17 +95,19 @@ func NewDistributedChunkReader(ctx context.Context, config DistributedChunkReade
 	childCtx, cancel := context.WithCancel(ctx)
 
 	return &DistributedChunkReader{
-		ctx:         childCtx,
-		cancel:      cancel,
-		chunks:      config.Chunks,
-		localCAS:    config.LocalCAS,
-		registry:    config.Registry,
-		replicator:  config.Replicator,
-		logger:      config.Logger,
-		timeout:     timeout,
-		totalSize:   config.TotalSize,
-		prefetchCfg: prefetch,
-		readyBuf:    make(map[int]*prefetchResult),
+		ctx:             childCtx,
+		cancel:          cancel,
+		chunks:          config.Chunks,
+		localCAS:        config.LocalCAS,
+		registry:        config.Registry,
+		replicator:      config.Replicator,
+		logger:          config.Logger,
+		timeout:         timeout,
+		totalSize:       config.TotalSize,
+		prefetchCfg:     prefetch,
+		readyBuf:        make(map[int]*prefetchResult),
+		statsChunkCount: config.StatsChunkCount,
+		statsChunkBytes: config.StatsChunkBytes,
 	}
 }
 
@@ -299,12 +306,15 @@ func (r *DistributedChunkReader) fetchChunk(idx int) ([]byte, error) {
 		}
 
 		// Cache locally for future reads
-		if _, _, werr := r.localCAS.WriteChunk(r.ctx, chunkData); werr != nil {
+		if _, onDiskBytes, werr := r.localCAS.WriteChunk(r.ctx, chunkData); werr != nil {
 			r.logger.Warn().
 				Err(werr).
 				Str("chunk_hash", chunkHash[:8]+"...").
 				Int("chunk_size", len(chunkData)).
 				Msg("Failed to cache chunk locally after remote fetch")
+		} else if onDiskBytes > 0 && r.statsChunkCount != nil {
+			r.statsChunkCount.Add(1)
+			r.statsChunkBytes.Add(onDiskBytes)
 		}
 
 		// Register ownership locally
