@@ -2229,12 +2229,15 @@ func (s *Store) PurgeAllRecycled(ctx context.Context) int {
 // PurgeAllRecycledInBucket removes all recycle bin entries for a specific bucket.
 // Used when hard-deleting a file share bucket or via the per-bucket purge API.
 func (s *Store) PurgeAllRecycledInBucket(ctx context.Context, bucket string) error {
+	// Phase 1: Under lock — remove entries and collect chunk hashes for deferred cleanup.
+	var allChunksToCheck []string
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	rbDir := s.recyclebinPath(bucket)
 	entries, err := os.ReadDir(rbDir)
 	if err != nil {
+		s.mu.Unlock()
 		if os.IsNotExist(err) {
 			return nil
 		}
@@ -2257,9 +2260,8 @@ func (s *Store) PurgeAllRecycledInBucket(ctx context.Context, bucket string) err
 			continue
 		}
 
-		// Collect chunks for cleanup
-		chunksToCheck := make([]string, len(entry.Meta.Chunks))
-		copy(chunksToCheck, entry.Meta.Chunks)
+		// Collect chunks for batch cleanup after releasing lock
+		allChunksToCheck = append(allChunksToCheck, entry.Meta.Chunks...)
 
 		// Delete version files
 		versionDir := filepath.Join(s.dataDir, "buckets", bucket, "versions", entry.OriginalKey)
@@ -2268,9 +2270,13 @@ func (s *Store) PurgeAllRecycledInBucket(ctx context.Context, bucket string) err
 		// Remove the entry
 		_ = os.Remove(entryPath)
 		s.statsRecycledBytes.Add(-entry.Meta.Size)
+	}
 
-		// Clean up unreferenced chunks
-		s.DeleteUnreferencedChunks(ctx, chunksToCheck)
+	s.mu.Unlock()
+
+	// Phase 2: Outside lock — single batch cleanup (one reference set build).
+	if len(allChunksToCheck) > 0 {
+		s.DeleteUnreferencedChunks(ctx, allChunksToCheck)
 	}
 
 	return nil
@@ -2280,17 +2286,17 @@ func (s *Store) PurgeAllRecycledInBucket(ctx context.Context, bucket string) err
 // If cutoff is non-nil, only entries older than cutoff are purged.
 func (s *Store) purgeRecycledEntries(ctx context.Context, cutoff *time.Time) int {
 	purgedCount := 0
+	var allChunksToCheck []string
 
 	buckets, err := s.ListBuckets(ctx)
 	if err != nil {
 		return 0
 	}
 
+	// Phase 1: Remove entries and collect chunk hashes for batch cleanup.
 	for _, bucket := range buckets {
-		select {
-		case <-ctx.Done():
-			return purgedCount
-		default:
+		if ctx.Err() != nil {
+			break
 		}
 
 		rbDir := s.recyclebinPath(bucket.Name)
@@ -2300,10 +2306,8 @@ func (s *Store) purgeRecycledEntries(ctx context.Context, cutoff *time.Time) int
 		}
 
 		for _, e := range entries {
-			select {
-			case <-ctx.Done():
-				return purgedCount
-			default:
+			if ctx.Err() != nil {
+				break
 			}
 
 			if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
@@ -2326,9 +2330,8 @@ func (s *Store) purgeRecycledEntries(ctx context.Context, cutoff *time.Time) int
 				continue
 			}
 
-			// Collect chunks to check for cleanup
-			chunksToCheck := make([]string, len(entry.Meta.Chunks))
-			copy(chunksToCheck, entry.Meta.Chunks)
+			// Collect chunks for batch cleanup
+			allChunksToCheck = append(allChunksToCheck, entry.Meta.Chunks...)
 
 			// Delete version files for this key
 			versionDir := filepath.Join(s.dataDir, "buckets", bucket.Name, "versions", entry.OriginalKey)
@@ -2341,10 +2344,12 @@ func (s *Store) purgeRecycledEntries(ctx context.Context, cutoff *time.Time) int
 
 			purgedCount++
 			s.statsRecycledBytes.Add(-entry.Meta.Size)
-
-			// Clean up unreferenced chunks (outside any lock concern since PurgeObject does the same)
-			s.DeleteUnreferencedChunks(ctx, chunksToCheck)
 		}
+	}
+
+	// Phase 2: Single batch cleanup (one reference set build for all purged entries).
+	if len(allChunksToCheck) > 0 {
+		s.DeleteUnreferencedChunks(ctx, allChunksToCheck)
 	}
 
 	return purgedCount
@@ -3204,7 +3209,6 @@ type GCStats struct {
 	BytesReclaimed           int64 // Approximate bytes reclaimed from chunk deletion
 	ObjectsScanned           int   // Number of objects scanned
 	BucketsProcessed         int   // Number of buckets processed
-	ChunksSkippedShared      int   // Chunks skipped because owned by other coordinators (Phase 6)
 	ChunksSkippedGracePeriod int   // Chunks skipped due to grace period (Phase 6)
 }
 
@@ -3461,62 +3465,22 @@ func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, refere
 		// Extract hash from path (chunks are stored as chunks/ab/abcdef...)
 		hash := filepath.Base(path)
 		if _, referenced := referencedChunks[hash]; !referenced {
-			// Chunk is not referenced locally - check if it's safe to delete
+			// Chunk is not referenced by any local metadata (live objects,
+			// versions, or recycle bin). The grace period above already
+			// protects against races with in-flight replication. Safe to
+			// delete locally regardless of registry state — each coordinator
+			// independently manages its own storage.
+			stats.BytesReclaimed += info.Size()
 
-			// Phase 6: Registry-aware deletion
-			// Query registry to see if other coordinators still own this chunk
+			// Unregister from chunk registry first (so other coordinators
+			// stop considering us an owner).
 			s.mu.RLock()
 			registry := s.chunkRegistry
-			coordID := s.coordinatorID
 			s.mu.RUnlock()
 
 			if registry != nil {
-				owners, err := registry.GetOwners(hash)
-				if err == nil && len(owners) > 0 {
-					// Fast path: sole owner check
-					if len(owners) == 1 && owners[0] == coordID {
-						// We're the sole owner - safe to delete
-					} else {
-						// Check if any other coordinator owns this chunk
-						hasOtherOwners := false
-						for _, owner := range owners {
-							if owner != coordID {
-								hasOtherOwners = true
-								break
-							}
-						}
-
-						if hasOtherOwners {
-							// Other coordinators still own this chunk - don't delete locally
-							stats.ChunksSkippedShared++
-							return nil
-						}
-
-						// Owners list exists but doesn't include us - registry might be out of sync
-						// Don't delete to be safe
-						stats.ChunksSkippedShared++
-						return nil
-					}
-				} else {
-					// Registry returned empty or error - chunk might be orphaned
-					// Self-healing: re-register ourselves as owner to prevent premature deletion
-					if coordID != "" {
-						if err := registry.RegisterChunk(hash, info.Size()); err != nil {
-							s.logger.Warn().Err(err).Str("chunk_hash", hash[:8]+"...").
-								Msg("Failed to re-register orphaned chunk during GC")
-						} else {
-							s.logger.Debug().Str("chunk_hash", hash[:8]+"...").
-								Msg("Re-registered orphaned chunk in registry (self-healing GC)")
-							stats.ChunksSkippedShared++
-							return nil // Don't delete - we just claimed ownership
-						}
-					}
-					// If re-registration fails or coordID is empty, proceed with deletion (fail-safe)
-				}
+				_ = registry.UnregisterChunk(hash)
 			}
-
-			// Safe to delete: not referenced locally and no other owners
-			stats.BytesReclaimed += info.Size()
 
 			// CAS.DeleteChunk has its own locking
 			if freed, delErr := s.cas.DeleteChunk(ctx, hash); delErr == nil {
@@ -3524,11 +3488,6 @@ func (s *Store) deleteOrphanedChunks(ctx context.Context, stats *GCStats, refere
 				if freed > 0 {
 					s.statsChunkCount.Add(-1)
 					s.statsChunkBytes.Add(-freed)
-				}
-
-				// Unregister from chunk registry
-				if registry != nil {
-					_ = registry.UnregisterChunk(hash)
 				}
 			}
 		}

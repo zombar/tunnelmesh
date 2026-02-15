@@ -56,7 +56,8 @@ func (m *mockReplicator) GetPeers() []string {
 
 // mockChunkRegistry implements ChunkRegistryInterface for testing.
 type mockChunkRegistry struct {
-	owners map[string][]string // chunkHash -> []coordinatorID
+	owners       map[string][]string // chunkHash -> []coordinatorID
+	localCoordID string              // set to enable UnregisterChunk tracking
 }
 
 func (m *mockChunkRegistry) RegisterChunk(hash string, size int64) error {
@@ -72,6 +73,21 @@ func (m *mockChunkRegistry) RegisterShardChunk(hash string, size int64, parentFi
 }
 
 func (m *mockChunkRegistry) UnregisterChunk(hash string) error {
+	if m.owners != nil && m.localCoordID != "" {
+		if owners, exists := m.owners[hash]; exists {
+			var remaining []string
+			for _, o := range owners {
+				if o != m.localCoordID {
+					remaining = append(remaining, o)
+				}
+			}
+			if len(remaining) == 0 {
+				delete(m.owners, hash)
+			} else {
+				m.owners[hash] = remaining
+			}
+		}
+	}
 	return nil
 }
 
