@@ -602,7 +602,7 @@ func (s *Store) DeleteBucket(ctx context.Context, bucket string) error {
 	}
 
 	// Check if bucket has recycle bin entries
-	recyclebinDir := filepath.Join(s.bucketPath(bucket), "recyclebin")
+	recyclebinDir := s.recyclebinPath(bucket)
 	if entries, err := os.ReadDir(recyclebinDir); err == nil && len(entries) > 0 {
 		return fmt.Errorf("bucket has %d recycled objects: %w", len(entries), ErrBucketNotEmpty)
 	}
@@ -683,7 +683,7 @@ func (s *Store) ForceDeleteBucket(ctx context.Context, bucket string) error {
 	})
 
 	// Decrement recycled bytes for all recyclebin entries being removed
-	rbDir := filepath.Join(bucketDir, "recyclebin")
+	rbDir := s.recyclebinPath(bucket)
 	_ = filepath.Walk(rbDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
 			return nil
@@ -1928,7 +1928,12 @@ func (s *Store) RecycleObject(ctx context.Context, bucket, key string) error {
 		Meta:        *meta,
 	}
 
-	// Write recycle bin entry
+	// Write recycle bin entry first, then remove live meta. If the process crashes
+	// between these two operations, both the live object and the recycle bin entry
+	// will exist on disk. This is safe: the live object takes precedence for all
+	// read operations, and the orphaned recycle bin entry will be purged by
+	// retention or the next GC cycle. We write the entry first so that a crash
+	// after removal doesn't lose the object metadata entirely.
 	entryData, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal recycled entry: %w", err)
@@ -2037,8 +2042,12 @@ func (s *Store) RestoreRecycledObject(ctx context.Context, bucket, key string) e
 		return fmt.Errorf("write restored meta: %w", err)
 	}
 
-	// Remove recycle bin entry
-	_ = os.Remove(bestPath)
+	// Remove recycle bin entry. If this fails, the entry is orphaned but harmless —
+	// the live object takes precedence, and the entry will be purged by retention.
+	if err := os.Remove(bestPath); err != nil && !os.IsNotExist(err) {
+		s.logger.Warn().Err(err).Str("path", bestPath).
+			Msg("failed to remove recyclebin entry after restore; entry will be purged by retention")
+	}
 
 	// Update bucket size
 	if bestEntry.Meta.Size > 0 {
@@ -2987,7 +2996,7 @@ func (s *Store) isChunkReferencedGlobally(ctx context.Context, hash string) bool
 		if dirContainsChunkRef(filepath.Join(bucketDir, "versions"), hash, extractChunksFromObjectMeta) {
 			return true
 		}
-		if dirContainsChunkRef(filepath.Join(bucketDir, "recyclebin"), hash, extractChunksFromRecycledEntry) {
+		if dirContainsChunkRef(s.recyclebinPath(bucket), hash, extractChunksFromRecycledEntry) {
 			return true
 		}
 	}
@@ -3138,7 +3147,7 @@ func (s *Store) initCASStats() {
 		})
 
 		// Count recyclebin entries and their logical sizes
-		rbDir := filepath.Join(bucketsDir, bucket, "recyclebin")
+		rbDir := s.recyclebinPath(bucket)
 		_ = filepath.Walk(rbDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
 				return nil
@@ -3321,7 +3330,7 @@ func (s *Store) buildChunkReferenceSet(ctx context.Context) map[string]struct{} 
 		})
 
 		// Scan recycle bin entries
-		recyclebinDir := filepath.Join(bucketsDir, bucket, "recyclebin")
+		recyclebinDir := s.recyclebinPath(bucket)
 		_ = filepath.Walk(recyclebinDir, func(path string, info os.FileInfo, err error) error {
 			select {
 			case <-ctx.Done():

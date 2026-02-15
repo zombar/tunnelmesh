@@ -326,6 +326,19 @@ func (s *Server) setupAdminRoutes() {
 		path := strings.TrimPrefix(r.URL.Path, "/api/s3/buckets/")
 		path = strings.TrimSuffix(path, "/")
 
+		// Handle per-bucket recycle bin purge: DELETE /api/s3/buckets/{bucket}/recyclebin
+		if strings.HasSuffix(path, "/recyclebin") {
+			bucket := strings.TrimSuffix(path, "/recyclebin")
+			if r.Method == http.MethodDelete {
+				s.withS3AdminMetrics(w, "purgeRecycleBin", func(w http.ResponseWriter) {
+					s.handlePurgeBucketRecycleBin(w, r, bucket)
+				})
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
 		// If path contains additional segments (e.g., "mybucket/objects"),
 		// delegate to S3 proxy handler instead of bucket management
 		if strings.Contains(path, "/") {
@@ -1925,6 +1938,29 @@ func (s *Server) handleS3GC(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		log.Error().Err(err).Msg("failed to encode GC stats response")
 	}
+}
+
+// handlePurgeBucketRecycleBin purges all recycle bin entries for a specific bucket.
+// This allows users to empty a bucket's recycle bin before deleting the bucket,
+// since DeleteBucket blocks on non-empty recycle bins.
+//
+// DELETE /api/s3/buckets/{bucket}/recyclebin
+func (s *Server) handlePurgeBucketRecycleBin(w http.ResponseWriter, r *http.Request, bucket string) {
+	if s.s3Store == nil {
+		s.jsonError(w, "S3 storage not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := s.s3Store.PurgeAllRecycledInBucket(r.Context(), bucket); err != nil {
+		s.jsonError(w, fmt.Sprintf("purge recycle bin: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"bucket": bucket,
+		"purged": true,
+	})
 }
 
 // Security: This endpoint is registered on adminMux which is only served over HTTPS
