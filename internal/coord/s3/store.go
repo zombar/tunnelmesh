@@ -2766,27 +2766,18 @@ func (s *Store) GetCASStats() CASStats {
 			return nil
 		})
 
-		// Count versions and their chunk references.
-		// Version chunks are on disk (counted in ChunkBytes), so their
-		// references must be in LogicalBytes too — otherwise Physical >> Logical.
+		// Count version files (lightweight — no file content reads).
+		// We intentionally skip reading version metadata here because
+		// walking thousands of version files every 60s causes disk I/O
+		// storms that starve replication. LogicalBytes may be slightly
+		// less than ChunkBytes while old versions await GC cleanup;
+		// this is cosmetic and self-corrects after each GC cycle.
 		versionsDir := filepath.Join(bucketsDir, bucket, "versions")
 		_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || filepath.Ext(path) != ".json" {
 				return nil
 			}
 			stats.VersionCount++
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil
-			}
-			var meta ObjectMeta
-			if json.Unmarshal(data, &meta) == nil {
-				for _, chunkHash := range meta.Chunks {
-					if size, ok := chunkSizes[chunkHash]; ok {
-						stats.LogicalBytes += size
-					}
-				}
-			}
 			return nil
 		})
 	}

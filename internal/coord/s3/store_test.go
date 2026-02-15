@@ -2395,7 +2395,7 @@ func TestGetCASStats_LegacyObjectsUseChunkLookup(t *testing.T) {
 		"legacy objects should use on-disk chunk sizes via Chunks list lookup")
 }
 
-func TestGetCASStats_VersionChunksIncludedInLogicalBytes(t *testing.T) {
+func TestGetCASStats_VersionCountAfterOverwrite(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ctx := context.Background()
 
@@ -2417,9 +2417,10 @@ func TestGetCASStats_VersionChunksIncludedInLogicalBytes(t *testing.T) {
 
 	statsAfterV2 := store.GetCASStats()
 	assert.Equal(t, 1, statsAfterV2.VersionCount, "should have 1 archived version")
-	// ChunkBytes includes both v1 and v2 chunks on disk.
-	// LogicalBytes must also include version chunk references,
-	// otherwise Physical >> Logical which is nonsensical.
-	assert.Equal(t, statsAfterV2.ChunkBytes, statsAfterV2.LogicalBytes,
-		"after v2: logical should still equal physical — version chunks must be counted")
+	// LogicalBytes only counts current objects (not version files) to avoid
+	// expensive I/O on every metrics refresh. ChunkBytes may exceed LogicalBytes
+	// while old version chunks await GC cleanup — this is expected and
+	// self-corrects after each GC cycle.
+	assert.Greater(t, statsAfterV2.ChunkBytes, statsAfterV2.LogicalBytes,
+		"after v2: physical > logical because version chunks await GC")
 }
