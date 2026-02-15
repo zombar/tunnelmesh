@@ -319,10 +319,13 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		// Derive S3 credentials
 		log.Info().Str("access_key", creds.AccessKey).Msg("Derived S3 credentials")
 
-		// s3bench is a lightweight peer with no TUN interface — use the
-		// coordinator URL directly. The admin mux supports both HTTP and HTTPS;
-		// the user provides the correct scheme via --coordinator.
-		adminURL := coordinatorURL
+		// Admin routes (/api/shares, /api/s3/*) are only served on the admin
+		// mux bound to mesh_ip:443, not the public server. Use the coordinator's
+		// mesh IP from the registration response.
+		if len(meshInfo.CoordMeshIPs) == 0 {
+			return fmt.Errorf("no coordinator mesh IPs in registration response")
+		}
+		adminURL := "https://" + meshInfo.CoordMeshIPs[0]
 
 		log.Info().
 			Str("s3_endpoint", adminURL).
