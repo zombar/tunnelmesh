@@ -30,6 +30,7 @@ type S3ObjectInfo struct {
 	ContentType  string `json:"content_type,omitempty"`
 	IsPrefix     bool   `json:"is_prefix,omitempty"` // True for "folder" prefixes
 	Forwarded    bool   `json:"-"`                   // In-memory: survives loadPeerIndexes until remote persists
+	SourceIP     string `json:"-"`                   // In-memory: coordinator IP that owns this object
 }
 
 // S3BucketInfo represents an S3 bucket for the explorer API.

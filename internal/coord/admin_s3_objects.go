@@ -166,7 +166,7 @@ func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, 
 				s.forwardS3Request(rec, r, target, bucket)
 				if rec.status == http.StatusOK || rec.status == http.StatusNoContent {
 					w.WriteHeader(rec.status)
-					s.updatePeerListingsAfterForward(bucket, key, r)
+					s.updatePeerListingsAfterForward(bucket, key, target, r)
 					return
 				}
 				// Forward failed — fall through to handle locally.
@@ -203,9 +203,14 @@ func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, 
 func (s *Server) handleS3GetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	reader, meta, err := s.s3Store.GetObject(r.Context(), bucket, key)
 	if err != nil {
-		// Try forwarding to primary if not found locally
+		// Try forwarding: first to the source coordinator (from listing index),
+		// then fall back to the hash-based primary coordinator.
 		if (errors.Is(err, s3.ErrObjectNotFound) || errors.Is(err, s3.ErrBucketNotFound)) &&
 			r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+			if target := s.findObjectSourceIP(bucket, key); target != "" {
+				s.forwardS3Request(w, r, target, bucket)
+				return
+			}
 			if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
 				s.forwardS3Request(w, r, target, bucket)
 				return
@@ -467,9 +472,14 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, r *http.Request, bu
 func (s *Server) handleS3HeadObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	meta, err := s.s3Store.HeadObject(r.Context(), bucket, key)
 	if err != nil {
-		// Try forwarding to primary if not found locally
+		// Try forwarding: first to the source coordinator (from listing index),
+		// then fall back to the hash-based primary coordinator.
 		if (errors.Is(err, s3.ErrBucketNotFound) || errors.Is(err, s3.ErrObjectNotFound)) &&
 			r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+			if target := s.findObjectSourceIP(bucket, key); target != "" {
+				s.forwardS3Request(w, r, target, bucket)
+				return
+			}
 			if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
 				s.forwardS3Request(w, r, target, bucket)
 				return

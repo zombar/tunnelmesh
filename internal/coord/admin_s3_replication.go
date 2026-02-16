@@ -56,7 +56,7 @@ func (d *discardResponseWriter) WriteHeader(code int)        { d.status = code }
 // updatePeerListingsAfterForward immediately updates the peerListings atomic pointer
 // after a successful forwarded write, so the listing handler shows the object without
 // waiting for the background indexer to persist and reload.
-func (s *Server) updatePeerListingsAfterForward(bucket, key string, r *http.Request) {
+func (s *Server) updatePeerListingsAfterForward(bucket, key, targetIP string, r *http.Request) {
 	for {
 		old := s.peerListings.Load()
 
@@ -81,6 +81,7 @@ func (s *Server) updatePeerListingsAfterForward(bucket, key string, r *http.Requ
 				LastModified: time.Now().UTC().Format(time.RFC3339),
 				ContentType:  r.Header.Get("Content-Type"),
 				Forwarded:    true,
+				SourceIP:     targetIP,
 			}
 			if info.ContentType == "" {
 				info.ContentType = "application/octet-stream"
@@ -97,6 +98,7 @@ func (s *Server) updatePeerListingsAfterForward(bucket, key string, r *http.Requ
 				recycled := *removed
 				recycled.DeletedAt = time.Now().UTC().Format(time.RFC3339)
 				recycled.Forwarded = true
+				recycled.SourceIP = targetIP
 				newPL.Recycled[bucket] = append(newPL.Recycled[bucket], recycled)
 			}
 		}
@@ -139,7 +141,13 @@ func (s *Server) ForwardS3Request(w http.ResponseWriter, r *http.Request, bucket
 	if r.Header.Get("X-TunnelMesh-Forwarded") != "" {
 		return false
 	}
-	target := s.objectPrimaryCoordinator(bucket, key)
+	var target string
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		target = s.findObjectSourceIP(bucket, key)
+	}
+	if target == "" {
+		target = s.objectPrimaryCoordinator(bucket, key)
+	}
 	if target == "" {
 		return false
 	}

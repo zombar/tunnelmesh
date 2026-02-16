@@ -18,7 +18,7 @@ func TestUpdatePeerListingsAfterForward_Put(t *testing.T) {
 	req.Header.Set("Content-Type", "text/plain")
 	req.ContentLength = 42
 
-	srv.updatePeerListingsAfterForward("test-bucket", "forwarded.txt", req)
+	srv.updatePeerListingsAfterForward("test-bucket", "forwarded.txt", "10.0.0.2", req)
 
 	pl := srv.peerListings.Load()
 	require.NotNil(t, pl)
@@ -28,6 +28,7 @@ func TestUpdatePeerListingsAfterForward_Put(t *testing.T) {
 	assert.Equal(t, int64(42), objs[0].Size)
 	assert.Equal(t, "text/plain", objs[0].ContentType)
 	assert.True(t, objs[0].Forwarded, "PUT entry should be marked as Forwarded")
+	assert.Equal(t, "10.0.0.2", objs[0].SourceIP, "PUT entry should have SourceIP set")
 }
 
 func TestUpdatePeerListingsAfterForward_Delete(t *testing.T) {
@@ -36,11 +37,11 @@ func TestUpdatePeerListingsAfterForward_Delete(t *testing.T) {
 	// First add an entry via PUT
 	putReq := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/test-bucket/objects/del.txt", nil)
 	putReq.ContentLength = 10
-	srv.updatePeerListingsAfterForward("test-bucket", "del.txt", putReq)
+	srv.updatePeerListingsAfterForward("test-bucket", "del.txt", "10.0.0.2", putReq)
 
 	// Then delete it
 	delReq := httptest.NewRequest(http.MethodDelete, "/api/s3/buckets/test-bucket/objects/del.txt", nil)
-	srv.updatePeerListingsAfterForward("test-bucket", "del.txt", delReq)
+	srv.updatePeerListingsAfterForward("test-bucket", "del.txt", "10.0.0.2", delReq)
 
 	pl := srv.peerListings.Load()
 	require.NotNil(t, pl)
@@ -53,6 +54,7 @@ func TestUpdatePeerListingsAfterForward_Delete(t *testing.T) {
 	assert.Equal(t, int64(10), recycled[0].Size)
 	assert.NotEmpty(t, recycled[0].DeletedAt)
 	assert.True(t, recycled[0].Forwarded, "DELETE recycled entry should be marked as Forwarded")
+	assert.Equal(t, "10.0.0.2", recycled[0].SourceIP, "DELETE recycled entry should have SourceIP set")
 }
 
 func TestUpdatePeerListingsAfterForward_DeleteNonExistent(t *testing.T) {
@@ -60,7 +62,7 @@ func TestUpdatePeerListingsAfterForward_DeleteNonExistent(t *testing.T) {
 
 	// Delete a key that was never added — recycled list should stay empty
 	delReq := httptest.NewRequest(http.MethodDelete, "/api/s3/buckets/test-bucket/objects/ghost.txt", nil)
-	srv.updatePeerListingsAfterForward("test-bucket", "ghost.txt", delReq)
+	srv.updatePeerListingsAfterForward("test-bucket", "ghost.txt", "10.0.0.2", delReq)
 
 	pl := srv.peerListings.Load()
 	require.NotNil(t, pl)
@@ -86,7 +88,7 @@ func TestLoadPeerIndexes_PreservesForwardedEntries(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/test-bucket/objects/fwd.txt", nil)
 	req.Header.Set("Content-Type", "text/plain")
 	req.ContentLength = 99
-	srv.updatePeerListingsAfterForward("test-bucket", "fwd.txt", req)
+	srv.updatePeerListingsAfterForward("test-bucket", "fwd.txt", "10.0.0.3", req)
 
 	// Simulate having two coordinators so loadPeerIndexes doesn't short-circuit
 	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2"})
@@ -101,6 +103,7 @@ func TestLoadPeerIndexes_PreservesForwardedEntries(t *testing.T) {
 	require.Len(t, objs, 1, "forwarded entry should survive loadPeerIndexes")
 	assert.Equal(t, "fwd.txt", objs[0].Key)
 	assert.True(t, objs[0].Forwarded)
+	assert.Equal(t, "10.0.0.3", objs[0].SourceIP, "SourceIP should survive loadPeerIndexes")
 }
 
 func TestLoadPeerIndexes_SupersedesForwardedEntry(t *testing.T) {
@@ -110,7 +113,7 @@ func TestLoadPeerIndexes_SupersedesForwardedEntry(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/test-bucket/objects/fwd.txt", nil)
 	req.Header.Set("Content-Type", "text/plain")
 	req.ContentLength = 99
-	srv.updatePeerListingsAfterForward("test-bucket", "fwd.txt", req)
+	srv.updatePeerListingsAfterForward("test-bucket", "fwd.txt", "10.0.0.3", req)
 
 	// Simulate two coordinators
 	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2"})
@@ -144,6 +147,84 @@ func TestLoadPeerIndexes_SupersedesForwardedEntry(t *testing.T) {
 	assert.Equal(t, "fwd.txt", objs[0].Key)
 	assert.Equal(t, "remote-peer", objs[0].Owner, "system store entry should win")
 	assert.False(t, objs[0].Forwarded, "persisted entry should not be marked Forwarded")
+	assert.Equal(t, "10.0.0.2", objs[0].SourceIP, "persisted entry should have SourceIP from peer IP")
+}
+
+func TestLoadPeerIndexes_SetsSourceIPFromPeerIP(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Simulate three coordinators
+	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"})
+
+	// Persist peer indexes with objects
+	for _, peer := range []struct {
+		ip, key string
+	}{
+		{"10.0.0.2", "from-peer2.txt"},
+		{"10.0.0.3", "from-peer3.txt"},
+	} {
+		idx := &listingIndex{
+			Buckets: map[string]*bucketListing{
+				"mybucket": {
+					Objects: []S3ObjectInfo{
+						{Key: peer.key, Size: 10, LastModified: "2024-01-01T00:00:00Z"},
+					},
+					Recycled: []S3ObjectInfo{
+						{Key: "recycled-" + peer.key, Size: 5, DeletedAt: "2024-01-02T00:00:00Z"},
+					},
+				},
+			},
+		}
+		err := srv.s3SystemStore.SaveJSON(context.Background(), "listings/"+peer.ip+".json", idx)
+		require.NoError(t, err)
+	}
+
+	srv.loadPeerIndexes(context.Background())
+
+	pl := srv.peerListings.Load()
+	require.NotNil(t, pl)
+
+	objs := pl.Objects["mybucket"]
+	require.Len(t, objs, 2)
+	sourceIPs := map[string]string{}
+	for _, obj := range objs {
+		sourceIPs[obj.Key] = obj.SourceIP
+	}
+	assert.Equal(t, "10.0.0.2", sourceIPs["from-peer2.txt"])
+	assert.Equal(t, "10.0.0.3", sourceIPs["from-peer3.txt"])
+
+	recycled := pl.Recycled["mybucket"]
+	require.Len(t, recycled, 2)
+	recycledIPs := map[string]string{}
+	for _, obj := range recycled {
+		recycledIPs[obj.Key] = obj.SourceIP
+	}
+	assert.Equal(t, "10.0.0.2", recycledIPs["recycled-from-peer2.txt"])
+	assert.Equal(t, "10.0.0.3", recycledIPs["recycled-from-peer3.txt"])
+}
+
+func TestFindObjectSourceIP(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// No peer listings — should return empty
+	assert.Equal(t, "", srv.findObjectSourceIP("bucket", "key"))
+
+	// Inject entries via peer listings
+	srv.peerListings.Store(&peerListings{
+		Objects: map[string][]S3ObjectInfo{
+			"mybucket": {
+				{Key: "a.txt", SourceIP: "10.0.0.2"},
+				{Key: "b.txt", SourceIP: "10.0.0.3"},
+				{Key: "c.txt", SourceIP: ""}, // no SourceIP
+			},
+		},
+	})
+
+	assert.Equal(t, "10.0.0.2", srv.findObjectSourceIP("mybucket", "a.txt"))
+	assert.Equal(t, "10.0.0.3", srv.findObjectSourceIP("mybucket", "b.txt"))
+	assert.Equal(t, "", srv.findObjectSourceIP("mybucket", "c.txt"), "empty SourceIP should return empty")
+	assert.Equal(t, "", srv.findObjectSourceIP("mybucket", "nonexistent.txt"))
+	assert.Equal(t, "", srv.findObjectSourceIP("otherbucket", "a.txt"))
 }
 
 func TestObjectPrimaryCoordinator_NilIPs(t *testing.T) {

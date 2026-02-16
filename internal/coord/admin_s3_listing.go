@@ -137,6 +137,21 @@ func (s *Server) updateListingIndex(bucket, key string, info *S3ObjectInfo, op s
 	}
 }
 
+// findObjectSourceIP returns the SourceIP of the first peer listing entry
+// matching the given bucket/key. Returns "" if not found.
+func (s *Server) findObjectSourceIP(bucket, key string) string {
+	pl := s.peerListings.Load()
+	if pl == nil {
+		return ""
+	}
+	for _, obj := range pl.Objects[bucket] {
+		if obj.Key == key && obj.SourceIP != "" {
+			return obj.SourceIP
+		}
+	}
+	return ""
+}
+
 // getPeerObjectListing returns cached peer object listings for a bucket.
 func (s *Server) getPeerObjectListing(bucket string) []S3ObjectInfo {
 	pl := s.peerListings.Load()
@@ -294,6 +309,12 @@ func (s *Server) loadPeerIndexes(ctx context.Context) {
 			continue // Peer index not available yet
 		}
 		for bucket, bl := range idx.Buckets {
+			for i := range bl.Objects {
+				bl.Objects[i].SourceIP = peerIP
+			}
+			for i := range bl.Recycled {
+				bl.Recycled[i].SourceIP = peerIP
+			}
 			merged.Objects[bucket] = append(merged.Objects[bucket], bl.Objects...)
 			merged.Recycled[bucket] = append(merged.Recycled[bucket], bl.Recycled...)
 		}
