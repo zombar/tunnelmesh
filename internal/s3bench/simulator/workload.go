@@ -306,13 +306,20 @@ func (w *WorkloadGenerator) generateDownloadTasks(uploadTasks []WorkloadTask) []
 				deadline = deleteTime
 			}
 
-			// Need at least 1 minute window between upload and deadline
-			if deadline-uploadTask.StoryTime < 1*time.Minute {
+			// Safety buffer: at least 2 seconds of real time, minimum 1 story-minute.
+			// At high time scales (e.g. 1000x), a 1-minute story buffer is only 60ms
+			// real time, which is not enough for concurrent HTTP requests to complete.
+			safetyBuffer := time.Duration(float64(2*time.Second) * w.timeScale)
+			if safetyBuffer < time.Minute {
+				safetyBuffer = time.Minute
+			}
+
+			if deadline-uploadTask.StoryTime < safetyBuffer {
 				continue
 			}
 
 			// Download between upload time and deadline
-			window := deadline - uploadTask.StoryTime - 1*time.Minute
+			window := deadline - uploadTask.StoryTime - safetyBuffer
 			downloadTime := uploadTask.StoryTime + time.Duration(rand.Float64()*float64(window))
 
 			downloadTask := WorkloadTask{
