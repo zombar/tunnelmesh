@@ -2165,16 +2165,17 @@
     async function undeleteFile() {
         if (!state.currentFile) return;
 
-        const fileName = state.currentFile.key.split('/').pop();
+        const { bucket, key } = state.currentFile;
+        const fileName = key.split('/').pop();
         if (!confirm(`Restore "${fileName}"?`)) return;
 
         try {
-            await restoreRecycledObject(state.currentFile.bucket, state.currentFile.key);
+            await restoreRecycledObject(bucket, key);
             showToast('File restored', 'success');
             // Refresh to show the file as restored
             await renderFileListing();
             // Reopen the file to update the UI
-            await openFile(state.currentFile.bucket, state.currentFile.key);
+            await openFile(bucket, key);
         } catch (err) {
             showToast(`Failed to restore: ${err.message}`, 'error');
         }
