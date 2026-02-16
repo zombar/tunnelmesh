@@ -29,6 +29,7 @@ type S3ObjectInfo struct {
 	DeletedAt    string `json:"deleted_at,omitempty"` // When the object was deleted (recycled)
 	ContentType  string `json:"content_type,omitempty"`
 	IsPrefix     bool   `json:"is_prefix,omitempty"` // True for "folder" prefixes
+	Forwarded    bool   `json:"-"`                   // In-memory: survives loadPeerIndexes until remote persists
 }
 
 // S3BucketInfo represents an S3 bucket for the explorer API.
