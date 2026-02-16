@@ -56,6 +56,7 @@ type DistributedChunkReader struct {
 	readyBuf    map[int]*prefetchResult // out-of-order buffer
 	nextRead    int                     // next chunk index Read() expects
 	started     bool                    // lazy-start flag
+	workerWg    sync.WaitGroup          // tracks prefetch worker goroutines
 
 	// Sequential fallback state (used when parallelism <= 1 or no replicator)
 	currentChunk []byte
@@ -191,11 +192,10 @@ func (r *DistributedChunkReader) startPrefetch() {
 		parallelism = len(r.chunks)
 	}
 
-	var wg sync.WaitGroup
 	for w := 0; w < parallelism; w++ {
-		wg.Add(1)
+		r.workerWg.Add(1)
 		go func() {
-			defer wg.Done()
+			defer r.workerWg.Done()
 			for idx := range workCh {
 				data, err := r.fetchChunk(idx)
 				select {
@@ -209,7 +209,7 @@ func (r *DistributedChunkReader) startPrefetch() {
 
 	// Close resultCh when all workers are done
 	go func() {
-		wg.Wait()
+		r.workerWg.Wait()
 		close(r.resultCh)
 	}()
 }
@@ -378,9 +378,11 @@ func (r *DistributedChunkReader) fetchChunkFromPeer(peerID, chunkHash string) ([
 	return chunkData, nil
 }
 
-// Close cancels prefetch goroutines and releases resources.
+// Close cancels prefetch goroutines, waits for them to finish, and releases resources.
+// Waiting ensures all file handles are closed before the caller cleans up temp directories.
 func (r *DistributedChunkReader) Close() error {
 	r.cancel()
+	r.workerWg.Wait()
 	return nil
 }
 
