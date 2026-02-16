@@ -81,6 +81,7 @@ func (s *Server) updatePeerListingsAfterForward(bucket, key, targetIP string, r 
 				LastModified: time.Now().UTC().Format(time.RFC3339),
 				ContentType:  r.Header.Get("Content-Type"),
 				Forwarded:    true,
+				ForwardedAt:  time.Now(),
 				SourceIP:     targetIP,
 			}
 			if info.ContentType == "" {
@@ -98,6 +99,7 @@ func (s *Server) updatePeerListingsAfterForward(bucket, key, targetIP string, r 
 				recycled := *removed
 				recycled.DeletedAt = time.Now().UTC().Format(time.RFC3339)
 				recycled.Forwarded = true
+				recycled.ForwardedAt = time.Now()
 				recycled.SourceIP = targetIP
 				newPL.Recycled[bucket] = append(newPL.Recycled[bucket], recycled)
 			}

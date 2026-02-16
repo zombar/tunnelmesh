@@ -77,7 +77,7 @@ func TestUpdateListingIndex_IncrementsSeq(t *testing.T) {
 	assert.Equal(t, uint64(2), idx2.Seq)
 }
 
-func TestReconcileLocalIndex_SkipsWhenSeqAdvanced(t *testing.T) {
+func TestReconcileLocalIndex_MergesWithConcurrentUpdates(t *testing.T) {
 	srv := newTestServerWithListingIndex(t)
 
 	// Pre-populate listing index (Seq=1)
@@ -108,8 +108,8 @@ func TestReconcileLocalIndex_SkipsWhenSeqAdvanced(t *testing.T) {
 	after := srv.localListingIndex.Load()
 	require.NotNil(t, after)
 
-	// The concurrent update must be preserved — reconcile either skipped
-	// (because Seq advanced) or CAS failed (because pointer changed).
+	// The concurrent update must be preserved — reconcile merges filesystem
+	// scan (ground truth) with incremental updates that arrived during the scan.
 	assert.Equal(t, uint64(2), after.Seq)
 	bl := after.Buckets["test-bucket"]
 	require.NotNil(t, bl)
@@ -119,5 +119,107 @@ func TestReconcileLocalIndex_SkipsWhenSeqAdvanced(t *testing.T) {
 			found = true
 		}
 	}
-	assert.True(t, found, "concurrent incremental update should be preserved")
+	assert.True(t, found, "concurrent incremental update should be preserved via merge")
+}
+
+func TestReconcileLocalIndex_RemovesStaleEntries(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Add a stale entry that does NOT exist on the filesystem
+	stale := S3ObjectInfo{Key: "stale-ghost.txt", Size: 999, LastModified: "2024-01-01T00:00:00Z"}
+	srv.updateListingIndex("test-bucket", "stale-ghost.txt", &stale, "put")
+
+	// Also add one more to bump Seq (simulating sustained writes)
+	info := S3ObjectInfo{Key: "another.txt", Size: 10, LastModified: "2024-01-02T00:00:00Z"}
+	srv.updateListingIndex("test-bucket", "another.txt", &info, "put")
+
+	before := srv.localListingIndex.Load()
+	require.NotNil(t, before)
+	require.Equal(t, uint64(2), before.Seq)
+
+	// Reconcile scans the actual filesystem — neither stale-ghost.txt nor
+	// another.txt exist on disk, so both should be removed.
+	srv.reconcileLocalIndex(t.Context())
+
+	after := srv.localListingIndex.Load()
+	require.NotNil(t, after)
+
+	// The stale entry should be gone (filesystem is ground truth)
+	bl := after.Buckets["test-bucket"]
+	if bl != nil {
+		for _, obj := range bl.Objects {
+			assert.NotEqual(t, "stale-ghost.txt", obj.Key, "stale entry should be removed by reconcile")
+		}
+	}
+}
+
+func TestForwardedEntryTTL(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Need multiple coord IPs for loadPeerIndexes to process forwarded entries
+	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2"})
+
+	// Seed peerListings with a forwarded entry that has already expired
+	expired := &peerListings{
+		Objects: map[string][]S3ObjectInfo{
+			"bkt": {
+				{
+					Key:         "old.txt",
+					Size:        10,
+					Forwarded:   true,
+					ForwardedAt: time.Now().Add(-time.Minute), // 60s ago, well past 30s TTL
+					SourceIP:    "10.0.0.2",
+				},
+				{
+					Key:         "fresh.txt",
+					Size:        20,
+					Forwarded:   true,
+					ForwardedAt: time.Now(), // just now
+					SourceIP:    "10.0.0.2",
+				},
+			},
+		},
+		Recycled: make(map[string][]S3ObjectInfo),
+	}
+	srv.peerListings.Store(expired)
+
+	// loadPeerIndexes should drop "old.txt" (expired) and keep "fresh.txt"
+	srv.loadPeerIndexes(t.Context())
+
+	pl := srv.peerListings.Load()
+	require.NotNil(t, pl)
+
+	var foundOld, foundFresh bool
+	for _, obj := range pl.Objects["bkt"] {
+		if obj.Key == "old.txt" {
+			foundOld = true
+		}
+		if obj.Key == "fresh.txt" {
+			foundFresh = true
+		}
+	}
+	assert.False(t, foundOld, "expired forwarded entry should be removed")
+	assert.True(t, foundFresh, "fresh forwarded entry should be preserved")
+}
+
+func TestUpdateListingIndex_DeleteDeduplicatesRecycled(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Put → Delete → Put → Delete the same key
+	info := S3ObjectInfo{Key: "file.txt", Size: 100, LastModified: "2024-01-01T00:00:00Z"}
+	srv.updateListingIndex("bkt", "file.txt", &info, "put")
+	srv.updateListingIndex("bkt", "file.txt", nil, "delete")
+
+	info2 := S3ObjectInfo{Key: "file.txt", Size: 200, LastModified: "2024-02-01T00:00:00Z"}
+	srv.updateListingIndex("bkt", "file.txt", &info2, "put")
+	srv.updateListingIndex("bkt", "file.txt", nil, "delete")
+
+	idx := srv.localListingIndex.Load()
+	require.NotNil(t, idx)
+	bl := idx.Buckets["bkt"]
+	require.NotNil(t, bl)
+
+	// Should have exactly one recycled entry (dedup by key)
+	assert.Len(t, bl.Recycled, 1, "recycled list should be deduplicated")
+	assert.Equal(t, "file.txt", bl.Recycled[0].Key)
 }
