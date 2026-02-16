@@ -101,7 +101,7 @@ func (s *Server) updatePeerListingsAfterForward(bucket, key, targetIP string, r 
 				recycled.Forwarded = true
 				recycled.ForwardedAt = time.Now()
 				recycled.SourceIP = targetIP
-				newPL.Recycled[bucket] = append(newPL.Recycled[bucket], recycled)
+				newPL.Recycled[bucket] = upsertObjectList(newPL.Recycled[bucket], key, recycled)
 			}
 		}
 

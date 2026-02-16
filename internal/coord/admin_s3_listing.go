@@ -379,8 +379,8 @@ func (s *Server) reconcileLocalIndex(ctx context.Context) {
 	}
 
 	// Capture the Seq before the filesystem scan. If incremental updates
-	// happen during the scan (Seq advances), this reconcile result is stale
-	// and we skip it — the next 60-second cycle will pick up any drift.
+	// happen during the scan (Seq advances), the merge-and-CAS loop below
+	// preserves those updates while using the filesystem scan as ground truth.
 	var preSeq uint64
 	if pre := s.localListingIndex.Load(); pre != nil {
 		preSeq = pre.Seq
@@ -514,6 +514,8 @@ func mergeReconcileWithCurrent(scan, current *listingIndex, preSeq uint64) *list
 }
 
 // appendMissing appends entries from src that are not already present (by key) in dst.
+// For keys present in both, dst's version wins. This means metadata (size, content-type)
+// may temporarily show the filesystem's version until the next reconcile cycle.
 func appendMissing(dst, src []S3ObjectInfo) []S3ObjectInfo {
 	existing := make(map[string]struct{}, len(dst))
 	for _, obj := range dst {
