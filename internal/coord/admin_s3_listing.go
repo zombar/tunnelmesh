@@ -299,6 +299,35 @@ func (s *Server) loadPeerIndexes(ctx context.Context) {
 		}
 	}
 
+	// Preserve forwarded entries from the previous peerListings that haven't
+	// been superseded by system store data yet. mergeObjectListings uses the
+	// system store result as "local" (wins ties) so forwarded entries are
+	// naturally dropped once the remote peer persists.
+	if old := s.peerListings.Load(); old != nil {
+		for bucket, objs := range old.Objects {
+			var forwarded []S3ObjectInfo
+			for _, obj := range objs {
+				if obj.Forwarded {
+					forwarded = append(forwarded, obj)
+				}
+			}
+			if len(forwarded) > 0 {
+				merged.Objects[bucket] = mergeObjectListings(merged.Objects[bucket], forwarded)
+			}
+		}
+		for bucket, objs := range old.Recycled {
+			var forwarded []S3ObjectInfo
+			for _, obj := range objs {
+				if obj.Forwarded {
+					forwarded = append(forwarded, obj)
+				}
+			}
+			if len(forwarded) > 0 {
+				merged.Recycled[bucket] = mergeObjectListings(merged.Recycled[bucket], forwarded)
+			}
+		}
+	}
+
 	s.peerListings.Store(merged)
 }
 

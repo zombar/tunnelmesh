@@ -27,6 +27,7 @@ func TestUpdatePeerListingsAfterForward_Put(t *testing.T) {
 	assert.Equal(t, "forwarded.txt", objs[0].Key)
 	assert.Equal(t, int64(42), objs[0].Size)
 	assert.Equal(t, "text/plain", objs[0].ContentType)
+	assert.True(t, objs[0].Forwarded, "PUT entry should be marked as Forwarded")
 }
 
 func TestUpdatePeerListingsAfterForward_Delete(t *testing.T) {
@@ -51,6 +52,7 @@ func TestUpdatePeerListingsAfterForward_Delete(t *testing.T) {
 	assert.Equal(t, "del.txt", recycled[0].Key)
 	assert.Equal(t, int64(10), recycled[0].Size)
 	assert.NotEmpty(t, recycled[0].DeletedAt)
+	assert.True(t, recycled[0].Forwarded, "DELETE recycled entry should be marked as Forwarded")
 }
 
 func TestUpdatePeerListingsAfterForward_DeleteNonExistent(t *testing.T) {
@@ -75,6 +77,73 @@ func TestDiscardResponseWriter_CapturesStatus(t *testing.T) {
 	n, err := d.Write([]byte("discarded"))
 	assert.NoError(t, err)
 	assert.Equal(t, 9, n) // len("discarded")
+}
+
+func TestLoadPeerIndexes_PreservesForwardedEntries(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Inject a forwarded entry via updatePeerListingsAfterForward
+	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/test-bucket/objects/fwd.txt", nil)
+	req.Header.Set("Content-Type", "text/plain")
+	req.ContentLength = 99
+	srv.updatePeerListingsAfterForward("test-bucket", "fwd.txt", req)
+
+	// Simulate having two coordinators so loadPeerIndexes doesn't short-circuit
+	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2"})
+
+	// Run loadPeerIndexes — system store has no peer data, so without
+	// forwarded-entry preservation the entry would be lost.
+	srv.loadPeerIndexes(context.Background())
+
+	pl := srv.peerListings.Load()
+	require.NotNil(t, pl)
+	objs := pl.Objects["test-bucket"]
+	require.Len(t, objs, 1, "forwarded entry should survive loadPeerIndexes")
+	assert.Equal(t, "fwd.txt", objs[0].Key)
+	assert.True(t, objs[0].Forwarded)
+}
+
+func TestLoadPeerIndexes_SupersedesForwardedEntry(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Inject a forwarded entry
+	req := httptest.NewRequest(http.MethodPut, "/api/s3/buckets/test-bucket/objects/fwd.txt", nil)
+	req.Header.Set("Content-Type", "text/plain")
+	req.ContentLength = 99
+	srv.updatePeerListingsAfterForward("test-bucket", "fwd.txt", req)
+
+	// Simulate two coordinators
+	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2"})
+
+	// Persist a peer index for 10.0.0.2 that contains the same key with a newer timestamp
+	peerIdx := &listingIndex{
+		Buckets: map[string]*bucketListing{
+			"test-bucket": {
+				Objects: []S3ObjectInfo{
+					{
+						Key:          "fwd.txt",
+						Size:         99,
+						LastModified: "2099-01-01T00:00:00Z",
+						ContentType:  "text/plain",
+						Owner:        "remote-peer",
+					},
+				},
+			},
+		},
+	}
+	err := srv.s3SystemStore.SaveJSON(context.Background(), "listings/10.0.0.2.json", peerIdx)
+	require.NoError(t, err)
+
+	// Run loadPeerIndexes — system store entry should supersede the forwarded one
+	srv.loadPeerIndexes(context.Background())
+
+	pl := srv.peerListings.Load()
+	require.NotNil(t, pl)
+	objs := pl.Objects["test-bucket"]
+	require.Len(t, objs, 1)
+	assert.Equal(t, "fwd.txt", objs[0].Key)
+	assert.Equal(t, "remote-peer", objs[0].Owner, "system store entry should win")
+	assert.False(t, objs[0].Forwarded, "persisted entry should not be marked Forwarded")
 }
 
 func TestObjectPrimaryCoordinator_NilIPs(t *testing.T) {

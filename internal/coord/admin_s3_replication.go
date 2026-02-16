@@ -80,6 +80,7 @@ func (s *Server) updatePeerListingsAfterForward(bucket, key string, r *http.Requ
 				Size:         r.ContentLength,
 				LastModified: time.Now().UTC().Format(time.RFC3339),
 				ContentType:  r.Header.Get("Content-Type"),
+				Forwarded:    true,
 			}
 			if info.ContentType == "" {
 				info.ContentType = "application/octet-stream"
@@ -95,6 +96,7 @@ func (s *Server) updatePeerListingsAfterForward(bucket, key string, r *http.Requ
 			if removed != nil {
 				recycled := *removed
 				recycled.DeletedAt = time.Now().UTC().Format(time.RFC3339)
+				recycled.Forwarded = true
 				newPL.Recycled[bucket] = append(newPL.Recycled[bucket], recycled)
 			}
 		}
