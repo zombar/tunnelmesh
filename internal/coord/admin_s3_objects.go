@@ -611,6 +611,14 @@ func (s *Server) handleS3UndeleteObject(w http.ResponseWriter, r *http.Request, 
 
 	// Restore from recycle bin
 	if err := s.s3Store.RestoreRecycledObject(r.Context(), bucket, key); err != nil {
+		// Try forwarding to the source coordinator if not found locally
+		if (errors.Is(err, s3.ErrObjectNotFound) || errors.Is(err, s3.ErrBucketNotFound)) &&
+			r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+			if target := s.findRecycledObjectSourceIP(bucket, key); target != "" {
+				s.forwardS3Request(w, r, target, bucket)
+				return
+			}
+		}
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)
@@ -697,6 +705,14 @@ func (s *Server) handleS3GetRecycledObject(w http.ResponseWriter, r *http.Reques
 
 	reader, meta, err := s.s3Store.GetRecycledObject(r.Context(), bucket, key)
 	if err != nil {
+		// Try forwarding to the source coordinator if not found locally
+		if (errors.Is(err, s3.ErrObjectNotFound) || errors.Is(err, s3.ErrBucketNotFound)) &&
+			r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+			if target := s.findRecycledObjectSourceIP(bucket, key); target != "" {
+				s.forwardS3Request(w, r, target, bucket)
+				return
+			}
+		}
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)

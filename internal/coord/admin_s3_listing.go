@@ -152,6 +152,21 @@ func (s *Server) findObjectSourceIP(bucket, key string) string {
 	return ""
 }
 
+// findRecycledObjectSourceIP returns the SourceIP of the first peer recycled
+// listing entry matching the given bucket/key. Returns "" if not found.
+func (s *Server) findRecycledObjectSourceIP(bucket, key string) string {
+	pl := s.peerListings.Load()
+	if pl == nil {
+		return ""
+	}
+	for _, obj := range pl.Recycled[bucket] {
+		if obj.Key == key && obj.SourceIP != "" {
+			return obj.SourceIP
+		}
+	}
+	return ""
+}
+
 // getPeerObjectListing returns cached peer object listings for a bucket.
 func (s *Server) getPeerObjectListing(bucket string) []S3ObjectInfo {
 	pl := s.peerListings.Load()

@@ -227,6 +227,31 @@ func TestFindObjectSourceIP(t *testing.T) {
 	assert.Equal(t, "", srv.findObjectSourceIP("otherbucket", "a.txt"))
 }
 
+func TestFindRecycledObjectSourceIP(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// No peer listings — should return empty
+	assert.Equal(t, "", srv.findRecycledObjectSourceIP("bucket", "key"))
+
+	// Inject entries via peer listings
+	srv.peerListings.Store(&peerListings{
+		Objects: map[string][]S3ObjectInfo{},
+		Recycled: map[string][]S3ObjectInfo{
+			"mybucket": {
+				{Key: "deleted-a.txt", SourceIP: "10.0.0.2"},
+				{Key: "deleted-b.txt", SourceIP: "10.0.0.3"},
+				{Key: "deleted-c.txt", SourceIP: ""}, // no SourceIP
+			},
+		},
+	})
+
+	assert.Equal(t, "10.0.0.2", srv.findRecycledObjectSourceIP("mybucket", "deleted-a.txt"))
+	assert.Equal(t, "10.0.0.3", srv.findRecycledObjectSourceIP("mybucket", "deleted-b.txt"))
+	assert.Equal(t, "", srv.findRecycledObjectSourceIP("mybucket", "deleted-c.txt"), "empty SourceIP should return empty")
+	assert.Equal(t, "", srv.findRecycledObjectSourceIP("mybucket", "nonexistent.txt"))
+	assert.Equal(t, "", srv.findRecycledObjectSourceIP("otherbucket", "deleted-a.txt"))
+}
+
 func TestObjectPrimaryCoordinator_NilIPs(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
