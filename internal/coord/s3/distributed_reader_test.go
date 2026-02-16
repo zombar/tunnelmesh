@@ -569,12 +569,10 @@ func TestDistributedChunkReader_PartialFailure(t *testing.T) {
 }
 
 func TestDistributedChunkReader_ContextCancellation(t *testing.T) {
-	// Use a separate directory that we manage manually to avoid cleanup race
-	dir, err := filepath.Abs(filepath.Join(t.TempDir(), "cas"))
-	require.NoError(t, err)
+	dir := t.TempDir()
 
 	var encryptionKey [32]byte
-	cas, err := NewCAS(dir, encryptionKey)
+	cas, err := NewCAS(filepath.Join(dir, "cas"), encryptionKey)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -617,10 +615,9 @@ func TestDistributedChunkReader_ContextCancellation(t *testing.T) {
 
 	// Read should eventually fail or return partial data
 	_, readErr := io.ReadAll(reader)
+	// Close waits for all worker goroutines to finish, ensuring no file
+	// handles are held when t.TempDir() cleanup runs (fixes Windows flake).
 	_ = reader.Close()
-
-	// Wait briefly for goroutines to settle after cancellation
-	time.Sleep(50 * time.Millisecond)
 
 	// Either we get an error (context canceled) or we get no data
 	// The key thing is that it doesn't hang

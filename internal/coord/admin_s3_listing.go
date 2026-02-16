@@ -105,7 +105,7 @@ func (s *Server) updateListingIndex(bucket, key string, info *S3ObjectInfo, op s
 			if removed != nil {
 				recycled := *removed
 				recycled.DeletedAt = time.Now().UTC().Format(time.RFC3339)
-				newBL.Recycled = append(newBL.Recycled, recycled)
+				newBL.Recycled = upsertObjectList(newBL.Recycled, key, recycled)
 			}
 
 		case "undelete":
@@ -339,11 +339,15 @@ func (s *Server) loadPeerIndexes(ctx context.Context) {
 	// been superseded by system store data yet. mergeObjectListings uses the
 	// system store result as "local" (wins ties) so forwarded entries are
 	// naturally dropped once the remote peer persists.
+	// Entries older than forwardedEntryTTL are expired to prevent unbounded accumulation.
+	const forwardedEntryTTL = 30 * time.Second
+
 	if old := s.peerListings.Load(); old != nil {
+		now := time.Now()
 		for bucket, objs := range old.Objects {
 			var forwarded []S3ObjectInfo
 			for _, obj := range objs {
-				if obj.Forwarded {
+				if obj.Forwarded && now.Sub(obj.ForwardedAt) < forwardedEntryTTL {
 					forwarded = append(forwarded, obj)
 				}
 			}
@@ -354,7 +358,7 @@ func (s *Server) loadPeerIndexes(ctx context.Context) {
 		for bucket, objs := range old.Recycled {
 			var forwarded []S3ObjectInfo
 			for _, obj := range objs {
-				if obj.Forwarded {
+				if obj.Forwarded && now.Sub(obj.ForwardedAt) < forwardedEntryTTL {
 					forwarded = append(forwarded, obj)
 				}
 			}
@@ -375,8 +379,8 @@ func (s *Server) reconcileLocalIndex(ctx context.Context) {
 	}
 
 	// Capture the Seq before the filesystem scan. If incremental updates
-	// happen during the scan (Seq advances), this reconcile result is stale
-	// and we skip it — the next 60-second cycle will pick up any drift.
+	// happen during the scan (Seq advances), the merge-and-CAS loop below
+	// preserves those updates while using the filesystem scan as ground truth.
 	var preSeq uint64
 	if pre := s.localListingIndex.Load(); pre != nil {
 		preSeq = pre.Seq
@@ -454,30 +458,75 @@ func (s *Server) reconcileLocalIndex(ctx context.Context) {
 		}
 	}
 
-	// If incremental updates happened during the scan, this reconcile result
-	// is stale — skip it. The next 60-second cycle will pick up any drift.
-	current := s.localListingIndex.Load()
-	if current != nil && current.Seq > preSeq {
-		return
-	}
+	// Merge filesystem scan (ground truth) with any concurrent incremental
+	// updates that arrived during the scan. Use CAS to avoid lost updates.
+	for {
+		current := s.localListingIndex.Load()
+		merged := mergeReconcileWithCurrent(newIdx, current, preSeq)
 
-	// Compare with current index — only update if changed.
-	// Uses CAS to avoid overwriting concurrent incremental updates from updateListingIndex.
-	// If CAS fails, the incremental update wins and reconcile will catch up next cycle.
-	// Preserve the current Seq value so incremental updates continue from the right base.
-	if current != nil {
-		newIdx.Seq = current.Seq
-	}
-	if !listingIndexEqual(current, newIdx) {
-		if s.localListingIndex.CompareAndSwap(current, newIdx) {
+		if listingIndexEqual(current, merged) {
+			break
+		}
+		if s.localListingIndex.CompareAndSwap(current, merged) {
 			s.listingIndexDirty.Store(true)
-			// Signal the indexer to persist
 			select {
 			case s.listingIndexNotify <- struct{}{}:
 			default:
 			}
+			break
+		}
+		// CAS failed (concurrent incremental update), retry merge
+	}
+}
+
+// mergeReconcileWithCurrent merges a filesystem scan result (ground truth) with the
+// current listing index. Incremental updates that arrived during the scan (detected
+// by Seq advancing past preSeq) are preserved so they aren't lost.
+func mergeReconcileWithCurrent(scan, current *listingIndex, preSeq uint64) *listingIndex {
+	merged := &listingIndex{Buckets: make(map[string]*bucketListing)}
+	for k, v := range scan.Buckets {
+		merged.Buckets[k] = v
+	}
+
+	if current == nil {
+		return merged
+	}
+
+	merged.Seq = current.Seq
+
+	// No incremental updates during scan — filesystem result is complete
+	if current.Seq <= preSeq {
+		return merged
+	}
+
+	// Preserve entries added by incremental updates during the scan
+	for bucket, currentBL := range current.Buckets {
+		scanBL := merged.Buckets[bucket]
+		if scanBL == nil {
+			merged.Buckets[bucket] = currentBL
+			continue
+		}
+		scanBL.Objects = appendMissing(scanBL.Objects, currentBL.Objects)
+		scanBL.Recycled = appendMissing(scanBL.Recycled, currentBL.Recycled)
+	}
+
+	return merged
+}
+
+// appendMissing appends entries from src that are not already present (by key) in dst.
+// For keys present in both, dst's version wins. This means metadata (size, content-type)
+// may temporarily show the filesystem's version until the next reconcile cycle.
+func appendMissing(dst, src []S3ObjectInfo) []S3ObjectInfo {
+	existing := make(map[string]struct{}, len(dst))
+	for _, obj := range dst {
+		existing[obj.Key] = struct{}{}
+	}
+	for _, obj := range src {
+		if _, ok := existing[obj.Key]; !ok {
+			dst = append(dst, obj)
 		}
 	}
+	return dst
 }
 
 // listingIndexEqual compares two listing indexes for equality.

@@ -21,16 +21,17 @@ import (
 
 // S3ObjectInfo represents an S3 object for the explorer API.
 type S3ObjectInfo struct {
-	Key          string `json:"key"`
-	Size         int64  `json:"size"`
-	LastModified string `json:"last_modified"`
-	Owner        string `json:"owner,omitempty"`      // Owner peer name (derived from bucket owner)
-	Expires      string `json:"expires,omitempty"`    // Optional expiration date
-	DeletedAt    string `json:"deleted_at,omitempty"` // When the object was deleted (recycled)
-	ContentType  string `json:"content_type,omitempty"`
-	IsPrefix     bool   `json:"is_prefix,omitempty"` // True for "folder" prefixes
-	Forwarded    bool   `json:"-"`                   // In-memory: survives loadPeerIndexes until remote persists
-	SourceIP     string `json:"-"`                   // In-memory: coordinator IP that owns this object
+	Key          string    `json:"key"`
+	Size         int64     `json:"size"`
+	LastModified string    `json:"last_modified"`
+	Owner        string    `json:"owner,omitempty"`      // Owner peer name (derived from bucket owner)
+	Expires      string    `json:"expires,omitempty"`    // Optional expiration date
+	DeletedAt    string    `json:"deleted_at,omitempty"` // When the object was deleted (recycled)
+	ContentType  string    `json:"content_type,omitempty"`
+	IsPrefix     bool      `json:"is_prefix,omitempty"` // True for "folder" prefixes
+	Forwarded    bool      `json:"-"`                   // In-memory: survives loadPeerIndexes until remote persists
+	ForwardedAt  time.Time `json:"-"`                   // In-memory: when the forwarded entry was created
+	SourceIP     string    `json:"-"`                   // In-memory: coordinator IP that owns this object
 }
 
 // S3BucketInfo represents an S3 bucket for the explorer API.
