@@ -66,20 +66,19 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 
 	result := make([]S3ObjectInfo, 0)
 	prefixSet := make(map[string]bool)
-	prefixSizes := make(map[string]int64) // Track folder sizes for batch calculation
+	prefixSizes := make(map[string]int64) // Accumulate folder sizes in-loop
 
 	for _, obj := range objects {
 		// Handle delimiter (folder grouping)
 		if delimiter != "" {
 			keyAfterPrefix := strings.TrimPrefix(obj.Key, prefix)
 			if idx := strings.Index(keyAfterPrefix, delimiter); idx >= 0 {
-				// This is a "folder" - add common prefix
+				// This is a "folder" - accumulate size from each object
 				commonPrefix := prefix + keyAfterPrefix[:idx+1]
 				if !prefixSet[commonPrefix] {
 					prefixSet[commonPrefix] = true
-					// Size will be calculated below
-					prefixSizes[commonPrefix] = 0
 				}
+				prefixSizes[commonPrefix] += obj.Size
 				continue
 			}
 		}
@@ -105,15 +104,8 @@ func (s *Server) handleS3ListObjects(w http.ResponseWriter, r *http.Request, buc
 		result = mergeObjectListings(result, filtered)
 	}
 
-	// Calculate sizes for all folders (prefixes) found
-	for commonPrefix := range prefixSizes {
-		size, err := s.s3Store.CalculatePrefixSize(r.Context(), bucket, commonPrefix)
-		if err != nil {
-			size = 0 // Gracefully handle errors - show 0 size rather than failing
-		}
-		prefixSizes[commonPrefix] = size
-
-		// Add folder to result with calculated size
+	// Add folder entries from already-computed sizes (no extra lock acquisition)
+	for commonPrefix, size := range prefixSizes {
 		result = append(result, S3ObjectInfo{
 			Key:      commonPrefix,
 			Size:     size,

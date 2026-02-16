@@ -866,7 +866,7 @@ func (s *Store) CalculatePrefixSize(ctx context.Context, bucketName, prefix stri
 		default:
 		}
 
-		objects, isTruncated, nextMarker, err := s.ListObjects(ctx, bucketName, prefix, marker, 1000)
+		objects, isTruncated, nextMarker, err := s.listObjectsUnsafe(bucketName, prefix, marker, 1000)
 		if err != nil {
 			return 0, fmt.Errorf("list objects: %w", err)
 		}
@@ -1533,7 +1533,7 @@ func (s *Store) putObjectWithErasureCoding(ctx context.Context, bucket, key stri
 	sizeDelta := size - oldSize
 	if sizeDelta != 0 {
 		if err := s.updateBucketSize(bucket, sizeDelta); err != nil {
-			_ = err
+			s.logger.Warn().Err(err).Str("bucket", bucket).Int64("delta", sizeDelta).Msg("failed to update bucket size")
 		}
 	}
 
@@ -1780,7 +1780,7 @@ func (s *Store) PutObject(ctx context.Context, bucket, key string, reader io.Rea
 	sizeDelta := written - oldSize
 	if sizeDelta != 0 {
 		if err := s.updateBucketSize(bucket, sizeDelta); err != nil {
-			_ = err
+			s.logger.Warn().Err(err).Str("bucket", bucket).Int64("delta", sizeDelta).Msg("failed to update bucket size")
 		}
 	}
 
@@ -2648,22 +2648,31 @@ func (s *Store) DeleteChunk(ctx context.Context, hash string) error {
 // marker is the key to start after (exclusive) for pagination.
 // Returns (objects, isTruncated, nextMarker, error).
 func (s *Store) ListObjects(ctx context.Context, bucket, prefix, marker string, maxKeys int) ([]ObjectMeta, bool, string, error) {
+	// Phase 1: Verify bucket exists under RLock, capture metaDir path
+	var metaDir string
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	// Check bucket exists
 	if _, err := s.getBucketMeta(bucket); err != nil {
+		s.mu.RUnlock()
 		return nil, false, "", err
 	}
+	metaDir = filepath.Join(s.bucketPath(bucket), "meta")
+	s.mu.RUnlock()
 
-	return s.listObjectsUnsafe(bucket, prefix, marker, maxKeys)
+	// Phase 2: Walk filesystem without lock (safe: writes use atomic temp+rename)
+	return s.walkObjectMeta(metaDir, prefix, marker, maxKeys)
 }
 
 // listObjectsUnsafe lists objects without lock (caller must hold lock).
 // Returns (objects, isTruncated, nextMarker, error).
 func (s *Store) listObjectsUnsafe(bucket, prefix, marker string, maxKeys int) ([]ObjectMeta, bool, string, error) {
 	metaDir := filepath.Join(s.bucketPath(bucket), "meta")
+	return s.walkObjectMeta(metaDir, prefix, marker, maxKeys)
+}
 
+// walkObjectMeta walks the metadata directory and returns objects matching
+// the prefix/marker/maxKeys filters. Does not require any lock — relies on
+// atomic file operations (temp+rename) for consistency during concurrent writes.
+func (s *Store) walkObjectMeta(metaDir, prefix, marker string, maxKeys int) ([]ObjectMeta, bool, string, error) {
 	var objects []ObjectMeta
 	passedMarker := marker == "" // If no marker, we've already passed it
 
@@ -2709,11 +2718,13 @@ func (s *Store) listObjectsUnsafe(bucket, prefix, marker string, maxKeys int) ([
 		// Read metadata
 		data, err := os.ReadFile(path)
 		if err != nil {
+			s.logger.Warn().Err(err).Str("path", path).Msg("ListObjects: failed to read metadata file")
 			return nil
 		}
 
 		var meta ObjectMeta
 		if err := json.Unmarshal(data, &meta); err != nil {
+			s.logger.Warn().Err(err).Str("path", path).Msg("ListObjects: corrupted metadata file")
 			return nil
 		}
 
