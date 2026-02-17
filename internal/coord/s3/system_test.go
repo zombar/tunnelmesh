@@ -163,8 +163,9 @@ func TestSystemStoreDeleteNotFound(t *testing.T) {
 	ss, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
 
+	// PurgeObject is idempotent — deleting a non-existent object succeeds silently
 	err = ss.Delete(context.Background(), "nonexistent.json")
-	assert.ErrorIs(t, err, ErrObjectNotFound)
+	assert.NoError(t, err)
 }
 
 func TestSystemStoreSaveLoadFilterRules(t *testing.T) {

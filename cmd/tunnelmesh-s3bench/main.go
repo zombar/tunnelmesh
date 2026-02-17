@@ -319,11 +319,13 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		// Derive S3 credentials
 		log.Info().Str("access_key", creds.AccessKey).Msg("Derived S3 credentials")
 
-		// Construct admin mux URL from coordinator mesh IP
-		adminURL := coordinatorURL // fallback to coordinator URL
-		if len(meshInfo.CoordMeshIPs) > 0 {
-			adminURL = fmt.Sprintf("https://%s", meshInfo.CoordMeshIPs[0])
+		// Admin routes (/api/shares, /api/s3/*) are only served on the admin
+		// mux bound to mesh_ip:443, not the public server. Use the coordinator's
+		// mesh IP from the registration response.
+		if len(meshInfo.CoordMeshIPs) == 0 {
+			return fmt.Errorf("no coordinator mesh IPs in registration response")
 		}
+		adminURL := "https://" + meshInfo.CoordMeshIPs[0]
 
 		log.Info().
 			Str("s3_endpoint", adminURL).
@@ -522,7 +524,7 @@ func cleanupMeshShares(ctx context.Context, client *mesh.CoordinatorClient, st s
 		}
 	}
 
-	// Trigger GC to purge tombstoned data and reclaim disk
+	// Trigger GC to purge recycled data and reclaim disk
 	log.Info().Msg("Triggering garbage collection...")
 	gcStats, err := client.TriggerGC(ctx, true)
 	if err != nil {
@@ -530,7 +532,7 @@ func cleanupMeshShares(ctx context.Context, client *mesh.CoordinatorClient, st s
 	}
 
 	log.Info().
-		Int("tombstoned_purged", gcStats.TombstonedPurged).
+		Int("recycled_purged", gcStats.RecycledPurged).
 		Int("versions_pruned", gcStats.VersionsPruned).
 		Int("chunks_deleted", gcStats.ChunksDeleted).
 		Int64("bytes_reclaimed", gcStats.BytesReclaimed).

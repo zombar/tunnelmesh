@@ -305,15 +305,15 @@ func (c *CoordinatorClient) DeleteShare(ctx context.Context, name string) error 
 
 // GCStats represents the response from the S3 GC endpoint.
 type GCStats struct {
-	TombstonedPurged int   `json:"tombstoned_purged"`
-	VersionsPruned   int   `json:"versions_pruned"`
-	ChunksDeleted    int   `json:"chunks_deleted"`
-	BytesReclaimed   int64 `json:"bytes_reclaimed"`
+	RecycledPurged int   `json:"recycled_purged"`
+	VersionsPruned int   `json:"versions_pruned"`
+	ChunksDeleted  int   `json:"chunks_deleted"`
+	BytesReclaimed int64 `json:"bytes_reclaimed"`
 }
 
 // TriggerGC triggers on-demand garbage collection on the coordinator via POST /api/s3/gc.
 // Uses a 10-minute context timeout since GC can be slow under sustained load.
-func (c *CoordinatorClient) TriggerGC(ctx context.Context, purgeAllTombstoned bool) (*GCStats, error) {
+func (c *CoordinatorClient) TriggerGC(ctx context.Context, purgeRecycleBin bool) (*GCStats, error) {
 	// GC can take several minutes under sustained load; use a longer timeout
 	// than the default 60-second client. Context-based timeout respects parent
 	// cancellation (e.g., user interrupt) unlike http.Client.Timeout.
@@ -323,7 +323,7 @@ func (c *CoordinatorClient) TriggerGC(ctx context.Context, purgeAllTombstoned bo
 	requestURL := fmt.Sprintf("%s/api/s3/gc", c.baseURL)
 
 	payload := map[string]interface{}{
-		"purge_all_tombstoned": purgeAllTombstoned,
+		"purge_recycle_bin": purgeRecycleBin,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

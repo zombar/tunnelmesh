@@ -84,15 +84,19 @@ type Server struct {
 	serverStats        serverStats
 	relay              *relayManager
 	holePunch          *holePunchManager
-	wgStore            *wireguard.Store           // WireGuard client storage
-	ca                 *CertificateAuthority      // Internal CA for mesh TLS certs
-	version            string                     // Server version for admin display
-	sseHub             *sseHub                    // SSE hub for real-time dashboard updates
-	ipGeoCache         *IPGeoCache                // IP geolocation cache for location fallback
-	coordIPs           atomic.Pointer[coordIPSet] // Coordinator mesh IPs (original + sorted) for DNS and write forwarding
-	s3ForwardTransport *http.Transport            // Shared transport for S3 write forwarding (reuses connections)
-	coordMetrics       *CoordMetrics              // Prometheus metrics for coordinator
-	metricsRegistry    prometheus.Registerer      // Prometheus registry for metrics (shared with peer metrics)
+	wgStore            *wireguard.Store             // WireGuard client storage
+	ca                 *CertificateAuthority        // Internal CA for mesh TLS certs
+	version            string                       // Server version for admin display
+	sseHub             *sseHub                      // SSE hub for real-time dashboard updates
+	ipGeoCache         *IPGeoCache                  // IP geolocation cache for location fallback
+	coordIPs           atomic.Pointer[coordIPSet]   // Coordinator mesh IPs (original + sorted) for DNS and write forwarding
+	s3ForwardTransport *http.Transport              // Shared transport for S3 write forwarding (reuses connections)
+	peerListings       atomic.Pointer[peerListings] // Pre-merged peer listing data (from system store)
+	localListingIndex  atomic.Pointer[listingIndex] // This coordinator's own listing index (in-memory)
+	listingIndexDirty  atomic.Bool                  // Whether local index needs persisting
+	listingIndexNotify chan struct{}                // Signal for immediate persist+load cycle
+	coordMetrics       *CoordMetrics                // Prometheus metrics for coordinator
+	metricsRegistry    prometheus.Registerer        // Prometheus registry for metrics (shared with peer metrics)
 	// S3 storage
 	s3Store             *s3.Store            // S3 file-based storage
 	s3Server            *s3.Server           // S3 HTTP server
@@ -359,9 +363,11 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	// Shared transport for forwarding S3 writes to other coordinators.
 	// TLS config is set later by SetMeshTLS() with the registration CA.
 	srv.s3ForwardTransport = &http.Transport{
-		MaxIdleConns:       100,
-		IdleConnTimeout:    90 * time.Second,
-		DisableCompression: true, // S3 objects are often already compressed
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		DisableCompression:    true, // S3 objects are often already compressed
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 30 * time.Second,
 	}
 
 	// Initialize packet filter
@@ -742,21 +748,21 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 // StartPeriodicCleanup starts the background cleanup goroutine for S3 storage.
 // gcStaggerDelay computes a deterministic stagger delay based on the coordinator
 // name hash, to avoid all coordinators running GC simultaneously.
-// Returns 0 to 1799 seconds (0–29m59s), keeping the window under 50% of the
-// 1-hour GC interval to ensure predictable cleanup cadence.
+// Returns 0 to 149 seconds (0–2m29s), keeping the window under 50% of the
+// 5-minute GC interval to ensure predictable cleanup cadence.
 func gcStaggerDelay(coordName string) time.Duration {
 	if coordName == "" {
 		coordName = "coordinator"
 	}
 	h := fnv.New32a()
 	h.Write([]byte(coordName))
-	return time.Duration(h.Sum32()%1800) * time.Second
+	return time.Duration(h.Sum32()%150) * time.Second
 }
 
 // StartPeriodicCleanup launches a background goroutine for S3 storage maintenance.
 // It periodically:
-//   - Purges tombstoned objects past their retention period
-//   - Tombstones content in expired file shares
+//   - Purges recycled objects past their retention period
+//   - Purges content in expired file shares
 //   - Runs garbage collection on versions and orphaned chunks
 //   - Updates CAS metrics (dedup ratio, chunk count, etc.)
 func (s *Server) StartPeriodicCleanup(ctx context.Context) {
@@ -768,82 +774,101 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 
 	log.Info().Str("coordinator", s.cfg.Name).Dur("stagger", stagger).Msg("GC stagger delay computed")
 
-	// Run cleanup every hour
-	ticker := time.NewTicker(1 * time.Hour)
+	// GC cycle body — shared between first run and ticker runs
+	runGCCycle := func() {
+		// Purge recycled objects past retention period
+		if purged := s.s3Store.PurgeRecycleBin(ctx); purged > 0 {
+			log.Info().Int("count", purged).Msg("purged recycled S3 objects")
+		}
+
+		// Purge content in expired file shares
+		if s.fileShareMgr != nil {
+			if purged := s.fileShareMgr.PurgeExpiredShareContents(ctx); purged > 0 {
+				log.Info().Int("count", purged).Msg("purged expired file share content")
+			}
+		}
+
+		// Purge orphaned file share buckets (shares deleted on another coordinator)
+		if s.fileShareMgr != nil {
+			if purged := s.fileShareMgr.PurgeOrphanedFileShareBuckets(ctx); purged > 0 {
+				log.Info().Int("count", purged).Msg("purged orphaned file share buckets")
+			}
+		}
+
+		// Serialize with manual GC — skip this cycle if manual GC is running
+		if !s.gcMu.TryLock() {
+			log.Debug().Msg("skipping periodic GC: manual GC in progress")
+		} else {
+			// Run garbage collection on versions and orphaned chunks
+			gcStart := time.Now()
+			gcStats := s.s3Store.RunGarbageCollection(ctx)
+			gcDuration := time.Since(gcStart).Seconds()
+			s.gcMu.Unlock()
+
+			// Always log GC at Info level so operators can confirm it's running
+			log.Info().
+				Str("coordinator", s.cfg.Name).
+				Int("versions_pruned", gcStats.VersionsPruned).
+				Int("chunks_deleted", gcStats.ChunksDeleted).
+				Int64("bytes_reclaimed", gcStats.BytesReclaimed).
+				Int("objects_scanned", gcStats.ObjectsScanned).
+				Int("chunks_skipped_grace_period", gcStats.ChunksSkippedGracePeriod).
+				Float64("duration_seconds", gcDuration).
+				Msg("periodic S3 garbage collection completed")
+
+			// Record GC metrics
+			if metrics := s3.GetS3Metrics(); metrics != nil {
+				metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
+			}
+
+			// Update S3 metrics after GC
+			s.updateS3Metrics()
+		}
+
+		// Collect and persist local capacity, then load peer snapshots
+		s.collectAndPersistCapacity(ctx)
+		s.loadPeerCapacitySnapshots(ctx)
+	}
+
+	// Initialize listing index channel and start background indexer
+	s.listingIndexNotify = make(chan struct{}, 1)
+	s.reconcileLocalIndex(ctx) // Populate index from disk on startup
+	s.loadPeerIndexes(ctx)     // Load any existing replicated peer data
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		defer ticker.Stop()
+		s.runListingIndexer(ctx)
+	}()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
 
 		// Update metrics on startup
 		s.updateS3Metrics()
 		s.collectAndPersistCapacity(ctx)
 
-		// Wait for stagger delay before first GC run.
-		// The first GC fires at startup+stagger, then every hour after that.
-		// This means the gap between first and second run is a full hour,
-		// regardless of the stagger offset.
+		// Wait for stagger delay before first GC run
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(stagger):
 		}
 
+		// Run first GC cycle immediately after stagger
+		runGCCycle()
+
+		// Create ticker AFTER stagger so the cycle is properly offset.
+		// Each coordinator's cycle: stagger, stagger+5m, stagger+10m, ...
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				// Purge tombstoned objects past retention period
-				if purged := s.s3Store.PurgeTombstonedObjects(ctx); purged > 0 {
-					log.Info().Int("count", purged).Msg("purged tombstoned S3 objects")
-				}
-
-				// Tombstone content in expired file shares
-				if s.fileShareMgr != nil {
-					if tombstoned := s.fileShareMgr.TombstoneExpiredShareContents(ctx); tombstoned > 0 {
-						log.Info().Int("count", tombstoned).Msg("tombstoned expired file share content")
-					}
-				}
-
-				// Serialize with manual GC — skip this cycle if manual GC is running
-				if !s.gcMu.TryLock() {
-					log.Debug().Msg("skipping periodic GC: manual GC in progress")
-				} else {
-					// Run garbage collection on versions and orphaned chunks
-					gcStart := time.Now()
-					gcStats := s.s3Store.RunGarbageCollection(ctx)
-					gcDuration := time.Since(gcStart).Seconds()
-					s.gcMu.Unlock()
-
-					// Log GC results: Info when work was done, Debug for no-ops
-					logEvent := log.Debug()
-					if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 || gcStats.ChunksSkippedShared > 0 || gcStats.ChunksSkippedGracePeriod > 0 {
-						logEvent = log.Info()
-					}
-					logEvent.
-						Str("coordinator", s.cfg.Name).
-						Int("versions_pruned", gcStats.VersionsPruned).
-						Int("chunks_deleted", gcStats.ChunksDeleted).
-						Int64("bytes_reclaimed", gcStats.BytesReclaimed).
-						Int("objects_scanned", gcStats.ObjectsScanned).
-						Int("chunks_skipped_shared", gcStats.ChunksSkippedShared).
-						Int("chunks_skipped_grace_period", gcStats.ChunksSkippedGracePeriod).
-						Float64("duration_seconds", gcDuration).
-						Msg("S3 garbage collection completed")
-
-					// Record GC metrics
-					if metrics := s3.GetS3Metrics(); metrics != nil {
-						metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
-					}
-
-					// Update S3 metrics after GC
-					s.updateS3Metrics()
-				}
-
-				// Collect and persist local capacity, then load peer snapshots
-				s.collectAndPersistCapacity(ctx)
-				s.loadPeerCapacitySnapshots(ctx)
+				runGCCycle()
 			}
 		}
 	}()
@@ -913,6 +938,8 @@ func (s *Server) updateS3Metrics() {
 		casStats.ChunkCount,
 		casStats.ChunkBytes,
 		casStats.LogicalBytes,
+		casStats.VersionBytes,
+		casStats.RecycledBytes,
 		casStats.VersionCount,
 	)
 
@@ -1143,8 +1170,8 @@ func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) erro
 	store.SetDefaultObjectExpiryDays(cfg.Coordinator.S3.ObjectExpiryDays)
 	store.SetDefaultShareExpiryDays(cfg.Coordinator.S3.ShareExpiryDays)
 
-	// Set tombstone retention config
-	store.SetTombstoneRetentionDays(cfg.Coordinator.S3.TombstoneRetentionDays)
+	// Set recycle bin retention config
+	store.SetRecycleBinRetentionDays(cfg.Coordinator.S3.RecycleBinRetentionDays)
 
 	// Set version retention config
 	store.SetVersionRetentionDays(cfg.Coordinator.S3.VersionRetentionDays)
@@ -1783,7 +1810,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist DNS data to S3 (async to avoid blocking registration)
-	go s.saveDNSData()
+	// Tracked by WaitGroup so Shutdown waits for completion before cleanup.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.saveDNSData()
+	}()
 
 	// Update replicator peer list if this is a coordinator
 	if peer.IsCoordinator && s.replicator != nil {
@@ -1859,8 +1891,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.updatePeerRecord(peerID, req.Name, req.PublicKey, isNewPeer)
 
 		// Auto-create peer share on first registration
+		// Tracked by WaitGroup so Shutdown waits for completion before cleanup.
 		if isNewPeer && s.fileShareMgr != nil {
-			go s.createPeerShare(peerID, req.Name)
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				s.createPeerShare(peerID, req.Name)
+			}()
 		}
 
 		// Check if peer is admin (for both new and existing peers)

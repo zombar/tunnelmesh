@@ -79,30 +79,30 @@ func NewCAS(chunksDir string, masterKey [32]byte) (*CAS, error) {
 	return cas, nil
 }
 
-// WriteChunk stores a chunk and returns its content hash.
-// If the chunk already exists (same content), it returns immediately (dedup).
+// WriteChunk stores a chunk and returns its content hash and on-disk size.
+// If the chunk already exists (same content), it returns immediately with onDiskBytes=0 (dedup hit).
 // Pipeline: plaintext -> compress -> encrypt -> store
-func (c *CAS) WriteChunk(ctx context.Context, data []byte) (string, error) {
+func (c *CAS) WriteChunk(ctx context.Context, data []byte) (hash string, onDiskBytes int64, err error) {
 	// Compute hash on plaintext for content addressing
-	hash := c.contentHash(data)
+	hash = c.contentHash(data)
 	chunkPath := c.chunkPath(hash)
 
 	// Check if chunk already exists (dedup)
 	// Safe without lock: os.Stat is atomic and we only need an approximate check.
 	if fileExists(chunkPath) {
-		return hash, nil
+		return hash, 0, nil // dedup hit
 	}
 
 	// Compress
 	compressed, err := c.compress(data)
 	if err != nil {
-		return "", fmt.Errorf("compress chunk: %w", err)
+		return "", 0, fmt.Errorf("compress chunk: %w", err)
 	}
 
 	// Encrypt with convergent encryption (deterministic key/nonce from content hash)
 	encrypted, err := c.encrypt(compressed, hash)
 	if err != nil {
-		return "", fmt.Errorf("encrypt chunk: %w", err)
+		return "", 0, fmt.Errorf("encrypt chunk: %w", err)
 	}
 
 	// Write atomically via unique temp file.
@@ -114,19 +114,21 @@ func (c *CAS) WriteChunk(ctx context.Context, data []byte) (string, error) {
 	// file content is byte-identical either way.
 	tmpFile, err := os.CreateTemp(filepath.Dir(chunkPath), ".chunk-*.tmp")
 	if err != nil {
-		return "", fmt.Errorf("create temp file: %w", err)
+		return "", 0, fmt.Errorf("create temp file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
 
 	if _, err := tmpFile.Write(encrypted); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("write chunk: %w", err)
+		return "", 0, fmt.Errorf("write chunk: %w", err)
 	}
 	if err := tmpFile.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("close temp file: %w", err)
+		return "", 0, fmt.Errorf("close temp file: %w", err)
 	}
+
+	onDiskBytes = int64(len(encrypted))
 
 	if err := os.Rename(tmpPath, chunkPath); err != nil {
 		_ = os.Remove(tmpPath)
@@ -135,12 +137,12 @@ func (c *CAS) WriteChunk(ctx context.Context, data []byte) (string, error) {
 		// a concurrent writer already placed the correct file — treat as
 		// successful dedup.
 		if fileExists(chunkPath) {
-			return hash, nil
+			return hash, 0, nil // concurrent dedup
 		}
-		return "", fmt.Errorf("rename chunk: %w", err)
+		return "", 0, fmt.Errorf("rename chunk: %w", err)
 	}
 
-	return hash, nil
+	return hash, onDiskBytes, nil
 }
 
 // ReadChunk retrieves and decrypts a chunk by its hash.
@@ -180,15 +182,25 @@ func (c *CAS) ReadChunk(ctx context.Context, hash string) ([]byte, error) {
 	return data, nil
 }
 
-// DeleteChunk removes a chunk from storage.
-func (c *CAS) DeleteChunk(ctx context.Context, hash string) error {
+// DeleteChunk removes a chunk from storage and returns the freed bytes.
+// Returns 0 if the chunk didn't exist.
+func (c *CAS) DeleteChunk(ctx context.Context, hash string) (int64, error) {
 	chunkPath := c.chunkPath(hash)
+
+	info, err := os.Stat(chunkPath)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("stat chunk: %w", err)
+	}
+	freedBytes := info.Size()
 
 	// Safe without lock: os.Remove is atomic on POSIX.
 	if err := os.Remove(chunkPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("delete chunk: %w", err)
+		return 0, fmt.Errorf("delete chunk: %w", err)
 	}
-	return nil
+	return freedBytes, nil
 }
 
 // ChunkExists checks if a chunk exists in storage.

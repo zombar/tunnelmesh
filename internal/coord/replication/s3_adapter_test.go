@@ -400,6 +400,98 @@ func TestS3StoreAdapter_Get_ReadError(t *testing.T) {
 	t.Skip("Read error path difficult to test without mocking")
 }
 
+func TestS3StoreAdapter_List_ExcludesDeletedObjects(t *testing.T) {
+	testStore := createTestS3Store(t)
+	adapter := NewS3StoreAdapter(testStore)
+
+	testBucket := "test-bucket"
+	ctx := context.Background()
+
+	err := testStore.CreateBucket(ctx, testBucket, "alice", 2, nil)
+	if err != nil {
+		t.Fatalf("failed to create bucket: %v", err)
+	}
+
+	// Add 3 objects
+	for _, key := range []string{"file1.txt", "file2.txt", "file3.txt"} {
+		_, err := testStore.PutObject(ctx, testBucket, key, bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+		if err != nil {
+			t.Fatalf("failed to put object %s: %v", key, err)
+		}
+	}
+
+	// Delete file2.txt (moves to recycle bin)
+	err = testStore.DeleteObject(ctx, testBucket, "file2.txt")
+	if err != nil {
+		t.Fatalf("failed to delete object: %v", err)
+	}
+
+	// List should only return live (non-deleted) objects
+	keys, err := adapter.List(ctx, testBucket)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(keys) != 2 {
+		t.Errorf("expected 2 keys (deleted excluded), got %d: %v", len(keys), keys)
+	}
+
+	keyMap := make(map[string]bool)
+	for _, key := range keys {
+		keyMap[key] = true
+	}
+
+	if keyMap["file2.txt"] {
+		t.Error("deleted object file2.txt should not appear in list")
+	}
+	if !keyMap["file1.txt"] || !keyMap["file3.txt"] {
+		t.Error("live objects should appear in list")
+	}
+}
+
+func TestS3StoreAdapter_ListBuckets_ExcludesDeletedBuckets(t *testing.T) {
+	testStore := createTestS3Store(t)
+	adapter := NewS3StoreAdapter(testStore)
+
+	ctx := context.Background()
+
+	// Create 3 buckets
+	for _, bucket := range []string{"bucket1", "bucket2", "bucket3"} {
+		err := testStore.CreateBucket(ctx, bucket, "alice", 2, nil)
+		if err != nil {
+			t.Fatalf("failed to create bucket %s: %v", bucket, err)
+		}
+	}
+
+	// Delete bucket2 (empty bucket, can be deleted directly)
+	err := testStore.DeleteBucket(ctx, "bucket2")
+	if err != nil {
+		t.Fatalf("failed to delete bucket: %v", err)
+	}
+
+	// ListBuckets should only return existing buckets
+	names, err := adapter.ListBuckets(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(names) != 2 {
+		t.Errorf("expected 2 buckets (deleted excluded), got %d: %v", len(names), names)
+	}
+
+	bucketMap := make(map[string]bool)
+	for _, name := range names {
+		bucketMap[name] = true
+	}
+
+	if bucketMap["bucket2"] {
+		t.Error("deleted bucket bucket2 should not appear in list")
+	}
+	if !bucketMap["bucket1"] || !bucketMap["bucket3"] {
+		t.Error("existing buckets should appear in list")
+	}
+}
+
 // createTestS3Store creates a new S3 store for testing
 func createTestS3Store(t *testing.T) *s3.Store {
 	t.Helper()
