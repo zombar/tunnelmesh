@@ -437,6 +437,8 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 			AckTimeout:           10 * time.Second,
 			RetryInterval:        30 * time.Second,
 			MaxPendingOperations: 10000,
+			ChunkPipelineWindow:  5,               // Send up to 5 chunks concurrently per object
+			AutoSyncInterval:     5 * time.Minute, // Re-enqueue all objects every 5 minutes
 		})
 
 		// Wire replicator into S3 store for distributed reads (fetching remote chunks)

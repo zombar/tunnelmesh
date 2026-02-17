@@ -1,0 +1,269 @@
+package replication
+
+import (
+	"context"
+	"sync"
+	"time"
+)
+
+// replQueueEntry represents a pending replication operation in the queue.
+type replQueueEntry struct {
+	bucket     string
+	key        string
+	op         string // "put" or "delete"
+	enqueuedAt time.Time
+	retries    int
+}
+
+// EnqueueReplication adds a replication operation to the background queue.
+// This is O(1) and non-blocking. Last-writer-wins dedup ensures that if the
+// same key is enqueued multiple times, only the latest operation is processed.
+func (r *Replicator) EnqueueReplication(bucket, key, op string) {
+	compositeKey := bucket + "\x00" + key
+	r.replPending.Store(compositeKey, &replQueueEntry{
+		bucket:     bucket,
+		key:        key,
+		op:         op,
+		enqueuedAt: time.Now(),
+	})
+
+	// Non-blocking signal to wake up the worker
+	select {
+	case r.replQueue <- struct{}{}:
+	default:
+	}
+}
+
+// runReplicationQueueWorker is the background goroutine that processes
+// queued replication operations. It wakes up on signal or every 5 seconds.
+func (r *Replicator) runReplicationQueueWorker() {
+	defer r.wg.Done()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-r.replQueue:
+			r.drainReplicationQueue(r.ctx)
+		case <-ticker.C:
+			r.drainReplicationQueue(r.ctx)
+		}
+	}
+}
+
+// drainReplicationQueue snapshots the pending map, clears it, and processes
+// all entries with bounded concurrency.
+func (r *Replicator) drainReplicationQueue(ctx context.Context) {
+	// Snapshot and clear pending entries
+	var entries []*replQueueEntry
+	r.replPending.Range(func(key, value any) bool {
+		entry := value.(*replQueueEntry)
+		entries = append(entries, entry)
+		r.replPending.Delete(key)
+		return true
+	})
+
+	if len(entries) == 0 {
+		return
+	}
+
+	r.logger.Info().
+		Int("entries", len(entries)).
+		Msg("Draining replication queue")
+
+	// Process with bounded concurrency
+	const maxConcurrent = 5
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		wg.Add(1)
+		go func(e *replQueueEntry) {
+			defer wg.Done()
+
+			// Acquire concurrency slot
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+
+			r.processQueueEntry(ctx, e)
+		}(entry)
+	}
+
+	wg.Wait()
+}
+
+// processQueueEntry handles a single replication queue entry.
+func (r *Replicator) processQueueEntry(ctx context.Context, entry *replQueueEntry) {
+	peers := r.GetPeers()
+	if len(peers) == 0 {
+		return
+	}
+
+	switch entry.op {
+	case "put":
+		r.processQueuePut(ctx, entry, peers)
+	case "delete":
+		r.processQueueDelete(ctx, entry, peers)
+	}
+}
+
+// processQueuePut replicates an object to all peers and cleans up non-assigned chunks on success.
+func (r *Replicator) processQueuePut(ctx context.Context, entry *replQueueEntry, peers []string) {
+	if r.chunkRegistry == nil {
+		// No chunk registry — fall back to file-level replication
+		return
+	}
+
+	entryCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	allSucceeded := true
+	for _, peerID := range peers {
+		if err := r.ReplicateObject(entryCtx, entry.bucket, entry.key, peerID); err != nil {
+			r.logger.Error().Err(err).
+				Str("peer", peerID).
+				Str("bucket", entry.bucket).
+				Str("key", entry.key).
+				Int("retry", entry.retries).
+				Msg("Queued replication failed")
+			allSucceeded = false
+		}
+	}
+
+	if allSucceeded {
+		if err := r.CleanupNonAssignedChunks(entryCtx, entry.bucket, entry.key); err != nil {
+			r.logger.Error().Err(err).
+				Str("bucket", entry.bucket).
+				Str("key", entry.key).
+				Msg("Failed to cleanup non-assigned chunks after queued replication")
+		}
+	} else {
+		r.reEnqueueOnFailure(entry)
+	}
+}
+
+// processQueueDelete replicates a delete operation to all peers.
+func (r *Replicator) processQueueDelete(ctx context.Context, entry *replQueueEntry, peers []string) {
+	entryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if err := r.ReplicateDelete(entryCtx, entry.bucket, entry.key); err != nil {
+		r.logger.Error().Err(err).
+			Str("bucket", entry.bucket).
+			Str("key", entry.key).
+			Int("retry", entry.retries).
+			Msg("Queued delete replication failed")
+		r.reEnqueueOnFailure(entry)
+	}
+}
+
+// reEnqueueOnFailure re-enqueues a failed entry up to 3 retries.
+func (r *Replicator) reEnqueueOnFailure(entry *replQueueEntry) {
+	const maxRetries = 3
+	if entry.retries >= maxRetries {
+		r.logger.Warn().
+			Str("bucket", entry.bucket).
+			Str("key", entry.key).
+			Str("op", entry.op).
+			Int("retries", entry.retries).
+			Msg("Replication failed after max retries, dropping")
+		return
+	}
+
+	compositeKey := entry.bucket + "\x00" + entry.key
+
+	// Only re-enqueue if no newer entry was added
+	_, loaded := r.replPending.LoadOrStore(compositeKey, &replQueueEntry{
+		bucket:     entry.bucket,
+		key:        entry.key,
+		op:         entry.op,
+		enqueuedAt: time.Now(),
+		retries:    entry.retries + 1,
+	})
+
+	if !loaded {
+		// Successfully stored, signal the worker
+		select {
+		case r.replQueue <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// drainReplicationQueueFinal performs a final drain during shutdown with a timeout.
+func (r *Replicator) drainReplicationQueueFinal() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r.drainReplicationQueue(ctx)
+}
+
+// runAutoSyncWorker periodically re-enqueues all objects for replication.
+// This is a safety net to catch any objects that were missed due to failures.
+func (r *Replicator) runAutoSyncWorker() {
+	defer r.wg.Done()
+
+	// Initial delay to let the cluster stabilize
+	select {
+	case <-r.ctx.Done():
+		return
+	case <-time.After(2 * time.Minute):
+	}
+
+	ticker := time.NewTicker(r.autoSyncInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-ticker.C:
+			r.runAutoSyncCycle()
+		}
+	}
+}
+
+// runAutoSyncCycle enqueues all objects for replication.
+// The queue deduplicates, and ReplicateObject skips already-replicated chunks.
+func (r *Replicator) runAutoSyncCycle() {
+	peers := r.GetPeers()
+	if len(peers) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.ctx, 3*time.Minute)
+	defer cancel()
+
+	allKeys, err := r.s3.GetAllObjectKeys(ctx)
+	if err != nil {
+		r.logger.Warn().Err(err).Msg("Auto-sync: failed to get all object keys")
+		return
+	}
+
+	var total int
+	for bucket, keys := range allKeys {
+		for _, key := range keys {
+			r.EnqueueReplication(bucket, key, "put")
+			total++
+		}
+	}
+
+	if total > 0 {
+		r.logger.Info().
+			Int("objects", total).
+			Int("peers", len(peers)).
+			Msg("Auto-sync: enqueued all objects for replication")
+	}
+}

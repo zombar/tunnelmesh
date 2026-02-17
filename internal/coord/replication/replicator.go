@@ -182,6 +182,16 @@ type Replicator struct {
 	// Rebalancer (nil if not configured)
 	rebalancer *Rebalancer
 
+	// Replication queue (replaces per-PutObject goroutine approach)
+	replQueue   chan struct{} // Notification channel (buffer=1)
+	replPending sync.Map      // map["bucket\x00key"]*replQueueEntry
+
+	// Chunk pipelining
+	chunkPipelineWindow int
+
+	// Auto-sync interval (0 = disabled)
+	autoSyncInterval time.Duration
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -226,6 +236,8 @@ type Config struct {
 	SyncResponseTimeout  time.Duration   // Timeout for handling sync responses (default: 10min)
 	ChunkAckTimeout      time.Duration   // Timeout for chunk-level ACKs (default: 30s, Phase 4)
 	MaxConcurrentSends   int             // Maximum concurrent outbound replication sends (default: 20)
+	ChunkPipelineWindow  int             // Maximum concurrent chunk sends per ReplicateObject (default: 5)
+	AutoSyncInterval     time.Duration   // How often to re-enqueue all objects for replication (default: 5min, 0 = disabled)
 	Context              context.Context // SECURITY FIX #3: Parent context for proper cancellation propagation
 }
 
@@ -264,6 +276,12 @@ func NewReplicator(config Config) *Replicator {
 	if config.MaxConcurrentSends == 0 {
 		config.MaxConcurrentSends = 20 // Default: 20 concurrent outbound replication sends
 	}
+	if config.ChunkPipelineWindow == 0 {
+		config.ChunkPipelineWindow = 5 // Default: 5 concurrent chunk sends per object
+	}
+	if config.AutoSyncInterval == 0 {
+		config.AutoSyncInterval = 5 * time.Minute // Default: 5 minutes
+	}
 
 	// SECURITY FIX #3: Use provided context or create a new one
 	// This allows proper context propagation and cancellation from parent
@@ -300,6 +318,9 @@ func NewReplicator(config Config) *Replicator {
 		pendingChunks:          make(map[string]*pendingChunkReplication),
 		pendingFetchRequests:   make(map[string]chan *FetchChunkResponsePayload),
 		pendingFetchTimestamps: make(map[string]time.Time),
+		replQueue:              make(chan struct{}, 1),
+		chunkPipelineWindow:    config.ChunkPipelineWindow,
+		autoSyncInterval:       config.AutoSyncInterval,
 		ctx:                    ctx,
 		cancel:                 cancel,
 	}
@@ -327,6 +348,16 @@ func (r *Replicator) Start() error {
 	r.wg.Add(1)
 	go r.fetchRequestCleanupWorker()
 
+	// Start replication queue worker
+	r.wg.Add(1)
+	go r.runReplicationQueueWorker()
+
+	// Start auto-sync worker if enabled
+	if r.autoSyncInterval > 0 {
+		r.wg.Add(1)
+		go r.runAutoSyncWorker()
+	}
+
 	// Start rebalancer if configured
 	if r.rebalancer != nil {
 		r.rebalancer.Start()
@@ -343,6 +374,9 @@ func (r *Replicator) Stop() error {
 	if r.rebalancer != nil {
 		r.rebalancer.Stop()
 	}
+
+	// Final drain of the replication queue before cancelling context
+	r.drainReplicationQueueFinal()
 
 	r.cancel()
 	r.wg.Wait()
@@ -1520,69 +1554,9 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 		Int("already_replicated", len(meta.Chunks)-len(chunksToReplicate)).
 		Msg("Starting chunk-level replication")
 
-	// Replicate each missing chunk
-	for i, chunkHash := range chunksToReplicate {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("replication canceled: %w", ctx.Err())
-		default:
-		}
-
-		// Read chunk data from local CAS. If the chunk was cleaned up by a
-		// concurrent CleanupNonAssignedChunks (e.g. another object shares this
-		// chunk hash via CAS dedup), fall back to fetching from a peer.
-		chunkData, err := r.s3.ReadChunk(ctx, chunkHash)
-		if err != nil {
-			localErr := err
-			chunkData, err = r.fetchChunkFromPeers(ctx, chunkHash)
-			if err != nil {
-				return fmt.Errorf("read chunk %s: local: %w, peers: %w", chunkHash, localErr, err)
-			}
-		}
-
-		// Get chunk metadata
-		chunkMeta := meta.ChunkMetadata[chunkHash]
-		if chunkMeta == nil {
-			// Fallback: create minimal metadata if not present
-			chunkMeta = &ChunkMetadata{
-				Hash: chunkHash,
-				Size: int64(len(chunkData)),
-			}
-		}
-
-		// Find chunk index in file (for ordering)
-		chunkIndex := -1
-		for idx, hash := range meta.Chunks {
-			if hash == chunkHash {
-				chunkIndex = idx
-				break
-			}
-		}
-
-		// Create chunk replication payload
-		payload := ReplicateChunkPayload{
-			Bucket:        bucket,
-			Key:           key,
-			ChunkHash:     chunkHash,
-			ChunkData:     chunkData,
-			ChunkIndex:    chunkIndex,
-			TotalChunks:   len(meta.Chunks),
-			ChunkSize:     chunkMeta.Size,
-			VersionVector: VersionVector(chunkMeta.VersionVector),
-		}
-
-		// Send chunk to peer
-		if err := r.sendReplicateChunk(ctx, peerID, payload); err != nil {
-			return fmt.Errorf("send chunk %s (%d/%d): %w", chunkHash, i+1, len(chunksToReplicate), err)
-		}
-
-		r.logger.Debug().
-			Str("bucket", bucket).
-			Str("key", key).
-			Str("chunk", truncateHashForLog(chunkHash)).
-			Int("progress", i+1).
-			Int("total", len(chunksToReplicate)).
-			Msg("Replicated chunk")
+	// Replicate chunks with pipelining for throughput
+	if err := r.replicateChunksPipelined(ctx, peerID, bucket, key, chunksToReplicate, meta); err != nil {
+		return err
 	}
 
 	// Send object metadata so the remote peer can serve reads
@@ -1608,6 +1582,121 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 		Msg("Completed chunk-level replication with metadata")
 
 	return nil
+}
+
+// replicateChunksPipelined sends chunks with windowed concurrency for throughput.
+// Instead of sending chunks one at a time (N × RTT), this sends up to
+// chunkPipelineWindow chunks concurrently.
+func (r *Replicator) replicateChunksPipelined(ctx context.Context, peerID, bucket, key string, chunksToReplicate []string, meta *ObjectMeta) error {
+	window := r.chunkPipelineWindow
+	if window <= 1 || len(chunksToReplicate) <= 1 {
+		// Fall back to sequential for single chunk or window=1
+		for i, chunkHash := range chunksToReplicate {
+			if err := r.replicateSingleChunk(ctx, peerID, bucket, key, chunkHash, meta); err != nil {
+				return fmt.Errorf("send chunk %s (%d/%d): %w", chunkHash, i+1, len(chunksToReplicate), err)
+			}
+		}
+		return nil
+	}
+
+	inflight := make(chan struct{}, window)
+	type chunkResult struct {
+		index int
+		hash  string
+		err   error
+	}
+	resultCh := make(chan chunkResult, len(chunksToReplicate))
+
+	for i, chunkHash := range chunksToReplicate {
+		select {
+		case <-ctx.Done():
+			// Collect already-sent results before returning
+			goto collect
+		case inflight <- struct{}{}:
+		}
+
+		go func(idx int, hash string) {
+			defer func() { <-inflight }()
+			err := r.replicateSingleChunk(ctx, peerID, bucket, key, hash, meta)
+			resultCh <- chunkResult{index: idx, hash: hash, err: err}
+		}(i, chunkHash)
+	}
+
+collect:
+	// Collect all results
+	var firstErr error
+	collected := 0
+	for collected < len(chunksToReplicate) {
+		select {
+		case res := <-resultCh:
+			collected++
+			if res.err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("send chunk %s (%d/%d): %w",
+					res.hash, res.index+1, len(chunksToReplicate), res.err)
+			}
+			if res.err == nil {
+				r.logger.Debug().
+					Str("bucket", bucket).
+					Str("key", key).
+					Str("chunk", truncateHashForLog(res.hash)).
+					Int("progress", collected).
+					Int("total", len(chunksToReplicate)).
+					Msg("Replicated chunk")
+			}
+		case <-ctx.Done():
+			if firstErr == nil {
+				firstErr = fmt.Errorf("replication canceled: %w", ctx.Err())
+			}
+			return firstErr
+		}
+	}
+
+	return firstErr
+}
+
+// replicateSingleChunk reads and sends a single chunk to a peer.
+func (r *Replicator) replicateSingleChunk(ctx context.Context, peerID, bucket, key, chunkHash string, meta *ObjectMeta) error {
+	// Read chunk data from local CAS. If the chunk was cleaned up by a
+	// concurrent CleanupNonAssignedChunks, fall back to fetching from a peer.
+	chunkData, err := r.s3.ReadChunk(ctx, chunkHash)
+	if err != nil {
+		localErr := err
+		chunkData, err = r.fetchChunkFromPeers(ctx, chunkHash)
+		if err != nil {
+			return fmt.Errorf("read chunk %s: local: %w, peers: %w", chunkHash, localErr, err)
+		}
+	}
+
+	// Get chunk metadata
+	chunkMeta := meta.ChunkMetadata[chunkHash]
+	if chunkMeta == nil {
+		chunkMeta = &ChunkMetadata{
+			Hash: chunkHash,
+			Size: int64(len(chunkData)),
+		}
+	}
+
+	// Find chunk index in file (for ordering)
+	chunkIndex := -1
+	for idx, hash := range meta.Chunks {
+		if hash == chunkHash {
+			chunkIndex = idx
+			break
+		}
+	}
+
+	payload := ReplicateChunkPayload{
+		Bucket:        bucket,
+		Key:           key,
+		ChunkHash:     chunkHash,
+		ChunkData:     chunkData,
+		ChunkIndex:    chunkIndex,
+		TotalChunks:   len(meta.Chunks),
+		ChunkSize:     chunkMeta.Size,
+		VersionVector: VersionVector(chunkMeta.VersionVector),
+	}
+
+	return r.sendReplicateChunk(ctx, peerID, payload)
 }
 
 // fetchChunkFromPeers tries to fetch a chunk from any available peer.
