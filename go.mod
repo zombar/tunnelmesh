@@ -13,7 +13,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/kardianos/service v1.2.4
-	github.com/klauspost/compress v1.18.3
+	github.com/klauspost/compress v1.18.4
 	github.com/klauspost/reedsolomon v1.13.2
 	github.com/miekg/dns v1.1.72
 	github.com/prometheus/client_golang v1.23.2
@@ -25,8 +25,8 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/willscott/go-nfs v0.0.3
 	go.uber.org/goleak v1.3.0
-	golang.org/x/crypto v0.47.0
-	golang.org/x/sys v0.40.0
+	golang.org/x/crypto v0.48.0
+	golang.org/x/sys v0.41.0
 	golang.org/x/time v0.14.0
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
