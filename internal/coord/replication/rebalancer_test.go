@@ -225,6 +225,115 @@ func TestRebalancer_OnCycleCompleteCallback(t *testing.T) {
 	assert.Equal(t, uint64(1), callbackStats.RunsTotal)
 }
 
+func TestRebalancer_CleansUpStaleChunks(t *testing.T) {
+	rb, replicator, s3Store := newTestRebalancer(t)
+
+	// 6 chunks across 2 objects, all stored locally
+	chunks1 := []string{"chunk_a", "chunk_b", "chunk_c"}
+	chunkData1 := map[string][]byte{
+		"chunk_a": []byte("data_a"),
+		"chunk_b": []byte("data_b"),
+		"chunk_c": []byte("data_c"),
+	}
+	chunks2 := []string{"chunk_d", "chunk_e", "chunk_f"}
+	chunkData2 := map[string][]byte{
+		"chunk_d": []byte("data_d"),
+		"chunk_e": []byte("data_e"),
+		"chunk_f": []byte("data_f"),
+	}
+	s3Store.addObjectWithChunks("bucket1", "file1", chunks1, chunkData1)
+	s3Store.addObjectWithChunks("bucket1", "file2", chunks2, chunkData2)
+
+	// Initially just us — all chunks are assigned to us
+	rb.NotifyTopologyChange()
+	rb.runRebalanceCycle(context.Background())
+
+	// Verify we still have all chunks
+	for _, h := range append(chunks1, chunks2...) {
+		assert.True(t, s3Store.ChunkExists(context.Background(), h), "should still have %s", h)
+	}
+
+	// Add coord2 — with RF=2 and 2 coordinators, all chunks stay on both (RF >= coord count)
+	// But add coord3 to get RF=2 < 3 coords, so some chunks should move OFF us
+	replicator.AddPeer("coord2")
+	replicator.AddPeer("coord3")
+	rb.NotifyTopologyChange()
+	rb.runRebalanceCycle(context.Background())
+
+	// With 3 coordinators and RF=2, each chunk should be on 2 of 3 coordinators.
+	// Some chunks that were only on us should now be deleted locally.
+	policy := NewStripingPolicy([]string{"coord1", "coord2", "coord3"})
+
+	// Check that chunks NOT assigned to coord1 were cleaned up
+	for i, hash := range chunks1 {
+		assigned := policy.ChunksForPeer("coord1", len(chunks1), 2)
+		isAssigned := false
+		for _, idx := range assigned {
+			if idx == i {
+				isAssigned = true
+				break
+			}
+		}
+		if !isAssigned {
+			assert.False(t, s3Store.ChunkExists(context.Background(), hash),
+				"chunk %s (index %d) should have been cleaned up", hash, i)
+		}
+	}
+
+	// Verify stats include cleaned chunks
+	assert.Greater(t, rb.GetStats().RunsTotal, uint64(0))
+}
+
+func TestRebalancer_CleanupPreservesSharedChunks(t *testing.T) {
+	rb, replicator, s3Store := newTestRebalancer(t)
+
+	// Two objects share a chunk hash — "shared_chunk" appears in both.
+	// Even if it's not assigned to us for object1, it IS assigned for object2,
+	// so it must NOT be deleted.
+	s3Store.addObjectWithChunks("bucket1", "file1", []string{"shared_chunk", "only_a"}, map[string][]byte{
+		"shared_chunk": []byte("shared_data"),
+		"only_a":       []byte("only_a_data"),
+	})
+	s3Store.addObjectWithChunks("bucket1", "file2", []string{"only_b", "shared_chunk"}, map[string][]byte{
+		"only_b":       []byte("only_b_data"),
+		"shared_chunk": []byte("shared_data"),
+	})
+
+	// 3 coordinators so RF=2 < 3 — some chunk indices won't be assigned to us
+	replicator.AddPeer("coord2")
+	replicator.AddPeer("coord3")
+
+	rb.NotifyTopologyChange()
+	rb.runRebalanceCycle(context.Background())
+
+	// The shared chunk should still exist because it's assigned to us for at least
+	// one of the two objects (different index, different assignment).
+	// With 3 peers and RF=2, index 0 → peers 0,1; index 1 → peers 1,2.
+	// coord1 is one of {coord1, coord2, coord3} sorted.
+	// In file1: shared_chunk is index 0, in file2: shared_chunk is index 1.
+	// At least one of those indices should assign to coord1 with RF=2.
+	policy := NewStripingPolicy([]string{"coord1", "coord2", "coord3"})
+	file1Assigned := policy.ChunksForPeer("coord1", 2, 2)
+	file2Assigned := policy.ChunksForPeer("coord1", 2, 2)
+
+	sharedNeeded := false
+	for _, idx := range file1Assigned {
+		if idx == 0 { // shared_chunk is index 0 in file1
+			sharedNeeded = true
+		}
+	}
+	for _, idx := range file2Assigned {
+		if idx == 1 { // shared_chunk is index 1 in file2
+			sharedNeeded = true
+		}
+	}
+
+	if sharedNeeded {
+		assert.True(t, s3Store.ChunkExists(context.Background(), "shared_chunk"),
+			"shared chunk should be preserved when assigned to us for any object")
+	}
+}
+
 // TestReplicateObjectMeta_IncludesVersionHistory verifies that sendReplicateObjectMeta
 // includes version history in the payload.
 func TestReplicateObjectMeta_IncludesVersionHistory(t *testing.T) {

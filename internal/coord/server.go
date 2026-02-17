@@ -448,6 +448,7 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 			if m := s3.GetS3Metrics(); m != nil {
 				m.RebalanceRunsTotal.Add(float64(stats.RunsTotal))
 				m.RebalanceChunksMovedTotal.Add(float64(stats.ChunksRedistributed))
+				m.RebalanceChunksCleanedTotal.Add(float64(stats.ChunksCleaned))
 				m.RebalanceBytesTransferred.Add(float64(stats.BytesTransferred))
 			}
 		}

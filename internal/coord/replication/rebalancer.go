@@ -94,6 +94,7 @@ func (rb *Rebalancer) NotifyTopologyChange() {
 type RebalancerStats struct {
 	RunsTotal           uint64 `json:"runs_total"`
 	ChunksRedistributed uint64 `json:"chunks_redistributed"`
+	ChunksCleaned       uint64 `json:"chunks_cleaned"`
 	BytesTransferred    int64  `json:"bytes_transferred"`
 }
 
@@ -180,6 +181,14 @@ func (rb *Rebalancer) runRebalanceCycle(ctx context.Context) {
 	var bytesThisCycle int64
 	selfID := rb.replicator.nodeID
 
+	// Track chunk hashes across all objects to safely clean up stale local copies.
+	// neededChunks: hashes assigned to us by at least one object — must keep.
+	// unassignedChunks: hashes we have locally but aren't assigned — candidates for deletion.
+	// After the transfer pass, delete unassignedChunks that aren't in neededChunks.
+	neededChunks := make(map[string]struct{})
+	unassignedChunks := make(map[string]struct{})
+
+	rateLimited := false
 	for bucket, keys := range allObjects {
 		select {
 		case <-ctx.Done():
@@ -200,16 +209,21 @@ func (rb *Rebalancer) runRebalanceCycle(ctx context.Context) {
 			default:
 			}
 
-			// Rate limit
-			if bytesThisCycle >= rb.maxBytesPerCycle {
-				rb.logger.Info().
-					Int64("bytes_transferred", bytesThisCycle).
-					Int64("max_bytes", rb.maxBytesPerCycle).
-					Msg("Rebalance cycle rate limit reached, stopping")
-				return
+			// Rate limit transfers but still scan all objects to build
+			// the needed/sent sets for correct cleanup.
+			maxTransfer := rb.maxBytesPerCycle - bytesThisCycle
+			if maxTransfer <= 0 {
+				if !rateLimited {
+					rateLimited = true
+					rb.logger.Info().
+						Int64("bytes_transferred", bytesThisCycle).
+						Int64("max_bytes", rb.maxBytesPerCycle).
+						Msg("Rebalance cycle rate limit reached, skipping further transfers")
+				}
+				maxTransfer = 0
 			}
 
-			transferred, err := rb.rebalanceObject(ctx, bucket, key, newPolicy, replicationFactor, selfID)
+			transferred, err := rb.rebalanceObject(ctx, bucket, key, newPolicy, replicationFactor, selfID, maxTransfer, neededChunks, unassignedChunks)
 			if err != nil {
 				rb.logger.Warn().Err(err).
 					Str("bucket", bucket).Str("key", key).
@@ -220,23 +234,51 @@ func (rb *Rebalancer) runRebalanceCycle(ctx context.Context) {
 		}
 	}
 
+	// Cleanup pass: delete local chunks that no object assigns to us.
+	var chunksCleaned uint64
+	for hash := range unassignedChunks {
+		if _, needed := neededChunks[hash]; needed {
+			continue
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		if err := rb.s3.DeleteChunk(ctx, hash); err != nil {
+			rb.logger.Debug().Err(err).
+				Str("chunk", truncateHashForLog(hash)).
+				Msg("Failed to delete stale chunk during rebalance cleanup")
+			continue
+		}
+		chunksCleaned++
+	}
+	if chunksCleaned > 0 {
+		rb.logger.Info().
+			Uint64("chunks_cleaned", chunksCleaned).
+			Msg("Cleaned up stale local chunks after rebalance")
+	}
+
 	rb.bytesTransferred.Add(bytesThisCycle)
 	chunksThisCycle := rb.chunksRedistributed.Load() - chunksBeforeCycle
 	if rb.OnCycleComplete != nil {
 		rb.OnCycleComplete(RebalancerStats{
 			RunsTotal:           1,
 			ChunksRedistributed: chunksThisCycle,
+			ChunksCleaned:       chunksCleaned,
 			BytesTransferred:    bytesThisCycle,
 		})
 	}
 	rb.logger.Info().
 		Int64("bytes_transferred", bytesThisCycle).
+		Uint64("chunks_cleaned", chunksCleaned).
 		Msg("Rebalance cycle completed")
 }
 
 // rebalanceObject performs chunk redistribution for a single object.
+// It populates neededChunks with hashes assigned to us and sentChunks with hashes
+// we successfully sent away. maxTransferBytes limits how much data to transfer;
+// set to 0 to skip transfers but still populate the tracking sets.
 // Returns bytes transferred.
-func (rb *Rebalancer) rebalanceObject(ctx context.Context, bucket, key string, policy *StripingPolicy, replicationFactor int, selfID string) (int64, error) {
+func (rb *Rebalancer) rebalanceObject(ctx context.Context, bucket, key string, policy *StripingPolicy, replicationFactor int, selfID string, maxTransferBytes int64, neededChunks, unassignedChunks map[string]struct{}) (int64, error) {
 	meta, err := rb.s3.GetObjectMeta(ctx, bucket, key)
 	if err != nil {
 		return 0, err
@@ -263,8 +305,10 @@ func (rb *Rebalancer) rebalanceObject(ctx context.Context, bucket, key string, p
 		}
 
 		if assignedSet[idx] {
-			// We should have this chunk — check existence without reading full data
-			if !rb.s3.ChunkExists(ctx, chunkHash) {
+			// We should have this chunk — record it and ensure we have it locally.
+			neededChunks[chunkHash] = struct{}{}
+
+			if maxTransferBytes > 0 && bytesTransferred < maxTransferBytes && !rb.s3.ChunkExists(ctx, chunkHash) {
 				// We don't have it but should — fetch from peers
 				data, fetchErr := rb.fetchChunkFromAnyPeer(ctx, chunkHash)
 				if fetchErr != nil {
@@ -283,42 +327,48 @@ func (rb *Rebalancer) rebalanceObject(ctx context.Context, bucket, key string, p
 				rb.chunksRedistributed.Add(1)
 			}
 		} else {
-			// We have this chunk but shouldn't — send it to the primary owner
+			// We shouldn't own this chunk index.
 			owner := policy.PrimaryOwner(idx)
 			if owner == selfID {
 				continue
 			}
 
-			// Check existence before reading
 			if !rb.s3.ChunkExists(ctx, chunkHash) {
-				continue // We don't have it, nothing to send
+				continue // We don't have it, nothing to do
 			}
 
-			data, readErr := rb.s3.ReadChunk(ctx, chunkHash)
-			if readErr != nil {
-				continue
+			// We have this chunk but aren't assigned to own it.
+			// Mark for cleanup — will be deleted only if no object assigns it to us.
+			unassignedChunks[chunkHash] = struct{}{}
+
+			// Best-effort: send to the correct owner if within rate limit.
+			if maxTransferBytes > 0 && bytesTransferred < maxTransferBytes {
+				data, readErr := rb.s3.ReadChunk(ctx, chunkHash)
+				if readErr != nil {
+					continue
+				}
+
+				sendErr := rb.replicator.sendReplicateChunk(ctx, owner, ReplicateChunkPayload{
+					Bucket:      bucket,
+					Key:         key,
+					ChunkHash:   chunkHash,
+					ChunkData:   data,
+					ChunkIndex:  idx,
+					TotalChunks: totalChunks,
+					ChunkSize:   int64(len(data)),
+				})
+
+				if sendErr != nil {
+					rb.logger.Debug().Err(sendErr).
+						Str("chunk", truncateHashForLog(chunkHash)).
+						Str("owner", owner).
+						Msg("Failed to send chunk to new owner during rebalance")
+					continue
+				}
+
+				bytesTransferred += int64(len(data))
+				rb.chunksRedistributed.Add(1)
 			}
-
-			sendErr := rb.replicator.sendReplicateChunk(ctx, owner, ReplicateChunkPayload{
-				Bucket:      bucket,
-				Key:         key,
-				ChunkHash:   chunkHash,
-				ChunkData:   data,
-				ChunkIndex:  idx,
-				TotalChunks: totalChunks,
-				ChunkSize:   int64(len(data)),
-			})
-
-			if sendErr != nil {
-				rb.logger.Debug().Err(sendErr).
-					Str("chunk", truncateHashForLog(chunkHash)).
-					Str("owner", owner).
-					Msg("Failed to send chunk to new owner during rebalance")
-				continue
-			}
-
-			bytesTransferred += int64(len(data))
-			rb.chunksRedistributed.Add(1)
 		}
 	}
 
