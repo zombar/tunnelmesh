@@ -3716,6 +3716,16 @@ func (s *Store) ImportVersionHistory(ctx context.Context, bucket, key string, ve
 			return imported, nil, fmt.Errorf("write version %s: %w", v.VersionID, err)
 		}
 		imported++
+
+		// Update stats to match what archiveCurrentVersion does.
+		// Without this, pruneExpiredVersions and other deletion paths
+		// would decrement counts for versions that were never counted,
+		// causing the version gauge to go negative.
+		s.statsVersionCount.Add(1)
+		var meta ObjectMeta
+		if json.Unmarshal(v.MetaJSON, &meta) == nil {
+			s.statsVersionBytes.Add(meta.Size)
+		}
 	}
 
 	// Prune expired versions to enforce local retention policy.
