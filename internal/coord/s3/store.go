@@ -2436,6 +2436,14 @@ func (s *Store) GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectM
 
 // ReadChunk reads a chunk from CAS by its hash.
 // This is used by the replicator to fetch chunk data for sending to peers.
+// ChunkExists checks if a chunk exists in CAS without reading its data.
+func (s *Store) ChunkExists(hash string) bool {
+	if s.cas == nil {
+		return false
+	}
+	return s.cas.ChunkExists(hash)
+}
+
 func (s *Store) ReadChunk(ctx context.Context, hash string) ([]byte, error) {
 	if s.cas == nil {
 		return nil, fmt.Errorf("CAS not initialized")
@@ -3630,9 +3638,8 @@ func (s *Store) ListVersions(ctx context.Context, bucket, key string) ([]Version
 	return versions, nil
 }
 
-// GetVersionHistory returns all version entries for an object (version ID + full meta JSON).
-// Returns both archived versions and the current version. Used by replication to send
-// version history to all coordinators.
+// GetVersionHistory returns archived version entries for an object (version ID + full meta JSON).
+// The current (live) version is not included; only entries from the versions/ directory.
 func (s *Store) GetVersionHistory(ctx context.Context, bucket, key string) ([]VersionHistoryEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -3675,19 +3682,20 @@ type VersionHistoryEntry struct {
 
 // ImportVersionHistory imports version entries from replication, skipping any that
 // already exist (dedup by versionID). After importing, prunes expired versions to
-// enforce local retention policy. Returns count of newly imported versions.
-func (s *Store) ImportVersionHistory(ctx context.Context, bucket, key string, versions []VersionHistoryEntry) (int, error) {
+// enforce local retention policy. Returns count of newly imported versions and
+// chunk hashes from pruned versions that may need garbage collection.
+func (s *Store) ImportVersionHistory(ctx context.Context, bucket, key string, versions []VersionHistoryEntry) (int, []string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if len(versions) == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 
 	// Ensure version directory exists
 	versionDir := s.versionDir(bucket, key)
 	if err := os.MkdirAll(versionDir, 0755); err != nil {
-		return 0, fmt.Errorf("create version directory: %w", err)
+		return 0, nil, fmt.Errorf("create version directory: %w", err)
 	}
 
 	imported := 0
@@ -3705,27 +3713,30 @@ func (s *Store) ImportVersionHistory(ctx context.Context, bucket, key string, ve
 		}
 
 		if err := syncedWriteFile(versionPath, v.MetaJSON, 0644); err != nil {
-			return imported, fmt.Errorf("write version %s: %w", v.VersionID, err)
+			return imported, nil, fmt.Errorf("write version %s: %w", v.VersionID, err)
 		}
 		imported++
 	}
 
-	// Prune expired versions to enforce local retention policy
+	// Prune expired versions to enforce local retention policy.
+	// Return chunk hashes from pruned versions so caller can GC outside the lock.
+	var chunksToCheck []string
 	if imported > 0 {
-		s.pruneExpiredVersions(ctx, bucket, key)
+		_, chunksToCheck = s.pruneExpiredVersions(ctx, bucket, key)
 	}
 
-	return imported, nil
+	return imported, chunksToCheck, nil
 }
 
 // GetAllObjectKeys returns all object keys grouped by bucket.
 // Used by the rebalancer to iterate all objects for redistribution.
+// The lock is released between buckets to avoid holding it during long I/O scans.
 func (s *Store) GetAllObjectKeys(ctx context.Context) (map[string][]string, error) {
+	// First pass: get bucket names under lock
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	bucketsDir := filepath.Join(s.dataDir, "buckets")
 	bucketEntries, err := os.ReadDir(bucketsDir)
+	s.mu.RUnlock()
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -3733,21 +3744,26 @@ func (s *Store) GetAllObjectKeys(ctx context.Context) (map[string][]string, erro
 		return nil, fmt.Errorf("read buckets dir: %w", err)
 	}
 
-	result := make(map[string][]string, len(bucketEntries))
+	var bucketNames []string
 	for _, bEntry := range bucketEntries {
-		if !bEntry.IsDir() {
-			continue
+		if bEntry.IsDir() {
+			bucketNames = append(bucketNames, bEntry.Name())
 		}
-		bucket := bEntry.Name()
+	}
 
+	// Second pass: list objects per bucket, re-acquiring lock for each
+	result := make(map[string][]string, len(bucketNames))
+	for _, bucket := range bucketNames {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
 
+		s.mu.RLock()
 		metaDir := filepath.Join(s.bucketPath(bucket), "meta")
 		entries, readErr := os.ReadDir(metaDir)
+		s.mu.RUnlock()
 		if readErr != nil {
 			if os.IsNotExist(readErr) {
 				continue

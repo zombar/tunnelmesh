@@ -444,6 +444,13 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 
 		// Initialize rebalancer for automatic data redistribution on topology changes
 		rebalancer := replication.NewRebalancer(srv.replicator, s3Adapter, chunkRegistry, log.Logger)
+		rebalancer.OnCycleComplete = func(stats replication.RebalancerStats) {
+			if m := s3.GetS3Metrics(); m != nil {
+				m.RebalanceRunsTotal.Add(float64(stats.RunsTotal))
+				m.RebalanceChunksMovedTotal.Add(float64(stats.ChunksRedistributed))
+				m.RebalanceBytesTransferred.Add(float64(stats.BytesTransferred))
+			}
+		}
 		srv.replicator.SetRebalancer(rebalancer)
 
 		log.Info().

@@ -552,7 +552,7 @@ func TestS3Adapter_ImportVersionHistory(t *testing.T) {
 		{VersionID: "imported-v1", MetaJSON: []byte(`{"key":"file.txt","version_id":"imported-v1","size":10}`)},
 	}
 
-	count, err := adapter.ImportVersionHistory(ctx, "test-bucket", "file.txt", versions)
+	count, _, err := adapter.ImportVersionHistory(ctx, "test-bucket", "file.txt", versions)
 	if err != nil {
 		t.Fatalf("import version history: %v", err)
 	}
@@ -597,28 +597,6 @@ func TestS3Adapter_GetAllObjectKeys(t *testing.T) {
 	}
 	if len(keys) != 1 {
 		t.Errorf("expected 1 key, got %d", len(keys))
-	}
-}
-
-func TestS3Adapter_GetBucketErasureCodingPolicy(t *testing.T) {
-	store := createTestS3Store(t)
-	adapter := NewS3StoreAdapter(store)
-	ctx := context.Background()
-
-	err := store.CreateBucket(ctx, "test-bucket", "alice", 2, nil)
-	if err != nil {
-		t.Fatalf("failed to create bucket: %v", err)
-	}
-
-	enabled, k, m, err := adapter.GetBucketErasureCodingPolicy(ctx, "test-bucket")
-	if err != nil {
-		t.Fatalf("get ec policy: %v", err)
-	}
-	if enabled {
-		t.Error("expected EC not enabled for default bucket")
-	}
-	if k != 0 || m != 0 {
-		t.Errorf("expected k=0, m=0 for no EC, got k=%d, m=%d", k, m)
 	}
 }
 

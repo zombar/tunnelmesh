@@ -58,7 +58,6 @@ type S3Metrics struct {
 	RebalanceRunsTotal        prometheus.Counter // tunnelmesh_s3_rebalance_runs_total
 	RebalanceChunksMovedTotal prometheus.Counter // tunnelmesh_s3_rebalance_chunks_moved_total
 	RebalanceBytesTransferred prometheus.Counter // tunnelmesh_s3_rebalance_bytes_transferred_total
-	RebalanceObjectsReencoded prometheus.Counter // tunnelmesh_s3_rebalance_objects_reencoded_total
 }
 
 // InitS3Metrics initializes all S3 metrics on the given registry.
@@ -202,10 +201,6 @@ func InitS3Metrics(registry prometheus.Registerer) *S3Metrics {
 			RebalanceBytesTransferred: promauto.With(registry).NewCounter(prometheus.CounterOpts{
 				Name: "tunnelmesh_s3_rebalance_bytes_transferred_total",
 				Help: "Total bytes transferred during rebalance operations",
-			}),
-			RebalanceObjectsReencoded: promauto.With(registry).NewCounter(prometheus.CounterOpts{
-				Name: "tunnelmesh_s3_rebalance_objects_reencoded_total",
-				Help: "Total objects re-encoded during rebalance operations",
 			}),
 		}
 		s3MetricsPtr.Store(m)

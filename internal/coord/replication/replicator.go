@@ -78,6 +78,9 @@ type S3Store interface {
 	// GetObjectMeta retrieves object metadata without loading chunk data
 	GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectMeta, error)
 
+	// ChunkExists checks if a chunk exists in CAS without reading its data.
+	ChunkExists(ctx context.Context, hash string) bool
+
 	// ReadChunk reads a chunk from CAS by hash
 	ReadChunk(ctx context.Context, hash string) ([]byte, error)
 
@@ -103,21 +106,18 @@ type S3Store interface {
 	// Used for replicated deletes where tombstoning is unnecessary.
 	PurgeObject(ctx context.Context, bucket, key string) error
 
-	// GetVersionHistory returns all version entries for an object (version ID + full meta JSON).
-	// Used to replicate version history to all coordinators.
+	// GetVersionHistory returns archived version entries for an object (version ID + full meta JSON).
+	// The current (live) version is not included; only entries from the versions/ directory.
 	GetVersionHistory(ctx context.Context, bucket, key string) ([]VersionEntry, error)
 
 	// ImportVersionHistory imports version entries, skipping any that already exist (dedup by versionID).
 	// After importing, prunes expired versions to enforce local retention policy.
-	// Returns count of newly imported versions.
-	ImportVersionHistory(ctx context.Context, bucket, key string, versions []VersionEntry) (int, error)
+	// Returns count of newly imported versions and chunk hashes from pruned versions for GC.
+	ImportVersionHistory(ctx context.Context, bucket, key string, versions []VersionEntry) (int, []string, error)
 
 	// GetAllObjectKeys returns all object keys grouped by bucket.
 	// Used by the rebalancer to iterate all objects for redistribution.
 	GetAllObjectKeys(ctx context.Context) (map[string][]string, error)
-
-	// GetBucketErasureCodingPolicy returns the erasure coding policy for a bucket.
-	GetBucketErasureCodingPolicy(ctx context.Context, bucket string) (enabled bool, k, m int, err error)
 }
 
 // ChunkRegistryInterface defines operations for chunk ownership tracking.
@@ -377,7 +377,7 @@ func (r *Replicator) AddPeer(coordMeshIP string) {
 	r.mu.Unlock()
 
 	if added && r.rebalancer != nil {
-		r.rebalancer.NotifyTopologyChange(r.GetPeers())
+		r.rebalancer.NotifyTopologyChange()
 	}
 }
 
@@ -393,7 +393,7 @@ func (r *Replicator) RemovePeer(coordMeshIP string) {
 	r.mu.Unlock()
 
 	if removed && r.rebalancer != nil {
-		r.rebalancer.NotifyTopologyChange(r.GetPeers())
+		r.rebalancer.NotifyTopologyChange()
 	}
 }
 
@@ -1073,7 +1073,7 @@ func (r *Replicator) handleSyncResponse(msg *Message) error {
 		// Always import version history regardless of object relationship —
 		// versions are additive and any coordinator should have complete history
 		if len(obj.Versions) > 0 {
-			imported, vErr := r.s3.ImportVersionHistory(ctx, obj.Bucket, obj.Key, obj.Versions)
+			imported, vChunks, vErr := r.s3.ImportVersionHistory(ctx, obj.Bucket, obj.Key, obj.Versions)
 			if vErr != nil {
 				r.logger.Warn().Err(vErr).
 					Str("bucket", obj.Bucket).Str("key", obj.Key).
@@ -1083,6 +1083,9 @@ func (r *Replicator) handleSyncResponse(msg *Message) error {
 					Str("bucket", obj.Bucket).Str("key", obj.Key).
 					Int("imported", imported).
 					Msg("Imported version history during sync")
+				if len(vChunks) > 0 {
+					r.s3.DeleteUnreferencedChunks(ctx, vChunks)
+				}
 			}
 		}
 	}
@@ -2222,7 +2225,7 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 
 	// Import version history if present
 	if len(payload.Versions) > 0 {
-		imported, vErr := r.s3.ImportVersionHistory(ctx, payload.Bucket, payload.Key, payload.Versions)
+		imported, vChunks, vErr := r.s3.ImportVersionHistory(ctx, payload.Bucket, payload.Key, payload.Versions)
 		if vErr != nil {
 			r.logger.Warn().Err(vErr).
 				Str("bucket", payload.Bucket).
@@ -2235,6 +2238,9 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 				Int("imported", imported).
 				Int("total", len(payload.Versions)).
 				Msg("Imported version history from replication")
+			if len(vChunks) > 0 {
+				r.s3.DeleteUnreferencedChunks(ctx, vChunks)
+			}
 		}
 	}
 

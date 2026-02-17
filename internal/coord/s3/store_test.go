@@ -2856,7 +2856,7 @@ func TestImportVersionHistory_Merge(t *testing.T) {
 		{VersionID: "imported-v2", MetaJSON: []byte(`{"key":"file.txt","version_id":"imported-v2","size":200}`)},
 	}
 
-	imported, err := store.ImportVersionHistory(ctx, "test-bucket", "file.txt", newVersions)
+	imported, _, err := store.ImportVersionHistory(ctx, "test-bucket", "file.txt", newVersions)
 	require.NoError(t, err)
 	assert.Equal(t, 2, imported)
 
@@ -2893,7 +2893,7 @@ func TestImportVersionHistory_NoDuplicates(t *testing.T) {
 		{VersionID: existingVersions[0].VersionID, MetaJSON: existingVersions[0].MetaJSON},
 	}
 
-	imported, err := store.ImportVersionHistory(ctx, "test-bucket", "file.txt", dupVersions)
+	imported, _, err := store.ImportVersionHistory(ctx, "test-bucket", "file.txt", dupVersions)
 	require.NoError(t, err)
 	assert.Equal(t, 0, imported, "Should not import duplicate versions")
 }
@@ -2902,7 +2902,7 @@ func TestImportVersionHistory_Empty(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	ctx := context.Background()
 
-	imported, err := store.ImportVersionHistory(ctx, "test-bucket", "file.txt", nil)
+	imported, _, err := store.ImportVersionHistory(ctx, "test-bucket", "file.txt", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, imported)
 }

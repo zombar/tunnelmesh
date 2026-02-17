@@ -150,6 +150,11 @@ func (a *S3StoreAdapter) GetObjectMeta(ctx context.Context, bucket, key string) 
 	return result, nil
 }
 
+// ChunkExists checks if a chunk exists in CAS without reading its data.
+func (a *S3StoreAdapter) ChunkExists(_ context.Context, hash string) bool {
+	return a.store.ChunkExists(hash)
+}
+
 // ReadChunk reads a chunk from CAS by hash (Phase 4).
 func (a *S3StoreAdapter) ReadChunk(ctx context.Context, hash string) ([]byte, error) {
 	data, err := a.store.ReadChunk(ctx, hash)
@@ -232,7 +237,7 @@ func (a *S3StoreAdapter) GetVersionHistory(ctx context.Context, bucket, key stri
 }
 
 // ImportVersionHistory imports version entries, deduplicating by versionID.
-func (a *S3StoreAdapter) ImportVersionHistory(ctx context.Context, bucket, key string, versions []VersionEntry) (int, error) {
+func (a *S3StoreAdapter) ImportVersionHistory(ctx context.Context, bucket, key string, versions []VersionEntry) (int, []string, error) {
 	// Convert replication.VersionEntry to s3.VersionHistoryEntry
 	storeVersions := make([]s3.VersionHistoryEntry, len(versions))
 	for i, v := range versions {
@@ -242,11 +247,11 @@ func (a *S3StoreAdapter) ImportVersionHistory(ctx context.Context, bucket, key s
 		}
 	}
 
-	count, err := a.store.ImportVersionHistory(ctx, bucket, key, storeVersions)
+	count, chunksToCheck, err := a.store.ImportVersionHistory(ctx, bucket, key, storeVersions)
 	if err != nil {
-		return 0, fmt.Errorf("import version history: %w", err)
+		return 0, nil, fmt.Errorf("import version history: %w", err)
 	}
-	return count, nil
+	return count, chunksToCheck, nil
 }
 
 // GetAllObjectKeys returns all object keys grouped by bucket.
@@ -256,13 +261,4 @@ func (a *S3StoreAdapter) GetAllObjectKeys(ctx context.Context) (map[string][]str
 		return nil, fmt.Errorf("get all object keys: %w", err)
 	}
 	return result, nil
-}
-
-// GetBucketErasureCodingPolicy returns the erasure coding policy for a bucket.
-func (a *S3StoreAdapter) GetBucketErasureCodingPolicy(ctx context.Context, bucket string) (bool, int, int, error) {
-	enabled, k, m, err := a.store.GetBucketErasureCodingPolicy(ctx, bucket)
-	if err != nil {
-		return false, 0, 0, fmt.Errorf("get bucket erasure coding policy: %w", err)
-	}
-	return enabled, k, m, nil
 }

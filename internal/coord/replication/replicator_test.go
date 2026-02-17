@@ -199,6 +199,13 @@ func (m *mockS3Store) GetObjectMeta(ctx context.Context, bucket, key string) (*O
 }
 
 // ReadChunk reads a chunk from CAS.
+func (m *mockS3Store) ChunkExists(_ context.Context, hash string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, exists := m.chunks[hash]
+	return exists
+}
+
 func (m *mockS3Store) ReadChunk(ctx context.Context, hash string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -309,7 +316,7 @@ func (m *mockS3Store) GetVersionHistory(_ context.Context, bucket, key string) (
 }
 
 // ImportVersionHistory imports version entries, deduplicating by versionID.
-func (m *mockS3Store) ImportVersionHistory(_ context.Context, bucket, key string, versions []VersionEntry) (int, error) {
+func (m *mockS3Store) ImportVersionHistory(_ context.Context, bucket, key string, versions []VersionEntry) (int, []string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -333,7 +340,7 @@ func (m *mockS3Store) ImportVersionHistory(_ context.Context, bucket, key string
 		imported++
 	}
 
-	return imported, nil
+	return imported, nil, nil
 }
 
 // GetAllObjectKeys returns all object keys grouped by bucket.
@@ -349,11 +356,6 @@ func (m *mockS3Store) GetAllObjectKeys(_ context.Context) (map[string][]string, 
 		}
 	}
 	return result, nil
-}
-
-// GetBucketErasureCodingPolicy returns the erasure coding policy for a bucket.
-func (m *mockS3Store) GetBucketErasureCodingPolicy(_ context.Context, _ string) (bool, int, int, error) {
-	return false, 0, 0, nil
 }
 
 // splitFirst splits a string at the first occurrence of sep.
