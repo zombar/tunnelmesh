@@ -442,6 +442,10 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 		// Wire replicator into S3 store for distributed reads (fetching remote chunks)
 		srv.s3Store.SetReplicator(srv.replicator)
 
+		// Initialize rebalancer for automatic data redistribution on topology changes
+		rebalancer := replication.NewRebalancer(srv.replicator, s3Adapter, chunkRegistry, log.Logger)
+		srv.replicator.SetRebalancer(rebalancer)
+
 		log.Info().
 			Str("node_id", nodeID).
 			Msg("replication engine initialized - coordinators will discover each other via peer list")

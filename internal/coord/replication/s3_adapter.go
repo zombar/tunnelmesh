@@ -3,6 +3,7 @@ package replication
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 
@@ -211,4 +212,57 @@ func (a *S3StoreAdapter) PurgeObject(ctx context.Context, bucket, key string) er
 	}
 
 	return nil
+}
+
+// GetVersionHistory returns all version entries for an object.
+func (a *S3StoreAdapter) GetVersionHistory(ctx context.Context, bucket, key string) ([]VersionEntry, error) {
+	entries, err := a.store.GetVersionHistory(ctx, bucket, key)
+	if err != nil {
+		return nil, fmt.Errorf("get version history: %w", err)
+	}
+
+	result := make([]VersionEntry, len(entries))
+	for i, e := range entries {
+		result[i] = VersionEntry{
+			VersionID: e.VersionID,
+			MetaJSON:  json.RawMessage(e.MetaJSON),
+		}
+	}
+	return result, nil
+}
+
+// ImportVersionHistory imports version entries, deduplicating by versionID.
+func (a *S3StoreAdapter) ImportVersionHistory(ctx context.Context, bucket, key string, versions []VersionEntry) (int, error) {
+	// Convert replication.VersionEntry to s3.VersionHistoryEntry
+	storeVersions := make([]s3.VersionHistoryEntry, len(versions))
+	for i, v := range versions {
+		storeVersions[i] = s3.VersionHistoryEntry{
+			VersionID: v.VersionID,
+			MetaJSON:  []byte(v.MetaJSON),
+		}
+	}
+
+	count, err := a.store.ImportVersionHistory(ctx, bucket, key, storeVersions)
+	if err != nil {
+		return 0, fmt.Errorf("import version history: %w", err)
+	}
+	return count, nil
+}
+
+// GetAllObjectKeys returns all object keys grouped by bucket.
+func (a *S3StoreAdapter) GetAllObjectKeys(ctx context.Context) (map[string][]string, error) {
+	result, err := a.store.GetAllObjectKeys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get all object keys: %w", err)
+	}
+	return result, nil
+}
+
+// GetBucketErasureCodingPolicy returns the erasure coding policy for a bucket.
+func (a *S3StoreAdapter) GetBucketErasureCodingPolicy(ctx context.Context, bucket string) (bool, int, int, error) {
+	enabled, k, m, err := a.store.GetBucketErasureCodingPolicy(ctx, bucket)
+	if err != nil {
+		return false, 0, 0, fmt.Errorf("get bucket erasure coding policy: %w", err)
+	}
+	return enabled, k, m, nil
 }

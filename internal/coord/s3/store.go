@@ -3630,6 +3630,163 @@ func (s *Store) ListVersions(ctx context.Context, bucket, key string) ([]Version
 	return versions, nil
 }
 
+// GetVersionHistory returns all version entries for an object (version ID + full meta JSON).
+// Returns both archived versions and the current version. Used by replication to send
+// version history to all coordinators.
+func (s *Store) GetVersionHistory(ctx context.Context, bucket, key string) ([]VersionHistoryEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var entries []VersionHistoryEntry
+
+	// Get archived versions from versions directory
+	versionDir := s.versionDir(bucket, key)
+	dirEntries, err := os.ReadDir(versionDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read version dir: %w", err)
+	}
+
+	for _, entry := range dirEntries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+
+		versionID := strings.TrimSuffix(entry.Name(), ".json")
+		versionPath := filepath.Join(versionDir, entry.Name())
+		data, readErr := os.ReadFile(versionPath)
+		if readErr != nil {
+			continue
+		}
+
+		entries = append(entries, VersionHistoryEntry{
+			VersionID: versionID,
+			MetaJSON:  data,
+		})
+	}
+
+	return entries, nil
+}
+
+// VersionHistoryEntry represents a version entry with its raw metadata JSON.
+type VersionHistoryEntry struct {
+	VersionID string
+	MetaJSON  []byte
+}
+
+// ImportVersionHistory imports version entries from replication, skipping any that
+// already exist (dedup by versionID). After importing, prunes expired versions to
+// enforce local retention policy. Returns count of newly imported versions.
+func (s *Store) ImportVersionHistory(ctx context.Context, bucket, key string, versions []VersionHistoryEntry) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(versions) == 0 {
+		return 0, nil
+	}
+
+	// Ensure version directory exists
+	versionDir := s.versionDir(bucket, key)
+	if err := os.MkdirAll(versionDir, 0755); err != nil {
+		return 0, fmt.Errorf("create version directory: %w", err)
+	}
+
+	imported := 0
+	for _, v := range versions {
+		versionPath := filepath.Join(versionDir, v.VersionID+".json")
+
+		// Skip if already exists (dedup by versionID)
+		if _, err := os.Stat(versionPath); err == nil {
+			continue
+		}
+
+		// Validate JSON before writing
+		if !json.Valid(v.MetaJSON) {
+			continue
+		}
+
+		if err := syncedWriteFile(versionPath, v.MetaJSON, 0644); err != nil {
+			return imported, fmt.Errorf("write version %s: %w", v.VersionID, err)
+		}
+		imported++
+	}
+
+	// Prune expired versions to enforce local retention policy
+	if imported > 0 {
+		s.pruneExpiredVersions(ctx, bucket, key)
+	}
+
+	return imported, nil
+}
+
+// GetAllObjectKeys returns all object keys grouped by bucket.
+// Used by the rebalancer to iterate all objects for redistribution.
+func (s *Store) GetAllObjectKeys(ctx context.Context) (map[string][]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	bucketsDir := filepath.Join(s.dataDir, "buckets")
+	bucketEntries, err := os.ReadDir(bucketsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read buckets dir: %w", err)
+	}
+
+	result := make(map[string][]string, len(bucketEntries))
+	for _, bEntry := range bucketEntries {
+		if !bEntry.IsDir() {
+			continue
+		}
+		bucket := bEntry.Name()
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		metaDir := filepath.Join(s.bucketPath(bucket), "meta")
+		entries, readErr := os.ReadDir(metaDir)
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				continue
+			}
+			return nil, fmt.Errorf("read meta dir for %s: %w", bucket, readErr)
+		}
+
+		var keys []string
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+				continue
+			}
+			keys = append(keys, strings.TrimSuffix(entry.Name(), ".json"))
+		}
+		if len(keys) > 0 {
+			result[bucket] = keys
+		}
+	}
+
+	return result, nil
+}
+
+// GetBucketErasureCodingPolicy returns the erasure coding policy for a bucket.
+func (s *Store) GetBucketErasureCodingPolicy(ctx context.Context, bucket string) (bool, int, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	meta, err := s.getBucketMeta(bucket)
+	if err != nil {
+		return false, 0, 0, fmt.Errorf("get bucket meta: %w", err)
+	}
+
+	if meta.ErasureCoding == nil {
+		return false, 0, 0, nil
+	}
+
+	return meta.ErasureCoding.Enabled, meta.ErasureCoding.DataShards, meta.ErasureCoding.ParityShards, nil
+}
+
 // GetObjectVersion retrieves a specific version of an object.
 func (s *Store) GetObjectVersion(ctx context.Context, bucket, key, versionID string) (io.ReadCloser, *ObjectMeta, error) {
 	s.mu.RLock()

@@ -102,6 +102,22 @@ type S3Store interface {
 	// PurgeObject permanently removes an object, its versions, and unreferenced chunks.
 	// Used for replicated deletes where tombstoning is unnecessary.
 	PurgeObject(ctx context.Context, bucket, key string) error
+
+	// GetVersionHistory returns all version entries for an object (version ID + full meta JSON).
+	// Used to replicate version history to all coordinators.
+	GetVersionHistory(ctx context.Context, bucket, key string) ([]VersionEntry, error)
+
+	// ImportVersionHistory imports version entries, skipping any that already exist (dedup by versionID).
+	// After importing, prunes expired versions to enforce local retention policy.
+	// Returns count of newly imported versions.
+	ImportVersionHistory(ctx context.Context, bucket, key string, versions []VersionEntry) (int, error)
+
+	// GetAllObjectKeys returns all object keys grouped by bucket.
+	// Used by the rebalancer to iterate all objects for redistribution.
+	GetAllObjectKeys(ctx context.Context) (map[string][]string, error)
+
+	// GetBucketErasureCodingPolicy returns the erasure coding policy for a bucket.
+	GetBucketErasureCodingPolicy(ctx context.Context, bucket string) (enabled bool, k, m int, err error)
 }
 
 // ChunkRegistryInterface defines operations for chunk ownership tracking.
@@ -162,6 +178,9 @@ type Replicator struct {
 	errorCount    atomic.Uint64
 	droppedCount  atomic.Uint64 // Operations dropped due to pending limit
 	rateLimited   atomic.Uint64 // Messages dropped due to rate limiting
+
+	// Rebalancer (nil if not configured)
+	rebalancer *Rebalancer
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -291,6 +310,11 @@ func NewReplicator(config Config) *Replicator {
 	return r
 }
 
+// SetRebalancer attaches a rebalancer to this replicator.
+func (r *Replicator) SetRebalancer(rb *Rebalancer) {
+	r.rebalancer = rb
+}
+
 // Start starts the replicator background tasks.
 func (r *Replicator) Start() error {
 	r.logger.Info().Msg("Starting replicator")
@@ -303,12 +327,23 @@ func (r *Replicator) Start() error {
 	r.wg.Add(1)
 	go r.fetchRequestCleanupWorker()
 
+	// Start rebalancer if configured
+	if r.rebalancer != nil {
+		r.rebalancer.Start()
+	}
+
 	return nil
 }
 
 // Stop stops the replicator and waits for background tasks to finish.
 func (r *Replicator) Stop() error {
 	r.logger.Info().Msg("Stopping replicator")
+
+	// Stop rebalancer first
+	if r.rebalancer != nil {
+		r.rebalancer.Stop()
+	}
+
 	r.cancel()
 	r.wg.Wait()
 	return nil
@@ -333,22 +368,32 @@ func (r *Replicator) releaseSendSlot() {
 // AddPeer adds a coordinator peer to replicate to.
 func (r *Replicator) AddPeer(coordMeshIP string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
+	added := false
 	if !r.peers[coordMeshIP] {
 		r.logger.Info().Str("peer", coordMeshIP).Msg("Added replication peer")
 		r.peers[coordMeshIP] = true
+		added = true
+	}
+	r.mu.Unlock()
+
+	if added && r.rebalancer != nil {
+		r.rebalancer.NotifyTopologyChange(r.GetPeers())
 	}
 }
 
 // RemovePeer removes a coordinator peer.
 func (r *Replicator) RemovePeer(coordMeshIP string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
+	removed := false
 	if r.peers[coordMeshIP] {
 		r.logger.Info().Str("peer", coordMeshIP).Msg("Removed replication peer")
 		delete(r.peers, coordMeshIP)
+		removed = true
+	}
+	r.mu.Unlock()
+
+	if removed && r.rebalancer != nil {
+		r.rebalancer.NotifyTopologyChange(r.GetPeers())
 	}
 }
 
@@ -884,14 +929,26 @@ func (r *Replicator) handleSyncRequest(msg *Message) error {
 				contentType = metadata["content-type"]
 			}
 
-			objects = append(objects, SyncObjectEntry{
+			entry := SyncObjectEntry{
 				Bucket:        bucket,
 				Key:           key,
 				Data:          data,
 				VersionVector: vv,
 				ContentType:   contentType,
 				Metadata:      metadata,
-			})
+			}
+
+			// Include version history in sync
+			versions, vErr := r.s3.GetVersionHistory(ctx, bucket, key)
+			if vErr != nil {
+				r.logger.Warn().Err(vErr).
+					Str("bucket", bucket).Str("key", key).
+					Msg("Failed to get version history for sync, sending without versions")
+			} else if len(versions) > 0 {
+				entry.Versions = versions
+			}
+
+			objects = append(objects, entry)
 		}
 	}
 
@@ -1011,6 +1068,22 @@ func (r *Replicator) handleSyncResponse(msg *Message) error {
 				Str("key", obj.Key).
 				Str("relationship", relationship.String()).
 				Msg("Skipped synced object (local is newer or equal)")
+		}
+
+		// Always import version history regardless of object relationship —
+		// versions are additive and any coordinator should have complete history
+		if len(obj.Versions) > 0 {
+			imported, vErr := r.s3.ImportVersionHistory(ctx, obj.Bucket, obj.Key, obj.Versions)
+			if vErr != nil {
+				r.logger.Warn().Err(vErr).
+					Str("bucket", obj.Bucket).Str("key", obj.Key).
+					Msg("Failed to import version history during sync")
+			} else if imported > 0 {
+				r.logger.Debug().
+					Str("bucket", obj.Bucket).Str("key", obj.Key).
+					Int("imported", imported).
+					Msg("Imported version history during sync")
+			}
 		}
 	}
 
@@ -2051,12 +2124,23 @@ func (r *Replicator) sendFetchChunkResponse(peerID string, payload FetchChunkRes
 
 // sendReplicateObjectMeta sends object metadata to a peer so it can serve reads.
 // This is fire-and-forget (no ACK needed) since metadata is idempotent.
+// Also includes version history so any coordinator can serve version listings.
 func (r *Replicator) sendReplicateObjectMeta(ctx context.Context, peerID, bucket, key string, metaJSON []byte) error {
 	payload := ReplicateObjectMetaPayload{
 		Bucket:      bucket,
 		Key:         key,
 		MetaJSON:    json.RawMessage(metaJSON),
 		BucketOwner: r.nodeID, // Preserve ownership: sender is the original bucket owner
+	}
+
+	// Include version history so all coordinators can serve version listings
+	versions, err := r.s3.GetVersionHistory(ctx, bucket, key)
+	if err != nil {
+		r.logger.Warn().Err(err).
+			Str("bucket", bucket).Str("key", key).
+			Msg("Failed to get version history for replication, sending without versions")
+	} else if len(versions) > 0 {
+		payload.Versions = versions
 	}
 
 	payloadJSON, err := json.Marshal(payload)
@@ -2133,6 +2217,24 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 				Int64("bytes_freed", freed).
 				Int("chunks_checked", len(chunksToCheck)).
 				Msg("Cleaned up unreferenced chunks after metadata import")
+		}
+	}
+
+	// Import version history if present
+	if len(payload.Versions) > 0 {
+		imported, vErr := r.s3.ImportVersionHistory(ctx, payload.Bucket, payload.Key, payload.Versions)
+		if vErr != nil {
+			r.logger.Warn().Err(vErr).
+				Str("bucket", payload.Bucket).
+				Str("key", payload.Key).
+				Msg("Failed to import version history")
+		} else if imported > 0 {
+			r.logger.Debug().
+				Str("bucket", payload.Bucket).
+				Str("key", payload.Key).
+				Int("imported", imported).
+				Int("total", len(payload.Versions)).
+				Msg("Imported version history from replication")
 		}
 	}
 

@@ -492,6 +492,136 @@ func TestS3StoreAdapter_ListBuckets_ExcludesDeletedBuckets(t *testing.T) {
 	}
 }
 
+func TestS3Adapter_GetVersionHistory(t *testing.T) {
+	store := createTestS3Store(t)
+	adapter := NewS3StoreAdapter(store)
+	ctx := context.Background()
+
+	// Create bucket and write multiple versions
+	err := store.CreateBucket(ctx, "test-bucket", "alice", 2, nil)
+	if err != nil {
+		t.Fatalf("failed to create bucket: %v", err)
+	}
+
+	v1 := []byte("version 1")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt", bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	if err != nil {
+		t.Fatalf("put v1: %v", err)
+	}
+
+	v2 := []byte("version 2")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt", bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	if err != nil {
+		t.Fatalf("put v2: %v", err)
+	}
+
+	// Get version history via adapter
+	versions, err := adapter.GetVersionHistory(ctx, "test-bucket", "file.txt")
+	if err != nil {
+		t.Fatalf("get version history: %v", err)
+	}
+
+	if len(versions) != 1 {
+		t.Fatalf("expected 1 archived version, got %d", len(versions))
+	}
+
+	if versions[0].VersionID == "" {
+		t.Error("version ID should not be empty")
+	}
+}
+
+func TestS3Adapter_ImportVersionHistory(t *testing.T) {
+	store := createTestS3Store(t)
+	adapter := NewS3StoreAdapter(store)
+	ctx := context.Background()
+
+	err := store.CreateBucket(ctx, "test-bucket", "alice", 2, nil)
+	if err != nil {
+		t.Fatalf("failed to create bucket: %v", err)
+	}
+
+	// Write an initial object
+	v1 := []byte("version 1")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt", bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	if err != nil {
+		t.Fatalf("put v1: %v", err)
+	}
+
+	// Import versions via adapter
+	versions := []VersionEntry{
+		{VersionID: "imported-v1", MetaJSON: []byte(`{"key":"file.txt","version_id":"imported-v1","size":10}`)},
+	}
+
+	count, err := adapter.ImportVersionHistory(ctx, "test-bucket", "file.txt", versions)
+	if err != nil {
+		t.Fatalf("import version history: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 imported, got %d", count)
+	}
+
+	// Verify via GetVersionHistory
+	result, err := adapter.GetVersionHistory(ctx, "test-bucket", "file.txt")
+	if err != nil {
+		t.Fatalf("get version history after import: %v", err)
+	}
+	if len(result) != 1 {
+		t.Errorf("expected 1 version, got %d", len(result))
+	}
+}
+
+func TestS3Adapter_GetAllObjectKeys(t *testing.T) {
+	store := createTestS3Store(t)
+	adapter := NewS3StoreAdapter(store)
+	ctx := context.Background()
+
+	err := store.CreateBucket(ctx, "test-bucket", "alice", 2, nil)
+	if err != nil {
+		t.Fatalf("failed to create bucket: %v", err)
+	}
+
+	data := []byte("test data")
+	_, err = store.PutObject(ctx, "test-bucket", "file1.txt", bytes.NewReader(data), int64(len(data)), "text/plain", nil)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	result, err := adapter.GetAllObjectKeys(ctx)
+	if err != nil {
+		t.Fatalf("get all object keys: %v", err)
+	}
+
+	keys, ok := result["test-bucket"]
+	if !ok {
+		t.Fatal("expected test-bucket in result")
+	}
+	if len(keys) != 1 {
+		t.Errorf("expected 1 key, got %d", len(keys))
+	}
+}
+
+func TestS3Adapter_GetBucketErasureCodingPolicy(t *testing.T) {
+	store := createTestS3Store(t)
+	adapter := NewS3StoreAdapter(store)
+	ctx := context.Background()
+
+	err := store.CreateBucket(ctx, "test-bucket", "alice", 2, nil)
+	if err != nil {
+		t.Fatalf("failed to create bucket: %v", err)
+	}
+
+	enabled, k, m, err := adapter.GetBucketErasureCodingPolicy(ctx, "test-bucket")
+	if err != nil {
+		t.Fatalf("get ec policy: %v", err)
+	}
+	if enabled {
+		t.Error("expected EC not enabled for default bucket")
+	}
+	if k != 0 || m != 0 {
+		t.Errorf("expected k=0, m=0 for no EC, got k=%d, m=%d", k, m)
+	}
+}
+
 // createTestS3Store creates a new S3 store for testing
 func createTestS3Store(t *testing.T) *s3.Store {
 	t.Helper()

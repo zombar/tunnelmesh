@@ -2791,3 +2791,192 @@ func TestCASStats_VersionBytesAfterInitCASStats(t *testing.T) {
 	assert.Equal(t, int64(len(v1)), stats.VersionBytes, "VersionBytes from initCASStats")
 	assert.Equal(t, int64(len(recycled)), stats.RecycledBytes, "RecycledBytes from initCASStats")
 }
+
+func TestGetVersionHistory(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Write multiple versions
+	v1 := []byte("version 1 data")
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	require.NoError(t, err)
+
+	v2 := []byte("version 2 data, longer")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	require.NoError(t, err)
+
+	v3 := []byte("version 3 data, even longer!!!")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v3), int64(len(v3)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// GetVersionHistory should return archived versions (v1 and v2)
+	entries, err := store.GetVersionHistory(ctx, "test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	// Should have 2 archived versions (v1, v2) - current (v3) is NOT included
+	assert.Len(t, entries, 2)
+
+	// Verify each entry has valid JSON
+	for _, e := range entries {
+		assert.NotEmpty(t, e.VersionID)
+		assert.True(t, json.Valid(e.MetaJSON), "MetaJSON should be valid JSON")
+	}
+}
+
+func TestImportVersionHistory_Merge(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Write an object so there's something to have versions for
+	v1 := []byte("version 1")
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	require.NoError(t, err)
+
+	v2 := []byte("version 2")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Get the existing version
+	existingVersions, err := store.GetVersionHistory(ctx, "test-bucket", "file.txt")
+	require.NoError(t, err)
+	assert.Len(t, existingVersions, 1) // v1 is archived
+
+	// Import additional versions from replication
+	newVersions := []VersionHistoryEntry{
+		{VersionID: "imported-v1", MetaJSON: []byte(`{"key":"file.txt","version_id":"imported-v1","size":100}`)},
+		{VersionID: "imported-v2", MetaJSON: []byte(`{"key":"file.txt","version_id":"imported-v2","size":200}`)},
+	}
+
+	imported, err := store.ImportVersionHistory(ctx, "test-bucket", "file.txt", newVersions)
+	require.NoError(t, err)
+	assert.Equal(t, 2, imported)
+
+	// Now GetVersionHistory should return all versions (1 existing + 2 imported)
+	allVersions, err := store.GetVersionHistory(ctx, "test-bucket", "file.txt")
+	require.NoError(t, err)
+	assert.Len(t, allVersions, 3)
+}
+
+func TestImportVersionHistory_NoDuplicates(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Write two versions to create an archived version
+	v1 := []byte("version 1")
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	require.NoError(t, err)
+
+	v2 := []byte("version 2")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Get existing version IDs
+	existingVersions, err := store.GetVersionHistory(ctx, "test-bucket", "file.txt")
+	require.NoError(t, err)
+	require.Len(t, existingVersions, 1)
+
+	// Try to import the same version ID — should be deduped
+	dupVersions := []VersionHistoryEntry{
+		{VersionID: existingVersions[0].VersionID, MetaJSON: existingVersions[0].MetaJSON},
+	}
+
+	imported, err := store.ImportVersionHistory(ctx, "test-bucket", "file.txt", dupVersions)
+	require.NoError(t, err)
+	assert.Equal(t, 0, imported, "Should not import duplicate versions")
+}
+
+func TestImportVersionHistory_Empty(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	imported, err := store.ImportVersionHistory(ctx, "test-bucket", "file.txt", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, imported)
+}
+
+func TestGetAllObjectKeys(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "bucket-a", "alice", 2, nil))
+	require.NoError(t, store.CreateBucket(ctx, "bucket-b", "bob", 2, nil))
+
+	// Add objects
+	data1 := []byte("object 1")
+	_, err := store.PutObject(ctx, "bucket-a", "file1.txt",
+		bytes.NewReader(data1), int64(len(data1)), "text/plain", nil)
+	require.NoError(t, err)
+
+	data2 := []byte("object 2")
+	_, err = store.PutObject(ctx, "bucket-a", "file2.txt",
+		bytes.NewReader(data2), int64(len(data2)), "text/plain", nil)
+	require.NoError(t, err)
+
+	data3 := []byte("object 3")
+	_, err = store.PutObject(ctx, "bucket-b", "file3.txt",
+		bytes.NewReader(data3), int64(len(data3)), "text/plain", nil)
+	require.NoError(t, err)
+
+	result, err := store.GetAllObjectKeys(ctx)
+	require.NoError(t, err)
+
+	assert.Len(t, result["bucket-a"], 2)
+	assert.Len(t, result["bucket-b"], 1)
+}
+
+func TestGetAllObjectKeys_Empty(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	result, err := store.GetAllObjectKeys(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, result)
+}
+
+func TestGetBucketErasureCodingPolicy_NoEC(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	enabled, k, m, err := store.GetBucketErasureCodingPolicy(ctx, "test-bucket")
+	require.NoError(t, err)
+	assert.False(t, enabled)
+	assert.Equal(t, 0, k)
+	assert.Equal(t, 0, m)
+}
+
+func TestGetBucketErasureCodingPolicy_WithEC(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	ecPolicy := &ErasureCodingPolicy{Enabled: true, DataShards: 10, ParityShards: 3}
+	require.NoError(t, store.CreateBucket(ctx, "ec-bucket", "alice", 2, ecPolicy))
+
+	enabled, k, m, err := store.GetBucketErasureCodingPolicy(ctx, "ec-bucket")
+	require.NoError(t, err)
+	assert.True(t, enabled)
+	assert.Equal(t, 10, k)
+	assert.Equal(t, 3, m)
+}
+
+func TestGetBucketErasureCodingPolicy_BucketNotFound(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	_, _, _, err := store.GetBucketErasureCodingPolicy(ctx, "nonexistent")
+	assert.Error(t, err)
+}
