@@ -176,7 +176,7 @@ func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, 
 			// Check for versionId query param
 			versionID := r.URL.Query().Get("versionId")
 			if versionID != "" {
-				s.handleS3GetObjectVersion(r.Context(), w, bucket, key, versionID)
+				s.handleS3GetObjectVersion(w, r, bucket, key, versionID)
 			} else {
 				s.handleS3GetObject(w, r, bucket, key)
 			}
@@ -190,34 +190,42 @@ func (s *Server) handleS3Object(w http.ResponseWriter, r *http.Request, bucket, 
 	})
 }
 
+// s3ForwardOrError tries forwarding a request to the source/primary coordinator
+// on not-found errors, or returns the appropriate error response.
+// Returns true if the error was handled (forwarded or error response sent).
+func (s *Server) s3ForwardOrError(w http.ResponseWriter, r *http.Request, err error, bucket, key, notFoundMsg, defaultMsg string) bool {
+	if err == nil {
+		return false
+	}
+	if (errors.Is(err, s3.ErrObjectNotFound) || errors.Is(err, s3.ErrBucketNotFound)) &&
+		r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+		if target := s.findObjectSourceIP(bucket, key); target != "" {
+			s.forwardS3Request(w, r, target, bucket)
+			return true
+		}
+		if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
+			s.forwardS3Request(w, r, target, bucket)
+			return true
+		}
+	}
+	switch {
+	case errors.Is(err, s3.ErrBucketNotFound):
+		s.jsonError(w, "bucket not found", http.StatusNotFound)
+	case errors.Is(err, s3.ErrObjectNotFound):
+		s.jsonError(w, notFoundMsg, http.StatusNotFound)
+	case errors.Is(err, s3.ErrAccessDenied):
+		s.jsonError(w, "access denied", http.StatusForbidden)
+	default:
+		s.jsonError(w, defaultMsg, http.StatusInternalServerError)
+	}
+	return true
+}
+
 // handleS3GetObject returns the object content.
 // Tries local storage first; forwards to primary coordinator on miss.
 func (s *Server) handleS3GetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	reader, meta, err := s.s3Store.GetObject(r.Context(), bucket, key)
-	if err != nil {
-		// Try forwarding: first to the source coordinator (from listing index),
-		// then fall back to the hash-based primary coordinator.
-		if (errors.Is(err, s3.ErrObjectNotFound) || errors.Is(err, s3.ErrBucketNotFound)) &&
-			r.Header.Get("X-TunnelMesh-Forwarded") == "" {
-			if target := s.findObjectSourceIP(bucket, key); target != "" {
-				s.forwardS3Request(w, r, target, bucket)
-				return
-			}
-			if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
-				s.forwardS3Request(w, r, target, bucket)
-				return
-			}
-		}
-		switch {
-		case errors.Is(err, s3.ErrBucketNotFound):
-			s.jsonError(w, "bucket not found", http.StatusNotFound)
-		case errors.Is(err, s3.ErrObjectNotFound):
-			s.jsonError(w, "object not found", http.StatusNotFound)
-		case errors.Is(err, s3.ErrAccessDenied):
-			s.jsonError(w, "access denied", http.StatusForbidden)
-		default:
-			s.jsonError(w, "failed to get object", http.StatusInternalServerError)
-		}
+	if s.s3ForwardOrError(w, r, err, bucket, key, "object not found", "failed to get object") {
 		return
 	}
 	defer func() { _ = reader.Close() }()
@@ -231,19 +239,10 @@ func (s *Server) handleS3GetObject(w http.ResponseWriter, r *http.Request, bucke
 }
 
 // handleS3GetObjectVersion returns a specific version of an object.
-func (s *Server) handleS3GetObjectVersion(ctx context.Context, w http.ResponseWriter, bucket, key, versionID string) {
-	reader, meta, err := s.s3Store.GetObjectVersion(ctx, bucket, key, versionID)
-	if err != nil {
-		switch {
-		case errors.Is(err, s3.ErrBucketNotFound):
-			s.jsonError(w, "bucket not found", http.StatusNotFound)
-		case errors.Is(err, s3.ErrObjectNotFound):
-			s.jsonError(w, "version not found", http.StatusNotFound)
-		case errors.Is(err, s3.ErrAccessDenied):
-			s.jsonError(w, "access denied", http.StatusForbidden)
-		default:
-			s.jsonError(w, "failed to get object version", http.StatusInternalServerError)
-		}
+// Tries local storage first; forwards to source/primary coordinator on miss.
+func (s *Server) handleS3GetObjectVersion(w http.ResponseWriter, r *http.Request, bucket, key, versionID string) {
+	reader, meta, err := s.s3Store.GetObjectVersion(r.Context(), bucket, key, versionID)
+	if s.s3ForwardOrError(w, r, err, bucket, key, "version not found", "failed to get object version") {
 		return
 	}
 	defer func() { _ = reader.Close() }()
@@ -496,6 +495,7 @@ func (s *Server) handleS3HeadObject(w http.ResponseWriter, r *http.Request, buck
 }
 
 // handleS3ListVersions returns all versions of an object.
+// Tries local storage first; forwards to source/primary coordinator on miss.
 func (s *Server) handleS3ListVersions(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	if r.Method != http.MethodGet {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -503,18 +503,20 @@ func (s *Server) handleS3ListVersions(w http.ResponseWriter, r *http.Request, bu
 	}
 
 	versions, err := s.s3Store.ListVersions(r.Context(), bucket, key)
-	if err != nil {
-		switch {
-		case errors.Is(err, s3.ErrBucketNotFound):
-			s.jsonError(w, "bucket not found", http.StatusNotFound)
-		case errors.Is(err, s3.ErrObjectNotFound):
-			s.jsonError(w, "object not found", http.StatusNotFound)
-		case errors.Is(err, s3.ErrAccessDenied):
-			s.jsonError(w, "access denied", http.StatusForbidden)
-		default:
-			s.jsonError(w, "failed to list versions", http.StatusInternalServerError)
-		}
+	if s.s3ForwardOrError(w, r, err, bucket, key, "object not found", "failed to list versions") {
 		return
+	}
+
+	// If local versions list is empty, try forwarding to primary (versions may exist there)
+	if len(versions) == 0 && r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+		if target := s.findObjectSourceIP(bucket, key); target != "" {
+			s.forwardS3Request(w, r, target, bucket)
+			return
+		}
+		if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
+			s.forwardS3Request(w, r, target, bucket)
+			return
+		}
 	}
 
 	// Convert to API response format
@@ -534,6 +536,8 @@ func (s *Server) handleS3ListVersions(w http.ResponseWriter, r *http.Request, bu
 }
 
 // handleS3RestoreVersion restores a previous version of an object.
+// This is a write operation — forwards proactively to the primary coordinator
+// (where version history lives) before attempting locally.
 func (s *Server) handleS3RestoreVersion(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	if r.Method != http.MethodPost {
 		s.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -546,8 +550,16 @@ func (s *Server) handleS3RestoreVersion(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// Buffer the request body so we can replay it for forwarding or local handling
+	bodyBytes, err := io.ReadAll(r.Body)
+	_ = r.Body.Close()
+	if err != nil {
+		s.jsonError(w, "failed to read request body", http.StatusInternalServerError)
+		return
+	}
+
 	var req RestoreVersionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		s.jsonError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -557,8 +569,28 @@ func (s *Server) handleS3RestoreVersion(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// Forward writes proactively to primary coordinator (version history lives there)
+	if r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		if target := s.objectPrimaryCoordinator(bucket, key); target != "" {
+			s.forwardS3Request(w, r, target, bucket)
+			return
+		}
+	}
+
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
 	meta, err := s.s3Store.RestoreVersion(r.Context(), bucket, key, req.VersionID)
 	if err != nil {
+		// Try forwarding to source on not-found (version may exist on another coordinator)
+		if (errors.Is(err, s3.ErrObjectNotFound) || errors.Is(err, s3.ErrBucketNotFound)) &&
+			r.Header.Get("X-TunnelMesh-Forwarded") == "" {
+			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			if target := s.findObjectSourceIP(bucket, key); target != "" {
+				s.forwardS3Request(w, r, target, bucket)
+				return
+			}
+		}
 		switch {
 		case errors.Is(err, s3.ErrBucketNotFound):
 			s.jsonError(w, "bucket not found", http.StatusNotFound)

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -2075,4 +2076,180 @@ func TestListObjects_PrefixFilterOnPeerResults(t *testing.T) {
 		assert.True(t, strings.HasPrefix(obj.Key, "docs/"), "all results should have docs/ prefix, got: %s", obj.Key)
 	}
 	assert.Len(t, objects, 2)
+}
+
+func TestS3ListVersions_ForwardsToPrimary(t *testing.T) {
+	// Backend simulates the primary coordinator that holds version history
+	var receivedReq *http.Request
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedReq = r
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]S3VersionInfo{
+			{VersionID: "v1", Size: 100, IsCurrent: true},
+		})
+	}))
+	defer backend.Close()
+	backendAddr := strings.TrimPrefix(backend.URL, "https://")
+
+	srv := newTestServerWithS3AndBucket(t)
+	srv.s3ForwardTransport = backend.Client().Transport.(*http.Transport)
+
+	// Configure multi-coordinator: self=10.0.0.1, primary for test-bucket/doc.txt = backendAddr
+	srv.storeCoordIPs([]string{"10.0.0.1", backendAddr})
+
+	// Ensure "test-bucket/doc.txt" primary is the backend (not self)
+	// Find a key that hashes to the backend
+	key := findKeyWithPrimary(t, srv, "test-bucket", backendAddr)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects/"+key+"/versions", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	require.NotNil(t, receivedReq, "request should have been forwarded to primary")
+	assert.Equal(t, "true", receivedReq.Header.Get("X-TunnelMesh-Forwarded"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var versions []S3VersionInfo
+	err := json.NewDecoder(rec.Body).Decode(&versions)
+	require.NoError(t, err)
+	assert.Len(t, versions, 1)
+	assert.Equal(t, "v1", versions[0].VersionID)
+}
+
+func TestS3ListVersions_NoForwardWhenAlreadyForwarded(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2"})
+
+	// Put an object so the bucket/key exist locally (no forwarding on not-found)
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "doc.txt",
+		bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Request with forwarded header should NOT forward again (loop prevention)
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects/doc.txt/versions", nil)
+	req.Header.Set("X-TunnelMesh-Forwarded", "true")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	// Should return local result (empty or with versions), not forward
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestS3GetObjectVersion_ForwardsToPrimary(t *testing.T) {
+	// Backend simulates the primary coordinator that holds the version
+	var receivedReq *http.Request
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedReq = r
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("X-Version-Id", "v1")
+		_, _ = w.Write([]byte("version content"))
+	}))
+	defer backend.Close()
+	backendAddr := strings.TrimPrefix(backend.URL, "https://")
+
+	srv := newTestServerWithS3AndBucket(t)
+	srv.s3ForwardTransport = backend.Client().Transport.(*http.Transport)
+	srv.storeCoordIPs([]string{"10.0.0.1", backendAddr})
+
+	key := findKeyWithPrimary(t, srv, "test-bucket", backendAddr)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects/"+key+"?versionId=v1", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	require.NotNil(t, receivedReq, "request should have been forwarded to primary")
+	assert.Equal(t, "true", receivedReq.Header.Get("X-TunnelMesh-Forwarded"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "version content", rec.Body.String())
+}
+
+func TestS3RestoreVersion_ForwardsToPrimary(t *testing.T) {
+	// Backend simulates the primary coordinator
+	var receivedReq *http.Request
+	var receivedBody []byte
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedReq = r
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":     "restored",
+			"version_id": "v1",
+		})
+	}))
+	defer backend.Close()
+	backendAddr := strings.TrimPrefix(backend.URL, "https://")
+
+	srv := newTestServerWithS3AndBucket(t)
+	srv.s3ForwardTransport = backend.Client().Transport.(*http.Transport)
+	srv.storeCoordIPs([]string{"10.0.0.1", backendAddr})
+
+	key := findKeyWithPrimary(t, srv, "test-bucket", backendAddr)
+
+	body := `{"version_id":"v1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/s3/buckets/test-bucket/objects/"+key+"/restore",
+		bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	require.NotNil(t, receivedReq, "request should have been forwarded to primary")
+	assert.Equal(t, "true", receivedReq.Header.Get("X-TunnelMesh-Forwarded"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, string(receivedBody), "v1")
+}
+
+func TestS3RestoreVersion_NoForwardWhenAlreadyForwarded(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2"})
+
+	// Put an object with a version to restore
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "doc.txt",
+		bytes.NewReader([]byte("v1")), 2, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = srv.s3Store.PutObject(context.Background(), "test-bucket", "doc.txt",
+		bytes.NewReader([]byte("v2")), 2, "text/plain", nil)
+	require.NoError(t, err)
+
+	versions, err := srv.s3Store.ListVersions(context.Background(), "test-bucket", "doc.txt")
+	require.NoError(t, err)
+	require.True(t, len(versions) >= 2, "should have at least 2 versions")
+
+	// Find the non-current version
+	var oldVersionID string
+	for _, v := range versions {
+		if !v.IsCurrent {
+			oldVersionID = v.VersionID
+			break
+		}
+	}
+	require.NotEmpty(t, oldVersionID, "should have a non-current version")
+
+	// Request with forwarded header should NOT forward again
+	body := `{"version_id":"` + oldVersionID + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/s3/buckets/test-bucket/objects/doc.txt/restore",
+		bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-TunnelMesh-Forwarded", "true")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	// Should handle locally, not forward
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var result map[string]interface{}
+	err = json.NewDecoder(rec.Body).Decode(&result)
+	require.NoError(t, err)
+	assert.Equal(t, "restored", result["status"])
+}
+
+// findKeyWithPrimary finds a key that hashes to the given target coordinator.
+func findKeyWithPrimary(t *testing.T, srv *Server, bucket, targetAddr string) string {
+	t.Helper()
+	for i := 0; i < 1000; i++ {
+		key := "key-" + strconv.Itoa(i)
+		if primary := srv.objectPrimaryCoordinator(bucket, key); primary == targetAddr {
+			return key
+		}
+	}
+	t.Fatal("could not find a key that hashes to target coordinator")
+	return ""
 }
