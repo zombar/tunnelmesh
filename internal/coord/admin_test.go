@@ -9,13 +9,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
+	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
 	"github.com/tunnelmesh/tunnelmesh/internal/routing"
 	"github.com/tunnelmesh/tunnelmesh/pkg/proto"
 )
@@ -71,16 +74,13 @@ func TestAdminOverview_ExitPeerInfo(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Coordinator.Enabled = true
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	srv, err := NewServer(ctx, cfg)
+	srv, err := NewServer(context.Background(), cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { cleanupServer(t, srv) })
 	require.NotNil(t, srv.adminMux, "adminMux should be created for coordinators")
 
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
-	defer func() { _ = srv.Shutdown(context.Background()) }()
 
 	// Register an exit node
 	client := NewClient(ts.URL, "test-token")
@@ -370,6 +370,49 @@ func TestS3Proxy_ListObjects_WithDelimiter(t *testing.T) {
 	assert.True(t, hasPrefix, "should have folder/ prefix")
 }
 
+func TestMergeObjectListings(t *testing.T) {
+	local := []S3ObjectInfo{
+		{Key: "a.txt", Size: 10, LastModified: "2024-01-01T00:00:00Z"},
+		{Key: "b.txt", Size: 20, LastModified: "2024-01-01T00:00:00Z"},
+		{Key: "folder/", Size: 100, IsPrefix: true},
+	}
+	remote := []S3ObjectInfo{
+		{Key: "b.txt", Size: 25, LastModified: "2024-02-01T00:00:00Z"}, // newer duplicate
+		{Key: "c.txt", Size: 30, LastModified: "2024-01-01T00:00:00Z"}, // new
+		{Key: "folder/", Size: 50, IsPrefix: true},                     // folder duplicate
+	}
+
+	merged := mergeObjectListings(local, remote)
+
+	// Should have 4 entries: a.txt, b.txt (updated), folder/ (summed), c.txt
+	assert.Len(t, merged, 4)
+
+	byKey := make(map[string]S3ObjectInfo)
+	for _, obj := range merged {
+		byKey[obj.Key] = obj
+	}
+
+	// a.txt unchanged
+	assert.Equal(t, int64(10), byKey["a.txt"].Size)
+
+	// b.txt should have remote's newer version
+	assert.Equal(t, int64(25), byKey["b.txt"].Size)
+	assert.Equal(t, "2024-02-01T00:00:00Z", byKey["b.txt"].LastModified)
+
+	// c.txt from remote
+	assert.Equal(t, int64(30), byKey["c.txt"].Size)
+
+	// folder/ sizes summed
+	assert.Equal(t, int64(150), byKey["folder/"].Size)
+	assert.True(t, byKey["folder/"].IsPrefix)
+}
+
+func TestMergeObjectListings_EmptyRemote(t *testing.T) {
+	local := []S3ObjectInfo{{Key: "a.txt", Size: 10}}
+	merged := mergeObjectListings(local, nil)
+	assert.Equal(t, local, merged)
+}
+
 func TestS3Proxy_GetObject(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 
@@ -507,10 +550,9 @@ func TestS3Proxy_DeleteObject(t *testing.T) {
 
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 
-	// Verify object is tombstoned (soft-deleted), not removed
-	meta, err := srv.s3Store.HeadObject(context.Background(), "test-bucket", "to-delete.txt")
-	require.NoError(t, err)
-	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
+	// Verify object is gone from live path (moved to recycle bin)
+	_, err = srv.s3Store.HeadObject(context.Background(), "test-bucket", "to-delete.txt")
+	assert.ErrorIs(t, err, s3.ErrObjectNotFound)
 }
 
 func TestS3Proxy_DeleteObject_SystemBucketForbidden(t *testing.T) {
@@ -1411,22 +1453,22 @@ func TestS3GC_MethodNotAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
 
-func TestS3GC_PurgeAllTombstoned(t *testing.T) {
+func TestS3GC_PurgeAllRecycled(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 
-	// Create and tombstone objects
+	// Create objects and move them to recycle bin
 	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "a.txt", bytes.NewReader([]byte("aaa")), 3, "text/plain", nil)
 	require.NoError(t, err)
 	_, err = srv.s3Store.PutObject(context.Background(), "test-bucket", "b.txt", bytes.NewReader([]byte("bbb")), 3, "text/plain", nil)
 	require.NoError(t, err)
 
-	err = srv.s3Store.TombstoneObject(context.Background(), "test-bucket", "a.txt")
+	err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", "a.txt")
 	require.NoError(t, err)
-	err = srv.s3Store.TombstoneObject(context.Background(), "test-bucket", "b.txt")
+	err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", "b.txt")
 	require.NoError(t, err)
 
-	// Trigger GC with purge_all_tombstoned
-	body := bytes.NewReader([]byte(`{"purge_all_tombstoned": true}`))
+	// Trigger GC with purge_recycle_bin
+	body := bytes.NewReader([]byte(`{"purge_recycle_bin": true}`))
 	req := httptest.NewRequest(http.MethodPost, "/api/s3/gc", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -1438,8 +1480,8 @@ func TestS3GC_PurgeAllTombstoned(t *testing.T) {
 	err = json.NewDecoder(rec.Body).Decode(&result)
 	require.NoError(t, err)
 
-	// Should have purged both tombstoned objects
-	assert.Equal(t, float64(2), result["tombstoned_purged"])
+	// Should have purged both recycled objects
+	assert.Equal(t, float64(2), result["recycled_purged"])
 	assert.Contains(t, result, "versions_pruned")
 	assert.Contains(t, result, "chunks_deleted")
 	assert.Contains(t, result, "bytes_reclaimed")
@@ -1449,14 +1491,14 @@ func TestS3GC_PurgeAllTombstoned(t *testing.T) {
 func TestS3GC_WithoutPurgeAll(t *testing.T) {
 	srv := newTestServerWithS3AndBucket(t)
 
-	// Create and tombstone an object (recently, so retention won't expire it)
+	// Create and delete an object (recently, so retention won't expire it)
 	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "recent.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
 	require.NoError(t, err)
-	err = srv.s3Store.TombstoneObject(context.Background(), "test-bucket", "recent.txt")
+	err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", "recent.txt")
 	require.NoError(t, err)
 
-	// Set retention to 90 days — recent tombstone should NOT be purged
-	srv.s3Store.SetTombstoneRetentionDays(90)
+	// Set retention to 90 days — recent recycled entry should NOT be purged
+	srv.s3Store.SetRecycleBinRetentionDays(90)
 
 	body := bytes.NewReader([]byte(`{}`))
 	req := httptest.NewRequest(http.MethodPost, "/api/s3/gc", body)
@@ -1470,8 +1512,8 @@ func TestS3GC_WithoutPurgeAll(t *testing.T) {
 	err = json.NewDecoder(rec.Body).Decode(&result)
 	require.NoError(t, err)
 
-	// Recent tombstone should not have been purged
-	assert.Equal(t, float64(0), result["tombstoned_purged"])
+	// Recent recycled entry should not have been purged
+	assert.Equal(t, float64(0), result["recycled_purged"])
 }
 
 func TestS3GC_EmptyBody(t *testing.T) {
@@ -1487,7 +1529,7 @@ func TestS3GC_EmptyBody(t *testing.T) {
 	var result map[string]interface{}
 	err := json.NewDecoder(rec.Body).Decode(&result)
 	require.NoError(t, err)
-	assert.Contains(t, result, "tombstoned_purged")
+	assert.Contains(t, result, "recycled_purged")
 }
 
 func TestS3GC_ConcurrentReturns429(t *testing.T) {
@@ -1503,4 +1545,711 @@ func TestS3GC_ConcurrentReturns429(t *testing.T) {
 	srv.gcMu.Unlock()
 
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+}
+
+// --- Recycle Bin HTTP Handler Tests ---
+
+func TestS3Proxy_GetRecycledObject(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Upload and delete an object so it lands in the recycle bin
+	content := []byte("recoverable content")
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "deleted.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", "deleted.txt")
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/recyclebin/deleted.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "text/plain", rec.Header().Get("Content-Type"))
+
+	body, _ := io.ReadAll(rec.Body)
+	assert.Equal(t, content, body)
+}
+
+func TestS3Proxy_GetRecycledObject_NotFound(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/recyclebin/nonexistent.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestS3Proxy_GetRecycledObject_MethodNotAllowed(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/s3/buckets/test-bucket/recyclebin/file.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestS3Proxy_ListRecycledObjects_PrefixFilter(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+
+	// Create and delete objects in different prefixes
+	for _, key := range []string{"docs/a.txt", "docs/b.txt", "src/main.go"} {
+		_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", key, bytes.NewReader([]byte("x")), 1, "text/plain", nil)
+		require.NoError(t, err)
+		err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", key)
+		require.NoError(t, err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/recyclebin?prefix=docs/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var objects []S3ObjectInfo
+	err := json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+
+	assert.Len(t, objects, 2)
+	for _, obj := range objects {
+		assert.True(t, strings.HasPrefix(obj.Key, "docs/"), "expected docs/ prefix, got: %s", obj.Key)
+	}
+}
+
+// --- Listing Index Tests ---
+
+func newTestServerWithListingIndex(t *testing.T) *Server {
+	t.Helper()
+	srv := newTestServerWithS3AndBucket(t)
+	srv.listingIndexNotify = make(chan struct{}, 1)
+	return srv
+}
+
+func TestUpdateListingIndex_Put(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	info := S3ObjectInfo{
+		Key:          "file.txt",
+		Size:         100,
+		LastModified: "2024-01-01T00:00:00Z",
+		ContentType:  "text/plain",
+	}
+	srv.updateListingIndex("test-bucket", "file.txt", &info, "put")
+
+	idx := srv.localListingIndex.Load()
+	require.NotNil(t, idx)
+	bl := idx.Buckets["test-bucket"]
+	require.NotNil(t, bl)
+	require.Len(t, bl.Objects, 1)
+	assert.Equal(t, "file.txt", bl.Objects[0].Key)
+	assert.Equal(t, int64(100), bl.Objects[0].Size)
+	assert.Equal(t, "text/plain", bl.Objects[0].ContentType)
+}
+
+func TestUpdateListingIndex_PutOverwrite(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	info1 := S3ObjectInfo{Key: "file.txt", Size: 100, LastModified: "2024-01-01T00:00:00Z"}
+	srv.updateListingIndex("test-bucket", "file.txt", &info1, "put")
+
+	info2 := S3ObjectInfo{Key: "file.txt", Size: 200, LastModified: "2024-02-01T00:00:00Z"}
+	srv.updateListingIndex("test-bucket", "file.txt", &info2, "put")
+
+	idx := srv.localListingIndex.Load()
+	bl := idx.Buckets["test-bucket"]
+	require.Len(t, bl.Objects, 1)
+	assert.Equal(t, int64(200), bl.Objects[0].Size)
+	assert.Equal(t, "2024-02-01T00:00:00Z", bl.Objects[0].LastModified)
+}
+
+func TestUpdateListingIndex_Delete(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	info := S3ObjectInfo{Key: "file.txt", Size: 100, LastModified: "2024-01-01T00:00:00Z"}
+	srv.updateListingIndex("test-bucket", "file.txt", &info, "put")
+
+	srv.updateListingIndex("test-bucket", "file.txt", nil, "delete")
+
+	idx := srv.localListingIndex.Load()
+	bl := idx.Buckets["test-bucket"]
+	assert.Empty(t, bl.Objects)
+	require.Len(t, bl.Recycled, 1)
+	assert.Equal(t, "file.txt", bl.Recycled[0].Key)
+	assert.NotEmpty(t, bl.Recycled[0].DeletedAt)
+}
+
+func TestUpdateListingIndex_DeleteNonexistent(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Should not panic when deleting a key that doesn't exist
+	srv.updateListingIndex("test-bucket", "nonexistent.txt", nil, "delete")
+
+	idx := srv.localListingIndex.Load()
+	require.NotNil(t, idx)
+}
+
+func TestUpdateListingIndex_Undelete(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	info := S3ObjectInfo{Key: "file.txt", Size: 100, LastModified: "2024-01-01T00:00:00Z"}
+	srv.updateListingIndex("test-bucket", "file.txt", &info, "put")
+	srv.updateListingIndex("test-bucket", "file.txt", nil, "delete")
+	srv.updateListingIndex("test-bucket", "file.txt", nil, "undelete")
+
+	idx := srv.localListingIndex.Load()
+	bl := idx.Buckets["test-bucket"]
+	require.Len(t, bl.Objects, 1)
+	assert.Equal(t, "file.txt", bl.Objects[0].Key)
+	assert.Empty(t, bl.Objects[0].DeletedAt, "DeletedAt should be cleared after undelete")
+	assert.Empty(t, bl.Recycled)
+}
+
+func TestUpdateListingIndex_SetsDirtyFlag(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	assert.False(t, srv.listingIndexDirty.Load())
+
+	info := S3ObjectInfo{Key: "file.txt", Size: 100}
+	srv.updateListingIndex("test-bucket", "file.txt", &info, "put")
+
+	assert.True(t, srv.listingIndexDirty.Load())
+}
+
+func TestUpdateListingIndex_CopyOnWrite(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	info1 := S3ObjectInfo{Key: "file1.txt", Size: 100}
+	srv.updateListingIndex("test-bucket", "file1.txt", &info1, "put")
+
+	// Capture the pointer before the concurrent update
+	before := srv.localListingIndex.Load()
+
+	// Concurrent updates should not corrupt the snapshot
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			info := S3ObjectInfo{Key: "concurrent.txt", Size: int64(n)}
+			srv.updateListingIndex("test-bucket", "concurrent.txt", &info, "put")
+		}(i)
+	}
+	wg.Wait()
+
+	// The old snapshot should still have exactly 1 object
+	require.Len(t, before.Buckets["test-bucket"].Objects, 1)
+	assert.Equal(t, "file1.txt", before.Buckets["test-bucket"].Objects[0].Key)
+}
+
+// --- filterByPrefixDelimiter Tests ---
+
+func TestFilterByPrefixDelimiter_NoFilter(t *testing.T) {
+	objs := []S3ObjectInfo{
+		{Key: "a.txt", Size: 10},
+		{Key: "b.txt", Size: 20},
+	}
+	result := filterByPrefixDelimiter(objs, "", "")
+	assert.Len(t, result, 2)
+}
+
+func TestFilterByPrefixDelimiter_PrefixOnly(t *testing.T) {
+	objs := []S3ObjectInfo{
+		{Key: "docs/readme.md", Size: 10},
+		{Key: "docs/guide.md", Size: 20},
+		{Key: "src/main.go", Size: 30},
+	}
+	result := filterByPrefixDelimiter(objs, "docs/", "")
+	assert.Len(t, result, 2)
+	for _, obj := range result {
+		assert.True(t, strings.HasPrefix(obj.Key, "docs/"))
+	}
+}
+
+func TestFilterByPrefixDelimiter_PrefixAndDelimiter(t *testing.T) {
+	objs := []S3ObjectInfo{
+		{Key: "file1.txt", Size: 10},
+		{Key: "folder/file2.txt", Size: 20},
+		{Key: "folder/file3.txt", Size: 30},
+	}
+	result := filterByPrefixDelimiter(objs, "", "/")
+
+	// Should have: file1.txt and folder/ prefix
+	assert.Len(t, result, 2)
+
+	byKey := make(map[string]S3ObjectInfo)
+	for _, obj := range result {
+		byKey[obj.Key] = obj
+	}
+
+	assert.Equal(t, int64(10), byKey["file1.txt"].Size)
+	assert.True(t, byKey["folder/"].IsPrefix)
+	assert.Equal(t, int64(50), byKey["folder/"].Size) // 20 + 30
+}
+
+func TestFilterByPrefixDelimiter_NestedFolders(t *testing.T) {
+	objs := []S3ObjectInfo{
+		{Key: "a/b/c/file.txt", Size: 10},
+		{Key: "a/b/d/file.txt", Size: 20},
+		{Key: "a/file.txt", Size: 30},
+	}
+	result := filterByPrefixDelimiter(objs, "a/", "/")
+
+	// Should have: a/file.txt and a/b/ prefix (grouping both c/ and d/)
+	assert.Len(t, result, 2)
+
+	byKey := make(map[string]S3ObjectInfo)
+	for _, obj := range result {
+		byKey[obj.Key] = obj
+	}
+
+	assert.Equal(t, int64(30), byKey["a/file.txt"].Size)
+	assert.True(t, byKey["a/b/"].IsPrefix)
+}
+
+func TestFilterByPrefixDelimiter_EmptyResult(t *testing.T) {
+	objs := []S3ObjectInfo{
+		{Key: "a.txt", Size: 10},
+	}
+	result := filterByPrefixDelimiter(objs, "nonexistent/", "")
+	assert.Empty(t, result)
+}
+
+// --- reconcileLocalIndex Tests ---
+
+func TestReconcileLocalIndex_PopulatesFromDisk(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Add objects directly to S3 store
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	srv.reconcileLocalIndex(context.Background())
+
+	idx := srv.localListingIndex.Load()
+	require.NotNil(t, idx)
+	bl := idx.Buckets["test-bucket"]
+	require.NotNil(t, bl)
+	require.Len(t, bl.Objects, 1)
+	assert.Equal(t, "file.txt", bl.Objects[0].Key)
+}
+
+func TestReconcileLocalIndex_IncludesRecycled(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", "file.txt")
+	require.NoError(t, err)
+
+	srv.reconcileLocalIndex(context.Background())
+
+	idx := srv.localListingIndex.Load()
+	bl := idx.Buckets["test-bucket"]
+	require.NotNil(t, bl)
+	assert.Empty(t, bl.Objects)
+	require.Len(t, bl.Recycled, 1)
+	assert.Equal(t, "file.txt", bl.Recycled[0].Key)
+	assert.NotEmpty(t, bl.Recycled[0].DeletedAt)
+}
+
+func TestReconcileLocalIndex_SkipsSystemBucket(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	srv.reconcileLocalIndex(context.Background())
+
+	idx := srv.localListingIndex.Load()
+	require.NotNil(t, idx)
+	_, exists := idx.Buckets[auth.SystemBucket]
+	assert.False(t, exists, "system bucket should be excluded from listing index")
+}
+
+func TestReconcileLocalIndex_DetectsReplicationArrivals(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// First reconcile — empty
+	srv.reconcileLocalIndex(context.Background())
+	idx := srv.localListingIndex.Load()
+	_, exists := idx.Buckets["test-bucket"]
+	assert.False(t, exists, "bucket should not be in index when empty")
+
+	// Simulate a replication arrival by adding an object directly
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "replicated.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Clear dirty flag to detect the change
+	srv.listingIndexDirty.Store(false)
+
+	srv.reconcileLocalIndex(context.Background())
+
+	idx = srv.localListingIndex.Load()
+	bl := idx.Buckets["test-bucket"]
+	require.NotNil(t, bl)
+	require.Len(t, bl.Objects, 1)
+	assert.Equal(t, "replicated.txt", bl.Objects[0].Key)
+}
+
+func TestReconcileLocalIndex_SetsDirtyOnChange(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// First reconcile with no objects — sets to something from nil
+	srv.reconcileLocalIndex(context.Background())
+	// Drain the notify channel
+	select {
+	case <-srv.listingIndexNotify:
+	default:
+	}
+	srv.listingIndexDirty.Store(false)
+
+	// Second reconcile with no changes — should NOT set dirty
+	srv.reconcileLocalIndex(context.Background())
+	assert.False(t, srv.listingIndexDirty.Load(), "dirty flag should not be set when nothing changed")
+
+	// Add an object and reconcile — SHOULD set dirty
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "new.txt", bytes.NewReader([]byte("x")), 1, "text/plain", nil)
+	require.NoError(t, err)
+
+	srv.reconcileLocalIndex(context.Background())
+	assert.True(t, srv.listingIndexDirty.Load(), "dirty flag should be set when index changes")
+}
+
+// --- Integration tests for listing with peer index ---
+
+func TestListObjects_MergesPeerListings(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Add a local object
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "local.txt", bytes.NewReader([]byte("local")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Populate peer listings via atomic pointer
+	pl := &peerListings{
+		Objects: map[string][]S3ObjectInfo{
+			"test-bucket": {
+				{Key: "peer.txt", Size: 42, LastModified: "2024-01-01T00:00:00Z", ContentType: "text/plain"},
+			},
+		},
+		Recycled: make(map[string][]S3ObjectInfo),
+	}
+	srv.peerListings.Store(pl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var objects []S3ObjectInfo
+	err = json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+
+	// Should have both local and peer objects
+	keys := make(map[string]bool)
+	for _, obj := range objects {
+		keys[obj.Key] = true
+	}
+	assert.True(t, keys["local.txt"], "should include local object")
+	assert.True(t, keys["peer.txt"], "should include peer object")
+}
+
+func TestListObjects_PeerListingsDedup(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Add a local object
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "shared.txt", bytes.NewReader([]byte("local")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Peer has the same key with a newer timestamp
+	pl := &peerListings{
+		Objects: map[string][]S3ObjectInfo{
+			"test-bucket": {
+				{Key: "shared.txt", Size: 99, LastModified: "2099-01-01T00:00:00Z"},
+			},
+		},
+		Recycled: make(map[string][]S3ObjectInfo),
+	}
+	srv.peerListings.Store(pl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	var objects []S3ObjectInfo
+	err = json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+
+	// Find the shared.txt entry — newer peer version should win
+	for _, obj := range objects {
+		if obj.Key == "shared.txt" {
+			assert.Equal(t, int64(99), obj.Size, "peer's newer entry should win dedup")
+			break
+		}
+	}
+}
+
+func TestListRecycledObjects_MergesPeerListings(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Add and delete a local object to create a recycled entry
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "deleted-local.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+	require.NoError(t, err)
+	err = srv.s3Store.DeleteObject(context.Background(), "test-bucket", "deleted-local.txt")
+	require.NoError(t, err)
+
+	// Populate peer recycled listings
+	pl := &peerListings{
+		Objects: make(map[string][]S3ObjectInfo),
+		Recycled: map[string][]S3ObjectInfo{
+			"test-bucket": {
+				{Key: "deleted-peer.txt", Size: 10, DeletedAt: "2024-06-01T00:00:00Z"},
+			},
+		},
+	}
+	srv.peerListings.Store(pl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/recyclebin", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var objects []S3ObjectInfo
+	err = json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+
+	keys := make(map[string]bool)
+	for _, obj := range objects {
+		keys[obj.Key] = true
+	}
+	assert.True(t, keys["deleted-local.txt"], "should include local recycled object")
+	assert.True(t, keys["deleted-peer.txt"], "should include peer recycled object")
+}
+
+func TestListObjects_NoPeers(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+	require.NoError(t, err)
+
+	// peerListings is nil (no peers)
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var objects []S3ObjectInfo
+	err = json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+	assert.Len(t, objects, 1)
+	assert.Equal(t, "file.txt", objects[0].Key)
+}
+
+func TestListObjects_PrefixFilterOnPeerResults(t *testing.T) {
+	srv := newTestServerWithListingIndex(t)
+
+	// Peer has objects with various prefixes
+	pl := &peerListings{
+		Objects: map[string][]S3ObjectInfo{
+			"test-bucket": {
+				{Key: "docs/readme.md", Size: 10, LastModified: "2024-01-01T00:00:00Z"},
+				{Key: "docs/guide.md", Size: 20, LastModified: "2024-01-01T00:00:00Z"},
+				{Key: "src/main.go", Size: 30, LastModified: "2024-01-01T00:00:00Z"},
+			},
+		},
+		Recycled: make(map[string][]S3ObjectInfo),
+	}
+	srv.peerListings.Store(pl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects?prefix=docs/", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	var objects []S3ObjectInfo
+	err := json.NewDecoder(rec.Body).Decode(&objects)
+	require.NoError(t, err)
+
+	// Only docs/ entries should be included
+	for _, obj := range objects {
+		assert.True(t, strings.HasPrefix(obj.Key, "docs/"), "all results should have docs/ prefix, got: %s", obj.Key)
+	}
+	assert.Len(t, objects, 2)
+}
+
+func TestS3ListVersions_ForwardsToPrimary(t *testing.T) {
+	// Backend simulates the primary coordinator that holds version history
+	var receivedReq *http.Request
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedReq = r
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]S3VersionInfo{
+			{VersionID: "v1", Size: 100, IsCurrent: true},
+		})
+	}))
+	defer backend.Close()
+	backendAddr := strings.TrimPrefix(backend.URL, "https://")
+
+	srv := newTestServerWithS3AndBucket(t)
+	srv.s3ForwardTransport = backend.Client().Transport.(*http.Transport)
+
+	// Configure multi-coordinator: self=10.0.0.1, primary for test-bucket/doc.txt = backendAddr
+	srv.storeCoordIPs([]string{"10.0.0.1", backendAddr})
+
+	// Ensure "test-bucket/doc.txt" primary is the backend (not self)
+	// Find a key that hashes to the backend
+	key := findKeyWithPrimary(t, srv, "test-bucket", backendAddr)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects/"+key+"/versions", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	require.NotNil(t, receivedReq, "request should have been forwarded to primary")
+	assert.Equal(t, "true", receivedReq.Header.Get("X-TunnelMesh-Forwarded"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var versions []S3VersionInfo
+	err := json.NewDecoder(rec.Body).Decode(&versions)
+	require.NoError(t, err)
+	assert.Len(t, versions, 1)
+	assert.Equal(t, "v1", versions[0].VersionID)
+}
+
+func TestS3ListVersions_NoForwardWhenAlreadyForwarded(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2"})
+
+	// Put an object so the bucket/key exist locally (no forwarding on not-found)
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "doc.txt",
+		bytes.NewReader([]byte("hello")), 5, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Request with forwarded header should NOT forward again (loop prevention)
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects/doc.txt/versions", nil)
+	req.Header.Set("X-TunnelMesh-Forwarded", "true")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	// Should return local result (empty or with versions), not forward
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestS3GetObjectVersion_ForwardsToPrimary(t *testing.T) {
+	// Backend simulates the primary coordinator that holds the version
+	var receivedReq *http.Request
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedReq = r
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("X-Version-Id", "v1")
+		_, _ = w.Write([]byte("version content"))
+	}))
+	defer backend.Close()
+	backendAddr := strings.TrimPrefix(backend.URL, "https://")
+
+	srv := newTestServerWithS3AndBucket(t)
+	srv.s3ForwardTransport = backend.Client().Transport.(*http.Transport)
+	srv.storeCoordIPs([]string{"10.0.0.1", backendAddr})
+
+	key := findKeyWithPrimary(t, srv, "test-bucket", backendAddr)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/s3/buckets/test-bucket/objects/"+key+"?versionId=v1", nil)
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	require.NotNil(t, receivedReq, "request should have been forwarded to primary")
+	assert.Equal(t, "true", receivedReq.Header.Get("X-TunnelMesh-Forwarded"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "version content", rec.Body.String())
+}
+
+func TestS3RestoreVersion_ForwardsToPrimary(t *testing.T) {
+	// Backend simulates the primary coordinator
+	var receivedReq *http.Request
+	var receivedBody []byte
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedReq = r
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":     "restored",
+			"version_id": "v1",
+		})
+	}))
+	defer backend.Close()
+	backendAddr := strings.TrimPrefix(backend.URL, "https://")
+
+	srv := newTestServerWithS3AndBucket(t)
+	srv.s3ForwardTransport = backend.Client().Transport.(*http.Transport)
+	srv.storeCoordIPs([]string{"10.0.0.1", backendAddr})
+
+	key := findKeyWithPrimary(t, srv, "test-bucket", backendAddr)
+
+	body := `{"version_id":"v1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/s3/buckets/test-bucket/objects/"+key+"/restore",
+		bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	require.NotNil(t, receivedReq, "request should have been forwarded to primary")
+	assert.Equal(t, "true", receivedReq.Header.Get("X-TunnelMesh-Forwarded"))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, string(receivedBody), "v1")
+}
+
+func TestS3RestoreVersion_NoForwardWhenAlreadyForwarded(t *testing.T) {
+	srv := newTestServerWithS3AndBucket(t)
+	srv.storeCoordIPs([]string{"10.0.0.1", "10.0.0.2"})
+
+	// Put an object with a version to restore
+	_, err := srv.s3Store.PutObject(context.Background(), "test-bucket", "doc.txt",
+		bytes.NewReader([]byte("v1")), 2, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = srv.s3Store.PutObject(context.Background(), "test-bucket", "doc.txt",
+		bytes.NewReader([]byte("v2")), 2, "text/plain", nil)
+	require.NoError(t, err)
+
+	versions, err := srv.s3Store.ListVersions(context.Background(), "test-bucket", "doc.txt")
+	require.NoError(t, err)
+	require.True(t, len(versions) >= 2, "should have at least 2 versions")
+
+	// Find the non-current version
+	var oldVersionID string
+	for _, v := range versions {
+		if !v.IsCurrent {
+			oldVersionID = v.VersionID
+			break
+		}
+	}
+	require.NotEmpty(t, oldVersionID, "should have a non-current version")
+
+	// Request with forwarded header should NOT forward again
+	body := `{"version_id":"` + oldVersionID + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/s3/buckets/test-bucket/objects/doc.txt/restore",
+		bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-TunnelMesh-Forwarded", "true")
+	rec := httptest.NewRecorder()
+	srv.adminMux.ServeHTTP(rec, req)
+
+	// Should handle locally, not forward
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var result map[string]interface{}
+	err = json.NewDecoder(rec.Body).Decode(&result)
+	require.NoError(t, err)
+	assert.Equal(t, "restored", result["status"])
+}
+
+// findKeyWithPrimary finds a key that hashes to the given target coordinator.
+func findKeyWithPrimary(t *testing.T, srv *Server, bucket, targetAddr string) string {
+	t.Helper()
+	for i := 0; i < 1000; i++ {
+		key := "key-" + strconv.Itoa(i)
+		if primary := srv.objectPrimaryCoordinator(bucket, key); primary == targetAddr {
+			return key
+		}
+	}
+	t.Fatal("could not find a key that hashes to target coordinator")
+	return ""
 }

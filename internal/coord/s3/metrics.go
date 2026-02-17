@@ -233,16 +233,18 @@ func (m *S3Metrics) SetRegisteredUsers(count int) {
 }
 
 // UpdateCASMetrics updates content-addressed storage metrics.
-func (m *S3Metrics) UpdateCASMetrics(chunks int, chunkBytes, logicalBytes int64, versions int) {
+// totalLogical includes live objects + versions + recyclebin for accurate dedup ratio.
+func (m *S3Metrics) UpdateCASMetrics(chunks int, chunkBytes, logicalBytes, versionBytes, recycledBytes int64, versions int) {
 	m.ChunksTotal.Set(float64(chunks))
 	m.ChunkStorageBytes.Set(float64(chunkBytes))
-	m.LogicalBytes.Set(float64(logicalBytes))
+	totalLogical := logicalBytes + versionBytes + recycledBytes
+	m.LogicalBytes.Set(float64(totalLogical))
 	m.VersionsTotal.Set(float64(versions))
 
 	// Calculate dedup ratio (logical/physical)
 	// A ratio > 1 means we're saving space through deduplication
 	if chunkBytes > 0 {
-		m.DedupRatio.Set(float64(logicalBytes) / float64(chunkBytes))
+		m.DedupRatio.Set(float64(totalLogical) / float64(chunkBytes))
 	} else {
 		m.DedupRatio.Set(1.0)
 	}

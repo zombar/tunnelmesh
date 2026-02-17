@@ -86,13 +86,22 @@ type S3Store interface {
 
 	// ImportObjectMeta writes object metadata directly (for replication receiver).
 	// bucketOwner is used when auto-creating the bucket (empty = "system").
-	ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) error
+	// Returns chunk hashes from pruned old versions that may now be unreferenced.
+	ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) ([]string, error)
+
+	// DeleteUnreferencedChunks checks each chunk hash and deletes unreferenced ones.
+	// Returns total bytes freed.
+	DeleteUnreferencedChunks(ctx context.Context, chunkHashes []string) int64
 
 	// DeleteChunk removes a chunk from CAS by hash (for cleanup after replication)
 	DeleteChunk(ctx context.Context, hash string) error
 
 	// GetBucketReplicationFactor returns the replication factor for a bucket (0 if unknown)
 	GetBucketReplicationFactor(ctx context.Context, bucket string) int
+
+	// PurgeObject permanently removes an object, its versions, and unreferenced chunks.
+	// Used for replicated deletes where tombstoning is unnecessary.
+	PurgeObject(ctx context.Context, bucket, key string) error
 }
 
 // ChunkRegistryInterface defines operations for chunk ownership tracking.
@@ -638,20 +647,21 @@ func (r *Replicator) applyReplication(payload *ReplicatePayload) error {
 	isDelete := len(payload.Data) == 0 || (payload.Metadata != nil && payload.Metadata["_deleted"] == "true")
 
 	if isDelete {
-		// Apply delete operation
-		if err := r.s3.Delete(ctx, payload.Bucket, payload.Key); err != nil {
+		// Purge immediately — replicated deletes don't need tombstoning because
+		// the primary already purged the object and won't re-send it during sync.
+		if err := r.s3.PurgeObject(ctx, payload.Bucket, payload.Key); err != nil {
 			r.logger.Error().Err(err).
 				Str("bucket", payload.Bucket).
 				Str("key", payload.Key).
 				Msg("Failed to apply delete replication to S3")
 			r.incrementErrorCount()
-			return fmt.Errorf("delete from s3: %w", err)
+			return fmt.Errorf("purge from s3: %w", err)
 		}
 
 		r.logger.Info().
 			Str("bucket", payload.Bucket).
 			Str("key", payload.Key).
-			Msg("Successfully applied delete replication")
+			Msg("Successfully applied delete replication (purged)")
 	} else {
 		// Apply put operation
 		if err := r.s3.Put(ctx, payload.Bucket, payload.Key, payload.Data, payload.ContentType, payload.Metadata); err != nil {
@@ -2102,13 +2112,28 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 	ctx, cancel := context.WithTimeout(r.ctx, r.applyTimeout)
 	defer cancel()
 
-	if err := r.s3.ImportObjectMeta(ctx, payload.Bucket, payload.Key, payload.MetaJSON, payload.BucketOwner); err != nil {
+	chunksToCheck, err := r.s3.ImportObjectMeta(ctx, payload.Bucket, payload.Key, payload.MetaJSON, payload.BucketOwner)
+	if err != nil {
 		r.logger.Error().Err(err).
 			Str("bucket", payload.Bucket).
 			Str("key", payload.Key).
 			Msg("Failed to import object metadata")
 		r.incrementErrorCount()
 		return fmt.Errorf("import object meta: %w", err)
+	}
+
+	// Clean up chunks from pruned old versions that are no longer referenced.
+	// This prevents orphaned chunks from accumulating on replica coordinators.
+	if len(chunksToCheck) > 0 {
+		freed := r.s3.DeleteUnreferencedChunks(ctx, chunksToCheck)
+		if freed > 0 {
+			r.logger.Debug().
+				Str("bucket", payload.Bucket).
+				Str("key", payload.Key).
+				Int64("bytes_freed", freed).
+				Int("chunks_checked", len(chunksToCheck)).
+				Msg("Cleaned up unreferenced chunks after metadata import")
+		}
 	}
 
 	r.logger.Info().

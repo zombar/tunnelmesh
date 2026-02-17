@@ -284,11 +284,15 @@ func (w *WorkloadGenerator) GenerateWorkload(ctx context.Context) ([]WorkloadTas
 func (w *WorkloadGenerator) generateDownloadTasks(uploadTasks []WorkloadTask) []WorkloadTask {
 	var downloads []WorkloadTask
 
-	// Track uploaded documents by filename
+	// Track uploaded documents by filename and their scheduled delete times
 	uploadedDocs := make(map[string]WorkloadTask)
+	deleteTimes := make(map[string]time.Duration)
 	for _, task := range uploadTasks {
 		if task.Operation == "upload" || task.Operation == "update" {
 			uploadedDocs[task.Filename] = task
+		}
+		if task.Operation == "delete" {
+			deleteTimes[task.Filename] = task.StoryTime
 		}
 	}
 
@@ -296,11 +300,27 @@ func (w *WorkloadGenerator) generateDownloadTasks(uploadTasks []WorkloadTask) []
 	for filename, uploadTask := range uploadedDocs {
 		// 20% chance to download this document
 		if rand.Intn(100) < 20 {
-			// Download some time after upload (30-90% through story)
-			downloadTime := uploadTask.StoryTime + time.Duration(float64(w.story.Duration())*0.3*(1+rand.Float64()))
-			if downloadTime > w.story.Duration() {
-				downloadTime = w.story.Duration() - 1*time.Minute
+			// Determine the deadline: either the delete time or end of story
+			deadline := w.story.Duration()
+			if deleteTime, hasDelete := deleteTimes[filename]; hasDelete {
+				deadline = deleteTime
 			}
+
+			// Safety buffer: at least 2 seconds of real time, minimum 1 story-minute.
+			// At high time scales (e.g. 1000x), a 1-minute story buffer is only 60ms
+			// real time, which is not enough for concurrent HTTP requests to complete.
+			safetyBuffer := time.Duration(float64(2*time.Second) * w.timeScale)
+			if safetyBuffer < time.Minute {
+				safetyBuffer = time.Minute
+			}
+
+			if deadline-uploadTask.StoryTime < safetyBuffer {
+				continue
+			}
+
+			// Download between upload time and deadline
+			window := deadline - uploadTask.StoryTime - safetyBuffer
+			downloadTime := uploadTask.StoryTime + time.Duration(rand.Float64()*float64(window))
 
 			downloadTask := WorkloadTask{
 				TaskID:      w.nextTaskID(),

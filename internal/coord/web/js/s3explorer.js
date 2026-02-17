@@ -828,6 +828,29 @@
         }
     }
 
+    async function fetchRecycledObjects(bucket, prefix = '') {
+        try {
+            const params = new URLSearchParams();
+            if (prefix) params.set('prefix', prefix);
+            const qs = params.toString();
+            const url = `/api/s3/buckets/${encodeURIComponent(bucket)}/recyclebin${qs ? `?${qs}` : ''}`;
+            const resp = await fetch(url);
+            if (!resp.ok) return [];
+            const entries = await resp.json();
+            if (!Array.isArray(entries)) return [];
+            // Server-side prefix filter returns all entries under the prefix;
+            // apply delimiter='/' logic client-side to show only direct children.
+            return entries.filter((obj) => {
+                if (!obj.key.startsWith(prefix)) return false;
+                const remainder = obj.key.slice(prefix.length);
+                return !remainder.includes('/');
+            });
+        } catch (err) {
+            console.error('Failed to fetch recycled objects:', err);
+            return [];
+        }
+    }
+
     async function getObject(bucket, key) {
         const resp = await fetch(`/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}`);
         if (!resp.ok) throw new Error(`Failed to get object: ${resp.status}`);
@@ -855,7 +878,7 @@
         return resp.ok || resp.status === 204;
     }
 
-    async function untombstoneObject(bucket, key) {
+    async function restoreRecycledObject(bucket, key) {
         const resp = await fetch(
             `/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}/undelete`,
             {
@@ -1090,17 +1113,31 @@
                 if (existingBtn) existingBtn.remove();
             }
 
-            // Show objects in current path
-            const objects = await fetchObjects(state.currentBucket, state.currentPath);
+            // Show objects in current path, including recycled objects
+            const [objects, recycled] = await Promise.all([
+                fetchObjects(state.currentBucket, state.currentPath),
+                fetchRecycledObjects(state.currentBucket, state.currentPath),
+            ]);
+
+            // Build set of live object keys to deduplicate recycled entries
+            const liveKeys = new Set(objects.filter((o) => !o.is_prefix).map((o) => o.key));
+
+            // Merge recycled objects that don't have a live counterpart
+            const merged = [...objects];
+            for (const rb of recycled) {
+                if (!liveKeys.has(rb.key)) {
+                    merged.push(rb);
+                }
+            }
 
             // Sort: folders first, then files
-            objects.sort((a, b) => {
+            merged.sort((a, b) => {
                 if (a.is_prefix && !b.is_prefix) return -1;
                 if (!a.is_prefix && b.is_prefix) return 1;
                 return a.key.localeCompare(b.key);
             });
 
-            items = objects
+            items = merged
                 .map((obj) => {
                     if (obj.is_prefix) {
                         const name = obj.key.replace(state.currentPath, '').replace(/\/$/, '');
@@ -1124,7 +1161,7 @@
                             owner: obj.owner,
                             lastModified: obj.last_modified,
                             expires: obj.expires,
-                            tombstonedAt: obj.tombstoned_at,
+                            deletedAt: obj.deleted_at,
                         };
                     }
                 })
@@ -1196,7 +1233,7 @@
                     const icon = item.isFolder
                         ? '<svg class="s3-icon s3-icon-folder" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>'
                         : '<svg class="s3-icon s3-icon-file" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>';
-                    const isTombstoned = Boolean(item.tombstonedAt);
+                    const isDeleted = Boolean(item.deletedAt);
                     const nameClass = item.isFolder ? 's3-name s3-name-folder' : 's3-name';
                     const onclick = item.isBucket
                         ? `TM.s3explorer.navigateTo('${escapeJsString(item.name)}', '')`
@@ -1206,12 +1243,12 @@
                     const itemId = item.key || item.name;
                     const isSelected = state.selectedItems.has(itemId);
                     let rowClass = isSelected ? 's3-selected' : '';
-                    if (isTombstoned) rowClass += ' s3-tombstoned';
-                    // Show checkboxes for files/folders (not buckets), disabled for read-only or tombstoned
+                    if (isDeleted) rowClass += ' s3-recycled';
+                    // Show checkboxes for files/folders (not buckets), disabled for read-only or deleted
                     const checkbox = item.isBucket
                         ? ''
-                        : `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} ${state.writable && !isTombstoned ? '' : 'disabled'} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeJsString(itemId)}')" />`;
-                    const tombstoneBadge = isTombstoned ? '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
+                        : `<input type="checkbox" class="s3-checkbox" data-item-id="${escapeHtml(itemId)}" ${isSelected ? 'checked' : ''} ${state.writable && !isDeleted ? '' : 'disabled'} onclick="event.stopPropagation(); TM.s3explorer.toggleSelection('${escapeJsString(itemId)}')" />`;
+                    const deletedBadge = isDeleted ? '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
 
                     // Only show quota column for bucket list (not when inside a bucket)
                     const quotaCell = state.currentBucket
@@ -1232,7 +1269,7 @@
                     return `
                 <tr class="${rowClass}" onclick="${onclick}">
                     <td>${checkbox}</td>
-                    <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span>${tombstoneBadge}</div></td>
+                    <td><div class="s3-item-name">${icon}<span class="${nameClass}">${escapeHtml(item.name)}</span>${deletedBadge}</div></td>
                     <td>${item.size !== null ? formatBytes(item.size) : '-'}</td>
                     ${quotaCell}
                     ${replicationCell}
@@ -1284,7 +1321,7 @@
                     const iconSVG = getIconSVG(iconType);
                     const metaHint = buildItemMetadata(item);
 
-                    const isTombstoned = Boolean(item.tombstonedAt);
+                    const isDeleted = Boolean(item.deletedAt);
                     const itemId = item.key || item.name;
                     const isSelected = state.selectedItems.has(itemId);
 
@@ -1305,16 +1342,16 @@
                         : `<input type="checkbox" class="s3-icon-checkbox"
                         data-item-id="${escapeHtml(itemId)}"
                         ${isSelected ? 'checked' : ''}
-                        ${state.writable && !isTombstoned ? '' : 'disabled'} />`;
+                        ${state.writable && !isDeleted ? '' : 'disabled'} />`;
 
-                    // Tombstone badge
-                    const tombstoneBadge = isTombstoned ? '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
+                    // Deleted badge
+                    const deletedBadge = isDeleted ? '<span class="s3-badge s3-badge-deleted">Deleted</span>' : '';
 
                     return `
-                <div class="s3-icon-item ${isSelected ? 's3-selected' : ''} ${isTombstoned ? 's3-tombstoned' : ''}"
+                <div class="s3-icon-item ${isSelected ? 's3-selected' : ''} ${isDeleted ? 's3-recycled' : ''}"
                      ${dataAttrs}>
                     ${checkbox}
-                    ${tombstoneBadge}
+                    ${deletedBadge}
                     ${iconSVG}
                     <div class="s3-icon-label">${escapeHtml(displayName)}</div>
                     ${metaHint ? `<div class="s3-icon-meta">${metaHint}</div>` : ''}
@@ -1367,14 +1404,19 @@
         const readonlyBadge = document.getElementById('s3-readonly-badge');
 
         const fileName = key.split('/').pop();
-        // Check if file is tombstoned from cached items
+        // Check if file is in recycle bin from cached items
         const item = state.currentItems.find((i) => i.key === key);
-        const isTombstoned = item?.tombstonedAt;
-        // Calculate when tombstone will be purged (tombstonedAt + 90 days)
-        const tombstoneExpiry = isTombstoned
-            ? new Date(new Date(item.tombstonedAt).getTime() + 90 * 24 * 60 * 60 * 1000).toISOString()
+        const isDeleted = item?.deletedAt;
+        // Calculate when recycled file will be purged (deletedAt + 90 days)
+        const recycleExpiry = isDeleted
+            ? new Date(new Date(item.deletedAt).getTime() + 90 * 24 * 60 * 60 * 1000).toISOString()
             : null;
-        const isReadOnly = !state.writable || isTombstoned;
+        const isReadOnly = !state.writable || isDeleted;
+
+        // Build content URL — recyclebin endpoint for deleted files, objects endpoint for live files
+        const contentBase = isDeleted
+            ? `/api/s3/buckets/${encodeURIComponent(bucket)}/recyclebin/${encodeURIComponent(key)}`
+            : `/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}`;
 
         // Clear selection when opening file
         state.selectedItems.clear();
@@ -1395,7 +1437,7 @@
             if (viewer) viewer.style.display = 'none';
             if (preview) {
                 preview.style.display = 'flex';
-                preview.innerHTML = `<img src="/api/s3/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(key)}" alt="${escapeHtml(fileName)}">`;
+                preview.innerHTML = `<img src="${contentBase}" alt="${escapeHtml(fileName)}">`;
             }
             if (fileActions) fileActions.style.display = 'flex';
             if (saveBtn) saveBtn.style.display = isReadOnly ? 'none' : 'inline-flex';
@@ -1405,7 +1447,9 @@
 
         // Try to open all other files as text
         try {
-            const { content } = await getObject(bucket, key);
+            const resp = await fetch(contentBase);
+            if (!resp.ok) throw new Error(`Failed to get object: ${resp.status}`);
+            const content = await resp.text();
 
             // Check if content is binary
             if (isBinaryContent(content)) {
@@ -1478,7 +1522,7 @@
 
             // Update delete/undelete button
             if (deleteBtn) {
-                if (isTombstoned) {
+                if (isDeleted) {
                     deleteBtn.innerHTML =
                         '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg><span>Undelete</span>';
                     deleteBtn.className = 's3-btn';
@@ -1499,18 +1543,18 @@
 
             // Update readonly badge
             if (readonlyBadge) {
-                if (isTombstoned && tombstoneExpiry) {
-                    const expiryText = TM.format?.formatExpiry ? TM.format.formatExpiry(tombstoneExpiry) : 'soon';
-                    readonlyBadge.textContent = `READ-ONLY - this deleted file will be removed ${expiryText}`;
+                if (isDeleted && recycleExpiry) {
+                    const expiryText = TM.format?.formatExpiry ? TM.format.formatExpiry(recycleExpiry) : 'soon';
+                    readonlyBadge.textContent = `READ-ONLY - this deleted file will be permanently removed ${expiryText}`;
                     readonlyBadge.style.display = 'block';
-                    readonlyBadge.classList.add('s3-readonly-tombstoned');
+                    readonlyBadge.classList.add('s3-readonly-recycled');
                 } else if (isReadOnly) {
                     readonlyBadge.textContent = 'READ-ONLY';
                     readonlyBadge.style.display = 'block';
-                    readonlyBadge.classList.remove('s3-readonly-tombstoned');
+                    readonlyBadge.classList.remove('s3-readonly-recycled');
                 } else {
                     readonlyBadge.style.display = 'none';
-                    readonlyBadge.classList.remove('s3-readonly-tombstoned');
+                    readonlyBadge.classList.remove('s3-readonly-recycled');
                 }
             }
 
@@ -2121,16 +2165,17 @@
     async function undeleteFile() {
         if (!state.currentFile) return;
 
-        const fileName = state.currentFile.key.split('/').pop();
+        const { bucket, key } = state.currentFile;
+        const fileName = key.split('/').pop();
         if (!confirm(`Restore "${fileName}"?`)) return;
 
         try {
-            await untombstoneObject(state.currentFile.bucket, state.currentFile.key);
+            await restoreRecycledObject(bucket, key);
             showToast('File restored', 'success');
-            // Refresh to show the file as non-tombstoned
+            // Refresh to show the file as restored
             await renderFileListing();
             // Reopen the file to update the UI
-            await openFile(state.currentFile.bucket, state.currentFile.key);
+            await openFile(bucket, key);
         } catch (err) {
             showToast(`Failed to restore: ${err.message}`, 'error');
         }

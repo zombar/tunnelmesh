@@ -12,8 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestGC_DistributedAware tests that GC doesn't delete chunks owned by other coordinators.
-func TestGC_DistributedAware(t *testing.T) {
+// TestGC_DeletesUnreferencedChunksRegardlessOfRegistry tests that GC deletes
+// locally unreferenced chunks even if other coordinators own them in the registry.
+// Each coordinator independently manages its own storage; the reference set +
+// grace period is sufficient for safety.
+func TestGC_DeletesUnreferencedChunksRegardlessOfRegistry(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create store with chunk registry
@@ -28,21 +31,21 @@ func TestGC_DistributedAware(t *testing.T) {
 
 	// Create mock registry
 	mockReg := &mockChunkRegistry{
-		owners: make(map[string][]string),
+		owners:       make(map[string][]string),
+		localCoordID: "coord1",
 	}
 	store.SetChunkRegistry(mockReg)
 	store.SetCoordinatorID("coord1")
 
 	// Create an orphaned chunk directly (not referenced by any object)
 	chunkData := []byte("Orphaned chunk data for testing")
-	chunkHash, err := store.cas.WriteChunk(ctx, chunkData)
+	chunkHash, _, err := store.cas.WriteChunk(ctx, chunkData)
 	require.NoError(t, err)
 
 	// Simulate: another coordinator (coord2) also owns this chunk
 	mockReg.owners[chunkHash] = []string{"coord1", "coord2"}
 
 	// Age the chunk (set mod time to 2 hours ago to pass grace period)
-	// Find the chunk file path
 	chunkPath := filepath.Join(store.dataDir, "chunks", chunkHash[:2], chunkHash)
 	twoHoursAgo := time.Now().Add(-2 * time.Hour)
 	err = os.Chtimes(chunkPath, twoHoursAgo, twoHoursAgo)
@@ -51,13 +54,16 @@ func TestGC_DistributedAware(t *testing.T) {
 	// Run GC
 	stats := store.RunGarbageCollection(ctx)
 
-	// Chunk should NOT be deleted (still owned by coord2)
-	assert.Equal(t, 0, stats.ChunksDeleted, "Should not delete shared chunks")
-	assert.Equal(t, 1, stats.ChunksSkippedShared, "Should skip shared chunks")
+	// Chunk should be deleted locally — not referenced by any local metadata.
+	// Other coordinators manage their own copies independently.
+	assert.Equal(t, 1, stats.ChunksDeleted, "Should delete locally unreferenced chunk")
 
-	// Verify chunk still exists
+	// Verify chunk was deleted from local CAS
 	_, err = store.cas.ReadChunk(ctx, chunkHash)
-	assert.NoError(t, err, "Chunk should still exist")
+	assert.Error(t, err, "Chunk should be deleted locally")
+
+	// Verify we unregistered ourselves from the registry
+	assert.NotContains(t, mockReg.owners[chunkHash], "coord1", "Should unregister self from registry")
 }
 
 // TestGC_DeletesWhenSoleOwner tests that GC deletes chunks when we're the only owner.
@@ -76,14 +82,15 @@ func TestGC_DeletesWhenSoleOwner(t *testing.T) {
 
 	// Create mock registry
 	mockReg := &mockChunkRegistry{
-		owners: make(map[string][]string),
+		owners:       make(map[string][]string),
+		localCoordID: "coord1",
 	}
 	store.SetChunkRegistry(mockReg)
 	store.SetCoordinatorID("coord1")
 
 	// Create an orphaned chunk directly (not referenced by any object)
 	chunkData := []byte("Test data for sole owner GC")
-	chunkHash, err := store.cas.WriteChunk(ctx, chunkData)
+	chunkHash, _, err := store.cas.WriteChunk(ctx, chunkData)
 	require.NoError(t, err)
 
 	// We're the sole owner
@@ -98,9 +105,8 @@ func TestGC_DeletesWhenSoleOwner(t *testing.T) {
 	// Run GC
 	stats := store.RunGarbageCollection(ctx)
 
-	// Chunk should be deleted (we're the sole owner)
-	assert.Equal(t, 1, stats.ChunksDeleted, "Should delete when sole owner")
-	assert.Equal(t, 0, stats.ChunksSkippedShared, "No shared chunks to skip")
+	// Chunk should be deleted (unreferenced locally)
+	assert.Equal(t, 1, stats.ChunksDeleted, "Should delete unreferenced chunk")
 
 	// Verify chunk was deleted
 	_, err = store.cas.ReadChunk(ctx, chunkHash)
@@ -169,7 +175,7 @@ func TestGC_NoRegistry(t *testing.T) {
 
 	// Create an orphaned chunk directly (not referenced by any object)
 	chunkData := []byte("Test data for no registry GC")
-	chunkHash, err := store.cas.WriteChunk(ctx, chunkData)
+	chunkHash, _, err := store.cas.WriteChunk(ctx, chunkData)
 	require.NoError(t, err)
 
 	// Age the chunk (set mod time to 2 hours ago to pass grace period)
@@ -181,16 +187,16 @@ func TestGC_NoRegistry(t *testing.T) {
 	// Run GC
 	stats := store.RunGarbageCollection(ctx)
 
-	// Chunk should be deleted (no registry to check)
+	// Chunk should be deleted (unreferenced locally)
 	assert.Equal(t, 1, stats.ChunksDeleted, "Should delete orphaned chunks without registry")
-	assert.Equal(t, 0, stats.ChunksSkippedShared, "No registry means no shared check")
 
 	// Verify chunk was deleted
 	_, err = store.cas.ReadChunk(ctx, chunkHash)
 	assert.Error(t, err, "Chunk should be deleted")
 }
 
-// TestGC_MultipleOwners tests GC with multiple owners in registry.
+// TestGC_MultipleOwners tests that GC deletes all locally unreferenced chunks
+// regardless of registry ownership, and unregisters self from each.
 func TestGC_MultipleOwners(t *testing.T) {
 	dir := t.TempDir()
 
@@ -206,28 +212,26 @@ func TestGC_MultipleOwners(t *testing.T) {
 
 	// Create mock registry
 	mockReg := &mockChunkRegistry{
-		owners: make(map[string][]string),
+		owners:       make(map[string][]string),
+		localCoordID: "coord1",
 	}
 	store.SetChunkRegistry(mockReg)
 	store.SetCoordinatorID("coord1")
 
 	// Create 3 orphaned chunks directly (not referenced by any object)
 	chunk1Data := []byte("Chunk 1: sole owner")
-	chunk1Hash, err := store.cas.WriteChunk(ctx, chunk1Data)
+	chunk1Hash, _, err := store.cas.WriteChunk(ctx, chunk1Data)
 	require.NoError(t, err)
 
 	chunk2Data := []byte("Chunk 2: shared ownership")
-	chunk2Hash, err := store.cas.WriteChunk(ctx, chunk2Data)
+	chunk2Hash, _, err := store.cas.WriteChunk(ctx, chunk2Data)
 	require.NoError(t, err)
 
 	chunk3Data := []byte("Chunk 3: other coordinator only")
-	chunk3Hash, err := store.cas.WriteChunk(ctx, chunk3Data)
+	chunk3Hash, _, err := store.cas.WriteChunk(ctx, chunk3Data)
 	require.NoError(t, err)
 
-	// Simulate different ownership scenarios:
-	// Chunk 1: Only us (should be deleted)
-	// Chunk 2: Us + coord2 (should NOT be deleted)
-	// Chunk 3: Only coord2 (should NOT be deleted - we're out of sync)
+	// Different registry states — but all are locally unreferenced, so all should be deleted
 	mockReg.owners[chunk1Hash] = []string{"coord1"}
 	mockReg.owners[chunk2Hash] = []string{"coord1", "coord2"}
 	mockReg.owners[chunk3Hash] = []string{"coord2"}
@@ -243,9 +247,18 @@ func TestGC_MultipleOwners(t *testing.T) {
 	// Run GC
 	stats := store.RunGarbageCollection(ctx)
 
-	// Only chunk 1 should be deleted (sole owner)
-	assert.Equal(t, 1, stats.ChunksDeleted, "Should delete only sole-owned chunk")
-	assert.Equal(t, 2, stats.ChunksSkippedShared, "Should skip 2 shared chunks")
+	// All 3 chunks should be deleted (all locally unreferenced + past grace period)
+	assert.Equal(t, 3, stats.ChunksDeleted, "Should delete all locally unreferenced chunks")
+
+	// Verify all chunks were deleted from local CAS
+	for _, chunkHash := range []string{chunk1Hash, chunk2Hash, chunk3Hash} {
+		_, err := store.cas.ReadChunk(ctx, chunkHash)
+		assert.Error(t, err, "Chunk %s should be deleted", chunkHash[:8])
+	}
+
+	// Verify we unregistered from all chunks in the registry
+	assert.NotContains(t, mockReg.owners[chunk1Hash], "coord1")
+	assert.NotContains(t, mockReg.owners[chunk2Hash], "coord1")
 }
 
 // TestGC_RegistryUnavailable tests GC behavior when registry query fails.
@@ -269,7 +282,7 @@ func TestGC_RegistryUnavailable(t *testing.T) {
 
 	// Create an orphaned chunk directly (not referenced by any object)
 	chunkData := []byte("Test data for registry failure")
-	chunkHash, err := store.cas.WriteChunk(ctx, chunkData)
+	chunkHash, _, err := store.cas.WriteChunk(ctx, chunkData)
 	require.NoError(t, err)
 
 	// Age the chunk (set mod time to 2 hours ago to pass grace period)
@@ -330,20 +343,20 @@ func TestGC_ErasureCodingParityShards(t *testing.T) {
 	// Manually create orphaned chunks simulating erasure-coded data
 	// Data chunks (simulating CDC-chunked data shards)
 	dataChunk1 := []byte("Data shard 1 chunk 1")
-	dataHash1, err := store.cas.WriteChunk(ctx, dataChunk1)
+	dataHash1, _, err := store.cas.WriteChunk(ctx, dataChunk1)
 	require.NoError(t, err)
 
 	dataChunk2 := []byte("Data shard 2 chunk 1")
-	dataHash2, err := store.cas.WriteChunk(ctx, dataChunk2)
+	dataHash2, _, err := store.cas.WriteChunk(ctx, dataChunk2)
 	require.NoError(t, err)
 
 	// Parity shards (stored whole)
 	parityShard1 := []byte("Parity shard 1 data")
-	parityHash1, err := store.cas.WriteChunk(ctx, parityShard1)
+	parityHash1, _, err := store.cas.WriteChunk(ctx, parityShard1)
 	require.NoError(t, err)
 
 	parityShard2 := []byte("Parity shard 2 data")
-	parityHash2, err := store.cas.WriteChunk(ctx, parityShard2)
+	parityHash2, _, err := store.cas.WriteChunk(ctx, parityShard2)
 	require.NoError(t, err)
 
 	// Age all chunks (set mod time to 2 hours ago to pass grace period)

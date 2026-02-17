@@ -234,11 +234,12 @@ func TestStressAlienInvasion(t *testing.T) {
 
 	// Verify timing is reasonable based on mode
 	if testing.Short() {
-		// Short mode: should complete in 10-60 seconds (includes workflow execution)
+		// Short mode: generates ~12K tasks compressed to fast execution.
+		// Recycle bin deletes create separate entry files (more I/O than tombstoning).
 		if duration < 10*time.Second {
 			t.Logf("NOTE: Completed faster than expected (%v < 10s). Excellent performance!", duration)
-		} else if duration > 90*time.Second {
-			t.Errorf("Duration %v exceeded target range (should be 10-60 seconds)", duration)
+		} else if duration > 3*time.Minute {
+			t.Errorf("Duration %v exceeded target range (should be under 3 minutes)", duration)
 		}
 	} else {
 		// Full mode: should complete in 4-6 minutes

@@ -230,12 +230,12 @@ func (m *mockS3Store) WriteChunkDirect(ctx context.Context, hash string, data []
 }
 
 // ImportObjectMeta writes object metadata directly.
-func (m *mockS3Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) error {
+func (m *mockS3Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.putErr != nil {
-		return m.putErr
+		return nil, m.putErr
 	}
 
 	// Decode meta to get basic info
@@ -247,7 +247,7 @@ func (m *mockS3Store) ImportObjectMeta(ctx context.Context, bucket, key string, 
 		Chunks      []string          `json:"chunks,omitempty"`
 	}
 	if err := json.Unmarshal(metaJSON, &meta); err != nil {
-		return fmt.Errorf("unmarshal meta: %w", err)
+		return nil, fmt.Errorf("unmarshal meta: %w", err)
 	}
 
 	m.objects[m.makeKey(bucket, key)] = mockS3Object{
@@ -256,7 +256,12 @@ func (m *mockS3Store) ImportObjectMeta(ctx context.Context, bucket, key string, 
 		metadata:    meta.Metadata,
 		chunks:      meta.Chunks,
 	}
-	return nil
+	return nil, nil
+}
+
+// DeleteUnreferencedChunks is a no-op in the mock.
+func (m *mockS3Store) DeleteUnreferencedChunks(_ context.Context, _ []string) int64 {
+	return 0
 }
 
 // GetBucketReplicationFactor returns the replication factor for a bucket.
@@ -274,6 +279,15 @@ func (m *mockS3Store) DeleteChunk(ctx context.Context, hash string) error {
 	}
 
 	delete(m.chunks, hash)
+	return nil
+}
+
+// PurgeObject permanently removes an object and its chunks (no tombstone).
+func (m *mockS3Store) PurgeObject(ctx context.Context, bucket, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.objects, m.makeKey(bucket, key))
 	return nil
 }
 
