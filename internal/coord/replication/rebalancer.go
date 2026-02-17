@@ -184,11 +184,12 @@ func (rb *Rebalancer) runRebalanceCycle(ctx context.Context) {
 	// Track chunk hashes across all objects to safely clean up stale local copies.
 	// neededChunks: hashes assigned to us by at least one object — must keep.
 	// unassignedChunks: hashes we have locally but aren't assigned — candidates for deletion.
-	// After the transfer pass, delete unassignedChunks that aren't in neededChunks.
+	// confirmedSent: hashes successfully sent to their new owner — safe to delete.
+	// Only delete chunks in (unassignedChunks - neededChunks) ∩ confirmedSent.
 	neededChunks := make(map[string]struct{})
 	unassignedChunks := make(map[string]struct{})
+	confirmedSent := make(map[string]struct{})
 
-	rateLimited := false
 	for bucket, keys := range allObjects {
 		select {
 		case <-ctx.Done():
@@ -209,21 +210,12 @@ func (rb *Rebalancer) runRebalanceCycle(ctx context.Context) {
 			default:
 			}
 
-			// Rate limit transfers but still scan all objects to build
-			// the needed/sent sets for correct cleanup.
 			maxTransfer := rb.maxBytesPerCycle - bytesThisCycle
 			if maxTransfer <= 0 {
-				if !rateLimited {
-					rateLimited = true
-					rb.logger.Info().
-						Int64("bytes_transferred", bytesThisCycle).
-						Int64("max_bytes", rb.maxBytesPerCycle).
-						Msg("Rebalance cycle rate limit reached, skipping further transfers")
-				}
 				maxTransfer = 0
 			}
 
-			transferred, err := rb.rebalanceObject(ctx, bucket, key, newPolicy, replicationFactor, selfID, maxTransfer, neededChunks, unassignedChunks)
+			transferred, err := rb.rebalanceObject(ctx, bucket, key, newPolicy, replicationFactor, selfID, maxTransfer, neededChunks, unassignedChunks, confirmedSent)
 			if err != nil {
 				rb.logger.Warn().Err(err).
 					Str("bucket", bucket).Str("key", key).
@@ -231,13 +223,24 @@ func (rb *Rebalancer) runRebalanceCycle(ctx context.Context) {
 				continue
 			}
 			bytesThisCycle += transferred
+
+			// Yield between objects to avoid starving write-lock acquisitions
+			// (e.g. ImportObjectMeta) when scanning many objects.
+			if maxTransfer <= 0 {
+				time.Sleep(time.Millisecond)
+			}
 		}
 	}
 
-	// Cleanup pass: delete local chunks that no object assigns to us.
+	// Cleanup pass: only delete chunks that are unassigned, not needed by any
+	// object, AND were successfully sent to their new owner. This prevents
+	// deleting chunks that haven't been transferred yet.
 	var chunksCleaned uint64
 	for hash := range unassignedChunks {
 		if _, needed := neededChunks[hash]; needed {
+			continue
+		}
+		if _, sent := confirmedSent[hash]; !sent {
 			continue
 		}
 		if ctx.Err() != nil {
@@ -274,11 +277,12 @@ func (rb *Rebalancer) runRebalanceCycle(ctx context.Context) {
 }
 
 // rebalanceObject performs chunk redistribution for a single object.
-// It populates neededChunks with hashes assigned to us and sentChunks with hashes
-// we successfully sent away. maxTransferBytes limits how much data to transfer;
-// set to 0 to skip transfers but still populate the tracking sets.
+// It populates neededChunks with hashes assigned to us, unassignedChunks with
+// hashes we have locally but aren't assigned, and confirmedSent with hashes
+// successfully sent to their new owner. maxTransferBytes limits how much data
+// to transfer; set to 0 to skip transfers but still populate the tracking sets.
 // Returns bytes transferred.
-func (rb *Rebalancer) rebalanceObject(ctx context.Context, bucket, key string, policy *StripingPolicy, replicationFactor int, selfID string, maxTransferBytes int64, neededChunks, unassignedChunks map[string]struct{}) (int64, error) {
+func (rb *Rebalancer) rebalanceObject(ctx context.Context, bucket, key string, policy *StripingPolicy, replicationFactor int, selfID string, maxTransferBytes int64, neededChunks, unassignedChunks, confirmedSent map[string]struct{}) (int64, error) {
 	meta, err := rb.s3.GetObjectMeta(ctx, bucket, key)
 	if err != nil {
 		return 0, err
@@ -368,6 +372,7 @@ func (rb *Rebalancer) rebalanceObject(ctx context.Context, bucket, key string, p
 
 				bytesTransferred += int64(len(data))
 				rb.chunksRedistributed.Add(1)
+				confirmedSent[chunkHash] = struct{}{}
 			}
 		}
 	}

@@ -226,7 +226,38 @@ func TestRebalancer_OnCycleCompleteCallback(t *testing.T) {
 }
 
 func TestRebalancer_CleansUpStaleChunks(t *testing.T) {
-	rb, replicator, s3Store := newTestRebalancer(t)
+	// Set up coord1 with real peer replicators so chunk sends succeed.
+	broker := newTestTransportBroker()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+	logger := zerolog.Nop()
+
+	replicator := NewReplicator(Config{
+		NodeID:        "coord1",
+		Transport:     broker.newTransportFor("coord1"),
+		S3Store:       s3Store,
+		ChunkRegistry: registry,
+		Logger:        logger,
+	})
+	require.NoError(t, replicator.Start())
+	defer func() { _ = replicator.Stop() }()
+
+	// Start peer replicators so sendReplicateChunk succeeds
+	for _, peerID := range []string{"coord2", "coord3"} {
+		peerS3 := newMockS3Store()
+		peer := NewReplicator(Config{
+			NodeID:        peerID,
+			Transport:     broker.newTransportFor(peerID),
+			S3Store:       peerS3,
+			ChunkRegistry: newMockChunkRegistry(),
+			Logger:        logger,
+		})
+		require.NoError(t, peer.Start())
+		defer func() { _ = peer.Stop() }()
+	}
+
+	rb := NewRebalancer(replicator, s3Store, registry, logger)
+	rb.debounceDuration = 0
 
 	// 6 chunks across 2 objects, all stored locally
 	chunks1 := []string{"chunk_a", "chunk_b", "chunk_c"}
@@ -253,15 +284,14 @@ func TestRebalancer_CleansUpStaleChunks(t *testing.T) {
 		assert.True(t, s3Store.ChunkExists(context.Background(), h), "should still have %s", h)
 	}
 
-	// Add coord2 — with RF=2 and 2 coordinators, all chunks stay on both (RF >= coord count)
-	// But add coord3 to get RF=2 < 3 coords, so some chunks should move OFF us
+	// Add coord2/coord3 — with RF=2 < 3 coords, some chunks should move OFF us
 	replicator.AddPeer("coord2")
 	replicator.AddPeer("coord3")
 	rb.NotifyTopologyChange()
 	rb.runRebalanceCycle(context.Background())
 
 	// With 3 coordinators and RF=2, each chunk should be on 2 of 3 coordinators.
-	// Some chunks that were only on us should now be deleted locally.
+	// Chunks not assigned to coord1 AND successfully sent should be deleted.
 	policy := NewStripingPolicy([]string{"coord1", "coord2", "coord3"})
 
 	// Check that chunks NOT assigned to coord1 were cleaned up
@@ -284,8 +314,66 @@ func TestRebalancer_CleansUpStaleChunks(t *testing.T) {
 	assert.Greater(t, rb.GetStats().RunsTotal, uint64(0))
 }
 
-func TestRebalancer_CleanupPreservesSharedChunks(t *testing.T) {
+func TestRebalancer_NoCleanupWithoutSuccessfulSend(t *testing.T) {
+	// Without real peer replicators, sends fail → chunks must NOT be deleted.
 	rb, replicator, s3Store := newTestRebalancer(t)
+
+	chunks := []string{"chunk_a", "chunk_b", "chunk_c"}
+	chunkData := map[string][]byte{
+		"chunk_a": []byte("data_a"),
+		"chunk_b": []byte("data_b"),
+		"chunk_c": []byte("data_c"),
+	}
+	s3Store.addObjectWithChunks("bucket1", "file1", chunks, chunkData)
+
+	// Initial run (just us)
+	rb.NotifyTopologyChange()
+	rb.runRebalanceCycle(context.Background())
+
+	// Add peers (no real replicators → sends will fail)
+	replicator.AddPeer("coord2")
+	replicator.AddPeer("coord3")
+	rb.NotifyTopologyChange()
+	rb.runRebalanceCycle(context.Background())
+
+	// ALL chunks must still exist because sends failed
+	for _, h := range chunks {
+		assert.True(t, s3Store.ChunkExists(context.Background(), h),
+			"chunk %s must be preserved when send fails", h)
+	}
+}
+
+func TestRebalancer_CleanupPreservesSharedChunks(t *testing.T) {
+	// Set up with real peer replicators so sends succeed.
+	broker := newTestTransportBroker()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+	logger := zerolog.Nop()
+
+	replicator := NewReplicator(Config{
+		NodeID:        "coord1",
+		Transport:     broker.newTransportFor("coord1"),
+		S3Store:       s3Store,
+		ChunkRegistry: registry,
+		Logger:        logger,
+	})
+	require.NoError(t, replicator.Start())
+	defer func() { _ = replicator.Stop() }()
+
+	for _, peerID := range []string{"coord2", "coord3"} {
+		peer := NewReplicator(Config{
+			NodeID:        peerID,
+			Transport:     broker.newTransportFor(peerID),
+			S3Store:       newMockS3Store(),
+			ChunkRegistry: newMockChunkRegistry(),
+			Logger:        logger,
+		})
+		require.NoError(t, peer.Start())
+		defer func() { _ = peer.Stop() }()
+	}
+
+	rb := NewRebalancer(replicator, s3Store, registry, logger)
+	rb.debounceDuration = 0
 
 	// Two objects share a chunk hash — "shared_chunk" appears in both.
 	// Even if it's not assigned to us for object1, it IS assigned for object2,
