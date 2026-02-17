@@ -144,7 +144,7 @@ func TestDrainReplicationQueue_Put(t *testing.T) {
 
 	// Verify chunks were replicated to coord-b
 	for _, hash := range chunks {
-		_, exists := s3b.chunks[hash]
+		exists := s3b.ChunkExists(context.Background(), hash)
 		assert.True(t, exists, "Chunk %s should be replicated to coord-b", hash)
 	}
 }
@@ -335,7 +335,7 @@ func TestShutdownDrain(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Verify the object was replicated during shutdown drain
-	_, exists := s3b.chunks["hash1"]
+	exists := s3b.ChunkExists(context.Background(), "hash1")
 	assert.True(t, exists, "Chunk should be replicated during shutdown drain")
 }
 
@@ -378,8 +378,7 @@ func TestRunReplicationQueueWorker_SignalWakeup(t *testing.T) {
 
 	// Wait for the worker to process (should be fast since it's signal-driven)
 	assert.Eventually(t, func() bool {
-		_, exists := s3b.chunks["hash1"]
-		return exists
+		return s3b.ChunkExists(context.Background(), "hash1")
 	}, 5*time.Second, 50*time.Millisecond, "Worker should process enqueued replication via signal")
 }
 
@@ -433,7 +432,7 @@ func TestAutoSyncCycle(t *testing.T) {
 	// Verify all objects were replicated
 	for _, key := range []string{"file1.txt", "file2.txt"} {
 		hash := "hash-" + key
-		_, exists := s3b.chunks[hash]
+		exists := s3b.ChunkExists(context.Background(), hash)
 		assert.True(t, exists, "Chunk %s should be replicated via auto-sync", hash)
 	}
 }
@@ -505,7 +504,7 @@ func TestChunkPipelining_MultipleChunks(t *testing.T) {
 
 	// Verify all chunks were replicated
 	for _, hash := range chunks {
-		_, exists := s3b.chunks[hash]
+		exists := s3b.ChunkExists(context.Background(), hash)
 		assert.True(t, exists, "Chunk %s should be replicated", hash)
 	}
 }
@@ -555,7 +554,7 @@ func TestChunkPipelining_WindowOne(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	for _, hash := range chunks {
-		_, exists := s3b.chunks[hash]
+		exists := s3b.ChunkExists(context.Background(), hash)
 		assert.True(t, exists, "Chunk %s should be replicated with window=1", hash)
 	}
 }
