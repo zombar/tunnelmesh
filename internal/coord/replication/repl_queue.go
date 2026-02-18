@@ -75,7 +75,7 @@ func (r *Replicator) drainReplicationQueue(ctx context.Context) {
 		Msg("Draining replication queue")
 
 	// Process with bounded concurrency
-	const maxConcurrent = 5
+	const maxConcurrent = 10
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 
@@ -120,37 +120,53 @@ func (r *Replicator) processQueueEntry(ctx context.Context, entry *replQueueEntr
 	}
 }
 
-// processQueuePut replicates an object to all peers and cleans up non-assigned chunks on success.
+// processQueuePut replicates an object to all peers in parallel and cleans up non-assigned chunks.
 func (r *Replicator) processQueuePut(ctx context.Context, entry *replQueueEntry, peers []string) {
 	if r.chunkRegistry == nil {
 		// No chunk registry — fall back to file-level replication
 		return
 	}
 
-	entryCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
+	type peerResult struct {
+		peerID string
+		err    error
+	}
+	results := make(chan peerResult, len(peers))
 
-	allSucceeded := true
 	for _, peerID := range peers {
-		if err := r.ReplicateObject(entryCtx, entry.bucket, entry.key, peerID); err != nil {
-			r.logger.Error().Err(err).
-				Str("peer", peerID).
+		go func(pid string) {
+			peerCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			defer cancel()
+			results <- peerResult{pid, r.ReplicateObject(peerCtx, entry.bucket, entry.key, pid)}
+		}(peerID)
+	}
+
+	var failedPeers []string
+	for range peers {
+		res := <-results
+		if res.err != nil {
+			r.logger.Error().Err(res.err).
+				Str("peer", res.peerID).
 				Str("bucket", entry.bucket).
 				Str("key", entry.key).
 				Int("retry", entry.retries).
 				Msg("Queued replication failed")
-			allSucceeded = false
+			failedPeers = append(failedPeers, res.peerID)
 		}
 	}
 
-	if allSucceeded {
-		if err := r.CleanupNonAssignedChunks(entryCtx, entry.bucket, entry.key); err != nil {
-			r.logger.Error().Err(err).
-				Str("bucket", entry.bucket).
-				Str("key", entry.key).
-				Msg("Failed to cleanup non-assigned chunks after queued replication")
-		}
-	} else {
+	// Always attempt cleanup — safety check inside CleanupNonAssignedChunks
+	// ensures we never delete the last copy of a chunk
+	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := r.CleanupNonAssignedChunks(cleanupCtx, entry.bucket, entry.key); err != nil {
+		r.logger.Error().Err(err).
+			Str("bucket", entry.bucket).
+			Str("key", entry.key).
+			Msg("Failed to cleanup non-assigned chunks after queued replication")
+	}
+
+	if len(failedPeers) > 0 {
 		r.reEnqueueOnFailure(entry)
 	}
 }

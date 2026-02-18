@@ -1648,6 +1648,11 @@ func TestCleanupNonAssignedChunks_ThreeCoordinators(t *testing.T) {
 	r.AddPeer("coord-b")
 	r.AddPeer("coord-c")
 
+	// Register remote owners for all chunks (simulating successful replication)
+	for _, hash := range chunks {
+		registry.setOwnership(hash, []string{"coord-a", "coord-b", "coord-c"})
+	}
+
 	// Verify all chunks exist before cleanup
 	for _, hash := range chunks {
 		_, exists := s3Store.chunks[hash]
@@ -1739,6 +1744,86 @@ func TestCleanupNonAssignedChunks_NoChunkRegistry(t *testing.T) {
 	err := r.CleanupNonAssignedChunks(ctx, "bucket", "file.bin")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "chunk registry not configured")
+}
+
+func TestCleanupNonAssignedChunks_SkipsWhenNoRemoteOwner(t *testing.T) {
+	ctx := context.Background()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+	transport := newMockTransport()
+
+	chunks := []string{"c0", "c1", "c2", "c3", "c4", "c5"}
+	chunkData := map[string][]byte{
+		"c0": []byte("data0"),
+		"c1": []byte("data1"),
+		"c2": []byte("data2"),
+		"c3": []byte("data3"),
+		"c4": []byte("data4"),
+		"c5": []byte("data5"),
+	}
+	s3Store.addObjectWithChunks("bucket", "file.bin", chunks, chunkData)
+
+	r := NewReplicator(Config{
+		NodeID:        "coord-a",
+		Transport:     transport,
+		S3Store:       s3Store,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	r.AddPeer("coord-b")
+	r.AddPeer("coord-c")
+
+	// Only register coord-a as owner (no remote owners) — simulates failed replication
+	for _, hash := range chunks {
+		registry.setOwnership(hash, []string{"coord-a"})
+	}
+
+	err := r.CleanupNonAssignedChunks(ctx, "bucket", "file.bin")
+	require.NoError(t, err)
+
+	// All chunks should be kept since no remote owner exists
+	for _, hash := range chunks {
+		_, exists := s3Store.chunks[hash]
+		assert.True(t, exists, "chunk %s should be kept when no remote owner exists", hash)
+	}
+}
+
+func TestCleanupNonAssignedChunks_SkipsWhenNoOwners(t *testing.T) {
+	ctx := context.Background()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+	transport := newMockTransport()
+
+	chunks := []string{"c0", "c1"}
+	chunkData := map[string][]byte{
+		"c0": []byte("data0"),
+		"c1": []byte("data1"),
+	}
+	s3Store.addObjectWithChunks("bucket", "file.bin", chunks, chunkData)
+
+	r := NewReplicator(Config{
+		NodeID:        "coord-a",
+		Transport:     transport,
+		S3Store:       s3Store,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	r.AddPeer("coord-b")
+
+	// Don't register any owners — simulates fresh chunk with no registry entries
+
+	err := r.CleanupNonAssignedChunks(ctx, "bucket", "file.bin")
+	require.NoError(t, err)
+
+	// All chunks should be kept since no owners exist
+	for _, hash := range chunks {
+		_, exists := s3Store.chunks[hash]
+		assert.True(t, exists, "chunk %s should be kept when no owners in registry", hash)
+	}
 }
 
 func TestReplicateObject_SendsMetadata(t *testing.T) {

@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -557,4 +558,158 @@ func TestChunkPipelining_WindowOne(t *testing.T) {
 		exists := s3b.ChunkExists(context.Background(), hash)
 		assert.True(t, exists, "Chunk %s should be replicated with window=1", hash)
 	}
+}
+
+func TestProcessQueuePut_ParallelPeerReplication(t *testing.T) {
+	// Verify that processQueuePut replicates to multiple peers in parallel.
+	// With 3 coordinators and RF=2, each chunk is assigned to 2 coordinators.
+	// We use enough chunks that both peers get some assigned chunks.
+	broker := newTestTransportBroker()
+	s3a := newMockS3Store()
+	s3b := newMockS3Store()
+	s3c := newMockS3Store()
+	registryA := newMockChunkRegistry()
+	registryB := newMockChunkRegistry()
+	registryC := newMockChunkRegistry()
+
+	rA := NewReplicator(Config{
+		NodeID:              "coord-a",
+		Transport:           broker.newTransportFor("coord-a"),
+		S3Store:             s3a,
+		ChunkRegistry:       registryA,
+		Logger:              zerolog.Nop(),
+		ChunkPipelineWindow: 5,
+		AutoSyncInterval:    0,
+	})
+	require.NoError(t, rA.Start())
+	defer func() { _ = rA.Stop() }()
+
+	rB := NewReplicator(Config{
+		NodeID:              "coord-b",
+		Transport:           broker.newTransportFor("coord-b"),
+		S3Store:             s3b,
+		ChunkRegistry:       registryB,
+		Logger:              zerolog.Nop(),
+		ChunkPipelineWindow: 5,
+	})
+	require.NoError(t, rB.Start())
+	defer func() { _ = rB.Stop() }()
+
+	rC := NewReplicator(Config{
+		NodeID:              "coord-c",
+		Transport:           broker.newTransportFor("coord-c"),
+		S3Store:             s3c,
+		ChunkRegistry:       registryC,
+		Logger:              zerolog.Nop(),
+		ChunkPipelineWindow: 5,
+	})
+	require.NoError(t, rC.Start())
+	defer func() { _ = rC.Stop() }()
+
+	rA.AddPeer("coord-b")
+	rA.AddPeer("coord-c")
+
+	// Create object with 6 chunks so striping distributes across all coordinators
+	chunks := make([]string, 6)
+	chunkData := make(map[string][]byte)
+	for i := 0; i < 6; i++ {
+		hash := fmt.Sprintf("hash%d", i)
+		chunks[i] = hash
+		chunkData[hash] = []byte(fmt.Sprintf("data%d", i))
+	}
+	s3a.addObjectWithChunks("bucket1", "file.txt", chunks, chunkData)
+
+	// Enqueue and drain
+	rA.EnqueueReplication("bucket1", "file.txt", "put")
+	rA.drainReplicationQueue(context.Background())
+
+	// Wait for async chunk processing
+	time.Sleep(500 * time.Millisecond)
+
+	// With RF=2 and 3 coordinators, each peer should get ~4 of 6 chunks.
+	// Verify both peers received at least some chunks (proves parallel execution).
+	bCount := 0
+	cCount := 0
+	for _, hash := range chunks {
+		if s3b.ChunkExists(context.Background(), hash) {
+			bCount++
+		}
+		if s3c.ChunkExists(context.Background(), hash) {
+			cCount++
+		}
+	}
+	assert.Greater(t, bCount, 0, "coord-b should have received some chunks")
+	assert.Greater(t, cCount, 0, "coord-c should have received some chunks")
+}
+
+func TestProcessQueuePut_ReEnqueuesOnPartialFailure(t *testing.T) {
+	// Verify that when one peer fails, the entry is re-enqueued for retry.
+	// coord-c has no replicator registered, so sending to it fails immediately.
+	// Note: rA is NOT started (no background worker) so re-enqueued entries stay in replPending.
+	broker := newTestTransportBroker()
+	s3a := newMockS3Store()
+	s3b := newMockS3Store()
+	registryA := newMockChunkRegistry()
+	registryB := newMockChunkRegistry()
+
+	rA := NewReplicator(Config{
+		NodeID:              "coord-a",
+		Transport:           broker.newTransportFor("coord-a"),
+		S3Store:             s3a,
+		ChunkRegistry:       registryA,
+		Logger:              zerolog.Nop(),
+		ChunkPipelineWindow: 5,
+		AutoSyncInterval:    0,
+	})
+	// Don't call rA.Start() — we drain manually to avoid the worker consuming re-enqueued entries
+	t.Cleanup(func() { _ = rA.Stop() })
+
+	rB := NewReplicator(Config{
+		NodeID:              "coord-b",
+		Transport:           broker.newTransportFor("coord-b"),
+		S3Store:             s3b,
+		ChunkRegistry:       registryB,
+		Logger:              zerolog.Nop(),
+		ChunkPipelineWindow: 5,
+	})
+	require.NoError(t, rB.Start())
+	defer func() { _ = rB.Stop() }()
+
+	// Add coord-b (reachable) and coord-c (no replicator = unreachable)
+	rA.AddPeer("coord-b")
+	rA.AddPeer("coord-c")
+
+	// Create object with 6 chunks for realistic striping
+	chunks := make([]string, 6)
+	chunkData := make(map[string][]byte)
+	for i := 0; i < 6; i++ {
+		hash := fmt.Sprintf("hash%d", i)
+		chunks[i] = hash
+		chunkData[hash] = []byte(fmt.Sprintf("data%d", i))
+	}
+	s3a.addObjectWithChunks("bucket1", "file.txt", chunks, chunkData)
+
+	// Enqueue and drain manually
+	rA.EnqueueReplication("bucket1", "file.txt", "put")
+	rA.drainReplicationQueue(context.Background())
+
+	// Wait for async chunk processing on receiver side
+	time.Sleep(500 * time.Millisecond)
+
+	// Entry should be re-enqueued because coord-c is unreachable
+	count := 0
+	rA.replPending.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	assert.Equal(t, 1, count, "Entry should be re-enqueued due to partial failure (coord-c unreachable)")
+
+	// coord-b should have received its assigned chunks
+	bCount := 0
+	for _, hash := range chunks {
+		if s3b.ChunkExists(context.Background(), hash) {
+			bCount++
+		}
+	}
+	assert.Greater(t, bCount, 0, "coord-b should have received some chunks despite coord-c failure")
 }

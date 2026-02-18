@@ -2389,10 +2389,33 @@ func (r *Replicator) CleanupNonAssignedChunks(ctx context.Context, bucket, key s
 		assignedSet[idx] = true
 	}
 
-	// Delete non-assigned chunks
-	var deleted, kept int
+	// Delete non-assigned chunks (with safety check: never delete the last copy)
+	var deleted, kept, skippedNoOwner int
 	for idx, chunkHash := range meta.Chunks {
 		if assignedSet[idx] {
+			kept++
+			continue
+		}
+
+		// Safety check: verify at least one remote owner has this chunk
+		owners, err := r.chunkRegistry.GetOwners(chunkHash)
+		if err != nil || len(owners) == 0 {
+			// No known owners — unsafe to delete, keep as safety net
+			skippedNoOwner++
+			kept++
+			continue
+		}
+
+		hasRemoteOwner := false
+		for _, owner := range owners {
+			if owner != r.nodeID {
+				hasRemoteOwner = true
+				break
+			}
+		}
+		if !hasRemoteOwner {
+			// Only we own this chunk — unsafe to delete
+			skippedNoOwner++
 			kept++
 			continue
 		}
@@ -2421,6 +2444,7 @@ func (r *Replicator) CleanupNonAssignedChunks(ctx context.Context, bucket, key s
 		Str("key", key).
 		Int("deleted", deleted).
 		Int("kept", kept).
+		Int("skipped_no_remote_owner", skippedNoOwner).
 		Int("total", len(meta.Chunks)).
 		Int("peers", len(peers)).
 		Msg("Cleaned up non-assigned chunks")
