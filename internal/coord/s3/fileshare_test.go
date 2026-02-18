@@ -743,3 +743,96 @@ func TestEnsureBucketForShare_ReplicatedShare(t *testing.T) {
 	// Share should now be in mgrB's memory
 	assert.NotNil(t, mgrB.Get("photos"))
 }
+
+func TestPurgeOrphanedFileShareBuckets_GracePeriod(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a fs+ bucket directly (no share config) — simulates replication
+	// arriving before the share config is replicated.
+	bucketName := FileShareBucketPrefix + "replicated"
+	err = store.CreateBucket(context.Background(), bucketName, "alice", 1, nil)
+	require.NoError(t, err)
+
+	// Bucket was just created (young) — purge should skip it
+	purged := mgr.PurgeOrphanedFileShareBuckets(context.Background())
+	assert.Equal(t, 0, purged, "young orphaned bucket should survive grace period")
+
+	// Verify bucket still exists
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	assert.NoError(t, err, "bucket should still exist after purge (grace period)")
+}
+
+func TestPurgeOrphanedFileShareBuckets_DeletesOldOrphans(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a fs+ bucket directly (no share config)
+	bucketName := FileShareBucketPrefix + "stale"
+	err = store.CreateBucket(context.Background(), bucketName, "alice", 1, nil)
+	require.NoError(t, err)
+
+	// Backdate the bucket's CreatedAt to make it older than the grace period
+	metaPath := filepath.Join(store.DataDir(), "buckets", bucketName, "_meta.json")
+	metaData, err := os.ReadFile(metaPath)
+	require.NoError(t, err)
+
+	// Replace the timestamp with one from 20 minutes ago
+	meta, err := store.HeadBucket(context.Background(), bucketName)
+	require.NoError(t, err)
+	oldTime := time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339Nano)
+	updated := bytes.Replace(metaData,
+		[]byte(meta.CreatedAt.Format(time.RFC3339Nano)),
+		[]byte(oldTime), 1)
+	require.NoError(t, os.WriteFile(metaPath, updated, 0644))
+
+	// Now purge should delete the old orphaned bucket
+	purged := mgr.PurgeOrphanedFileShareBuckets(context.Background())
+	assert.Equal(t, 1, purged, "old orphaned bucket should be purged")
+
+	// Verify bucket is gone
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	assert.ErrorIs(t, err, ErrBucketNotFound, "old orphaned bucket should be deleted")
+}
+
+func TestPurgeOrphanedFileShareBuckets_KeepsActiveBuckets(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a proper share (bucket + config)
+	_, err = mgr.Create(context.Background(), "active", "Active share", "alice", 0, nil)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + "active"
+
+	// Backdate the bucket so it's past the grace period
+	metaPath := filepath.Join(store.DataDir(), "buckets", bucketName, "_meta.json")
+	metaData, err := os.ReadFile(metaPath)
+	require.NoError(t, err)
+
+	oldTime := time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339Nano)
+	meta, _ := store.HeadBucket(context.Background(), bucketName)
+	updated := bytes.Replace(metaData,
+		[]byte(meta.CreatedAt.Format(time.RFC3339Nano)),
+		[]byte(oldTime), 1)
+	require.NoError(t, os.WriteFile(metaPath, updated, 0644))
+
+	// Purge should NOT delete this bucket — it has a corresponding share
+	purged := mgr.PurgeOrphanedFileShareBuckets(context.Background())
+	assert.Equal(t, 0, purged, "active share bucket should not be purged")
+
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	assert.NoError(t, err, "active share bucket should still exist")
+}
