@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCoordinatorClient_CreateBucket(t *testing.T) {
@@ -396,6 +397,177 @@ func TestCoordinatorClient_BucketExists(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCoordinatorClient_DeleteShare(t *testing.T) {
+	tests := []struct {
+		name          string
+		shareName     string
+		serverStatus  int
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name:         "successful deletion",
+			shareName:    "s3bench_alien-public",
+			serverStatus: http.StatusOK,
+			expectError:  false,
+		},
+		{
+			name:         "not found is idempotent",
+			shareName:    "nonexistent-share",
+			serverStatus: http.StatusNotFound,
+			expectError:  false,
+		},
+		{
+			name:          "server error",
+			shareName:     "test-share",
+			serverStatus:  http.StatusInternalServerError,
+			expectError:   true,
+			errorContains: "500",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodDelete {
+					t.Errorf("Expected DELETE, got %s", r.Method)
+				}
+				if !strings.Contains(r.URL.Path, "/api/shares/") {
+					t.Errorf("Expected /api/shares/ in path, got %s", r.URL.Path)
+				}
+
+				w.WriteHeader(tt.serverStatus)
+			}))
+			defer server.Close()
+
+			client := &CoordinatorClient{
+				baseURL:    server.URL,
+				httpClient: server.Client(),
+				accessKey:  "test-access",
+				secretKey:  "test-secret",
+			}
+
+			err := client.DeleteShare(context.Background(), tt.shareName)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error, got nil")
+				} else if tt.errorContains != "" && !strings.Contains(err.Error(), tt.errorContains) {
+					t.Errorf("Expected error to contain %q, got %q", tt.errorContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error, got %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestCoordinatorClient_TriggerGC(t *testing.T) {
+	newGCServer := func(t *testing.T, status int, response string) *httptest.Server {
+		t.Helper()
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				t.Errorf("Expected POST, got %s", r.Method)
+			}
+			if r.URL.Path != "/api/s3/gc" {
+				t.Errorf("Expected /api/s3/gc, got %s", r.URL.Path)
+			}
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "purge_recycle_bin") {
+				t.Errorf("Expected purge_recycle_bin in body, got %s", string(body))
+			}
+			w.WriteHeader(status)
+			if response != "" {
+				_, _ = w.Write([]byte(response))
+			}
+		}))
+	}
+
+	t.Run("successful GC", func(t *testing.T) {
+		server := newGCServer(t, http.StatusOK, `{"recycled_purged":5,"versions_pruned":3,"chunks_deleted":10,"bytes_reclaimed":1048576}`)
+		defer server.Close()
+
+		client := &CoordinatorClient{baseURL: server.URL, httpClient: server.Client(), accessKey: "test", secretKey: "test"}
+		stats, err := client.TriggerGC(context.Background(), true)
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if stats.RecycledPurged != 5 || stats.VersionsPruned != 3 || stats.ChunksDeleted != 10 || stats.BytesReclaimed != 1048576 {
+			t.Errorf("Unexpected stats: %+v", stats)
+		}
+	})
+
+	t.Run("server error", func(t *testing.T) {
+		server := newGCServer(t, http.StatusInternalServerError, "")
+		defer server.Close()
+
+		client := &CoordinatorClient{baseURL: server.URL, httpClient: server.Client(), accessKey: "test", secretKey: "test"}
+		_, err := client.TriggerGC(context.Background(), true)
+		if err == nil || !strings.Contains(err.Error(), "500") {
+			t.Errorf("Expected error containing '500', got: %v", err)
+		}
+	})
+}
+
+func TestCoordinatorClient_TriggerGC_SlowServer(t *testing.T) {
+	// Verify that TriggerGC tolerates responses slower than the default 60s client timeout.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second) // Simulate slow GC
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"recycled_purged":1,"versions_pruned":0,"chunks_deleted":0,"bytes_reclaimed":0}`))
+	}))
+	defer server.Close()
+
+	client := &CoordinatorClient{
+		baseURL:   server.URL,
+		accessKey: "test",
+		secretKey: "test",
+		httpClient: &http.Client{
+			Timeout:   1 * time.Second, // Shorter than the server delay
+			Transport: server.Client().Transport,
+		},
+	}
+
+	stats, err := client.TriggerGC(context.Background(), true)
+	if err != nil {
+		t.Fatalf("GC should not timeout with context-based timeout: %v", err)
+	}
+	if stats.RecycledPurged != 1 {
+		t.Errorf("Expected RecycledPurged=1, got %d", stats.RecycledPurged)
+	}
+}
+
+func TestCoordinatorClient_TriggerGC_ContextCancellation(t *testing.T) {
+	// Verify that TriggerGC respects parent context cancellation.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := &CoordinatorClient{
+		baseURL:    server.URL,
+		accessKey:  "test",
+		secretKey:  "test",
+		httpClient: server.Client(),
+	}
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_, err := client.TriggerGC(ctx, true)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("Expected error from cancelled context")
+	}
+	if elapsed > 1*time.Second {
+		t.Errorf("Expected cancellation within ~200ms, took %v", elapsed)
 	}
 }
 

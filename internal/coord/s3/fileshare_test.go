@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -178,14 +180,13 @@ func TestFileShareManager_Delete(t *testing.T) {
 	err = mgr.Delete(context.Background(), "temp")
 	require.NoError(t, err)
 
-	// Bucket is kept (for potential restore), but objects are tombstoned
+	// Bucket should be deleted entirely (objects purged, bucket removed)
 	_, err = store.HeadBucket(context.Background(), bucketName)
-	assert.NoError(t, err, "bucket should still exist for restore capability")
+	assert.ErrorIs(t, err, ErrBucketNotFound, "bucket should be removed after share delete")
 
-	// Object should be tombstoned
-	meta, err := store.HeadObject(context.Background(), bucketName, "file.txt")
-	require.NoError(t, err)
-	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
+	// Object should be gone
+	_, err = store.HeadObject(context.Background(), bucketName, "file.txt")
+	assert.ErrorIs(t, err, ErrBucketNotFound, "object should be gone after share delete")
 
 	// Verify share is removed from list
 	shares := mgr.List()
@@ -194,7 +195,7 @@ func TestFileShareManager_Delete(t *testing.T) {
 	}
 }
 
-func TestFileShareManager_DeleteAndRecreate_RestoresContent(t *testing.T) {
+func TestFileShareManager_DeleteAndRecreate_StartsFresh(t *testing.T) {
 	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
@@ -211,31 +212,22 @@ func TestFileShareManager_DeleteAndRecreate_RestoresContent(t *testing.T) {
 	_, err = store.PutObject(context.Background(), bucketName, "readme.txt", bytes.NewReader(testData), int64(len(testData)), "text/plain", nil)
 	require.NoError(t, err)
 
-	// Delete the share (tombstones content)
+	// Delete the share (purges all content and removes bucket)
 	err = mgr.Delete(context.Background(), "docs")
 	require.NoError(t, err)
 
-	// Verify content is tombstoned
-	meta, err := store.HeadObject(context.Background(), bucketName, "readme.txt")
-	require.NoError(t, err)
-	assert.True(t, meta.IsTombstoned())
+	// Bucket should be gone
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	assert.ErrorIs(t, err, ErrBucketNotFound)
 
-	// Recreate with same name (should restore content)
+	// Recreate with same name (should start fresh, no old content)
 	_, err = mgr.Create(context.Background(), "docs", "Restored docs", "bob", 0, nil)
 	require.NoError(t, err)
 
-	// Content should be restored (untombstoned)
-	meta, err = store.HeadObject(context.Background(), bucketName, "readme.txt")
+	// Bucket should exist again but be empty
+	objects, _, _, err := store.ListObjects(context.Background(), bucketName, "", "", 0)
 	require.NoError(t, err)
-	assert.False(t, meta.IsTombstoned(), "object should be untombstoned after recreate")
-
-	// Content should still be readable
-	reader, _, err := store.GetObject(context.Background(), bucketName, "readme.txt")
-	require.NoError(t, err)
-	defer func() { _ = reader.Close() }()
-	content, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	assert.Equal(t, "important data", string(content))
+	assert.Empty(t, objects, "recreated share should start with empty bucket")
 }
 
 func TestFileShareManager_Delete_RemovesPermissions(t *testing.T) {
@@ -385,7 +377,7 @@ func TestFileShare_IsExpired(t *testing.T) {
 	assert.False(t, never.IsExpired())
 }
 
-func TestFileShareManager_TombstoneExpiredShareContents(t *testing.T) {
+func TestFileShareManager_PurgeExpiredShareContents(t *testing.T) {
 	store := newTestStoreWithCASForFileshare(t)
 
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
@@ -410,14 +402,137 @@ func TestFileShareManager_TombstoneExpiredShareContents(t *testing.T) {
 	share.ExpiresAt = time.Now().Add(-24 * time.Hour)
 	mgr.mu.Unlock()
 
-	// Run tombstoning of expired share contents
-	count := mgr.TombstoneExpiredShareContents(context.Background())
-	assert.Equal(t, 1, count, "should tombstone 1 object")
+	// Run purging of expired share contents
+	count := mgr.PurgeExpiredShareContents(context.Background())
+	assert.Equal(t, 1, count, "should purge 1 object")
 
-	// Verify object is now tombstoned
-	obj, err := store.HeadObject(context.Background(), bucketName, "file.txt")
+	// Verify object is now gone (purged, not tombstoned)
+	_, err = store.HeadObject(context.Background(), bucketName, "file.txt")
+	assert.ErrorIs(t, err, ErrObjectNotFound)
+}
+
+func TestFileShareManager_RecreatesMissingBucketsOnLoad(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
 	require.NoError(t, err)
-	assert.True(t, obj.IsTombstoned())
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create shares that persist to system store
+	_, err = mgr.Create(context.Background(), "photos", "Photos share", "alice", 0, nil)
+	require.NoError(t, err)
+	_, err = mgr.Create(context.Background(), "docs", "Documents share", "bob", 0, nil)
+	require.NoError(t, err)
+
+	// Verify buckets exist
+	_, err = store.HeadBucket(context.Background(), FileShareBucketPrefix+"photos")
+	require.NoError(t, err)
+	_, err = store.HeadBucket(context.Background(), FileShareBucketPrefix+"docs")
+	require.NoError(t, err)
+
+	// Delete the bucket directories to simulate a coordinator that received
+	// share metadata via replication but never had the buckets created locally
+	err = store.DeleteBucket(context.Background(), FileShareBucketPrefix+"photos")
+	require.NoError(t, err)
+	err = store.DeleteBucket(context.Background(), FileShareBucketPrefix+"docs")
+	require.NoError(t, err)
+
+	// Verify buckets are gone
+	_, err = store.HeadBucket(context.Background(), FileShareBucketPrefix+"photos")
+	assert.ErrorIs(t, err, ErrBucketNotFound)
+
+	// Recreate the file share manager — this simulates coordinator restart
+	// The constructor should detect missing buckets and recreate them
+	mgr2 := NewFileShareManager(store, systemStore, authorizer)
+
+	// Verify shares are still loaded
+	assert.Len(t, mgr2.List(), 2)
+
+	// Verify buckets were recreated
+	_, err = store.HeadBucket(context.Background(), FileShareBucketPrefix+"photos")
+	assert.NoError(t, err, "photos bucket should be recreated on load")
+	_, err = store.HeadBucket(context.Background(), FileShareBucketPrefix+"docs")
+	assert.NoError(t, err, "docs bucket should be recreated on load")
+
+	// Verify we can write to the recreated buckets
+	content := []byte("test data")
+	_, err = store.PutObject(context.Background(), FileShareBucketPrefix+"photos", "test.txt",
+		bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	assert.NoError(t, err, "should be able to write to recreated bucket")
+}
+
+func TestFileShareManager_RecreatesOnlyMissingBuckets(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create two shares
+	_, err = mgr.Create(context.Background(), "photos", "Photos share", "alice", 0, nil)
+	require.NoError(t, err)
+	_, err = mgr.Create(context.Background(), "docs", "Documents share", "bob", 0, nil)
+	require.NoError(t, err)
+
+	// Write content to docs bucket so we can verify it's untouched
+	docsBucket := FileShareBucketPrefix + "docs"
+	content := []byte("important data")
+	_, err = store.PutObject(context.Background(), docsBucket, "readme.txt",
+		bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Delete only the photos bucket — docs stays intact
+	err = store.DeleteBucket(context.Background(), FileShareBucketPrefix+"photos")
+	require.NoError(t, err)
+
+	// Recreate the file share manager
+	mgr2 := NewFileShareManager(store, systemStore, authorizer)
+	assert.Len(t, mgr2.List(), 2)
+
+	// Photos bucket was recreated
+	_, err = store.HeadBucket(context.Background(), FileShareBucketPrefix+"photos")
+	assert.NoError(t, err, "photos bucket should be recreated")
+
+	// Docs bucket still has its content
+	reader, _, err := store.GetObject(context.Background(), docsBucket, "readme.txt")
+	require.NoError(t, err)
+	data, _ := io.ReadAll(reader)
+	_ = reader.Close()
+	assert.Equal(t, "important data", string(data), "existing bucket content should be untouched")
+}
+
+func TestFileShareManager_RecreatesWithCorrectReplicationFactor(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create share with custom replication factor 3
+	opts := &FileShareOptions{ReplicationFactor: 3}
+	_, err = mgr.Create(context.Background(), "critical", "Critical data", "alice", 0, opts)
+	require.NoError(t, err)
+
+	// Verify bucket has RF=3
+	meta, err := store.HeadBucket(context.Background(), FileShareBucketPrefix+"critical")
+	require.NoError(t, err)
+	assert.Equal(t, 3, meta.ReplicationFactor)
+
+	// Delete the bucket
+	err = store.DeleteBucket(context.Background(), FileShareBucketPrefix+"critical")
+	require.NoError(t, err)
+
+	// Recreate the file share manager — should recreate with RF=3
+	mgr2 := NewFileShareManager(store, systemStore, authorizer)
+	assert.Len(t, mgr2.List(), 1)
+
+	// Verify recreated bucket has RF=3 (not default 2)
+	meta, err = store.HeadBucket(context.Background(), FileShareBucketPrefix+"critical")
+	require.NoError(t, err)
+	assert.Equal(t, 3, meta.ReplicationFactor, "recreated bucket should preserve original replication factor")
 }
 
 func TestFileShareManager_IsProtectedBinding(t *testing.T) {
@@ -494,4 +609,137 @@ func TestFileShareManager_IsProtectedBinding(t *testing.T) {
 			assert.Equal(t, tt.protected, result)
 		})
 	}
+}
+
+func TestEnsureBucketForShare(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a share (which creates the bucket)
+	_, err = mgr.Create(context.Background(), "docs", "Documentation", "alice", 0, nil)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + "docs"
+
+	// Verify bucket exists
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	require.NoError(t, err)
+
+	// Delete the bucket directory to simulate corruption/missing bucket
+	bucketDir := filepath.Join(store.DataDir(), "buckets", bucketName)
+	require.NoError(t, os.RemoveAll(bucketDir))
+
+	// Verify bucket is gone
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	require.ErrorIs(t, err, ErrBucketNotFound)
+
+	// EnsureBucketForShare should recreate it
+	err = mgr.EnsureBucketForShare(context.Background(), bucketName)
+	require.NoError(t, err)
+
+	// Bucket should exist again
+	meta, err := store.HeadBucket(context.Background(), bucketName)
+	require.NoError(t, err)
+	assert.Equal(t, bucketName, meta.Name)
+	assert.Equal(t, "alice", meta.Owner)
+}
+
+func TestEnsureBucketForShare_Idempotent(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	_, err = mgr.Create(context.Background(), "docs", "Documentation", "alice", 0, nil)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + "docs"
+
+	// Call twice — both should succeed (bucket already exists)
+	err = mgr.EnsureBucketForShare(context.Background(), bucketName)
+	assert.NoError(t, err)
+
+	err = mgr.EnsureBucketForShare(context.Background(), bucketName)
+	assert.NoError(t, err)
+}
+
+func TestEnsureBucketForShare_NonShareBucket(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Non-fs+ bucket should be a no-op
+	err = mgr.EnsureBucketForShare(context.Background(), "regular-bucket")
+	assert.NoError(t, err)
+}
+
+func TestEnsureBucketForShare_NoMatchingShare(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// fs+ prefix but no share exists for it — should be a no-op
+	err = mgr.EnsureBucketForShare(context.Background(), FileShareBucketPrefix+"nonexistent")
+	assert.NoError(t, err)
+}
+
+func TestEnsureBucketForShare_ReplicatedShare(t *testing.T) {
+	// Simulates the cross-coordinator scenario: a share is created on coordinator A
+	// and replicated to coordinator B's system store. Coordinator B's FileShareManager
+	// doesn't have the share in memory, but should discover it from the system store.
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+
+	// Create a share on "coordinator A"
+	mgrA := NewFileShareManager(store, systemStore, authorizer)
+	_, err = mgrA.Create(context.Background(), "photos", "Photos", "alice", 0, nil)
+	require.NoError(t, err)
+
+	// "Coordinator B": same system store (simulates replication), fresh FileShareManager
+	// that hasn't loaded the share into memory yet. Delete the bucket to simulate
+	// that B never had it locally.
+	mgrB := NewFileShareManager(store, systemStore, authorizer)
+
+	bucketName := FileShareBucketPrefix + "photos"
+
+	// Delete bucket to simulate coordinator B having replicated share metadata
+	// but not the bucket directories
+	bucketDir := filepath.Join(store.DataDir(), "buckets", bucketName)
+	require.NoError(t, os.RemoveAll(bucketDir))
+
+	// Clear mgrB's in-memory shares to simulate it not having loaded this share
+	mgrB.mu.Lock()
+	mgrB.shares = nil
+	mgrB.mu.Unlock()
+
+	// Verify share is not in memory
+	assert.Nil(t, mgrB.Get("photos"))
+
+	// EnsureBucketForShare should discover the share from the system store and recreate the bucket
+	err = mgrB.EnsureBucketForShare(context.Background(), bucketName)
+	require.NoError(t, err)
+
+	// Bucket should exist now
+	meta, err := store.HeadBucket(context.Background(), bucketName)
+	require.NoError(t, err)
+	assert.Equal(t, bucketName, meta.Name)
+	assert.Equal(t, "alice", meta.Owner)
+
+	// Share should now be in mgrB's memory
+	assert.NotNil(t, mgrB.Get("photos"))
 }

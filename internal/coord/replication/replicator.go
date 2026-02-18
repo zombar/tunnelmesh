@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,6 +51,11 @@ type ChunkMetadata struct {
 	VersionVector map[string]uint64
 }
 
+// CapacityChecker checks whether a coordinator has sufficient storage capacity.
+type CapacityChecker interface {
+	HasCapacityFor(coordinatorName string, bytes int64) bool
+}
+
 // S3Store defines the interface for S3 storage operations.
 type S3Store interface {
 	// Get retrieves an object from S3
@@ -77,6 +83,25 @@ type S3Store interface {
 
 	// WriteChunkDirect writes chunk data directly to CAS (for replication receiver)
 	WriteChunkDirect(ctx context.Context, hash string, data []byte) error
+
+	// ImportObjectMeta writes object metadata directly (for replication receiver).
+	// bucketOwner is used when auto-creating the bucket (empty = "system").
+	// Returns chunk hashes from pruned old versions that may now be unreferenced.
+	ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) ([]string, error)
+
+	// DeleteUnreferencedChunks checks each chunk hash and deletes unreferenced ones.
+	// Returns total bytes freed.
+	DeleteUnreferencedChunks(ctx context.Context, chunkHashes []string) int64
+
+	// DeleteChunk removes a chunk from CAS by hash (for cleanup after replication)
+	DeleteChunk(ctx context.Context, hash string) error
+
+	// GetBucketReplicationFactor returns the replication factor for a bucket (0 if unknown)
+	GetBucketReplicationFactor(ctx context.Context, bucket string) int
+
+	// PurgeObject permanently removes an object, its versions, and unreferenced chunks.
+	// Used for replicated deletes where tombstoning is unnecessary.
+	PurgeObject(ctx context.Context, bucket, key string) error
 }
 
 // ChunkRegistryInterface defines operations for chunk ownership tracking.
@@ -95,6 +120,7 @@ type Replicator struct {
 	s3                   S3Store
 	state                *State
 	chunkRegistry        ChunkRegistryInterface // Distributed chunk ownership tracking (Phase 4)
+	capacityChecker      CapacityChecker        // Optional capacity pre-flight checker
 	logger               zerolog.Logger
 	maxPendingOperations int // Maximum pending ACKs (0 = unlimited)
 
@@ -120,17 +146,22 @@ type Replicator struct {
 	pendingFetchRequests   map[string]chan *FetchChunkResponsePayload // map[requestID]chan (Phase 5)
 	pendingFetchTimestamps map[string]time.Time                       // map[requestID]timestamp for TTL cleanup
 
+	// Async ACK sending
+	ackSendSem chan struct{} // Semaphore to bound concurrent async ACK sends
+
+	// Outbound send concurrency control
+	sendSem chan struct{} // Semaphore to limit concurrent outbound replication sends
+
 	// Rate limiting
 	rateLimiter *rate.Limiter // Limits incoming replication messages per second
 
-	// Metrics
-	metricsMu     sync.RWMutex
-	sentCount     uint64
-	receivedCount uint64
-	conflictCount uint64
-	errorCount    uint64
-	droppedCount  uint64 // Operations dropped due to pending limit
-	rateLimited   uint64 // Messages dropped due to rate limiting
+	// Metrics (lock-free via atomics)
+	sentCount     atomic.Uint64
+	receivedCount atomic.Uint64
+	conflictCount atomic.Uint64
+	errorCount    atomic.Uint64
+	droppedCount  atomic.Uint64 // Operations dropped due to pending limit
+	rateLimited   atomic.Uint64 // Messages dropped due to rate limiting
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -163,6 +194,7 @@ type Config struct {
 	Transport            Transport
 	S3Store              S3Store
 	ChunkRegistry        ChunkRegistryInterface // Optional: distributed chunk ownership tracking (Phase 4)
+	CapacityChecker      CapacityChecker        // Optional: nil = no capacity checks
 	Logger               zerolog.Logger
 	AckTimeout           time.Duration   // How long to wait for ACK before retrying (default: 10s)
 	RetryInterval        time.Duration   // How long to wait before retrying failed replication (default: 30s)
@@ -174,6 +206,7 @@ type Config struct {
 	SyncRequestTimeout   time.Duration   // Timeout for handling sync requests (default: 5min)
 	SyncResponseTimeout  time.Duration   // Timeout for handling sync responses (default: 10min)
 	ChunkAckTimeout      time.Duration   // Timeout for chunk-level ACKs (default: 30s, Phase 4)
+	MaxConcurrentSends   int             // Maximum concurrent outbound replication sends (default: 20)
 	Context              context.Context // SECURITY FIX #3: Parent context for proper cancellation propagation
 }
 
@@ -209,6 +242,9 @@ func NewReplicator(config Config) *Replicator {
 	if config.ChunkAckTimeout == 0 {
 		config.ChunkAckTimeout = 30 * time.Second // Default: 30s for chunk ACKs
 	}
+	if config.MaxConcurrentSends == 0 {
+		config.MaxConcurrentSends = 20 // Default: 20 concurrent outbound replication sends
+	}
 
 	// SECURITY FIX #3: Use provided context or create a new one
 	// This allows proper context propagation and cancellation from parent
@@ -219,19 +255,26 @@ func NewReplicator(config Config) *Replicator {
 	ctx, cancel := context.WithCancel(parentCtx)
 
 	r := &Replicator{
-		nodeID:                 config.NodeID,
-		transport:              config.Transport,
-		s3:                     config.S3Store,
-		state:                  NewState(config.NodeID),
-		chunkRegistry:          config.ChunkRegistry, // Optional (nil if not using chunk-level replication)
-		logger:                 config.Logger.With().Str("component", "replicator").Logger(),
-		maxPendingOperations:   config.MaxPendingOperations,
-		ackTimeout:             config.AckTimeout,
-		applyTimeout:           config.ApplyTimeout,
-		ackSendTimeout:         config.AckSendTimeout,
-		syncRequestTimeout:     config.SyncRequestTimeout,
-		syncResponseTimeout:    config.SyncResponseTimeout,
-		chunkAckTimeout:        config.ChunkAckTimeout,
+		nodeID:               config.NodeID,
+		transport:            config.Transport,
+		s3:                   config.S3Store,
+		state:                NewState(config.NodeID),
+		chunkRegistry:        config.ChunkRegistry, // Optional (nil if not using chunk-level replication)
+		capacityChecker:      config.CapacityChecker,
+		logger:               config.Logger.With().Str("component", "replicator").Logger(),
+		maxPendingOperations: config.MaxPendingOperations,
+		ackTimeout:           config.AckTimeout,
+		applyTimeout:         config.ApplyTimeout,
+		ackSendTimeout:       config.AckSendTimeout,
+		syncRequestTimeout:   config.SyncRequestTimeout,
+		syncResponseTimeout:  config.SyncResponseTimeout,
+		chunkAckTimeout:      config.ChunkAckTimeout,
+		// Semaphore to bound concurrent async ACK sends. Cap of 100 allows
+		// high parallelism for typical replication bursts while limiting
+		// goroutine memory overhead (~8KB stack each). When full, callers
+		// fall back to synchronous send rather than queueing indefinitely.
+		ackSendSem:             make(chan struct{}, 100),
+		sendSem:                make(chan struct{}, config.MaxConcurrentSends),
 		rateLimiter:            rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst),
 		peers:                  make(map[string]bool),
 		pending:                make(map[string]*pendingReplication),
@@ -269,6 +312,22 @@ func (r *Replicator) Stop() error {
 	r.cancel()
 	r.wg.Wait()
 	return nil
+}
+
+// acquireSendSlot acquires a slot from the outbound send semaphore.
+// Returns nil on success, or the context error if the context is cancelled.
+func (r *Replicator) acquireSendSlot(ctx context.Context) error {
+	select {
+	case r.sendSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// releaseSendSlot releases a slot back to the outbound send semaphore.
+func (r *Replicator) releaseSendSlot() {
+	<-r.sendSem
 }
 
 // AddPeer adds a coordinator peer to replicate to.
@@ -366,67 +425,6 @@ func (r *Replicator) RequestSyncFromAll(ctx context.Context, buckets []string) e
 	return lastErr
 }
 
-// ReplicateOperation replicates an S3 operation to all coordinator peers.
-// This should be called after successfully writing to local S3.
-func (r *Replicator) ReplicateOperation(ctx context.Context, bucket, key string, data []byte, contentType string, metadata map[string]string) error {
-	// Update local version vector
-	vv := r.state.Update(bucket, key)
-
-	r.logger.Debug().
-		Str("bucket", bucket).
-		Str("key", key).
-		Str("version_vector", vv.String()).
-		Msg("Replicating operation")
-
-	// Get peers to replicate to
-	peers := r.GetPeers()
-	if len(peers) == 0 {
-		r.logger.Debug().Msg("No peers to replicate to")
-		return nil
-	}
-
-	// Create replicate payload
-	payload := ReplicatePayload{
-		Bucket:        bucket,
-		Key:           key,
-		Data:          data,
-		VersionVector: vv,
-		ContentType:   contentType,
-		Metadata:      metadata,
-	}
-
-	// Send to all peers in parallel to avoid one slow peer blocking others
-	// Use semaphore to limit concurrency to 10 concurrent sends
-	semaphore := make(chan struct{}, 10)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var lastErr error
-
-	for _, peer := range peers {
-		wg.Add(1)
-		go func(p string) {
-			defer wg.Done()
-
-			// Acquire semaphore
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			if err := r.sendReplicateMessage(ctx, p, payload); err != nil {
-				r.logger.Error().Err(err).Str("peer", p).Msg("Failed to send replicate message")
-				mu.Lock()
-				lastErr = err
-				mu.Unlock()
-				r.incrementErrorCount()
-			} else {
-				r.incrementSentCount()
-			}
-		}(peer)
-	}
-
-	wg.Wait()
-	return lastErr
-}
-
 // ReplicateDelete replicates a delete operation to all coordinator peers.
 // Deletes are represented as tombstones (empty data with delete marker).
 func (r *Replicator) ReplicateDelete(ctx context.Context, bucket, key string) error {
@@ -507,8 +505,14 @@ func (r *Replicator) sendReplicateMessage(ctx context.Context, peer string, payl
 		return fmt.Errorf("dropped: pending operations limit reached")
 	}
 
-	// Send via transport
-	if err := r.transport.SendToCoordinator(ctx, peer, data); err != nil {
+	// Acquire send slot to limit concurrent outbound HTTP requests
+	if err := r.acquireSendSlot(ctx); err != nil {
+		r.removePendingACK(msgID)
+		return fmt.Errorf("acquire send slot: %w", err)
+	}
+	err = r.transport.SendToCoordinator(ctx, peer, data)
+	r.releaseSendSlot()
+	if err != nil {
 		r.removePendingACK(msgID)
 		return fmt.Errorf("send to coordinator: %w", err)
 	}
@@ -534,6 +538,13 @@ func (r *Replicator) handleIncomingMessage(from string, data []byte) error {
 		return fmt.Errorf("unmarshal message: %w", err)
 	}
 
+	// Override msg.From with the authenticated sender's mesh IP.
+	// msg.From contains the node ID (e.g., "coordinator-1") which is a
+	// hostname, but SendToCoordinator needs a mesh IP for the URL.
+	if from != "" {
+		msg.From = from
+	}
+
 	r.logger.Debug().
 		Str("type", string(msg.Type)).
 		Str("from", from).
@@ -557,6 +568,8 @@ func (r *Replicator) handleIncomingMessage(from string, data []byte) error {
 		return r.handleFetchChunk(msg)
 	case MessageTypeFetchChunkResponse:
 		return r.handleFetchChunkResponse(msg)
+	case MessageTypeReplicateObjectMeta:
+		return r.handleReplicateObjectMeta(msg)
 	default:
 		r.logger.Warn().Str("type", string(msg.Type)).Msg("Unknown message type")
 		return fmt.Errorf("unknown message type: %s", msg.Type)
@@ -597,13 +610,15 @@ func (r *Replicator) handleReplicate(msg *Message) error {
 		// If remote won, apply the update
 		if winner.Equal(payload.VersionVector) {
 			if err := r.applyReplication(payload); err != nil {
+				// Error ACKs stay synchronous — handler is already returning error
 				return r.sendAck(msg.ID, msg.From, false, err.Error(), localVV)
 			}
 		}
 		// Merge version vectors (for both local and remote wins)
 		// This ensures both coordinators converge to the same VV after conflict
 		mergedVV, _ := r.state.Merge(payload.Bucket, payload.Key, payload.VersionVector)
-		return r.sendAck(msg.ID, msg.From, true, "", mergedVV)
+		r.asyncSendAck(msg.ID, msg.From, true, "", mergedVV)
+		return nil
 	}
 
 	// No conflict - check if we should apply
@@ -618,8 +633,9 @@ func (r *Replicator) handleReplicate(msg *Message) error {
 	// Merge version vectors
 	mergedVV, _ := r.state.Merge(payload.Bucket, payload.Key, payload.VersionVector)
 
-	// Send ACK
-	return r.sendAck(msg.ID, msg.From, true, "", mergedVV)
+	// Send ACK asynchronously to avoid blocking this handler
+	r.asyncSendAck(msg.ID, msg.From, true, "", mergedVV)
+	return nil
 }
 
 // applyReplication applies a replication operation to local S3.
@@ -631,20 +647,21 @@ func (r *Replicator) applyReplication(payload *ReplicatePayload) error {
 	isDelete := len(payload.Data) == 0 || (payload.Metadata != nil && payload.Metadata["_deleted"] == "true")
 
 	if isDelete {
-		// Apply delete operation
-		if err := r.s3.Delete(ctx, payload.Bucket, payload.Key); err != nil {
+		// Purge immediately — replicated deletes don't need tombstoning because
+		// the primary already purged the object and won't re-send it during sync.
+		if err := r.s3.PurgeObject(ctx, payload.Bucket, payload.Key); err != nil {
 			r.logger.Error().Err(err).
 				Str("bucket", payload.Bucket).
 				Str("key", payload.Key).
 				Msg("Failed to apply delete replication to S3")
 			r.incrementErrorCount()
-			return fmt.Errorf("delete from s3: %w", err)
+			return fmt.Errorf("purge from s3: %w", err)
 		}
 
 		r.logger.Info().
 			Str("bucket", payload.Bucket).
 			Str("key", payload.Key).
-			Msg("Successfully applied delete replication")
+			Msg("Successfully applied delete replication (purged)")
 	} else {
 		// Apply put operation
 		if err := r.s3.Put(ctx, payload.Bucket, payload.Key, payload.Data, payload.ContentType, payload.Metadata); err != nil {
@@ -694,6 +711,64 @@ func (r *Replicator) sendAck(replicateID, to string, success bool, errorMsg stri
 	}
 
 	return nil
+}
+
+// asyncSendAck sends an ACK in a background goroutine bounded by the ACK send
+// semaphore. This prevents the handler from blocking on the ACK send — which
+// would create a bidirectional HTTP dependency between coordinators and lead to
+// convoy/deadlock under sustained load.
+func (r *Replicator) asyncSendAck(replicateID, to string, success bool, errorMsg string, vv VersionVector) {
+	select {
+	case r.ackSendSem <- struct{}{}:
+		// Acquired semaphore slot — send asynchronously
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			defer func() { <-r.ackSendSem }()
+
+			if err := r.sendAck(replicateID, to, success, errorMsg, vv); err != nil {
+				r.logger.Warn().Err(err).
+					Str("to", to).
+					Str("replicate_id", replicateID).
+					Msg("Failed to send async ACK")
+			}
+		}()
+	default:
+		// Semaphore full — fall back to synchronous send (still better than not sending)
+		if err := r.sendAck(replicateID, to, success, errorMsg, vv); err != nil {
+			r.logger.Warn().Err(err).
+				Str("to", to).
+				Str("replicate_id", replicateID).
+				Msg("Failed to send sync-fallback ACK")
+		}
+	}
+}
+
+// asyncSendChunkAck sends a chunk ACK in a background goroutine bounded by the
+// ACK send semaphore.
+func (r *Replicator) asyncSendChunkAck(replicateID, to, bucket, key, chunkHash string, chunkIndex int, success bool, errorMsg string) {
+	select {
+	case r.ackSendSem <- struct{}{}:
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			defer func() { <-r.ackSendSem }()
+
+			if err := r.sendChunkAck(replicateID, to, bucket, key, chunkHash, chunkIndex, success, errorMsg); err != nil {
+				r.logger.Warn().Err(err).
+					Str("to", to).
+					Str("chunk", truncateHashForLog(chunkHash)).
+					Msg("Failed to send async chunk ACK")
+			}
+		}()
+	default:
+		if err := r.sendChunkAck(replicateID, to, bucket, key, chunkHash, chunkIndex, success, errorMsg); err != nil {
+			r.logger.Warn().Err(err).
+				Str("to", to).
+				Str("chunk", truncateHashForLog(chunkHash)).
+				Msg("Failed to send sync-fallback chunk ACK")
+		}
+	}
 }
 
 // handleAck processes an incoming ACK message.
@@ -1060,9 +1135,6 @@ type Stats struct {
 }
 
 func (r *Replicator) GetStats() Stats {
-	r.metricsMu.RLock()
-	defer r.metricsMu.RUnlock()
-
 	r.pendingMu.RLock()
 	pendingCount := len(r.pending)
 	r.pendingMu.RUnlock()
@@ -1072,52 +1144,23 @@ func (r *Replicator) GetStats() Stats {
 	r.mu.RUnlock()
 
 	return Stats{
-		SentCount:     r.sentCount,
-		ReceivedCount: r.receivedCount,
-		ConflictCount: r.conflictCount,
-		ErrorCount:    r.errorCount,
-		DroppedCount:  r.droppedCount,
-		RateLimited:   r.rateLimited,
+		SentCount:     r.sentCount.Load(),
+		ReceivedCount: r.receivedCount.Load(),
+		ConflictCount: r.conflictCount.Load(),
+		ErrorCount:    r.errorCount.Load(),
+		DroppedCount:  r.droppedCount.Load(),
+		RateLimited:   r.rateLimited.Load(),
 		PeerCount:     peerCount,
 		PendingACKs:   pendingCount,
 	}
 }
 
-func (r *Replicator) incrementSentCount() {
-	r.metricsMu.Lock()
-	r.sentCount++
-	r.metricsMu.Unlock()
-}
-
-func (r *Replicator) incrementReceivedCount() {
-	r.metricsMu.Lock()
-	r.receivedCount++
-	r.metricsMu.Unlock()
-}
-
-func (r *Replicator) incrementConflictCount() {
-	r.metricsMu.Lock()
-	r.conflictCount++
-	r.metricsMu.Unlock()
-}
-
-func (r *Replicator) incrementErrorCount() {
-	r.metricsMu.Lock()
-	r.errorCount++
-	r.metricsMu.Unlock()
-}
-
-func (r *Replicator) incrementDroppedCount() {
-	r.metricsMu.Lock()
-	r.droppedCount++
-	r.metricsMu.Unlock()
-}
-
-func (r *Replicator) incrementRateLimitedCount() {
-	r.metricsMu.Lock()
-	r.rateLimited++
-	r.metricsMu.Unlock()
-}
+func (r *Replicator) incrementSentCount()        { r.sentCount.Add(1) }
+func (r *Replicator) incrementReceivedCount()    { r.receivedCount.Add(1) }
+func (r *Replicator) incrementConflictCount()    { r.conflictCount.Add(1) }
+func (r *Replicator) incrementErrorCount()       { r.errorCount.Add(1) }
+func (r *Replicator) incrementDroppedCount()     { r.droppedCount.Add(1) }
+func (r *Replicator) incrementRateLimitedCount() { r.rateLimited.Add(1) }
 
 // GetState returns the replication state tracker.
 func (r *Replicator) GetState() *State {
@@ -1293,19 +1336,9 @@ func (sp *StripingPolicy) GetShardOwner(shardIndex int, isParityShard bool, data
 // coordinators hold different primary chunks, enabling parallel reads.
 // Enables resume capability: failed transfers can be resumed from the last successful chunk.
 func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID string) error {
-	// Chunk registry required for chunk-level replication
+	// Chunk registry is required for chunk-level replication
 	if r.chunkRegistry == nil {
-		r.logger.Warn().Msg("Chunk registry not configured, falling back to file-level replication")
-		// Fall back to file-level replication
-		data, metadata, err := r.s3.Get(ctx, bucket, key)
-		if err != nil {
-			return fmt.Errorf("get object for replication: %w", err)
-		}
-		contentType := ""
-		if metadata != nil {
-			contentType = metadata["content-type"]
-		}
-		return r.ReplicateOperation(ctx, bucket, key, data, contentType, metadata)
+		return fmt.Errorf("chunk registry not configured: chunk-level replication requires a chunk registry")
 	}
 
 	// Get file metadata (includes chunk list)
@@ -1339,9 +1372,11 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 	var chunksToReplicate []string
 
 	if len(allCoords) > 1 {
-		// Multi-coordinator: use striping policy
-		// Default replication factor of 2 (each chunk on primary + 1 replica)
-		replicationFactor := 2
+		// Multi-coordinator: use striping policy with bucket's replication factor
+		replicationFactor := r.s3.GetBucketReplicationFactor(ctx, bucket)
+		if replicationFactor < 1 {
+			replicationFactor = 2 // Fallback if bucket RF is unknown
+		}
 
 		sp := NewStripingPolicy(allCoords)
 		assignedIndices := sp.ChunksForPeer(peerID, len(meta.Chunks), replicationFactor)
@@ -1374,13 +1409,29 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 		}
 	}
 
+	// Pre-flight capacity check
+	if err := r.checkPeerCapacity(peerID, bucket, key, chunksToReplicate, meta); err != nil {
+		return err
+	}
+
 	if len(chunksToReplicate) == 0 {
+		// Still send metadata even if all chunks were already there
+		metaJSON, err := json.Marshal(meta)
+		if err != nil {
+			return fmt.Errorf("marshal object metadata: %w", err)
+		}
+		if err := r.sendReplicateObjectMeta(ctx, peerID, bucket, key, metaJSON); err != nil {
+			r.logger.Warn().Err(err).
+				Str("peer", peerID).
+				Msg("Failed to send object metadata")
+		}
+
 		r.logger.Info().
 			Str("bucket", bucket).
 			Str("key", key).
 			Str("peer", peerID).
 			Int("total_chunks", len(meta.Chunks)).
-			Msg("All chunks already replicated, skipping")
+			Msg("All chunks already replicated, sent metadata only")
 		return nil
 	}
 
@@ -1401,10 +1452,16 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 		default:
 		}
 
-		// Read chunk data from local CAS
+		// Read chunk data from local CAS. If the chunk was cleaned up by a
+		// concurrent CleanupNonAssignedChunks (e.g. another object shares this
+		// chunk hash via CAS dedup), fall back to fetching from a peer.
 		chunkData, err := r.s3.ReadChunk(ctx, chunkHash)
 		if err != nil {
-			return fmt.Errorf("read chunk %s: %w", chunkHash, err)
+			localErr := err
+			chunkData, err = r.fetchChunkFromPeers(ctx, chunkHash)
+			if err != nil {
+				return fmt.Errorf("read chunk %s: local: %w, peers: %w", chunkHash, localErr, err)
+			}
 		}
 
 		// Get chunk metadata
@@ -1452,14 +1509,65 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 			Msg("Replicated chunk")
 	}
 
+	// Send object metadata so the remote peer can serve reads
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal object metadata: %w", err)
+	}
+
+	if err := r.sendReplicateObjectMeta(ctx, peerID, bucket, key, metaJSON); err != nil {
+		r.logger.Warn().Err(err).
+			Str("peer", peerID).
+			Str("bucket", bucket).
+			Str("key", key).
+			Msg("Failed to send object metadata (chunks were sent successfully)")
+		// Don't fail the whole operation — chunks are there, metadata can be retried
+	}
+
 	r.logger.Info().
 		Str("bucket", bucket).
 		Str("key", key).
 		Str("peer", peerID).
 		Int("chunks_replicated", len(chunksToReplicate)).
-		Msg("Completed chunk-level replication")
+		Msg("Completed chunk-level replication with metadata")
 
 	return nil
+}
+
+// fetchChunkFromPeers tries to fetch a chunk from any available peer.
+// Used as a fallback when a chunk has been cleaned up locally by a concurrent
+// CleanupNonAssignedChunks from another object's replication.
+func (r *Replicator) fetchChunkFromPeers(ctx context.Context, chunkHash string) ([]byte, error) {
+	peers := r.GetPeers()
+	if len(peers) == 0 {
+		return nil, fmt.Errorf("chunk not found locally and no peers available")
+	}
+
+	r.logger.Debug().
+		Str("chunk", truncateHashForLog(chunkHash)).
+		Int("peers", len(peers)).
+		Msg("Chunk not found locally during replication, fetching from peers")
+
+	var lastErr error
+	for _, peerID := range peers {
+		data, err := r.FetchChunk(ctx, peerID, chunkHash)
+		if err != nil {
+			r.logger.Debug().Err(err).
+				Str("peer", peerID).
+				Str("chunk", truncateHashForLog(chunkHash)).
+				Msg("Peer chunk fetch failed, trying next")
+			lastErr = err
+			continue
+		}
+		// Cache locally for future reads
+		if werr := r.s3.WriteChunkDirect(ctx, chunkHash, data); werr != nil {
+			r.logger.Warn().Err(werr).
+				Str("chunk", truncateHashForLog(chunkHash)).
+				Msg("Failed to cache remotely-fetched chunk locally")
+		}
+		return data, nil
+	}
+	return nil, fmt.Errorf("chunk %s not found on any peer: %w", chunkHash, lastErr)
 }
 
 // sendReplicateChunk sends a chunk replication message and waits for ACK.
@@ -1490,8 +1598,14 @@ func (r *Replicator) sendReplicateChunk(ctx context.Context, peerID string, payl
 		return fmt.Errorf("dropped: pending chunk operations limit reached")
 	}
 
-	// Send via transport
-	if err := r.transport.SendToCoordinator(ctx, peerID, data); err != nil {
+	// Acquire send slot to limit concurrent outbound HTTP requests
+	if err := r.acquireSendSlot(ctx); err != nil {
+		r.removePendingChunkACK(msgID)
+		return fmt.Errorf("acquire send slot: %w", err)
+	}
+	err = r.transport.SendToCoordinator(ctx, peerID, data)
+	r.releaseSendSlot()
+	if err != nil {
 		r.removePendingChunkACK(msgID)
 		return fmt.Errorf("send to coordinator: %w", err)
 	}
@@ -1506,6 +1620,30 @@ func (r *Replicator) sendReplicateChunk(ctx context.Context, peerID string, payl
 		return fmt.Errorf("chunk replication failed: %s", ack.Error)
 	}
 
+	return nil
+}
+
+// checkPeerCapacity performs a pre-flight capacity check before replication.
+// Returns nil if the check passes or if no capacity checker is configured (fail-open).
+func (r *Replicator) checkPeerCapacity(peerID, bucket, key string, chunks []string, meta *ObjectMeta) error {
+	if r.capacityChecker == nil || len(chunks) == 0 {
+		return nil
+	}
+	var estimatedBytes int64
+	for _, chunkHash := range chunks {
+		if cm := meta.ChunkMetadata[chunkHash]; cm != nil {
+			estimatedBytes += cm.Size
+		}
+	}
+	if estimatedBytes > 0 && !r.capacityChecker.HasCapacityFor(peerID, estimatedBytes) {
+		r.logger.Warn().
+			Str("peer", peerID).
+			Str("bucket", bucket).
+			Str("key", key).
+			Int64("estimated_bytes", estimatedBytes).
+			Msg("Peer near capacity, skipping replication")
+		return fmt.Errorf("peer %s near capacity: need %d bytes", peerID, estimatedBytes)
+	}
 	return nil
 }
 
@@ -1533,9 +1671,19 @@ func (r *Replicator) handleReplicateChunk(msg *Message) error {
 		Str("from", msg.From).
 		Msg("Received chunk replication")
 
+	// Check local capacity before writing
+	if r.capacityChecker != nil && !r.capacityChecker.HasCapacityFor(r.nodeID, int64(len(payload.ChunkData))) {
+		r.logger.Warn().
+			Str("chunk", truncateHashForLog(payload.ChunkHash)).
+			Int("bytes", len(payload.ChunkData)).
+			Msg("Storage capacity exceeded, rejecting chunk")
+		return r.sendChunkAck(msg.ID, msg.From, payload.Bucket, payload.Key, payload.ChunkHash, payload.ChunkIndex, false, "storage capacity exceeded")
+	}
+
 	// Store chunk in local CAS
 	if err := r.s3.WriteChunkDirect(r.ctx, payload.ChunkHash, payload.ChunkData); err != nil {
 		r.logger.Error().Err(err).Str("chunk", truncateHashForLog(payload.ChunkHash)).Msg("Failed to write chunk")
+		// Error ACK stays synchronous
 		return r.sendChunkAck(msg.ID, msg.From, payload.Bucket, payload.Key, payload.ChunkHash, payload.ChunkIndex, false, err.Error())
 	}
 
@@ -1547,8 +1695,9 @@ func (r *Replicator) handleReplicateChunk(msg *Message) error {
 		}
 	}
 
-	// Send success ACK
-	return r.sendChunkAck(msg.ID, msg.From, payload.Bucket, payload.Key, payload.ChunkHash, payload.ChunkIndex, true, "")
+	// Send success ACK asynchronously to avoid blocking this handler
+	r.asyncSendChunkAck(msg.ID, msg.From, payload.Bucket, payload.Key, payload.ChunkHash, payload.ChunkIndex, true, "")
+	return nil
 }
 
 // sendChunkAck sends a chunk ACK message.
@@ -1894,6 +2043,190 @@ func (r *Replicator) sendFetchChunkResponse(peerID string, payload FetchChunkRes
 	if err := r.transport.SendToCoordinator(ctx, peerID, data); err != nil {
 		return fmt.Errorf("send to coordinator: %w", err)
 	}
+
+	return nil
+}
+
+// ==== Object Metadata Replication ====
+
+// sendReplicateObjectMeta sends object metadata to a peer so it can serve reads.
+// This is fire-and-forget (no ACK needed) since metadata is idempotent.
+func (r *Replicator) sendReplicateObjectMeta(ctx context.Context, peerID, bucket, key string, metaJSON []byte) error {
+	payload := ReplicateObjectMetaPayload{
+		Bucket:      bucket,
+		Key:         key,
+		MetaJSON:    json.RawMessage(metaJSON),
+		BucketOwner: r.nodeID, // Preserve ownership: sender is the original bucket owner
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal object meta payload: %w", err)
+	}
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeReplicateObjectMeta,
+		ID:      uuid.New().String(),
+		From:    r.nodeID,
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal message: %w", err)
+	}
+
+	// Acquire send slot to limit concurrent outbound HTTP requests
+	if err := r.acquireSendSlot(ctx); err != nil {
+		return fmt.Errorf("acquire send slot: %w", err)
+	}
+	err = r.transport.SendToCoordinator(ctx, peerID, data)
+	r.releaseSendSlot()
+	if err != nil {
+		return fmt.Errorf("send object meta to %s: %w", peerID, err)
+	}
+
+	r.logger.Debug().
+		Str("bucket", bucket).
+		Str("key", key).
+		Str("peer", peerID).
+		Msg("Sent object metadata to peer")
+
+	return nil
+}
+
+// handleReplicateObjectMeta processes an incoming object metadata replication message.
+func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
+	var payload ReplicateObjectMetaPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal object meta payload: %w", err)
+	}
+
+	r.logger.Debug().
+		Str("bucket", payload.Bucket).
+		Str("key", payload.Key).
+		Str("from", msg.From).
+		Msg("Received object metadata replication")
+
+	ctx, cancel := context.WithTimeout(r.ctx, r.applyTimeout)
+	defer cancel()
+
+	chunksToCheck, err := r.s3.ImportObjectMeta(ctx, payload.Bucket, payload.Key, payload.MetaJSON, payload.BucketOwner)
+	if err != nil {
+		r.logger.Error().Err(err).
+			Str("bucket", payload.Bucket).
+			Str("key", payload.Key).
+			Msg("Failed to import object metadata")
+		r.incrementErrorCount()
+		return fmt.Errorf("import object meta: %w", err)
+	}
+
+	// Clean up chunks from pruned old versions that are no longer referenced.
+	// This prevents orphaned chunks from accumulating on replica coordinators.
+	if len(chunksToCheck) > 0 {
+		freed := r.s3.DeleteUnreferencedChunks(ctx, chunksToCheck)
+		if freed > 0 {
+			r.logger.Debug().
+				Str("bucket", payload.Bucket).
+				Str("key", payload.Key).
+				Int64("bytes_freed", freed).
+				Int("chunks_checked", len(chunksToCheck)).
+				Msg("Cleaned up unreferenced chunks after metadata import")
+		}
+	}
+
+	r.logger.Info().
+		Str("bucket", payload.Bucket).
+		Str("key", payload.Key).
+		Str("from", msg.From).
+		Msg("Successfully imported object metadata")
+
+	r.incrementReceivedCount()
+	return nil
+}
+
+// ==== Chunk Cleanup After Replication ====
+
+// CleanupNonAssignedChunks removes chunks that are not assigned to this coordinator
+// according to the striping policy. This should only be called after all peers have
+// successfully received their chunks via ReplicateObject.
+func (r *Replicator) CleanupNonAssignedChunks(ctx context.Context, bucket, key string) error {
+	if r.chunkRegistry == nil {
+		return fmt.Errorf("chunk registry not configured")
+	}
+
+	// Get object metadata
+	meta, err := r.s3.GetObjectMeta(ctx, bucket, key)
+	if err != nil {
+		return fmt.Errorf("get object metadata: %w", err)
+	}
+
+	if len(meta.Chunks) == 0 {
+		return nil
+	}
+
+	// Build striping policy from all coordinators
+	peers := r.GetPeers()
+	allCoords := make([]string, 0, len(peers)+1)
+	allCoords = append(allCoords, r.nodeID)
+	allCoords = append(allCoords, peers...)
+
+	if len(allCoords) <= 1 {
+		// No peers — keep everything
+		return nil
+	}
+
+	// Use bucket's replication factor for consistent assignment
+	replicationFactor := r.s3.GetBucketReplicationFactor(ctx, bucket)
+	if replicationFactor < 1 {
+		replicationFactor = 2 // Fallback if bucket RF is unknown
+	}
+
+	sp := NewStripingPolicy(allCoords)
+	assignedIndices := sp.ChunksForPeer(r.nodeID, len(meta.Chunks), replicationFactor)
+
+	// Build set of assigned indices
+	assignedSet := make(map[int]bool, len(assignedIndices))
+	for _, idx := range assignedIndices {
+		assignedSet[idx] = true
+	}
+
+	// Delete non-assigned chunks
+	var deleted, kept int
+	for idx, chunkHash := range meta.Chunks {
+		if assignedSet[idx] {
+			kept++
+			continue
+		}
+
+		// Delete from local CAS
+		if err := r.s3.DeleteChunk(ctx, chunkHash); err != nil {
+			r.logger.Warn().Err(err).
+				Str("chunk", truncateHashForLog(chunkHash)).
+				Int("index", idx).
+				Msg("Failed to delete non-assigned chunk")
+			continue
+		}
+
+		// Unregister from chunk registry
+		if err := r.chunkRegistry.UnregisterChunk(chunkHash); err != nil {
+			r.logger.Warn().Err(err).
+				Str("chunk", truncateHashForLog(chunkHash)).
+				Msg("Failed to unregister chunk from registry")
+		}
+
+		deleted++
+	}
+
+	r.logger.Info().
+		Str("bucket", bucket).
+		Str("key", key).
+		Int("deleted", deleted).
+		Int("kept", kept).
+		Int("total", len(meta.Chunks)).
+		Int("peers", len(peers)).
+		Msg("Cleaned up non-assigned chunks")
 
 	return nil
 }

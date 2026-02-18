@@ -2,16 +2,18 @@ package s3
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// s3MetricsOnce ensures metrics are only initialized once.
+// s3MetricsOnce prevents double-registration panics from promauto.
 var s3MetricsOnce sync.Once
 
-// s3MetricsInstance is the singleton instance of S3 metrics.
-var s3MetricsInstance *S3Metrics
+// s3MetricsPtr is the singleton instance of S3 metrics, accessed atomically
+// for safe concurrent reads from background goroutines.
+var s3MetricsPtr atomic.Pointer[S3Metrics]
 
 // S3Metrics holds all Prometheus metrics for the S3 service.
 type S3Metrics struct {
@@ -46,16 +48,22 @@ type S3Metrics struct {
 	GCChunksDeleted   prometheus.Counter   // tunnelmesh_s3_gc_chunks_deleted_total
 	GCBytesReclaimed  prometheus.Counter   // tunnelmesh_s3_gc_bytes_reclaimed_total
 	GCDurationSeconds prometheus.Histogram // tunnelmesh_s3_gc_duration_seconds
+
+	// Volume metrics (filesystem-level)
+	VolumeTotalBytes     prometheus.Gauge // tunnelmesh_s3_volume_total_bytes
+	VolumeUsedBytes      prometheus.Gauge // tunnelmesh_s3_volume_used_bytes
+	VolumeAvailableBytes prometheus.Gauge // tunnelmesh_s3_volume_available_bytes
 }
 
-// InitS3Metrics initializes all S3 metrics.
-// Metrics are only registered once; subsequent calls return the same instance.
+// InitS3Metrics initializes all S3 metrics on the given registry.
+// Must be called exactly once with the correct registry (enforced by sync.Once).
+// The instance is stored atomically for safe concurrent reads via GetS3Metrics().
 func InitS3Metrics(registry prometheus.Registerer) *S3Metrics {
+	if registry == nil {
+		registry = prometheus.DefaultRegisterer
+	}
 	s3MetricsOnce.Do(func() {
-		if registry == nil {
-			registry = prometheus.DefaultRegisterer
-		}
-		s3MetricsInstance = &S3Metrics{
+		m := &S3Metrics{
 			RequestsTotal: promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
 				Name: "tunnelmesh_s3_requests_total",
 				Help: "Total S3 requests by operation and status",
@@ -89,7 +97,7 @@ func InitS3Metrics(registry prometheus.Registerer) *S3Metrics {
 
 			StorageBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
 				Name: "tunnelmesh_s3_storage_bytes",
-				Help: "Total bytes stored in S3",
+				Help: "Total physical bytes stored in S3 (after deduplication)",
 			}),
 
 			QuotaBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
@@ -159,16 +167,34 @@ func InitS3Metrics(registry prometheus.Registerer) *S3Metrics {
 				Help:    "Garbage collection duration in seconds",
 				Buckets: []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120},
 			}),
+
+			// Volume metrics
+			VolumeTotalBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_volume_total_bytes",
+				Help: "Total filesystem capacity in bytes",
+			}),
+
+			VolumeUsedBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_volume_used_bytes",
+				Help: "Used filesystem space in bytes",
+			}),
+
+			VolumeAvailableBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+				Name: "tunnelmesh_s3_volume_available_bytes",
+				Help: "Available filesystem space in bytes (non-root)",
+			}),
 		}
+		s3MetricsPtr.Store(m)
 	})
 
-	return s3MetricsInstance
+	return s3MetricsPtr.Load()
 }
 
 // GetS3Metrics returns the singleton S3 metrics instance.
 // Returns nil if metrics have not been initialized.
+// Safe for concurrent use from multiple goroutines.
 func GetS3Metrics() *S3Metrics {
-	return s3MetricsInstance
+	return s3MetricsPtr.Load()
 }
 
 // RecordRequest records a request metric.
@@ -207,19 +233,28 @@ func (m *S3Metrics) SetRegisteredUsers(count int) {
 }
 
 // UpdateCASMetrics updates content-addressed storage metrics.
-func (m *S3Metrics) UpdateCASMetrics(chunks int, chunkBytes, logicalBytes int64, versions int) {
+// totalLogical includes live objects + versions + recyclebin for accurate dedup ratio.
+func (m *S3Metrics) UpdateCASMetrics(chunks int, chunkBytes, logicalBytes, versionBytes, recycledBytes int64, versions int) {
 	m.ChunksTotal.Set(float64(chunks))
 	m.ChunkStorageBytes.Set(float64(chunkBytes))
-	m.LogicalBytes.Set(float64(logicalBytes))
+	totalLogical := logicalBytes + versionBytes + recycledBytes
+	m.LogicalBytes.Set(float64(totalLogical))
 	m.VersionsTotal.Set(float64(versions))
 
 	// Calculate dedup ratio (logical/physical)
 	// A ratio > 1 means we're saving space through deduplication
 	if chunkBytes > 0 {
-		m.DedupRatio.Set(float64(logicalBytes) / float64(chunkBytes))
+		m.DedupRatio.Set(float64(totalLogical) / float64(chunkBytes))
 	} else {
 		m.DedupRatio.Set(1.0)
 	}
+}
+
+// UpdateVolumeMetrics updates filesystem volume gauges.
+func (m *S3Metrics) UpdateVolumeMetrics(totalBytes, usedBytes, availableBytes int64) {
+	m.VolumeTotalBytes.Set(float64(totalBytes))
+	m.VolumeUsedBytes.Set(float64(usedBytes))
+	m.VolumeAvailableBytes.Set(float64(availableBytes))
 }
 
 // RecordGCRun records garbage collection metrics.

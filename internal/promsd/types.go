@@ -28,7 +28,6 @@ type Config struct {
 	AuthToken       string
 	PollInterval    time.Duration
 	OutputFile      string
-	CoordOutputFile string // Output file for coordinator targets (port 443)
 	MetricsPort     string
 	TLSSkipVerify   bool
 	OnlineThreshold time.Duration
@@ -40,7 +39,6 @@ func DefaultConfig() Config {
 		CoordURL:        "https://localhost:443",
 		PollInterval:    30 * time.Second,
 		OutputFile:      "/targets/peers.json",
-		CoordOutputFile: "/targets/coordinators.json",
 		MetricsPort:     "9443",
 		OnlineThreshold: 2 * time.Minute,
 	}

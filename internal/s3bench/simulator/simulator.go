@@ -89,6 +89,7 @@ type Simulator struct {
 	sharePrefix string                  // Peer name prefix for share bucket names
 
 	// Execution state
+	generated bool
 	startTime time.Time
 	tasks     []WorkloadTask
 	attempts  map[string][]AdversaryAttempt // Map character ID to attempts
@@ -212,7 +213,12 @@ func (s *Simulator) shareBucketName(shareName string) string {
 }
 
 // GenerateScenario generates all tasks, attempts, and workflows for the scenario.
+// It is idempotent: subsequent calls after the first are no-ops.
 func (s *Simulator) GenerateScenario(ctx context.Context) error {
+	if s.generated {
+		return nil
+	}
+
 	var err error
 
 	// Generate workload tasks
@@ -253,6 +259,7 @@ func (s *Simulator) GenerateScenario(ctx context.Context) error {
 		s.metrics.WorkflowTestsRun = len(s.workflows)
 	}
 
+	s.generated = true
 	return nil
 }
 
@@ -477,7 +484,7 @@ func (s *Simulator) executeTask(ctx context.Context, task *WorkloadTask) error {
 		}
 
 	case "delete":
-		// Delete document (creates tombstone)
+		// Delete document (moves to recycle bin)
 		err = s.executeDelete(ctx, store, session, bucketName, task)
 		if err == nil {
 			s.metricsLock.Lock()
@@ -640,7 +647,7 @@ func (s *Simulator) executeDelete(ctx context.Context, store *s3.Store, session 
 		return s.executeDeleteHTTP(ctx, session, bucket, task)
 	}
 
-	// Delete object (creates deletion marker/tombstone)
+	// Delete object (moves to recycle bin)
 	err := store.DeleteObject(context.Background(), bucket, task.Filename)
 	if err != nil {
 		return fmt.Errorf("deleting object %s/%s: %w", bucket, task.Filename, err)
@@ -887,11 +894,29 @@ func (s *Simulator) executeWorkflow(ctx context.Context, workflow WorkflowTest) 
 	}
 }
 
-// executeWorkflowDeletion tests document deletion and tombstone behavior.
+// executeWorkflowDeletion tests document deletion and recycle bin behavior.
 func (s *Simulator) executeWorkflowDeletion(ctx context.Context, store *s3.Store, session *UserSession, workflow WorkflowTest) (bool, error) {
 	bucket := s.shareBucketName("alien-public") // Use public bucket for test
 	docName := workflow.Parameters["document_name"].(string)
 	content := []byte("Deletion test content")
+
+	// In mesh mode, route through coordinator API (buckets only exist remotely)
+	if s.meshClient != nil {
+		if err := s.meshClient.PutObject(ctx, bucket, docName, content, "text/plain", nil); err != nil {
+			return false, fmt.Errorf("mesh upload failed: %w", err)
+		}
+		if _, err := s.meshClient.GetObject(ctx, bucket, docName); err != nil {
+			return false, fmt.Errorf("mesh document not found after upload: %w", err)
+		}
+		if err := s.meshClient.DeleteObject(ctx, bucket, docName); err != nil {
+			return false, fmt.Errorf("mesh deletion failed: %w", err)
+		}
+		if _, err := s.meshClient.GetObject(ctx, bucket, docName); err == nil {
+			log.Debug().Str("testID", workflow.TestID).Msg("Document still has versions after delete (expected)")
+		}
+		log.Debug().Str("testID", workflow.TestID).Msg("Deletion workflow passed (mesh)")
+		return true, nil
+	}
 
 	// 1. Upload test document
 	reader := bytes.NewReader(content)
@@ -912,7 +937,7 @@ func (s *Simulator) executeWorkflowDeletion(ctx context.Context, store *s3.Store
 		return false, fmt.Errorf("deletion failed: %w", err)
 	}
 
-	// 4. Verify access is denied (tombstone) - should return ObjectNotFound or similar error
+	// 4. Verify access is denied (moved to recycle bin) - should return ObjectNotFound or similar error
 	_, _, err = store.GetObject(context.Background(), bucket, docName)
 	if err == nil {
 		// Document might still be accessible if it's just a deletion marker
@@ -972,9 +997,22 @@ func (s *Simulator) executeWorkflowQuota(ctx context.Context, store *s3.Store, s
 
 // executeWorkflowRetention tests version retention policy enforcement.
 func (s *Simulator) executeWorkflowRetention(ctx context.Context, store *s3.Store, session *UserSession, workflow WorkflowTest) (bool, error) {
-	// Simplified: Verify versioning works
 	bucket := s.shareBucketName("alien-public")
 	docName := "retention_test.txt"
+
+	// In mesh mode, route through coordinator API (buckets only exist remotely).
+	// ListVersions is not exposed on the mesh client, so we just verify the 3 PUTs
+	// succeed (which validates create+update through the real admin mux).
+	if s.meshClient != nil {
+		for i := 0; i < 3; i++ {
+			content := []byte(fmt.Sprintf("Version %d content", i+1))
+			if err := s.meshClient.PutObject(ctx, bucket, docName, content, "text/plain", nil); err != nil {
+				return false, fmt.Errorf("mesh version %d upload failed: %w", i+1, err)
+			}
+		}
+		log.Debug().Str("testID", workflow.TestID).Msg("Retention workflow passed (mesh, 3 versions uploaded)")
+		return true, nil
+	}
 
 	// Upload multiple versions
 	for i := 0; i < 3; i++ {

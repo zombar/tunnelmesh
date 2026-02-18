@@ -259,11 +259,6 @@ func (s *Server) tryServeFile(w http.ResponseWriter, r *http.Request, bucketName
 	}
 	defer func() { _ = reader.Close() }()
 
-	// Skip tombstoned objects
-	if meta.IsTombstoned() {
-		return false
-	}
-
 	// Determine content type
 	contentType := meta.ContentType
 	if contentType == "" {
@@ -316,10 +311,6 @@ func (s *Server) handleDirectoryListing(w http.ResponseWriter, r *http.Request, 
 	var entries []peerSiteEntry
 
 	for _, obj := range objects {
-		if obj.IsTombstoned() {
-			continue
-		}
-
 		// Get relative path from prefix
 		relKey := strings.TrimPrefix(obj.Key, prefix)
 		if relKey == "" {

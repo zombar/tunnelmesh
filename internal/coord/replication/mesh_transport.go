@@ -49,6 +49,14 @@ func NewMeshTransport(logger zerolog.Logger, tlsConfig *tls.Config) *MeshTranspo
 	}
 }
 
+// SetTLSConfig replaces the TLS configuration on the underlying HTTP transport.
+// Must be called before any requests are sent.
+func (mt *MeshTransport) SetTLSConfig(cfg *tls.Config) {
+	if t, ok := mt.httpClient.Transport.(*http.Transport); ok {
+		t.TLSClientConfig = cfg
+	}
+}
+
 // SendToCoordinator sends a replication message to another coordinator via HTTP.
 // The coordMeshIP should be the coordinator's mesh IP address (e.g., "10.42.0.1").
 func (mt *MeshTransport) SendToCoordinator(ctx context.Context, coordMeshIP string, data []byte) error {

@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -308,10 +310,9 @@ func TestDeleteObject(t *testing.T) {
 
 	assert.Equal(t, http.StatusNoContent, w.Code)
 
-	// Verify object is tombstoned (soft-deleted), not removed
-	meta, err := store.HeadObject(context.Background(), "my-bucket", "file.txt")
-	require.NoError(t, err)
-	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
+	// Verify object is gone from live path (moved to recycle bin)
+	_, err = store.HeadObject(context.Background(), "my-bucket", "file.txt")
+	assert.ErrorIs(t, err, ErrObjectNotFound)
 }
 
 func TestDeleteObjectNotFound(t *testing.T) {
@@ -654,4 +655,291 @@ func TestListObjects_EmptyPrefixesNoAccess(t *testing.T) {
 
 	// No objects visible
 	assert.Len(t, resp.Contents, 0)
+}
+
+// newTestMetrics creates S3Metrics backed by a fresh Prometheus registry for testing.
+func newTestMetrics(t *testing.T) (*S3Metrics, *prometheus.Registry) {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	m := &S3Metrics{
+		RequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tunnelmesh_s3_requests_total",
+			Help: "Test",
+		}, []string{"operation", "status"}),
+		RequestDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "tunnelmesh_s3_request_duration_seconds",
+			Help: "Test",
+		}, []string{"operation"}),
+		BytesUploaded:   prometheus.NewCounter(prometheus.CounterOpts{Name: "tunnelmesh_s3_bytes_uploaded_total", Help: "Test"}),
+		BytesDownloaded: prometheus.NewCounter(prometheus.CounterOpts{Name: "tunnelmesh_s3_bytes_downloaded_total", Help: "Test"}),
+	}
+	reg.MustRegister(m.RequestsTotal, m.RequestDuration, m.BytesUploaded, m.BytesDownloaded)
+	return m, reg
+}
+
+// getMetricCount finds a specific counter value from gathered metrics.
+func getMetricCount(families []*dto.MetricFamily, name, operation, status string) float64 {
+	for _, fam := range families {
+		if fam.GetName() != name {
+			continue
+		}
+		for _, m := range fam.GetMetric() {
+			labels := make(map[string]string)
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["operation"] == operation && labels["status"] == status {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
+}
+
+func TestServerMetrics(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(*Store)
+		method     string
+		path       string
+		body       []byte
+		wantOp     string
+		wantStatus string
+	}{
+		{
+			name:       "ListBuckets success",
+			method:     http.MethodGet,
+			path:       "/",
+			wantOp:     "ListBuckets",
+			wantStatus: "success",
+		},
+		{
+			name:       "CreateBucket success",
+			method:     http.MethodPut,
+			path:       "/new-bucket",
+			wantOp:     "CreateBucket",
+			wantStatus: "success",
+		},
+		{
+			name: "CreateBucket conflict",
+			setup: func(s *Store) {
+				_ = s.CreateBucket(context.Background(), "exists", "alice", 2, nil)
+			},
+			method:     http.MethodPut,
+			path:       "/exists",
+			wantOp:     "CreateBucket",
+			wantStatus: "error",
+		},
+		{
+			name: "HeadBucket success",
+			setup: func(s *Store) {
+				_ = s.CreateBucket(context.Background(), "b", "alice", 2, nil)
+			},
+			method:     http.MethodHead,
+			path:       "/b",
+			wantOp:     "HeadBucket",
+			wantStatus: "success",
+		},
+		{
+			name:       "HeadBucket not found",
+			method:     http.MethodHead,
+			path:       "/nonexistent",
+			wantOp:     "HeadBucket",
+			wantStatus: "not_found",
+		},
+		{
+			name: "DeleteBucket success",
+			setup: func(s *Store) {
+				_ = s.CreateBucket(context.Background(), "del", "alice", 2, nil)
+			},
+			method:     http.MethodDelete,
+			path:       "/del",
+			wantOp:     "DeleteBucket",
+			wantStatus: "success",
+		},
+		{
+			name:       "DeleteBucket not found",
+			method:     http.MethodDelete,
+			path:       "/nonexistent",
+			wantOp:     "DeleteBucket",
+			wantStatus: "not_found",
+		},
+		{
+			name: "ListObjects success",
+			setup: func(s *Store) {
+				_ = s.CreateBucket(context.Background(), "lb", "alice", 2, nil)
+			},
+			method:     http.MethodGet,
+			path:       "/lb",
+			wantOp:     "ListObjects",
+			wantStatus: "success",
+		},
+		{
+			name:       "ListObjects bucket not found",
+			method:     http.MethodGet,
+			path:       "/nonexistent",
+			wantOp:     "ListObjects",
+			wantStatus: "not_found",
+		},
+		{
+			name: "ListObjectsV2 success",
+			setup: func(s *Store) {
+				_ = s.CreateBucket(context.Background(), "lv2", "alice", 2, nil)
+			},
+			method:     http.MethodGet,
+			path:       "/lv2?list-type=2",
+			wantOp:     "ListObjectsV2",
+			wantStatus: "success",
+		},
+		{
+			name: "PutObject success",
+			setup: func(s *Store) {
+				_ = s.CreateBucket(context.Background(), "put", "alice", 2, nil)
+			},
+			method:     http.MethodPut,
+			path:       "/put/file.txt",
+			body:       []byte("hello"),
+			wantOp:     "PutObject",
+			wantStatus: "success",
+		},
+		{
+			name:       "PutObject bucket not found",
+			method:     http.MethodPut,
+			path:       "/nonexistent/file.txt",
+			body:       []byte("hello"),
+			wantOp:     "PutObject",
+			wantStatus: "not_found",
+		},
+		{
+			name: "GetObject success",
+			setup: func(s *Store) {
+				_ = s.CreateBucket(context.Background(), "get", "alice", 2, nil)
+				_, _ = s.PutObject(context.Background(), "get", "f.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+			},
+			method:     http.MethodGet,
+			path:       "/get/f.txt",
+			wantOp:     "GetObject",
+			wantStatus: "success",
+		},
+		{
+			name: "GetObject not found",
+			setup: func(s *Store) {
+				_ = s.CreateBucket(context.Background(), "get2", "alice", 2, nil)
+			},
+			method:     http.MethodGet,
+			path:       "/get2/missing.txt",
+			wantOp:     "GetObject",
+			wantStatus: "not_found",
+		},
+		{
+			name: "DeleteObject success",
+			setup: func(s *Store) {
+				_ = s.CreateBucket(context.Background(), "do", "alice", 2, nil)
+				_, _ = s.PutObject(context.Background(), "do", "f.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+			},
+			method:     http.MethodDelete,
+			path:       "/do/f.txt",
+			wantOp:     "DeleteObject",
+			wantStatus: "success",
+		},
+		{
+			name: "HeadObject success",
+			setup: func(s *Store) {
+				_ = s.CreateBucket(context.Background(), "ho", "alice", 2, nil)
+				_, _ = s.PutObject(context.Background(), "ho", "f.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+			},
+			method:     http.MethodHead,
+			path:       "/ho/f.txt",
+			wantOp:     "HeadObject",
+			wantStatus: "success",
+		},
+		{
+			name: "HeadObject not found",
+			setup: func(s *Store) {
+				_ = s.CreateBucket(context.Background(), "ho2", "alice", 2, nil)
+			},
+			method:     http.MethodHead,
+			path:       "/ho2/missing.txt",
+			wantOp:     "HeadObject",
+			wantStatus: "not_found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metrics, reg := newTestMetrics(t)
+			store := newTestStoreWithCASForServer(t)
+			if tt.setup != nil {
+				tt.setup(store)
+			}
+			auth := &mockAuthorizer{userID: "alice", allowAll: true}
+			server := NewServer(store, auth, metrics)
+
+			var body io.Reader
+			if tt.body != nil {
+				body = bytes.NewReader(tt.body)
+			}
+			req := httptest.NewRequest(tt.method, tt.path, body)
+			w := httptest.NewRecorder()
+
+			server.Handler().ServeHTTP(w, req)
+
+			families, err := reg.Gather()
+			require.NoError(t, err)
+
+			count := getMetricCount(families, "tunnelmesh_s3_requests_total", tt.wantOp, tt.wantStatus)
+			assert.Equal(t, 1.0, count,
+				"expected tunnelmesh_s3_requests_total{operation=%q, status=%q} = 1", tt.wantOp, tt.wantStatus)
+		})
+	}
+}
+
+func TestMetricsOnCorrectRegistry(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics, _ := newTestMetrics(t)
+	reg.MustRegister(metrics.RequestsTotal)
+
+	metrics.RecordRequest("GetObject", "success", 0.1)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	found := false
+	for _, f := range families {
+		if f.GetName() == "tunnelmesh_s3_requests_total" {
+			found = true
+		}
+	}
+	assert.True(t, found, "S3 request metrics should be on the custom registry")
+}
+
+func TestSetMetricsWiresIntoServer(t *testing.T) {
+	store := newTestStoreWithCASForServer(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "b", "alice", 2, nil))
+	auth := &mockAuthorizer{userID: "alice", allowAll: true}
+
+	// Create server without metrics
+	server := NewServer(store, auth, nil)
+
+	// Make a request — should work without metrics (no panic)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Now wire in metrics via SetMetrics
+	metrics, reg := newTestMetrics(t)
+	server.SetMetrics(metrics)
+
+	// Make another request — should now record metrics
+	req = httptest.NewRequest(http.MethodHead, "/b", nil)
+	w = httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	count := getMetricCount(families, "tunnelmesh_s3_requests_total", "HeadBucket", "success")
+	assert.Equal(t, 1.0, count, "HeadBucket metric should be recorded after SetMetrics")
 }

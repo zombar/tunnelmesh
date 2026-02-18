@@ -17,7 +17,6 @@ func main() {
 	fmt.Printf("  Coord server: %s\n", cfg.CoordURL)
 	fmt.Printf("  Poll interval: %s\n", cfg.PollInterval)
 	fmt.Printf("  Output file: %s\n", cfg.OutputFile)
-	fmt.Printf("  Coord output file: %s\n", cfg.CoordOutputFile)
 	fmt.Printf("  Metrics port: %s\n", cfg.MetricsPort)
 	fmt.Printf("  TLS skip verify: %t\n", cfg.TLSSkipVerify)
 
@@ -58,9 +57,6 @@ func configFromEnv() promsd.Config {
 	}
 	if v := os.Getenv("OUTPUT_FILE"); v != "" {
 		cfg.OutputFile = v
-	}
-	if v := os.Getenv("COORD_OUTPUT_FILE"); v != "" {
-		cfg.CoordOutputFile = v
 	}
 	if v := os.Getenv("METRICS_PORT"); v != "" {
 		cfg.MetricsPort = v

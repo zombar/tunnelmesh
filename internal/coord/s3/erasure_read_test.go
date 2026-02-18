@@ -8,7 +8,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -111,12 +110,12 @@ func TestErasureCodingReadPath_Reconstruction(t *testing.T) {
 				}
 				if shardsDeleted[chunkMeta.ShardIndex] {
 					// Already deleting this shard's chunks
-					_ = store.cas.DeleteChunk(ctx, chunkHash)
+					_, _ = store.cas.DeleteChunk(ctx, chunkHash)
 					continue
 				}
 				if len(shardsDeleted) < missing {
 					shardsDeleted[chunkMeta.ShardIndex] = true
-					_ = store.cas.DeleteChunk(ctx, chunkHash)
+					_, _ = store.cas.DeleteChunk(ctx, chunkHash)
 				}
 			}
 			require.Equal(t, missing, len(shardsDeleted), "should have deleted chunks for %d shards", missing)
@@ -130,9 +129,8 @@ func TestErasureCodingReadPath_Reconstruction(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, data, got, "reconstructed data should match original with %d missing shards", missing)
 
-			// Wait briefly for background caching goroutine to complete
-			// (it writes reconstructed chunks to CAS asynchronously)
-			time.Sleep(200 * time.Millisecond)
+			// Wait for background caching goroutine to complete
+			store.WaitBackground()
 		})
 	}
 }
@@ -152,10 +150,10 @@ func TestErasureCodingReadPath_InsufficientShards(t *testing.T) {
 
 	// Delete ALL data chunks AND one parity shard (m+1 shards missing → insufficient)
 	for _, chunkHash := range meta.ErasureCoding.DataHashes {
-		_ = store.cas.DeleteChunk(ctx, chunkHash)
+		_, _ = store.cas.DeleteChunk(ctx, chunkHash)
 	}
 	// Also delete one parity shard so we have < k available
-	_ = store.cas.DeleteChunk(ctx, meta.ErasureCoding.ParityHashes[0])
+	_, _ = store.cas.DeleteChunk(ctx, meta.ErasureCoding.ParityHashes[0])
 
 	// Read should fail
 	_, _, err = store.GetObject(ctx, "ec-bucket", "test.bin")
@@ -235,7 +233,7 @@ func TestErasureCodingReadPath_ParityOnlyReconstruction(t *testing.T) {
 
 	// Delete ALL data chunks
 	for _, chunkHash := range meta.ErasureCoding.DataHashes {
-		_ = store.cas.DeleteChunk(ctx, chunkHash)
+		_, _ = store.cas.DeleteChunk(ctx, chunkHash)
 	}
 
 	// Read should succeed (k=3 parity shards available = k needed)
@@ -248,7 +246,7 @@ func TestErasureCodingReadPath_ParityOnlyReconstruction(t *testing.T) {
 	assert.Equal(t, data, got, "should reconstruct from parity shards alone")
 
 	// Wait for background caching goroutine
-	time.Sleep(200 * time.Millisecond)
+	store.WaitBackground()
 }
 
 // TestErasureCodingReadPath_MixedShardReconstruction tests reconstruction with
@@ -270,11 +268,11 @@ func TestErasureCodingReadPath_MixedShardReconstruction(t *testing.T) {
 	for _, chunkHash := range meta.ErasureCoding.DataHashes {
 		chunkMeta := meta.ChunkMetadata[chunkHash]
 		if chunkMeta != nil && chunkMeta.ShardIndex < 2 {
-			_ = store.cas.DeleteChunk(ctx, chunkHash)
+			_, _ = store.cas.DeleteChunk(ctx, chunkHash)
 			shardsDeleted++
 		}
 	}
-	_ = store.cas.DeleteChunk(ctx, meta.ErasureCoding.ParityHashes[0])
+	_, _ = store.cas.DeleteChunk(ctx, meta.ErasureCoding.ParityHashes[0])
 
 	// Should still be able to read (6 data + 3 parity - 2 data - 1 parity = 6 ≥ k=6)
 	reader, _, err := store.GetObject(ctx, "ec-bucket", "test.bin")
@@ -286,7 +284,7 @@ func TestErasureCodingReadPath_MixedShardReconstruction(t *testing.T) {
 	assert.Equal(t, data, got, "should reconstruct with mixed available shards")
 
 	// Wait for background caching goroutine
-	time.Sleep(200 * time.Millisecond)
+	store.WaitBackground()
 }
 
 // TestErasureCodingReadPath_MetadataIntegrity verifies that erasure coding metadata
@@ -459,7 +457,7 @@ func TestErasureCodingReadPath_DistributedFetch(t *testing.T) {
 		if shardsDeleted[chunkMeta.ShardIndex] {
 			remoteChunks[chunkHash] = chunkData
 			registryOwners[chunkHash] = []string{"remote-coord-1"}
-			_ = store.cas.DeleteChunk(ctx, chunkHash)
+			_, _ = store.cas.DeleteChunk(ctx, chunkHash)
 		}
 	}
 	require.Equal(t, shardsToDelete, len(shardsDeleted), "should have deleted chunks for %d shards", shardsToDelete)
@@ -503,12 +501,12 @@ func TestErasureCodingReadPath_DistributedFetchFallbackToReconstruction(t *testi
 			continue
 		}
 		if shardsDeleted[chunkMeta.ShardIndex] {
-			_ = store.cas.DeleteChunk(ctx, chunkHash)
+			_, _ = store.cas.DeleteChunk(ctx, chunkHash)
 			continue
 		}
 		if len(shardsDeleted) < 2 {
 			shardsDeleted[chunkMeta.ShardIndex] = true
-			_ = store.cas.DeleteChunk(ctx, chunkHash)
+			_, _ = store.cas.DeleteChunk(ctx, chunkHash)
 		}
 	}
 
@@ -528,7 +526,7 @@ func TestErasureCodingReadPath_DistributedFetchFallbackToReconstruction(t *testi
 	assert.Equal(t, data, got, "should reconstruct via RS after failed distributed fetch")
 
 	// Wait for background caching goroutine
-	time.Sleep(200 * time.Millisecond)
+	store.WaitBackground()
 }
 
 // TestErasureCodingReadPath_NoDistributedWithoutReplicator tests that without
@@ -553,12 +551,12 @@ func TestErasureCodingReadPath_NoDistributedWithoutReplicator(t *testing.T) {
 			continue
 		}
 		if shardsDeleted[chunkMeta.ShardIndex] {
-			_ = store.cas.DeleteChunk(ctx, chunkHash)
+			_, _ = store.cas.DeleteChunk(ctx, chunkHash)
 			continue
 		}
 		if len(shardsDeleted) < 2 {
 			shardsDeleted[chunkMeta.ShardIndex] = true
-			_ = store.cas.DeleteChunk(ctx, chunkHash)
+			_, _ = store.cas.DeleteChunk(ctx, chunkHash)
 		}
 	}
 
@@ -575,7 +573,7 @@ func TestErasureCodingReadPath_NoDistributedWithoutReplicator(t *testing.T) {
 	assert.Equal(t, data, got, "should reconstruct via RS without distributed fetch capability")
 
 	// Wait for background caching goroutine
-	time.Sleep(200 * time.Millisecond)
+	store.WaitBackground()
 }
 
 // TestErasureCodingReadPath_DistributedFetchHashMismatch tests that corrupt chunks
@@ -609,7 +607,7 @@ func TestErasureCodingReadPath_DistributedFetchHashMismatch(t *testing.T) {
 			// Store corrupted data (wrong bytes) so hash validation fails
 			corruptChunks[chunkHash] = []byte("corrupted data that won't match hash")
 			registryOwners[chunkHash] = []string{"bad-coord-1"}
-			_ = store.cas.DeleteChunk(ctx, chunkHash)
+			_, _ = store.cas.DeleteChunk(ctx, chunkHash)
 		}
 	}
 	require.Equal(t, 2, len(shardsDeleted))
@@ -630,5 +628,5 @@ func TestErasureCodingReadPath_DistributedFetchHashMismatch(t *testing.T) {
 	assert.Equal(t, data, got, "should reconstruct via RS after rejecting corrupt remote chunks")
 
 	// Wait for background caching goroutine
-	time.Sleep(200 * time.Millisecond)
+	store.WaitBackground()
 }

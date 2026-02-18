@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -90,6 +91,66 @@ func TestStoreDeleteBucketNotEmpty(t *testing.T) {
 	// Try to delete bucket
 	err = store.DeleteBucket(context.Background(), "test-bucket")
 	assert.ErrorIs(t, err, ErrBucketNotEmpty)
+}
+
+func TestDeleteBucket_WithRecycleBinEntries(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Add an object
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt", bytes.NewReader([]byte("content")), 7, "text/plain", nil)
+	require.NoError(t, err)
+
+	// Delete moves to recycle bin
+	require.NoError(t, store.DeleteObject(ctx, "test-bucket", "file.txt"))
+
+	// Bucket should not be deletable while recycle bin has entries
+	err = store.DeleteBucket(ctx, "test-bucket")
+	assert.Error(t, err)
+
+	// Purge recycle bin
+	store.PurgeAllRecycled(ctx)
+
+	// Now bucket should be deletable
+	err = store.DeleteBucket(ctx, "test-bucket")
+	assert.NoError(t, err)
+}
+
+func TestForceDeleteBucket(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Add objects
+	for i := 0; i < 5; i++ {
+		key := fmt.Sprintf("file-%d.txt", i)
+		data := []byte(fmt.Sprintf("content-%d", i))
+		_, err := store.PutObject(ctx, "test-bucket", key, bytes.NewReader(data), int64(len(data)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	// Delete some to create recycle bin entries
+	require.NoError(t, store.DeleteObject(ctx, "test-bucket", "file-0.txt"))
+	require.NoError(t, store.DeleteObject(ctx, "test-bucket", "file-1.txt"))
+
+	// Verify stats before
+	stats := store.GetCASStats()
+	assert.Greater(t, stats.ObjectCount, 0)
+
+	// ForceDeleteBucket should remove everything including recycle bin
+	err := store.ForceDeleteBucket(ctx, "test-bucket")
+	require.NoError(t, err)
+
+	// Bucket should be gone
+	_, err = store.HeadBucket(ctx, "test-bucket")
+	assert.ErrorIs(t, err, ErrBucketNotFound)
+
+	// Idempotent: calling again on non-existent bucket returns nil
+	err = store.ForceDeleteBucket(ctx, "test-bucket")
+	assert.NoError(t, err)
 }
 
 func TestStoreHeadBucketNotFound(t *testing.T) {
@@ -281,10 +342,16 @@ func TestStoreDeleteObject(t *testing.T) {
 	err = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
 	require.NoError(t, err)
 
-	// Verify object is tombstoned (soft-deleted), not removed
-	meta, err := store.HeadObject(context.Background(), "test-bucket", "file.txt")
+	// Object should be gone from ListObjects
+	objects, _, _, err := store.ListObjects(context.Background(), "test-bucket", "", "", 0)
 	require.NoError(t, err)
-	assert.True(t, meta.IsTombstoned(), "object should be tombstoned")
+	assert.Empty(t, objects)
+
+	// Object should exist in recycle bin
+	recycled, err := store.ListRecycledObjects(context.Background(), "test-bucket")
+	require.NoError(t, err)
+	assert.Len(t, recycled, 1)
+	assert.Equal(t, "file.txt", recycled[0].OriginalKey)
 }
 
 func TestStorePurgeObject(t *testing.T) {
@@ -307,8 +374,9 @@ func TestStoreDeleteObjectNotFound(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
 
+	// S3 semantics: deleting a non-existent object is idempotent (succeeds)
 	err := store.DeleteObject(context.Background(), "test-bucket", "nonexistent.txt")
-	assert.ErrorIs(t, err, ErrObjectNotFound)
+	assert.NoError(t, err)
 }
 
 func TestStoreDeleteObjectBucketNotFound(t *testing.T) {
@@ -429,19 +497,12 @@ func TestStoreWithQuota(t *testing.T) {
 	assert.Equal(t, int64(len(content)), stats.UsedBytes)
 	assert.Equal(t, int64(len(content)), stats.PerBucket["test-bucket"])
 
-	// Tombstone (soft delete) should NOT release quota yet
+	// Delete (recycle) should release quota immediately
 	err = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
 	require.NoError(t, err)
 
 	stats = store.QuotaStats()
-	assert.Equal(t, int64(len(content)), stats.UsedBytes, "tombstoned objects still use quota")
-
-	// Purge should release quota
-	err = store.PurgeObject(context.Background(), "test-bucket", "file.txt")
-	require.NoError(t, err)
-
-	stats = store.QuotaStats()
-	assert.Equal(t, int64(0), stats.UsedBytes, "purged objects release quota")
+	assert.Equal(t, int64(0), stats.UsedBytes, "recycled objects release quota")
 }
 
 // =========================================================================
@@ -465,35 +526,81 @@ func TestObjectLifecycle_ExpirySetting(t *testing.T) {
 	assert.WithinDuration(t, expectedExpiry, *meta.Expires, time.Minute)
 }
 
-func TestObjectLifecycle_TombstonePreservesContent(t *testing.T) {
+func TestDeleteObject_MovesToRecycleBin(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
 
-	content := []byte("important data")
+	content := []byte("hello world")
 	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
-	// Tombstone the object
-	err = store.TombstoneObject(context.Background(), "test-bucket", "file.txt")
-	require.NoError(t, err)
+	err = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
+	assert.NoError(t, err)
 
-	// Verify object is tombstoned
-	meta, err := store.HeadObject(context.Background(), "test-bucket", "file.txt")
-	require.NoError(t, err)
-	assert.True(t, meta.IsTombstoned())
+	// Object should be gone from ListObjects
+	objects, _, _, err := store.ListObjects(context.Background(), "test-bucket", "", "", 0)
+	assert.NoError(t, err)
+	assert.Empty(t, objects)
 
-	// Content should still be readable
-	reader, readMeta, err := store.GetObject(context.Background(), "test-bucket", "file.txt")
-	require.NoError(t, err)
-	defer func() { _ = reader.Close() }()
-	assert.True(t, readMeta.IsTombstoned())
-
-	data, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	assert.Equal(t, content, data)
+	// Object should exist in recycle bin
+	recycled, err := store.ListRecycledObjects(context.Background(), "test-bucket")
+	assert.NoError(t, err)
+	assert.Len(t, recycled, 1)
+	assert.Equal(t, "file.txt", recycled[0].OriginalKey)
+	assert.Equal(t, int64(11), recycled[0].Meta.Size)
 }
 
-func TestObjectLifecycle_TombstonedObjectInList(t *testing.T) {
+func TestRestoreRecycledObject(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	content := []byte("hello world")
+	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	err = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
+	assert.NoError(t, err)
+
+	// Restore from recycle bin
+	err = store.RestoreRecycledObject(context.Background(), "test-bucket", "file.txt")
+	assert.NoError(t, err)
+
+	// Object should be back in ListObjects
+	objects, _, _, err := store.ListObjects(context.Background(), "test-bucket", "", "", 0)
+	assert.NoError(t, err)
+	assert.Len(t, objects, 1)
+	assert.Equal(t, "file.txt", objects[0].Key)
+
+	// Recycle bin should be empty
+	recycled, err := store.ListRecycledObjects(context.Background(), "test-bucket")
+	assert.NoError(t, err)
+	assert.Empty(t, recycled)
+}
+
+func TestRestoreRecycledObject_ConflictWithLive(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	content := []byte("original")
+	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Delete it
+	err = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
+	assert.NoError(t, err)
+
+	// Create new object with same key
+	replacement := []byte("replacement")
+	_, err = store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(replacement), int64(len(replacement)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Restore should fail -- live object exists
+	err = store.RestoreRecycledObject(context.Background(), "test-bucket", "file.txt")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+}
+
+func TestRecycleBin_DeletedObjectNotInList(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
 
@@ -503,29 +610,15 @@ func TestObjectLifecycle_TombstonedObjectInList(t *testing.T) {
 	_, err = store.PutObject(context.Background(), "test-bucket", "dead.txt", bytes.NewReader([]byte("dead")), 4, "text/plain", nil)
 	require.NoError(t, err)
 
-	// Tombstone one
-	err = store.TombstoneObject(context.Background(), "test-bucket", "dead.txt")
+	// Delete one
+	err = store.DeleteObject(context.Background(), "test-bucket", "dead.txt")
 	require.NoError(t, err)
 
-	// Both should appear in list
+	// Only live object should appear in list
 	objects, _, _, err := store.ListObjects(context.Background(), "test-bucket", "", "", 0)
 	require.NoError(t, err)
-	assert.Len(t, objects, 2)
-
-	// Check tombstone flags
-	var liveObj, deadObj *ObjectMeta
-	for i := range objects {
-		switch objects[i].Key {
-		case "live.txt":
-			liveObj = &objects[i]
-		case "dead.txt":
-			deadObj = &objects[i]
-		}
-	}
-	require.NotNil(t, liveObj)
-	require.NotNil(t, deadObj)
-	assert.False(t, liveObj.IsTombstoned())
-	assert.True(t, deadObj.IsTombstoned())
+	assert.Len(t, objects, 1)
+	assert.Equal(t, "live.txt", objects[0].Key)
 }
 
 func TestObjectLifecycle_PurgeRemovesCompletely(t *testing.T) {
@@ -536,11 +629,7 @@ func TestObjectLifecycle_PurgeRemovesCompletely(t *testing.T) {
 	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
-	// Tombstone first
-	err = store.TombstoneObject(context.Background(), "test-bucket", "file.txt")
-	require.NoError(t, err)
-
-	// Then purge
+	// Purge directly (hard delete)
 	err = store.PurgeObject(context.Background(), "test-bucket", "file.txt")
 	require.NoError(t, err)
 
@@ -554,264 +643,193 @@ func TestObjectLifecycle_PurgeRemovesCompletely(t *testing.T) {
 	assert.Empty(t, objects)
 }
 
-func TestObjectLifecycle_DoubleTombstoneIsNoop(t *testing.T) {
+func TestPurgeRecycleBin_RespectsRetention(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
 
-	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+	// Create three objects
+	_, err := store.PutObject(context.Background(), "test-bucket", "old.txt", bytes.NewReader([]byte("old content")), 11, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = store.PutObject(context.Background(), "test-bucket", "new.txt", bytes.NewReader([]byte("new content")), 11, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = store.PutObject(context.Background(), "test-bucket", "live.txt", bytes.NewReader([]byte("live content")), 12, "text/plain", nil)
 	require.NoError(t, err)
 
-	// Tombstone twice - should not error
-	err = store.TombstoneObject(context.Background(), "test-bucket", "file.txt")
-	require.NoError(t, err)
+	// Delete old.txt and new.txt
+	_ = store.DeleteObject(context.Background(), "test-bucket", "old.txt")
+	_ = store.DeleteObject(context.Background(), "test-bucket", "new.txt")
 
-	meta1, _ := store.HeadObject(context.Background(), "test-bucket", "file.txt")
-	tombstonedAt1 := meta1.TombstonedAt
+	// Backdate old.txt's recycled entry to 100 days ago
+	rbDir := filepath.Join(store.DataDir(), "buckets", "test-bucket", "recyclebin")
+	entries, _ := os.ReadDir(rbDir)
+	for _, e := range entries {
+		data, _ := os.ReadFile(filepath.Join(rbDir, e.Name()))
+		var entry RecycledEntry
+		_ = json.Unmarshal(data, &entry)
+		if entry.OriginalKey == "old.txt" {
+			entry.DeletedAt = time.Now().UTC().AddDate(0, 0, -100)
+			newData, _ := json.Marshal(entry)
+			_ = os.WriteFile(filepath.Join(rbDir, e.Name()), newData, 0644)
+		}
+	}
 
-	err = store.TombstoneObject(context.Background(), "test-bucket", "file.txt")
-	require.NoError(t, err)
+	store.SetRecycleBinRetentionDays(90)
+	purged := store.PurgeRecycleBin(context.Background())
+	assert.Equal(t, 1, purged, "only old entry should be purged")
 
-	meta2, _ := store.HeadObject(context.Background(), "test-bucket", "file.txt")
-	// Timestamp should not change on second tombstone
-	assert.Equal(t, tombstonedAt1, meta2.TombstonedAt)
-}
+	// new.txt should still be in recycle bin
+	recycled, _ := store.ListRecycledObjects(context.Background(), "test-bucket")
+	assert.Len(t, recycled, 1)
+	assert.Equal(t, "new.txt", recycled[0].OriginalKey)
 
-func TestObjectLifecycle_PurgeTombstonedObjects(t *testing.T) {
-	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
-
-	// Create and tombstone some objects
-	_, err := store.PutObject(context.Background(), "test-bucket", "old.txt", bytes.NewReader([]byte("old")), 3, "text/plain", nil)
-	require.NoError(t, err)
-	_, err = store.PutObject(context.Background(), "test-bucket", "new.txt", bytes.NewReader([]byte("new")), 3, "text/plain", nil)
-	require.NoError(t, err)
-	_, err = store.PutObject(context.Background(), "test-bucket", "live.txt", bytes.NewReader([]byte("live")), 4, "text/plain", nil)
-	require.NoError(t, err)
-
-	// Tombstone old.txt and new.txt
-	err = store.TombstoneObject(context.Background(), "test-bucket", "old.txt")
-	require.NoError(t, err)
-	err = store.TombstoneObject(context.Background(), "test-bucket", "new.txt")
-	require.NoError(t, err)
-
-	// Manually backdate old.txt tombstone to 100 days ago
-	oldMeta, _ := store.HeadObject(context.Background(), "test-bucket", "old.txt")
-	oldTime := time.Now().UTC().AddDate(0, 0, -100)
-	oldMeta.TombstonedAt = &oldTime
-	// Write the backdated metadata
-	metaPath := filepath.Join(store.dataDir, "buckets", "test-bucket", "meta", "old.txt.json")
-	metaData, _ := os.ReadFile(metaPath)
-	var meta ObjectMeta
-	_ = json.Unmarshal(metaData, &meta)
-	meta.TombstonedAt = &oldTime
-	updatedData, _ := json.MarshalIndent(meta, "", "  ")
-	_ = os.WriteFile(metaPath, updatedData, 0644)
-
-	// Set retention to 90 days and purge
-	store.SetTombstoneRetentionDays(90)
-	purged := store.PurgeTombstonedObjects(context.Background())
-
-	// Should have purged 1 object (old.txt is > 90 days old)
-	assert.Equal(t, 1, purged)
-
-	// old.txt should be gone
-	_, err = store.HeadObject(context.Background(), "test-bucket", "old.txt")
-	assert.ErrorIs(t, err, ErrObjectNotFound)
-
-	// new.txt should still exist (tombstoned < 90 days ago)
-	newMeta, err := store.HeadObject(context.Background(), "test-bucket", "new.txt")
-	require.NoError(t, err)
-	assert.True(t, newMeta.IsTombstoned())
-
-	// live.txt should still exist (not tombstoned)
-	liveMeta, err := store.HeadObject(context.Background(), "test-bucket", "live.txt")
-	require.NoError(t, err)
-	assert.False(t, liveMeta.IsTombstoned())
-}
-
-func TestObjectLifecycle_PurgeTombstonedObjectsDisabled(t *testing.T) {
-	store := newTestStoreWithCAS(t)
-	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
-
-	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
-	require.NoError(t, err)
-	err = store.TombstoneObject(context.Background(), "test-bucket", "file.txt")
-	require.NoError(t, err)
-
-	// Retention days = 0 means disabled
-	store.SetTombstoneRetentionDays(0)
-	purged := store.PurgeTombstonedObjects(context.Background())
-	assert.Equal(t, 0, purged)
-
-	// Object should still exist
-	_, err = store.HeadObject(context.Background(), "test-bucket", "file.txt")
+	// live.txt should still be live
+	_, err = store.HeadObject(context.Background(), "test-bucket", "live.txt")
 	assert.NoError(t, err)
 }
 
-func TestObjectLifecycle_PurgeCancellation(t *testing.T) {
+func TestPurgeRecycleBin_DisabledWhenZero(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
 
-	// Create and tombstone many objects to ensure cancellation occurs mid-operation
-	totalObjects := 10000
-	if testing.Short() {
-		totalObjects = 2000
-	}
-	for i := 0; i < totalObjects; i++ {
-		key := fmt.Sprintf("file-%04d.txt", i)
-		_, err := store.PutObject(context.Background(), "test-bucket", key, bytes.NewReader([]byte("data")), 4, "text/plain", nil)
-		require.NoError(t, err)
+	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("data")), 4, "text/plain", nil)
+	require.NoError(t, err)
+	_ = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
 
-		// Tombstone with old timestamp so they'll be purged
-		err = store.TombstoneObject(context.Background(), "test-bucket", key)
-		require.NoError(t, err)
+	// Retention days = 0 means disabled
+	store.SetRecycleBinRetentionDays(0)
+	purged := store.PurgeRecycleBin(context.Background())
+	assert.Equal(t, 0, purged)
 
-		// Manually backdate tombstone to 100 days ago
-		meta, _ := store.HeadObject(context.Background(), "test-bucket", key)
-		oldTime := time.Now().UTC().AddDate(0, 0, -100)
-		meta.TombstonedAt = &oldTime
-		metaPath := filepath.Join(store.dataDir, "buckets", "test-bucket", "meta", key+".json")
-		metaJSON, _ := json.Marshal(meta)
-		_ = os.WriteFile(metaPath, metaJSON, 0600)
-	}
-
-	store.SetTombstoneRetentionDays(30) // Expire after 30 days
-
-	// Create a context with a short timeout (should cancel mid-operation with 10k objects)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	// Run purge - it should be cancelled mid-operation by timeout
-	purged := store.PurgeTombstonedObjects(ctx)
-
-	// Verify partial progress: some objects purged, but not all
-	assert.Greater(t, purged, 0, "should have purged at least one object before cancellation")
-	assert.Less(t, purged, totalObjects, "should not have purged all objects due to cancellation")
-
-	t.Logf("Purged %d objects before cancellation (out of %d)", purged, totalObjects)
-
-	// Verify some objects still exist (not all were purged)
-	remaining := 0
-	for i := 0; i < totalObjects; i++ {
-		key := fmt.Sprintf("file-%04d.txt", i)
-		_, err := store.HeadObject(context.Background(), "test-bucket", key)
-		if err == nil {
-			remaining++
-		}
-	}
-	assert.Greater(t, remaining, 0, "some objects should still exist after early cancellation")
-	assert.Equal(t, totalObjects-purged, remaining, "remaining objects should equal total minus purged")
+	// Object should still be in recycle bin
+	recycled, err := store.ListRecycledObjects(context.Background(), "test-bucket")
+	assert.NoError(t, err)
+	assert.Len(t, recycled, 1)
 }
 
-func TestBucketTombstone(t *testing.T) {
-	masterKey := [32]byte{1, 2, 3, 4, 5, 6, 7, 8}
-	store, err := NewStoreWithCAS(t.TempDir(), nil, masterKey)
+func TestPurgeAllRecycled(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	_, err := store.PutObject(context.Background(), "test-bucket", "a.txt", bytes.NewReader([]byte("aaa")), 3, "text/plain", nil)
+	require.NoError(t, err)
+	_, err = store.PutObject(context.Background(), "test-bucket", "b.txt", bytes.NewReader([]byte("bbb")), 3, "text/plain", nil)
 	require.NoError(t, err)
 
-	// Create bucket with objects
-	err = store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil)
-	require.NoError(t, err)
+	_ = store.DeleteObject(context.Background(), "test-bucket", "a.txt")
+	_ = store.DeleteObject(context.Background(), "test-bucket", "b.txt")
 
-	content := []byte("test content")
-	_, err = store.PutObject(context.Background(), "test-bucket", "file1.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
-	require.NoError(t, err)
-	_, err = store.PutObject(context.Background(), "test-bucket", "file2.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
-	require.NoError(t, err)
+	purged := store.PurgeAllRecycled(context.Background())
+	assert.Equal(t, 2, purged)
 
-	// Tombstone the bucket
-	err = store.TombstoneBucket(context.Background(), "test-bucket")
-	require.NoError(t, err)
-
-	// Bucket should be tombstoned
-	bucketMeta, err := store.HeadBucket(context.Background(), "test-bucket")
-	require.NoError(t, err)
-	assert.True(t, bucketMeta.IsTombstoned())
-
-	// Objects should appear tombstoned via HeadObject
-	obj1, err := store.HeadObject(context.Background(), "test-bucket", "file1.txt")
-	require.NoError(t, err)
-	assert.True(t, obj1.IsTombstoned(), "object should appear tombstoned when bucket is tombstoned")
-
-	// Objects should appear tombstoned in ListObjects
-	objects, _, _, err := store.ListObjects(context.Background(), "test-bucket", "", "", 100)
-	require.NoError(t, err)
-	assert.Len(t, objects, 2)
-	for _, obj := range objects {
-		assert.True(t, obj.IsTombstoned(), "all objects should appear tombstoned")
-	}
-
-	// Untombstone the bucket
-	err = store.UntombstoneBucket(context.Background(), "test-bucket")
-	require.NoError(t, err)
-
-	// Bucket should no longer be tombstoned
-	bucketMeta, err = store.HeadBucket(context.Background(), "test-bucket")
-	require.NoError(t, err)
-	assert.False(t, bucketMeta.IsTombstoned())
-
-	// Objects should no longer appear tombstoned
-	obj1, err = store.HeadObject(context.Background(), "test-bucket", "file1.txt")
-	require.NoError(t, err)
-	assert.False(t, obj1.IsTombstoned(), "object should not appear tombstoned after bucket untombstoned")
+	recycled, _ := store.ListRecycledObjects(context.Background(), "test-bucket")
+	assert.Empty(t, recycled)
 }
 
-func TestDeleteTwiceToPurge(t *testing.T) {
-	masterKey := [32]byte{1, 2, 3, 4, 5, 6, 7, 8}
-	store, err := NewStoreWithCAS(t.TempDir(), nil, masterKey)
+func TestPurgeAllRecycled_Empty(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// No recycled objects -- should return 0
+	purged := store.PurgeAllRecycled(context.Background())
+	assert.Equal(t, 0, purged)
+}
+
+func TestRecycleBin_MultipleDeletesSameKey(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create, delete, create, delete
+	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("version1")), 8, "text/plain", nil)
+	require.NoError(t, err)
+	_ = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
+
+	_, err = store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader([]byte("version2")), 8, "text/plain", nil)
+	require.NoError(t, err)
+	_ = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
+
+	// Should have 2 recycled entries
+	recycled, err := store.ListRecycledObjects(context.Background(), "test-bucket")
+	assert.NoError(t, err)
+	assert.Len(t, recycled, 2)
+}
+
+func TestGetRecycledObject(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	content := []byte("hello recycled world")
+	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
-	err = store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil)
+	// Delete the object (moves to recycle bin)
+	err = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
 	require.NoError(t, err)
+
+	// GetRecycledObject should return the content
+	reader, meta, err := store.GetRecycledObject(context.Background(), "test-bucket", "file.txt")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+
+	assert.Equal(t, "text/plain", meta.ContentType)
+	assert.Equal(t, int64(len(content)), meta.Size)
+
+	got, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, content, got)
+}
+
+func TestGetRecycledObject_NotFound(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	_, _, err := store.GetRecycledObject(context.Background(), "test-bucket", "nonexistent.txt")
+	assert.ErrorIs(t, err, ErrObjectNotFound)
+}
+
+func TestGetRecycledObject_ReturnsLatest(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create, delete, create with different content, delete again
+	v1 := []byte("version1")
+	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	require.NoError(t, err)
+	require.NoError(t, store.DeleteObject(context.Background(), "test-bucket", "file.txt"))
+
+	v2 := []byte("version2-latest")
+	_, err = store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	require.NoError(t, err)
+	require.NoError(t, store.DeleteObject(context.Background(), "test-bucket", "file.txt"))
+
+	// GetRecycledObject should return the most recent version
+	reader, _, err := store.GetRecycledObject(context.Background(), "test-bucket", "file.txt")
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+
+	got, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, v2, got)
+}
+
+func TestDeleteObject_SecondDeleteReturnsNotFound(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
 
 	content := []byte("delete me")
-	_, err = store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	_, err := store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
 
-	// First delete: should tombstone
+	// First delete: moves to recycle bin
 	err = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
 	require.NoError(t, err)
 
-	meta, err := store.HeadObject(context.Background(), "test-bucket", "file.txt")
-	require.NoError(t, err)
-	assert.True(t, meta.IsTombstoned(), "first delete should tombstone")
-
-	// Second delete: should purge
-	err = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
-	require.NoError(t, err)
-
-	// Object should be gone
+	// Object should be gone from live path
 	_, err = store.HeadObject(context.Background(), "test-bucket", "file.txt")
-	assert.Equal(t, ErrObjectNotFound, err, "second delete should purge")
-}
+	assert.ErrorIs(t, err, ErrObjectNotFound)
 
-func TestDeleteTwiceToPurge_BucketTombstoned(t *testing.T) {
-	masterKey := [32]byte{1, 2, 3, 4, 5, 6, 7, 8}
-	store, err := NewStoreWithCAS(t.TempDir(), nil, masterKey)
-	require.NoError(t, err)
-
-	err = store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil)
-	require.NoError(t, err)
-
-	content := []byte("delete me")
-	_, err = store.PutObject(context.Background(), "test-bucket", "file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
-	require.NoError(t, err)
-
-	// Tombstone the bucket (simulates file share deletion)
-	err = store.TombstoneBucket(context.Background(), "test-bucket")
-	require.NoError(t, err)
-
-	// Object appears tombstoned via bucket
-	meta, err := store.HeadObject(context.Background(), "test-bucket", "file.txt")
-	require.NoError(t, err)
-	assert.True(t, meta.IsTombstoned())
-
-	// Delete should purge (since already tombstoned via bucket)
+	// Second delete: idempotent (S3 semantics — succeeds even though already recycled)
 	err = store.DeleteObject(context.Background(), "test-bucket", "file.txt")
-	require.NoError(t, err)
-
-	// Object should be gone
-	_, err = store.HeadObject(context.Background(), "test-bucket", "file.txt")
-	assert.Equal(t, ErrObjectNotFound, err, "delete of bucket-tombstoned object should purge")
+	assert.NoError(t, err)
 }
 
 // --- Path Traversal Regression Tests ---
@@ -1015,7 +1033,7 @@ func TestCAS_WriteAndReadChunk(t *testing.T) {
 	require.NoError(t, err)
 
 	data := []byte("hello content-addressable world")
-	hash, err := cas.WriteChunk(context.Background(), data)
+	hash, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 	assert.NotEmpty(t, hash)
 
@@ -1035,10 +1053,10 @@ func TestCAS_Deduplication(t *testing.T) {
 	data := []byte("duplicate me")
 
 	// Write same data twice
-	hash1, err := cas.WriteChunk(context.Background(), data)
+	hash1, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
-	hash2, err := cas.WriteChunk(context.Background(), data)
+	hash2, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	// Should return same hash (dedup)
@@ -1049,7 +1067,7 @@ func TestCAS_Deduplication(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write once more to verify it doesn't increase
-	_, err = cas.WriteChunk(context.Background(), data)
+	_, _, err = cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	totalSize2, err := cas.TotalSize(context.Background())
@@ -1067,7 +1085,7 @@ func TestCAS_ConvergentEncryption(t *testing.T) {
 	data := []byte("same plaintext should produce same ciphertext")
 
 	// Write the data
-	hash1, err := cas.WriteChunk(context.Background(), data)
+	hash1, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	// Get the encrypted size
@@ -1075,10 +1093,10 @@ func TestCAS_ConvergentEncryption(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete and rewrite
-	err = cas.DeleteChunk(context.Background(), hash1)
+	_, err = cas.DeleteChunk(context.Background(), hash1)
 	require.NoError(t, err)
 
-	hash2, err := cas.WriteChunk(context.Background(), data)
+	hash2, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	size2, err := cas.ChunkSize(context.Background(), hash2)
@@ -1108,12 +1126,12 @@ func TestCAS_DeleteChunk(t *testing.T) {
 	require.NoError(t, err)
 
 	data := []byte("delete me")
-	hash, err := cas.WriteChunk(context.Background(), data)
+	hash, _, err := cas.WriteChunk(context.Background(), data)
 	require.NoError(t, err)
 
 	assert.True(t, cas.ChunkExists(hash))
 
-	err = cas.DeleteChunk(context.Background(), hash)
+	_, err = cas.DeleteChunk(context.Background(), hash)
 	require.NoError(t, err)
 
 	assert.False(t, cas.ChunkExists(hash))
@@ -1457,6 +1475,59 @@ func TestConcurrent_MultipleKeys(t *testing.T) {
 	assert.Equal(t, numGoroutines, len(objects))
 }
 
+func TestConcurrent_PutDoesNotBlockList(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Seed an object so ListObjects has something to return
+	seed := []byte("seed-data")
+	_, err := store.PutObject(context.Background(), "test-bucket", "seed.txt", bytes.NewReader(seed), int64(len(seed)), "text/plain", nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const writers = 5
+	const writesPerWorker = 3
+	var wg sync.WaitGroup
+
+	// Start writers that upload to different keys
+	wg.Add(writers)
+	for i := 0; i < writers; i++ {
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < writesPerWorker; j++ {
+				content := []byte(strings.Repeat("w", 2000+id*100+j*50))
+				key := fmt.Sprintf("writer-%d-%d.txt", id, j)
+				_, putErr := store.PutObject(ctx, "test-bucket", key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+				if putErr != nil && ctx.Err() == nil {
+					t.Errorf("writer %d write %d: %v", id, j, putErr)
+				}
+			}
+		}(i)
+	}
+
+	// Concurrent reader — should never be blocked for longer than metadata I/O
+	listDone := make(chan struct{})
+	go func() {
+		defer close(listDone)
+		for i := 0; i < 20; i++ {
+			objs, _, _, listErr := store.ListObjects(ctx, "test-bucket", "", "", 100)
+			if listErr != nil && ctx.Err() == nil {
+				t.Errorf("list iteration %d: %v", i, listErr)
+				return
+			}
+			// Must always see at least the seed object
+			if len(objs) < 1 && ctx.Err() == nil {
+				t.Errorf("list iteration %d: expected at least 1 object, got %d", i, len(objs))
+			}
+		}
+	}()
+
+	wg.Wait()
+	<-listDone
+}
+
 func TestStreamingRead_LargeFile(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
@@ -1591,13 +1662,13 @@ func TestCalculatePrefixSize_NonExistentBucket(t *testing.T) {
 	assert.Contains(t, err.Error(), "bucket not found")
 }
 
-func TestCalculatePrefixSize_IncludesTombstoned(t *testing.T) {
+func TestCalculatePrefixSize_ExcludesDeletedObjects(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	bucket := "test-bucket"
 
 	require.NoError(t, store.CreateBucket(context.Background(), bucket, "owner-id", 2, nil))
 
-	// Create and delete an object (tombstone it)
+	// Create an object
 	content := []byte("test content")
 	_, err := store.PutObject(context.Background(), bucket, "folder/file.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 	require.NoError(t, err)
@@ -1607,13 +1678,13 @@ func TestCalculatePrefixSize_IncludesTombstoned(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(content)), sizeBeforeDelete)
 
-	// Delete (tombstone) the object
+	// Delete (moves to recycle bin) the object
 	require.NoError(t, store.DeleteObject(context.Background(), bucket, "folder/file.txt"))
 
-	// Size should still include the tombstoned object until it's purged
+	// Size should not include recycled objects
 	sizeAfterDelete, err := store.CalculatePrefixSize(context.Background(), bucket, "folder/")
 	require.NoError(t, err)
-	assert.Equal(t, int64(len(content)), sizeAfterDelete, "tombstoned objects should still count toward size")
+	assert.Equal(t, int64(0), sizeAfterDelete, "deleted objects should not count toward prefix size")
 }
 
 // TestConcurrent_PurgeObjectNoDeadlock verifies that PurgeObject doesn't deadlock
@@ -1624,14 +1695,12 @@ func TestConcurrent_PurgeObjectNoDeadlock(t *testing.T) {
 	store := newTestStoreWithCAS(t)
 	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
 
-	// Create multiple objects to purge
+	// Create multiple objects to purge (live objects, not recycled)
 	for i := 0; i < 10; i++ {
 		key := fmt.Sprintf("file-%d.txt", i)
 		content := []byte(fmt.Sprintf("content-%d-%s", i, strings.Repeat("x", 500)))
 		_, err := store.PutObject(context.Background(), "test-bucket", key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
 		require.NoError(t, err)
-		// Tombstone so it can be purged
-		require.NoError(t, store.DeleteObject(context.Background(), "test-bucket", key))
 	}
 
 	// Use timeout context to detect deadlock
@@ -1640,7 +1709,7 @@ func TestConcurrent_PurgeObjectNoDeadlock(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	// Concurrent purges
+	// Concurrent purges (PurgeObject works on live objects)
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		go func(id int) {
@@ -1694,10 +1763,8 @@ func TestConcurrent_GCAndPurgeNoDeadlock(t *testing.T) {
 		}
 	}
 
-	// Tombstone some for purging
-	for i := 0; i < 3; i++ {
-		require.NoError(t, store.DeleteObject(context.Background(), "test-bucket", fmt.Sprintf("obj-%d.txt", i)))
-	}
+	// Mark some for purging (PurgeObject works on live objects directly)
+	// Objects 0-2 will be purged, objects 3-4 will remain for reads
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -1746,6 +1813,164 @@ func TestConcurrent_GCAndPurgeNoDeadlock(t *testing.T) {
 	}
 }
 
+// TestConcurrent_CalculatePrefixSizeNoDeadlock verifies that CalculatePrefixSize
+// doesn't deadlock when called concurrently with PutObject. Before the fix,
+// CalculatePrefixSize acquired RLock then called ListObjects which tried RLock
+// again — when a PutObject was pending Lock, Go's RWMutex blocked the nested
+// RLock, causing an indefinite hang (appeared as S3 Explorer silent failure).
+func TestConcurrent_CalculatePrefixSizeNoDeadlock(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Seed some objects under a folder prefix
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("folder/file-%d.txt", i)
+		content := []byte(fmt.Sprintf("content-%d-%s", i, strings.Repeat("x", 500)))
+		_, err := store.PutObject(context.Background(), "test-bucket", key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	// Concurrent PutObject (acquires write lock, triggers the contention)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				key := fmt.Sprintf("folder/new-%d-%d.txt", id, j)
+				content := []byte(fmt.Sprintf("new-content-%d-%d", id, j))
+				_, _ = store.PutObject(ctx, "test-bucket", key, bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+			}
+		}(i)
+	}
+
+	// Concurrent CalculatePrefixSize (previously deadlocked under RLock)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				_, _ = store.CalculatePrefixSize(ctx, "test-bucket", "folder/")
+			}
+		}()
+	}
+
+	// Concurrent ListObjects (shares RLock path)
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				_, _, _, _ = store.ListObjects(ctx, "test-bucket", "folder/", "", 100)
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success - no deadlock
+	case <-ctx.Done():
+		t.Fatal("deadlock detected: concurrent CalculatePrefixSize + PutObject timed out after 10s")
+	}
+}
+
+// TestConcurrent_GCDoesNotBlockReads verifies that GC's filesystem scan
+// (buildChunkReferenceSet) does not hold s.mu, allowing concurrent ListObjects
+// and PutObject to proceed without blocking. This is a regression test for the
+// S3 explorer freeze after ~1 hour (GC holding RLock during full walk).
+func TestConcurrent_GCDoesNotBlockReads(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create objects to make GC scan take some time
+	for i := 0; i < 10; i++ {
+		content := []byte(fmt.Sprintf("content-%d-%s", i, strings.Repeat("x", 1000)))
+		_, err := store.PutObject(context.Background(), "test-bucket", fmt.Sprintf("obj-%d.txt", i), bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	// Run GC repeatedly (this does the expensive filesystem scan)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 5; i++ {
+			store.RunGarbageCollection(ctx)
+		}
+	}()
+
+	// Concurrent writes — these acquire s.mu.Lock() and would deadlock
+	// if buildChunkReferenceSet held s.mu.RLock() (write-preferring RWMutex
+	// blocks new RLock acquires once a Lock waiter exists)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			content := []byte(fmt.Sprintf("concurrent-write-%d", i))
+			_, _ = store.PutObject(ctx, "test-bucket", "concurrent.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		}
+	}()
+
+	// Concurrent reads — simulate dashboard API calls that were freezing
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 30; i++ {
+			_, _, _, _ = store.ListObjects(ctx, "test-bucket", "", "", 100)
+			_, _ = store.ListBuckets(ctx)
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success — no lock contention blocking reads during GC
+	case <-ctx.Done():
+		t.Fatal("lock contention detected: concurrent GC + writes + reads timed out after 10s")
+	}
+}
+
+// TestBuildChunkReferenceSet_Cancellation verifies that buildChunkReferenceSet
+// respects context cancellation and returns early.
+func TestBuildChunkReferenceSet_Cancellation(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	require.NoError(t, store.CreateBucket(context.Background(), "test-bucket", "alice", 2, nil))
+
+	// Create some objects
+	for i := 0; i < 5; i++ {
+		content := []byte(fmt.Sprintf("content-%d", i))
+		_, err := store.PutObject(context.Background(), "test-bucket", fmt.Sprintf("obj-%d.txt", i), bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	// Cancel immediately
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	refs := store.buildChunkReferenceSet(ctx)
+	// Should return without error (may have partial or empty results)
+	assert.NotNil(t, refs)
+}
+
 // TestBuildChunkReferenceSet_SubdirectoryMeta verifies that buildChunkReferenceSet
 // finds chunks referenced by metadata files in subdirectories (e.g., system bucket
 // stores metadata in meta/auth/, meta/dns/, meta/filter/).
@@ -1775,7 +2000,7 @@ func TestBuildChunkReferenceSet_SubdirectoryMeta(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(subDir, "users.json"), data, 0o600))
 
 	// Build reference set
-	refs := store.buildChunkReferenceSet()
+	refs := store.buildChunkReferenceSet(context.Background())
 
 	// Should find the chunk from the subdirectory metadata
 	_, found := refs["subdir-chunk-hash-abc123"]
@@ -1871,4 +2096,698 @@ func TestPruneAllExpiredVersionsSimple_SubdirectoryMeta(t *testing.T) {
 	// The expired version file should be deleted
 	_, err = os.Stat(filepath.Join(versionDir, "old-version.json"))
 	assert.True(t, os.IsNotExist(err), "expired version should be deleted")
+}
+
+// ==== ImportObjectMeta Tests ====
+
+func TestImportObjectMeta_NewBucket(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Import metadata for a bucket that doesn't exist yet
+	meta := ObjectMeta{
+		Key:         "report.pdf",
+		Size:        5000,
+		ContentType: "application/pdf",
+		Chunks:      []string{"hash1", "hash2"},
+	}
+	metaJSON, err := json.Marshal(meta)
+	require.NoError(t, err)
+
+	_, err = store.ImportObjectMeta(ctx, "newbucket", "report.pdf", metaJSON, "alice")
+	require.NoError(t, err)
+
+	// Verify the metadata is readable
+	got, err := store.GetObjectMeta(ctx, "newbucket", "report.pdf")
+	require.NoError(t, err)
+	assert.Equal(t, "report.pdf", got.Key)
+	assert.Equal(t, int64(5000), got.Size)
+	assert.Equal(t, "application/pdf", got.ContentType)
+	assert.Equal(t, []string{"hash1", "hash2"}, got.Chunks)
+
+	// Verify bucket was created with correct owner
+	buckets, err := store.ListBuckets(ctx)
+	require.NoError(t, err)
+	require.Len(t, buckets, 1)
+	assert.Equal(t, "alice", buckets[0].Owner)
+}
+
+func TestImportObjectMeta_ExistingBucket(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Create bucket first
+	require.NoError(t, store.CreateBucket(ctx, "mybucket", "alice", 1, nil))
+
+	meta := ObjectMeta{
+		Key:         "doc.txt",
+		Size:        100,
+		ContentType: "text/plain",
+		Chunks:      []string{"abc"},
+	}
+	metaJSON, err := json.Marshal(meta)
+	require.NoError(t, err)
+
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
+	require.NoError(t, err)
+
+	got, err := store.GetObjectMeta(ctx, "mybucket", "doc.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "doc.txt", got.Key)
+}
+
+func TestImportObjectMeta_InvalidJSON(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	_, err := store.ImportObjectMeta(ctx, "bucket", "key", []byte("not json"), "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid object meta JSON")
+}
+
+func TestImportObjectMeta_InvalidBucketName(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	meta := ObjectMeta{Key: "test"}
+	metaJSON, _ := json.Marshal(meta)
+
+	_, err := store.ImportObjectMeta(ctx, "../escape", "test", metaJSON, "")
+	assert.Error(t, err)
+}
+
+func TestImportObjectMeta_ArchivesVersion(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "mybucket", "alice", 1, nil))
+
+	// Import first version
+	meta1 := ObjectMeta{
+		Key:         "doc.txt",
+		Size:        100,
+		ContentType: "text/plain",
+		Chunks:      []string{"hash1"},
+	}
+	metaJSON1, err := json.Marshal(meta1)
+	require.NoError(t, err)
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON1, "")
+	require.NoError(t, err)
+
+	// Import second version (overwrites first)
+	meta2 := ObjectMeta{
+		Key:         "doc.txt",
+		Size:        200,
+		ContentType: "text/plain",
+		Chunks:      []string{"hash2"},
+	}
+	metaJSON2, err := json.Marshal(meta2)
+	require.NoError(t, err)
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON2, "")
+	require.NoError(t, err)
+
+	// Verify current version is meta2
+	got, err := store.GetObjectMeta(ctx, "mybucket", "doc.txt")
+	require.NoError(t, err)
+	assert.Equal(t, int64(200), got.Size)
+
+	// Verify a version was archived (versions directory has a file)
+	versionsDir := filepath.Join(store.DataDir(), "buckets", "mybucket", "versions", "doc.txt")
+	entries, err := os.ReadDir(versionsDir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "should have 1 archived version")
+}
+
+// ==== DeleteChunk Tests ====
+
+func TestDeleteChunk(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Write a chunk first
+	data := []byte("test chunk data")
+	hash := ContentHash(data)
+	err := store.WriteChunkDirect(ctx, hash, data)
+	require.NoError(t, err)
+
+	// Verify chunk exists
+	readData, err := store.ReadChunk(ctx, hash)
+	require.NoError(t, err)
+	assert.Equal(t, data, readData)
+
+	// Delete the chunk
+	err = store.DeleteChunk(ctx, hash)
+	require.NoError(t, err)
+
+	// Verify chunk is gone
+	_, err = store.ReadChunk(ctx, hash)
+	assert.Error(t, err)
+}
+
+func TestDeleteChunk_NonExistent(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Deleting a non-existent chunk should not error (idempotent behavior).
+	// This is important because cleanup may run after a chunk was already
+	// garbage collected or deleted by another process.
+	err := store.DeleteChunk(ctx, "nonexistent-hash")
+	assert.NoError(t, err)
+}
+
+func TestDeleteUnreferencedChunks(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Create a bucket and object referencing chunk1
+	require.NoError(t, store.CreateBucket(ctx, "mybucket", "alice", 1, nil))
+
+	chunk1 := []byte("referenced chunk data")
+	hash1 := ContentHash(chunk1)
+	require.NoError(t, store.WriteChunkDirect(ctx, hash1, chunk1))
+
+	chunk2 := []byte("orphaned chunk data!!")
+	hash2 := ContentHash(chunk2)
+	require.NoError(t, store.WriteChunkDirect(ctx, hash2, chunk2))
+
+	// Create an object that references only chunk1
+	meta := ObjectMeta{
+		Key:    "doc.txt",
+		Size:   int64(len(chunk1)),
+		Chunks: []string{hash1},
+	}
+	metaJSON, err := json.Marshal(meta)
+	require.NoError(t, err)
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
+	require.NoError(t, err)
+
+	// Record stats before cleanup
+	statsBefore := store.GetCASStats()
+
+	// Delete unreferenced chunks — chunk2 is orphaned, chunk1 is referenced
+	freed := store.DeleteUnreferencedChunks(ctx, []string{hash1, hash2})
+
+	// chunk2 should have been freed
+	assert.Greater(t, freed, int64(0), "should have freed bytes for orphaned chunk")
+
+	// Verify stats were decremented
+	statsAfter := store.GetCASStats()
+	assert.Equal(t, statsBefore.ChunkCount-1, statsAfter.ChunkCount, "chunk count should decrease by 1")
+	assert.Equal(t, statsBefore.ChunkBytes-freed, statsAfter.ChunkBytes, "chunk bytes should decrease by freed amount")
+
+	// chunk1 should still be readable (it's referenced)
+	_, err = store.ReadChunk(ctx, hash1)
+	assert.NoError(t, err)
+
+	// chunk2 should be gone
+	_, err = store.ReadChunk(ctx, hash2)
+	assert.Error(t, err)
+}
+
+func TestDeleteUnreferencedChunks_AllReferenced(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Write a chunk and reference it from an object
+	require.NoError(t, store.CreateBucket(ctx, "mybucket", "alice", 1, nil))
+
+	chunk := []byte("kept chunk data")
+	hash := ContentHash(chunk)
+	require.NoError(t, store.WriteChunkDirect(ctx, hash, chunk))
+
+	meta := ObjectMeta{
+		Key:    "doc.txt",
+		Size:   int64(len(chunk)),
+		Chunks: []string{hash},
+	}
+	metaJSON, err := json.Marshal(meta)
+	require.NoError(t, err)
+	_, err = store.ImportObjectMeta(ctx, "mybucket", "doc.txt", metaJSON, "")
+	require.NoError(t, err)
+
+	statsBefore := store.GetCASStats()
+
+	// All chunks are referenced — nothing should be freed
+	freed := store.DeleteUnreferencedChunks(ctx, []string{hash})
+	assert.Equal(t, int64(0), freed)
+
+	// Stats unchanged
+	statsAfter := store.GetCASStats()
+	assert.Equal(t, statsBefore.ChunkCount, statsAfter.ChunkCount)
+	assert.Equal(t, statsBefore.ChunkBytes, statsAfter.ChunkBytes)
+}
+
+func TestSyncedWriteFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.json")
+
+	// Write initial content
+	original := []byte(`{"name":"original"}`)
+	err := syncedWriteFile(path, original, 0644)
+	require.NoError(t, err)
+
+	// Verify initial content
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, original, data)
+
+	// Overwrite with new content
+	updated := []byte(`{"name":"updated","extra":"field"}`)
+	err = syncedWriteFile(path, updated, 0644)
+	require.NoError(t, err)
+
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, updated, data)
+
+	// Verify no temp files left behind
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "no temp files should remain after successful write")
+}
+
+func TestSyncedWriteFileAtomic_ReadOnlyDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce read-only directory permissions via os.Chmod")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.json")
+
+	// Write initial content
+	original := []byte(`{"name":"original"}`)
+	err := syncedWriteFile(path, original, 0644)
+	require.NoError(t, err)
+
+	// Make directory read-only to simulate write failure
+	require.NoError(t, os.Chmod(dir, 0555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
+
+	// Attempt to overwrite — should fail, but original file should remain
+	err = syncedWriteFile(path, []byte(`{"name":"corrupted"}`), 0644)
+	assert.Error(t, err)
+
+	// Restore permissions and verify original content is intact
+	require.NoError(t, os.Chmod(dir, 0755))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, original, data, "original file should be untouched after failed write")
+}
+
+func TestGetBucketMeta_EmptyMetadata(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Create a valid bucket first
+	err := store.CreateBucket(ctx, "test-bucket", "alice", 2, nil)
+	require.NoError(t, err)
+
+	// Verify it exists
+	_, err = store.HeadBucket(ctx, "test-bucket")
+	require.NoError(t, err)
+
+	// Overwrite _meta.json with empty content (simulates disk-full truncation)
+	metaPath := filepath.Join(store.DataDir(), "buckets", "test-bucket", "_meta.json")
+	require.NoError(t, os.WriteFile(metaPath, []byte{}, 0644))
+
+	// Should return ErrBucketNotFound, not a generic error
+	_, err = store.HeadBucket(ctx, "test-bucket")
+	assert.ErrorIs(t, err, ErrBucketNotFound)
+}
+
+func TestGetBucketMeta_CorruptedJSON(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Create a valid bucket first
+	err := store.CreateBucket(ctx, "test-bucket", "alice", 2, nil)
+	require.NoError(t, err)
+
+	// Overwrite _meta.json with invalid JSON
+	metaPath := filepath.Join(store.DataDir(), "buckets", "test-bucket", "_meta.json")
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{invalid json`), 0644))
+
+	// Should return ErrBucketNotFound, not a generic unmarshal error
+	_, err = store.HeadBucket(ctx, "test-bucket")
+	assert.ErrorIs(t, err, ErrBucketNotFound)
+}
+
+func TestStore_VolumeStats(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir, nil)
+	require.NoError(t, err)
+
+	total, used, available, err := store.VolumeStats()
+	require.NoError(t, err)
+
+	assert.Greater(t, total, int64(0), "total should be positive")
+	assert.GreaterOrEqual(t, used, int64(0), "used should be non-negative")
+	assert.Greater(t, available, int64(0), "available should be positive")
+}
+
+func TestGetCASStats_LogicalBytesUsesMetaSize(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Put a single unique object — LogicalBytes should equal meta.Size (uncompressed)
+	content := []byte("unique content for stats test")
+	_, err := store.PutObject(ctx, "test-bucket", "file1.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	stats := store.GetCASStats()
+
+	assert.Equal(t, 1, stats.ObjectCount, "should have 1 object")
+	assert.Greater(t, stats.ChunkBytes, int64(0), "should have chunk bytes on disk")
+	assert.Equal(t, int64(len(content)), stats.LogicalBytes,
+		"LogicalBytes should equal meta.Size (uncompressed content size)")
+
+	// Put a second identical object (dedup) — LogicalBytes should be 2x content size
+	_, err = store.PutObject(ctx, "test-bucket", "file2.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	stats = store.GetCASStats()
+
+	assert.Equal(t, 2, stats.ObjectCount, "should have 2 objects")
+	assert.Equal(t, int64(2*len(content)), stats.LogicalBytes,
+		"deduplicated: logical bytes should be 2x content size (both objects reference same data)")
+}
+
+func TestGetCASStats_LegacyObjectsUseMetaSize(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Put an object normally
+	content := []byte("legacy test content")
+	_, err := store.PutObject(ctx, "test-bucket", "legacy.txt", bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Simulate a legacy object by stripping ChunkMetadata from the stored meta
+	// LogicalBytes should still work because it uses meta.Size, not chunk lookups
+	metaDir := filepath.Join(store.DataDir(), "buckets", "test-bucket", "meta")
+	err = filepath.Walk(metaDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil || info.IsDir() || filepath.Ext(path) != ".json" {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		var meta ObjectMeta
+		if jsonErr := json.Unmarshal(data, &meta); jsonErr != nil {
+			return jsonErr
+		}
+		meta.ChunkMetadata = nil // Simulate legacy object with no chunk metadata
+		updated, jsonErr := json.Marshal(meta)
+		if jsonErr != nil {
+			return jsonErr
+		}
+		return os.WriteFile(path, updated, 0o644)
+	})
+	require.NoError(t, err)
+
+	// Re-init stats from disk to pick up the modified metadata
+	store.initCASStats()
+
+	stats := store.GetCASStats()
+
+	assert.Equal(t, 1, stats.ObjectCount)
+	// LogicalBytes uses meta.Size which is always available regardless of ChunkMetadata
+	assert.Equal(t, int64(len(content)), stats.LogicalBytes,
+		"legacy objects should use meta.Size for LogicalBytes")
+}
+
+func TestGetCASStats_VersionCountAfterOverwrite(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Write v1 of a file
+	v1 := []byte("version one content for logical bytes test")
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt", bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	require.NoError(t, err)
+
+	statsAfterV1 := store.GetCASStats()
+	assert.Equal(t, int64(len(v1)), statsAfterV1.LogicalBytes,
+		"after v1: logical bytes should equal content size")
+
+	// Overwrite with v2 — v1 is archived, its chunks remain on disk
+	v2 := []byte("version two with different content for test")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt", bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	require.NoError(t, err)
+
+	statsAfterV2 := store.GetCASStats()
+	assert.Equal(t, 1, statsAfterV2.VersionCount, "should have 1 archived version")
+	// LogicalBytes only counts current objects (not version files).
+	// After overwrite, LogicalBytes should equal the new content size.
+	assert.Equal(t, int64(len(v2)), statsAfterV2.LogicalBytes,
+		"after v2: logical bytes should equal v2 content size (only current objects)")
+	// VersionBytes should track the archived version's size
+	assert.Equal(t, int64(len(v1)), statsAfterV2.VersionBytes,
+		"after v2: version bytes should equal v1 content size (archived version)")
+}
+
+// trackingChunkRegistry records RegisterChunk calls for testing.
+type trackingChunkRegistry struct {
+	mu         sync.Mutex
+	registered map[string]int64 // hash -> size
+}
+
+func newTrackingChunkRegistry() *trackingChunkRegistry {
+	return &trackingChunkRegistry{registered: make(map[string]int64)}
+}
+
+func (r *trackingChunkRegistry) RegisterChunk(hash string, size int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.registered[hash] = size
+	return nil
+}
+
+func (r *trackingChunkRegistry) RegisterChunkWithReplication(hash string, size int64, _ int) error {
+	return r.RegisterChunk(hash, size)
+}
+
+func (r *trackingChunkRegistry) RegisterShardChunk(hash string, size int64, _, _ string, _, _ int) error {
+	return r.RegisterChunk(hash, size)
+}
+
+func (r *trackingChunkRegistry) UnregisterChunk(_ string) error { return nil }
+
+func (r *trackingChunkRegistry) GetOwners(_ string) ([]string, error) {
+	return nil, fmt.Errorf("not found")
+}
+
+func (r *trackingChunkRegistry) GetChunksOwnedBy(_ string) ([]string, error) {
+	return nil, nil
+}
+
+func (r *trackingChunkRegistry) isRegistered(hash string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.registered[hash]
+	return ok
+}
+
+func TestWriteChunkDirect_RegistersInRegistry(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	reg := newTrackingChunkRegistry()
+	store.SetChunkRegistry(reg)
+
+	data := []byte("chunk data for registry test")
+	hash := ContentHash(data)
+
+	err := store.WriteChunkDirect(ctx, hash, data)
+	require.NoError(t, err)
+
+	assert.True(t, reg.isRegistered(hash),
+		"WriteChunkDirect should register chunk in the distributed registry")
+}
+
+func TestPutObject_CleansUpPrunedVersionChunks(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Set max versions to 3 for easier testing
+	store.maxVersionsPerObject = 3
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Write 5 versions (exceeds max of 3), creating prunable versions
+	for i := 0; i < 5; i++ {
+		content := []byte(fmt.Sprintf("version %d unique content for pruning test", i))
+		_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+			bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	stats := store.GetCASStats()
+	// Should have at most 3 versions (max limit)
+	assert.LessOrEqual(t, stats.VersionCount, 3,
+		"version count should not exceed maxVersionsPerObject")
+
+	// Version pruning happens inline, but chunk cleanup is deferred to periodic GC
+	// (which builds the reference set once for efficiency). Chunks from pruned
+	// versions remain on disk until the next GC cycle.
+	assert.Greater(t, stats.ChunkCount, 0, "should still have chunks for live + retained versions")
+}
+
+func TestImportObjectMeta_CleansUpPrunedVersionChunks(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	store.maxVersionsPerObject = 3
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Write initial versions via PutObject
+	for i := 0; i < 3; i++ {
+		content := []byte(fmt.Sprintf("version %d for import test", i))
+		_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+			bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+		require.NoError(t, err)
+	}
+
+	// Import additional versions via ImportObjectMeta (simulates replication)
+	for i := 3; i < 6; i++ {
+		content := []byte(fmt.Sprintf("version %d for import test", i))
+		hash := ContentHash(content)
+		// Write chunk directly (as replication would)
+		require.NoError(t, store.WriteChunkDirect(ctx, hash, content))
+
+		meta := ObjectMeta{
+			Key:          "file.txt",
+			Size:         int64(len(content)),
+			ContentType:  "text/plain",
+			LastModified: time.Now().UTC(),
+			VersionID:    fmt.Sprintf("import-v%d", i),
+			Chunks:       []string{hash},
+		}
+		metaJSON, err := json.Marshal(meta)
+		require.NoError(t, err)
+
+		chunksToCheck, err := store.ImportObjectMeta(ctx, "test-bucket", "file.txt", metaJSON, "alice")
+		require.NoError(t, err)
+
+		// ImportObjectMeta returns chunks to check for cleanup
+		if len(chunksToCheck) > 0 {
+			store.DeleteUnreferencedChunks(ctx, chunksToCheck)
+		}
+	}
+
+	stats := store.GetCASStats()
+	assert.LessOrEqual(t, stats.VersionCount, 3,
+		"version count should not exceed maxVersionsPerObject after import")
+}
+
+func TestCASStats_IncludesVersionAndRecycleBin(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Write v1
+	v1 := []byte("version 1 content for combined stats test")
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Write v2 (archives v1)
+	v2 := []byte("version 2 content for combined stats test")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Add another object then recycle it
+	recycled := []byte("content to be recycled")
+	_, err = store.PutObject(ctx, "test-bucket", "to-delete.txt",
+		bytes.NewReader(recycled), int64(len(recycled)), "text/plain", nil)
+	require.NoError(t, err)
+
+	err = store.RecycleObject(ctx, "test-bucket", "to-delete.txt")
+	require.NoError(t, err)
+
+	stats := store.GetCASStats()
+
+	// Live: v2 of file.txt
+	assert.Equal(t, int64(len(v2)), stats.LogicalBytes,
+		"LogicalBytes should equal live object size")
+
+	// Versions: v1 of file.txt
+	assert.Equal(t, int64(len(v1)), stats.VersionBytes,
+		"VersionBytes should equal archived version size")
+
+	// Recycled: to-delete.txt
+	assert.Equal(t, int64(len(recycled)), stats.RecycledBytes,
+		"RecycledBytes should equal recycled object size")
+
+	// Total managed data = live + versions + recycled
+	totalLogical := stats.LogicalBytes + stats.VersionBytes + stats.RecycledBytes
+	expectedTotal := int64(len(v1)) + int64(len(v2)) + int64(len(recycled))
+	assert.Equal(t, expectedTotal, totalLogical,
+		"total logical bytes should equal live + version + recycled")
+}
+
+func TestCASStats_RecycledBytesDecrementOnRestore(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	content := []byte("content to recycle and restore")
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(content), int64(len(content)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Recycle
+	require.NoError(t, store.RecycleObject(ctx, "test-bucket", "file.txt"))
+	stats := store.GetCASStats()
+	assert.Equal(t, int64(len(content)), stats.RecycledBytes)
+	assert.Equal(t, int64(0), stats.LogicalBytes)
+
+	// Restore
+	require.NoError(t, store.RestoreRecycledObject(ctx, "test-bucket", "file.txt"))
+	stats = store.GetCASStats()
+	assert.Equal(t, int64(0), stats.RecycledBytes,
+		"RecycledBytes should be 0 after restore")
+	assert.Equal(t, int64(len(content)), stats.LogicalBytes,
+		"LogicalBytes should be restored")
+}
+
+func TestCASStats_VersionBytesAfterInitCASStats(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "test-bucket", "alice", 2, nil))
+
+	// Create version history
+	v1 := []byte("v1 data for init stats test")
+	_, err := store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v1), int64(len(v1)), "text/plain", nil)
+	require.NoError(t, err)
+
+	v2 := []byte("v2 data for init stats test")
+	_, err = store.PutObject(ctx, "test-bucket", "file.txt",
+		bytes.NewReader(v2), int64(len(v2)), "text/plain", nil)
+	require.NoError(t, err)
+
+	// Recycle an object
+	recycled := []byte("will be recycled for init stats test")
+	_, err = store.PutObject(ctx, "test-bucket", "recycled.txt",
+		bytes.NewReader(recycled), int64(len(recycled)), "text/plain", nil)
+	require.NoError(t, err)
+	require.NoError(t, store.RecycleObject(ctx, "test-bucket", "recycled.txt"))
+
+	// Re-init stats from filesystem (simulates restart)
+	store.initCASStats()
+
+	stats := store.GetCASStats()
+	assert.Equal(t, int64(len(v2)), stats.LogicalBytes, "LogicalBytes from initCASStats")
+	assert.Equal(t, int64(len(v1)), stats.VersionBytes, "VersionBytes from initCASStats")
+	assert.Equal(t, int64(len(recycled)), stats.RecycledBytes, "RecycledBytes from initCASStats")
 }

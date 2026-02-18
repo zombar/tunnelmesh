@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"encoding/json"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -59,6 +60,10 @@ var (
 	sshKeyPath     string
 	insecureTLS    bool
 	authToken      string
+
+	// Accordion mode flags
+	accordion      bool
+	accordionCount int
 )
 
 func main() {
@@ -114,6 +119,10 @@ func init() {
 	runCmd.Flags().StringVar(&sshKeyPath, "ssh-key", "", "SSH private key path (default: ~/.tunnelmesh/s3bench_key)")
 	runCmd.Flags().BoolVar(&insecureTLS, "insecure-tls", true, "Skip TLS certificate verification (admin mux uses mesh CA)")
 	runCmd.Flags().StringVar(&authToken, "auth-token", "", "Coordinator auth token (for protected coordinators)")
+
+	// Accordion mode flags
+	runCmd.Flags().BoolVar(&accordion, "accordion", false, "Loop mode: run → cleanup → repeat (requires --coordinator)")
+	runCmd.Flags().IntVar(&accordionCount, "count", 0, "Run N iterations then stop (implies --accordion)")
 }
 
 var runCmd = &cobra.Command{
@@ -130,7 +139,13 @@ Example:
   s3bench run alien_invasion --time-scale 864 --enable-mesh --enable-adversary
 
   # Realistic demo (2 hours)
-  s3bench run alien_invasion --time-scale 36`,
+  s3bench run alien_invasion --time-scale 36
+
+  # Accordion mode: run 3 iterations with cleanup between each
+  s3bench run alien_invasion --time-scale 4320 --coordinator https://coord:8443 --count 3
+
+  # Accordion mode: loop until Ctrl+C
+  s3bench run alien_invasion --time-scale 4320 --coordinator https://coord:8443 --accordion`,
 	Args: cobra.ExactArgs(1),
 	RunE: runScenario,
 }
@@ -196,6 +211,14 @@ func getAvailableStories() map[string]story.Story {
 }
 
 func runScenario(cmd *cobra.Command, args []string) error {
+	// Validate accordion flags
+	if accordionCount > 0 {
+		accordion = true
+	}
+	if accordion && coordinatorURL == "" {
+		return fmt.Errorf("--accordion requires --coordinator")
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -269,7 +292,7 @@ func runScenario(cmd *cobra.Command, args []string) error {
 
 	// Mesh integration (optional)
 	var meshClient *mesh.CoordinatorClient
-	var sharePrefix string
+	var meshInfo *mesh.MeshInfo
 	if coordinatorURL != "" {
 		log.Info().Str("coordinator", coordinatorURL).Msg("Mesh integration enabled")
 
@@ -282,7 +305,7 @@ func runScenario(cmd *cobra.Command, args []string) error {
 
 		// Register with coordinator
 		log.Info().Msg("Registering with coordinator...")
-		meshInfo, err := mesh.RegisterWithCoordinator(ctx, coordinatorURL, creds, insecureTLS, authToken)
+		meshInfo, err = mesh.RegisterWithCoordinator(ctx, coordinatorURL, creds, insecureTLS, authToken)
 		if err != nil {
 			return fmt.Errorf("registration failed: %w", err)
 		}
@@ -296,47 +319,85 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		// Derive S3 credentials
 		log.Info().Str("access_key", creds.AccessKey).Msg("Derived S3 credentials")
 
-		// Construct admin mux URL from coordinator mesh IP
-		adminURL := coordinatorURL // fallback to coordinator URL
-		if len(meshInfo.CoordMeshIPs) > 0 {
-			adminURL = fmt.Sprintf("https://%s", meshInfo.CoordMeshIPs[0])
+		// Admin routes (/api/shares, /api/s3/*) are only served on the admin
+		// mux bound to mesh_ip:443, not the public server. Use the coordinator's
+		// mesh IP from the registration response.
+		if len(meshInfo.CoordMeshIPs) == 0 {
+			return fmt.Errorf("no coordinator mesh IPs in registration response")
 		}
+		adminURL := "https://" + meshInfo.CoordMeshIPs[0]
 
 		log.Info().
 			Str("s3_endpoint", adminURL).
-			Msg("Creating shares on coordinator admin mux")
+			Msg("Using coordinator admin mux")
 		meshClient = mesh.NewCoordinatorClient(adminURL, creds, insecureTLS)
+	}
 
-		// Create shares for each department (coordinator auto-prefixes with peer name)
-		for _, dept := range st.Departments() {
-			quotaMB := dept.QuotaMB
-			if quotaOverrideMB > 0 {
-				quotaMB = quotaOverrideMB
-			}
+	// Print scenario summary
+	printScenarioIntro(st, timeScale)
 
-			actualName, err := meshClient.CreateShare(ctx, dept.FileShare, dept.Name, quotaMB)
-			if err != nil {
-				return fmt.Errorf("creating share %s: %w", dept.FileShare, err)
-			}
+	// Determine iteration count
+	totalIterations := 1
+	if accordion {
+		if accordionCount > 0 {
+			totalIterations = accordionCount
+		} else {
+			totalIterations = 0 // 0 = infinite (until Ctrl+C)
+		}
+	}
 
-			if actualName == "" {
-				// Share already existed (409 Conflict) — derive prefix from peer name
-				log.Info().Str("share", dept.FileShare).Msg("Share already exists, skipping creation")
-			} else {
-				// Extract prefix from the auto-prefixed name (e.g., "s3bench_alien-public" → "s3bench")
-				if idx := strings.Index(actualName, "_"); idx > 0 {
-					sharePrefix = actualName[:idx]
-				}
-				log.Info().
-					Str("share", actualName).
-					Int64("quota_mb", quotaMB).
-					Msg("Created share")
-			}
+	// Iteration loop
+	for iteration := 1; totalIterations == 0 || iteration <= totalIterations; iteration++ {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
 		}
 
-		// If we didn't get a prefix from creation (all already existed), derive from peer name
-		if sharePrefix == "" {
-			sharePrefix = "s3bench"
+		if accordion {
+			printIterationHeader(iteration, totalIterations)
+		}
+
+		sharePrefix, err := runIteration(ctx, st, userMgr, meshClient, meshInfo, iteration, totalIterations)
+		if err != nil {
+			return err
+		}
+
+		// Cleanup between iterations (not after the last one)
+		moreIterations := totalIterations == 0 || iteration < totalIterations
+		if accordion && moreIterations && meshClient != nil {
+			if err := cleanupMeshShares(ctx, meshClient, st, sharePrefix); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func printIterationHeader(iteration, totalIterations int) {
+	fmt.Println()
+	fmt.Println("╔═══════════════════════════════════════════════════════════╗")
+	if totalIterations > 0 {
+		fmt.Printf("║  ITERATION %d / %d%s║\n", iteration, totalIterations,
+			strings.Repeat(" ", 46-len(fmt.Sprintf("%d / %d", iteration, totalIterations))))
+	} else {
+		fmt.Printf("║  ITERATION %d (Ctrl+C to stop)%s║\n", iteration,
+			strings.Repeat(" ", 28-len(fmt.Sprintf("%d", iteration))))
+	}
+	fmt.Println("╚═══════════════════════════════════════════════════════════╝")
+	fmt.Println()
+}
+
+// runIteration runs a single benchmark iteration. Returns the share prefix used.
+func runIteration(ctx context.Context, st story.Story, userMgr *simulator.UserManager, meshClient *mesh.CoordinatorClient, meshInfo *mesh.MeshInfo, iteration, totalIterations int) (string, error) {
+	// Create shares on coordinator
+	var sharePrefix string
+	if meshClient != nil {
+		var err error
+		sharePrefix, err = createMeshShares(ctx, meshClient, st, meshInfo)
+		if err != nil {
+			return "", err
 		}
 	}
 
@@ -351,9 +412,9 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		ExpiryOverride:       expiryOverride,
 		AdversaryAttempts:    adversaryAttempts,
 		MaxConcurrentUploads: maxConcurrentUploads,
-		UserManager:          userMgr, // Pass user manager for actual S3 operations
+		UserManager:          userMgr,
 		UseMesh:              meshClient != nil,
-		MeshClient:           meshClient, // Pass mesh client for coordinator integration
+		MeshClient:           meshClient,
 		SharePrefix:          sharePrefix,
 		WorkflowTestsEnabled: map[simulator.WorkflowType]bool{
 			simulator.WorkflowDeletion:    testDeletion,
@@ -364,20 +425,16 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		},
 	}
 
-	// Create simulator
+	// Create and run simulator
 	log.Info().Msg("Creating simulator...")
 	sim, err := simulator.NewSimulator(config)
 	if err != nil {
-		return fmt.Errorf("creating simulator: %w", err)
+		return "", fmt.Errorf("creating simulator: %w", err)
 	}
 
-	// Print scenario summary
-	printScenarioIntro(st, timeScale)
-
-	// Generate scenario
 	log.Info().Msg("Generating scenario...")
 	if err := sim.GenerateScenario(ctx); err != nil {
-		return fmt.Errorf("generating scenario: %w", err)
+		return "", fmt.Errorf("generating scenario: %w", err)
 	}
 
 	summary := sim.GetScenarioSummary()
@@ -385,20 +442,17 @@ func runScenario(cmd *cobra.Command, args []string) error {
 	fmt.Println(summary.String())
 	fmt.Println()
 
-	// Run scenario
 	log.Info().Msg("Starting scenario execution...")
 	fmt.Println("Press Ctrl+C to stop")
 	fmt.Println()
 
 	metrics, err := sim.Run(ctx)
 	if err != nil {
-		return fmt.Errorf("running scenario: %w", err)
+		return "", fmt.Errorf("running scenario: %w", err)
 	}
 
-	// Print final report
 	printFinalReport(metrics)
 
-	// Show coordinator info if using mesh mode
 	if meshClient != nil {
 		fmt.Println()
 		log.Info().Msg("Documents uploaded to coordinator and viewable in Objects browser")
@@ -407,13 +461,88 @@ func runScenario(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Write JSON output if requested
 	if jsonOutput != "" {
-		if err := writeJSONOutput(jsonOutput, metrics, st, meshClient != nil, coordinatorURL); err != nil {
+		if err := writeJSONOutput(jsonOutput, metrics, st, meshClient != nil, coordinatorURL, iteration, totalIterations); err != nil {
 			log.Error().Err(err).Str("file", jsonOutput).Msg("Failed to write JSON output")
-			return fmt.Errorf("writing JSON output: %w", err)
+			return "", fmt.Errorf("writing JSON output: %w", err)
 		}
 		log.Info().Str("file", jsonOutput).Msg("Results written to JSON file")
+	}
+
+	return sharePrefix, nil
+}
+
+// createMeshShares creates file shares on the coordinator for each story department.
+// Returns the share prefix derived from the coordinator's auto-prefixed name.
+func createMeshShares(ctx context.Context, client *mesh.CoordinatorClient, st story.Story, meshInfo *mesh.MeshInfo) (string, error) {
+	log.Info().Msg("Creating shares on coordinator...")
+	var sharePrefix string
+
+	for _, dept := range st.Departments() {
+		quotaMB := dept.QuotaMB
+		if quotaOverrideMB > 0 {
+			quotaMB = quotaOverrideMB
+		}
+
+		actualName, err := client.CreateShare(ctx, dept.FileShare, dept.Name, quotaMB)
+		if err != nil {
+			return "", fmt.Errorf("creating share %s: %w", dept.FileShare, err)
+		}
+
+		if actualName == "" {
+			log.Info().Str("share", dept.FileShare).Msg("Share already exists, skipping creation")
+		} else {
+			if idx := strings.Index(actualName, "_"); idx > 0 {
+				sharePrefix = actualName[:idx]
+			}
+			log.Info().
+				Str("share", actualName).
+				Int64("quota_mb", quotaMB).
+				Msg("Created share")
+		}
+	}
+
+	// Fallback: derive from peer name if all shares already existed
+	if sharePrefix == "" {
+		sharePrefix = meshInfo.PeerName
+	}
+
+	return sharePrefix, nil
+}
+
+// cleanupMeshShares deletes all shares and triggers GC to reclaim disk space.
+func cleanupMeshShares(ctx context.Context, client *mesh.CoordinatorClient, st story.Story, prefix string) error {
+	fmt.Println()
+	log.Info().Msg("Cleaning up shares and triggering GC...")
+
+	// Delete each department share
+	for _, dept := range st.Departments() {
+		shareName := prefix + "_" + dept.FileShare
+		log.Info().Str("share", shareName).Msg("Deleting share")
+		if err := client.DeleteShare(ctx, shareName); err != nil {
+			return fmt.Errorf("deleting share %s: %w", shareName, err)
+		}
+	}
+
+	// Trigger GC to purge recycled data and reclaim disk
+	log.Info().Msg("Triggering garbage collection...")
+	gcStats, err := client.TriggerGC(ctx, true)
+	if err != nil {
+		return fmt.Errorf("triggering GC: %w", err)
+	}
+
+	log.Info().
+		Int("recycled_purged", gcStats.RecycledPurged).
+		Int("versions_pruned", gcStats.VersionsPruned).
+		Int("chunks_deleted", gcStats.ChunksDeleted).
+		Int64("bytes_reclaimed", gcStats.BytesReclaimed).
+		Msg("GC completed")
+
+	// Brief pause before next iteration
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-time.After(2 * time.Second):
 	}
 
 	return nil
@@ -553,11 +682,13 @@ func printFinalReport(metrics *simulator.SimulatorMetrics) {
 // JSONOutput represents the JSON output format for results.
 type JSONOutput struct {
 	// Metadata
-	Scenario       string  `json:"scenario"`
-	Description    string  `json:"description"`
-	TimeScale      float64 `json:"time_scale"`
-	MeshMode       bool    `json:"mesh_mode,omitempty"`
-	CoordinatorURL string  `json:"coordinator_url,omitempty"`
+	Scenario        string  `json:"scenario"`
+	Description     string  `json:"description"`
+	TimeScale       float64 `json:"time_scale"`
+	Iteration       int     `json:"iteration,omitempty"`
+	TotalIterations int     `json:"total_iterations,omitempty"`
+	MeshMode        bool    `json:"mesh_mode,omitempty"`
+	CoordinatorURL  string  `json:"coordinator_url,omitempty"`
 
 	// Timing
 	StartTime     time.Time `json:"start_time"`
@@ -626,17 +757,19 @@ type JSONOutput struct {
 }
 
 // writeJSONOutput writes metrics to a JSON file.
-func writeJSONOutput(filename string, metrics *simulator.SimulatorMetrics, st story.Story, meshMode bool, coordinatorURL string) error {
+func writeJSONOutput(filename string, metrics *simulator.SimulatorMetrics, st story.Story, meshMode bool, coordinatorURL string, iteration, totalIterations int) error {
 	output := JSONOutput{
-		Scenario:       st.Name(),
-		Description:    st.Description(),
-		TimeScale:      timeScale,
-		MeshMode:       meshMode,
-		CoordinatorURL: coordinatorURL,
-		StartTime:      metrics.StartTime,
-		EndTime:        metrics.EndTime,
-		Duration:       metrics.Duration.String(),
-		StoryDuration:  metrics.StoryDuration.String(),
+		Scenario:        st.Name(),
+		Description:     st.Description(),
+		TimeScale:       timeScale,
+		Iteration:       iteration,
+		TotalIterations: totalIterations,
+		MeshMode:        meshMode,
+		CoordinatorURL:  coordinatorURL,
+		StartTime:       metrics.StartTime,
+		EndTime:         metrics.EndTime,
+		Duration:        metrics.Duration.String(),
+		StoryDuration:   metrics.StoryDuration.String(),
 	}
 
 	// Operations

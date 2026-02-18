@@ -275,6 +275,90 @@ func (c *CoordinatorClient) GetObject(ctx context.Context, bucket, key string) (
 	return data, nil
 }
 
+// DeleteShare deletes a file share on the coordinator via DELETE /api/shares/{name}.
+// Treats 404 as success (idempotent).
+func (c *CoordinatorClient) DeleteShare(ctx context.Context, name string) error {
+	requestURL := fmt.Sprintf("%s/api/shares/%s", c.baseURL, url.PathEscape(name))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, requestURL, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	c.setBasicAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("HTTP DELETE %s: %w", requestURL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil // Idempotent: already deleted
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete share failed: %d %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
+}
+
+// GCStats represents the response from the S3 GC endpoint.
+type GCStats struct {
+	RecycledPurged int   `json:"recycled_purged"`
+	VersionsPruned int   `json:"versions_pruned"`
+	ChunksDeleted  int   `json:"chunks_deleted"`
+	BytesReclaimed int64 `json:"bytes_reclaimed"`
+}
+
+// TriggerGC triggers on-demand garbage collection on the coordinator via POST /api/s3/gc.
+// Uses a 10-minute context timeout since GC can be slow under sustained load.
+func (c *CoordinatorClient) TriggerGC(ctx context.Context, purgeRecycleBin bool) (*GCStats, error) {
+	// GC can take several minutes under sustained load; use a longer timeout
+	// than the default 60-second client. Context-based timeout respects parent
+	// cancellation (e.g., user interrupt) unlike http.Client.Timeout.
+	gcCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+
+	requestURL := fmt.Sprintf("%s/api/s3/gc", c.baseURL)
+
+	payload := map[string]interface{}{
+		"purge_recycle_bin": purgeRecycleBin,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(gcCtx, http.MethodPost, requestURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setBasicAuth(req)
+
+	// Use a client without its own Timeout so the context controls cancellation.
+	gcClient := &http.Client{Transport: c.httpClient.Transport}
+
+	resp, err := gcClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP POST %s: %w", requestURL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("trigger GC failed: %d %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var stats GCStats
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return &stats, nil
+}
+
 // setBasicAuth sets HTTP Basic Auth header using S3 credentials.
 func (c *CoordinatorClient) setBasicAuth(req *http.Request) {
 	auth := c.accessKey + ":" + c.secretKey

@@ -80,3 +80,4 @@ internal/coord/web/coverage/
 tunnelmesh_icon.png
 .tunnelmesh-token
 output.json
+results.json

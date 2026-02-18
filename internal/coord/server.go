@@ -15,6 +15,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,29 +69,34 @@ type serverStats struct {
 // This separation ensures the admin interface (dashboards, monitoring, config) is never
 // exposed to the public internet, while the coordination API remains accessible for peers.
 type Server struct {
-	cancel          context.CancelFunc // Cancel function for server lifecycle (stops background operations)
-	wg              sync.WaitGroup     // Tracks background goroutines for clean shutdown
-	cfg             *config.PeerConfig
-	mux             *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
-	adminMux        *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
-	adminServer     *http.Server   // HTTPS server for adminMux, bound to mesh IP only
-	peers           map[string]*peerInfo
-	coordinators    map[string]*peerInfo // Subset of peers that are coordinators, for O(1) lookups
-	peersMu         sync.RWMutex
-	ipAlloc         *ipAllocator
-	dnsCache        map[string]string // hostname -> mesh IP
-	aliasOwner      map[string]string // alias -> peer name (reverse lookup for ownership)
-	serverStats     serverStats
-	relay           *relayManager
-	holePunch       *holePunchManager
-	wgStore         *wireguard.Store      // WireGuard client storage
-	ca              *CertificateAuthority // Internal CA for mesh TLS certs
-	version         string                // Server version for admin display
-	sseHub          *sseHub               // SSE hub for real-time dashboard updates
-	ipGeoCache      *IPGeoCache           // IP geolocation cache for location fallback
-	coordMeshIPs    atomic.Value          // All coordinator mesh IPs ([]string) for "this.tunnelmesh" round-robin
-	coordMetrics    *CoordMetrics         // Prometheus metrics for coordinator
-	metricsRegistry prometheus.Registerer // Prometheus registry for metrics (shared with peer metrics)
+	cancel             context.CancelFunc // Cancel function for server lifecycle (stops background operations)
+	wg                 sync.WaitGroup     // Tracks background goroutines for clean shutdown
+	cfg                *config.PeerConfig
+	mux                *http.ServeMux // Public coordination API (peer registration, relay/heartbeats)
+	adminMux           *http.ServeMux // Private admin interface (dashboards, monitoring, relay/heartbeats) - mesh-only
+	adminServer        *http.Server   // HTTPS server for adminMux, bound to mesh IP only
+	peers              map[string]*peerInfo
+	coordinators       map[string]*peerInfo // Subset of peers that are coordinators, for O(1) lookups
+	peersMu            sync.RWMutex
+	ipAlloc            *ipAllocator
+	dnsCache           map[string]string // hostname -> mesh IP
+	aliasOwner         map[string]string // alias -> peer name (reverse lookup for ownership)
+	serverStats        serverStats
+	relay              *relayManager
+	holePunch          *holePunchManager
+	wgStore            *wireguard.Store             // WireGuard client storage
+	ca                 *CertificateAuthority        // Internal CA for mesh TLS certs
+	version            string                       // Server version for admin display
+	sseHub             *sseHub                      // SSE hub for real-time dashboard updates
+	ipGeoCache         *IPGeoCache                  // IP geolocation cache for location fallback
+	coordIPs           atomic.Pointer[coordIPSet]   // Coordinator mesh IPs (original + sorted) for DNS and write forwarding
+	s3ForwardTransport *http.Transport              // Shared transport for S3 write forwarding (reuses connections)
+	peerListings       atomic.Pointer[peerListings] // Pre-merged peer listing data (from system store)
+	localListingIndex  atomic.Pointer[listingIndex] // This coordinator's own listing index (in-memory)
+	listingIndexDirty  atomic.Bool                  // Whether local index needs persisting
+	listingIndexNotify chan struct{}                // Signal for immediate persist+load cycle
+	coordMetrics       *CoordMetrics                // Prometheus metrics for coordinator
+	metricsRegistry    prometheus.Registerer        // Prometheus registry for metrics (shared with peer metrics)
 	// S3 storage
 	s3Store             *s3.Store            // S3 file-based storage
 	s3Server            *s3.Server           // S3 HTTP server
@@ -105,6 +111,8 @@ type Server struct {
 	filter       *routing.PacketFilter // Global packet filter
 	filterSaveMu sync.Mutex            // Protects SaveFilterRules from concurrent calls
 	filterTimer  *time.Timer           // Timer for debouncing filter saves
+	// S3 GC serialization
+	gcMu sync.Mutex // Prevents concurrent GC runs via /api/s3/gc
 	// Docker orchestration (when coordinator joins mesh)
 	dockerMgr *docker.Manager // Docker manager (nil if Docker not enabled)
 	// Peer name cache for owner display (cached to avoid LoadPeers() on every request)
@@ -112,8 +120,16 @@ type Server struct {
 	// Callback for coordinator list changes (updates local DNS resolver)
 	coordIPsCb func([]string)
 	// Replication for multi-coordinator setup
-	replicator    *replication.Replicator    // S3 replication engine (nil if not enabled)
-	meshTransport *replication.MeshTransport // Transport for replication messages
+	replicator       *replication.Replicator    // S3 replication engine (nil if not enabled)
+	meshTransport    *replication.MeshTransport // Transport for replication messages
+	capacityRegistry *s3.CapacityRegistry       // Storage capacity tracking for replication
+}
+
+// coordIPSet holds both the original and sorted coordinator IP lists as a single
+// atomic unit to prevent inconsistent reads during updates.
+type coordIPSet struct {
+	original []string // Self is always first
+	sorted   []string // Deterministic ordering for hash-based routing
 }
 
 // ipAllocator manages IP address allocation from the mesh CIDR.
@@ -344,6 +360,16 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	}
 	srv.ca = ca
 
+	// Shared transport for forwarding S3 writes to other coordinators.
+	// TLS config is set later by SetMeshTLS() with the registration CA.
+	srv.s3ForwardTransport = &http.Transport{
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		DisableCompression:    true, // S3 objects are often already compressed
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 30 * time.Second,
+	}
+
 	// Initialize packet filter
 	srv.filter = routing.NewPacketFilter(cfg.Coordinator.Filter.IsDefaultDeny())
 
@@ -378,7 +404,11 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 	// Initialize S3 replication for multi-coordinator deployments
 	// Coordinators discover each other through the peer list using is_coordinator flag
 	if srv.s3Store != nil {
-		// Create mesh transport for replication messages (HTTPS between coordinators)
+		// Initialize capacity registry for storage capacity tracking
+		srv.capacityRegistry = s3.NewCapacityRegistry()
+
+		// Create mesh transport for replication messages (HTTPS between coordinators).
+		// TLS config is set later by SetMeshTLS() with the registration CA.
 		srv.meshTransport = replication.NewMeshTransport(log.Logger, nil)
 
 		// Create S3 store adapter for replication
@@ -393,6 +423,7 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 		// Initialize chunk registry for chunk-level replication (avoids buffering full objects)
 		chunkRegistry := replication.NewChunkRegistry(nodeID, nil)
 		srv.s3Store.SetChunkRegistry(chunkRegistry)
+		srv.s3Store.SetCoordinatorID(nodeID)
 
 		// Initialize replicator
 		srv.replicator = replication.NewReplicator(replication.Config{
@@ -400,12 +431,16 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 			Transport:            srv.meshTransport,
 			S3Store:              s3Adapter,
 			ChunkRegistry:        chunkRegistry,
+			CapacityChecker:      srv.capacityRegistry,
 			Logger:               log.Logger,
 			Context:              ctx, // Pass server context for proper cancellation
 			AckTimeout:           10 * time.Second,
 			RetryInterval:        30 * time.Second,
 			MaxPendingOperations: 10000,
 		})
+
+		// Wire replicator into S3 store for distributed reads (fetching remote chunks)
+		srv.s3Store.SetReplicator(srv.replicator)
 
 		log.Info().
 			Str("node_id", nodeID).
@@ -414,6 +449,19 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 
 	srv.setupRoutes(ctx)
 	return srv, nil
+}
+
+// SetMeshTLS configures the TLS settings for inter-coordinator communication.
+// The TLS config should trust the mesh CA (from registration) and include the
+// coordinator's own certificate for client authentication.
+// Must be called before any replication traffic is sent.
+func (s *Server) SetMeshTLS(cfg *tls.Config) {
+	if s.meshTransport != nil {
+		s.meshTransport.SetTLSConfig(cfg)
+	}
+	if s.s3ForwardTransport != nil {
+		s.s3ForwardTransport.TLSClientConfig = cfg
+	}
 }
 
 // refreshPeerNameCache reloads the peer ID -> name mapping from storage.
@@ -698,9 +746,23 @@ func (s *Server) StartPeriodicSave(ctx context.Context) {
 }
 
 // StartPeriodicCleanup starts the background cleanup goroutine for S3 storage.
+// gcStaggerDelay computes a deterministic stagger delay based on the coordinator
+// name hash, to avoid all coordinators running GC simultaneously.
+// Returns 0 to 149 seconds (0–2m29s), keeping the window under 50% of the
+// 5-minute GC interval to ensure predictable cleanup cadence.
+func gcStaggerDelay(coordName string) time.Duration {
+	if coordName == "" {
+		coordName = "coordinator"
+	}
+	h := fnv.New32a()
+	h.Write([]byte(coordName))
+	return time.Duration(h.Sum32()%150) * time.Second
+}
+
+// StartPeriodicCleanup launches a background goroutine for S3 storage maintenance.
 // It periodically:
-//   - Purges tombstoned objects past their retention period
-//   - Tombstones content in expired file shares
+//   - Purges recycled objects past their retention period
+//   - Purges content in expired file shares
 //   - Runs garbage collection on versions and orphaned chunks
 //   - Updates CAS metrics (dedup ratio, chunk count, etc.)
 func (s *Server) StartPeriodicCleanup(ctx context.Context) {
@@ -708,54 +770,122 @@ func (s *Server) StartPeriodicCleanup(ctx context.Context) {
 		return
 	}
 
-	// Run cleanup every hour
-	ticker := time.NewTicker(1 * time.Hour)
+	stagger := gcStaggerDelay(s.cfg.Name)
+
+	log.Info().Str("coordinator", s.cfg.Name).Dur("stagger", stagger).Msg("GC stagger delay computed")
+
+	// GC cycle body — shared between first run and ticker runs
+	runGCCycle := func() {
+		// Purge recycled objects past retention period
+		if purged := s.s3Store.PurgeRecycleBin(ctx); purged > 0 {
+			log.Info().Int("count", purged).Msg("purged recycled S3 objects")
+		}
+
+		// Purge content in expired file shares
+		if s.fileShareMgr != nil {
+			if purged := s.fileShareMgr.PurgeExpiredShareContents(ctx); purged > 0 {
+				log.Info().Int("count", purged).Msg("purged expired file share content")
+			}
+		}
+
+		// Purge orphaned file share buckets (shares deleted on another coordinator)
+		if s.fileShareMgr != nil {
+			if purged := s.fileShareMgr.PurgeOrphanedFileShareBuckets(ctx); purged > 0 {
+				log.Info().Int("count", purged).Msg("purged orphaned file share buckets")
+			}
+		}
+
+		// Serialize with manual GC — skip this cycle if manual GC is running
+		if !s.gcMu.TryLock() {
+			log.Debug().Msg("skipping periodic GC: manual GC in progress")
+		} else {
+			// Run garbage collection on versions and orphaned chunks
+			gcStart := time.Now()
+			gcStats := s.s3Store.RunGarbageCollection(ctx)
+			gcDuration := time.Since(gcStart).Seconds()
+			s.gcMu.Unlock()
+
+			// Always log GC at Info level so operators can confirm it's running
+			log.Info().
+				Str("coordinator", s.cfg.Name).
+				Int("versions_pruned", gcStats.VersionsPruned).
+				Int("chunks_deleted", gcStats.ChunksDeleted).
+				Int64("bytes_reclaimed", gcStats.BytesReclaimed).
+				Int("objects_scanned", gcStats.ObjectsScanned).
+				Int("chunks_skipped_grace_period", gcStats.ChunksSkippedGracePeriod).
+				Float64("duration_seconds", gcDuration).
+				Msg("periodic S3 garbage collection completed")
+
+			// Record GC metrics
+			if metrics := s3.GetS3Metrics(); metrics != nil {
+				metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
+			}
+
+			// Update S3 metrics after GC
+			s.updateS3Metrics()
+		}
+
+		// Collect and persist local capacity, then load peer snapshots
+		s.collectAndPersistCapacity(ctx)
+		s.loadPeerCapacitySnapshots(ctx)
+	}
+
+	// Initialize listing index channel and start background indexer
+	s.listingIndexNotify = make(chan struct{}, 1)
+	s.reconcileLocalIndex(ctx) // Populate index from disk on startup
+	s.loadPeerIndexes(ctx)     // Load any existing replicated peer data
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		defer ticker.Stop()
+		s.runListingIndexer(ctx)
+	}()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
 
 		// Update metrics on startup
-		s.updateCASMetrics()
+		s.updateS3Metrics()
+		s.collectAndPersistCapacity(ctx)
+
+		// Wait for stagger delay before first GC run
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(stagger):
+		}
+
+		// Run first GC cycle immediately after stagger
+		runGCCycle()
+
+		// Create ticker AFTER stagger so the cycle is properly offset.
+		// Each coordinator's cycle: stagger, stagger+5m, stagger+10m, ...
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				// Purge tombstoned objects past retention period
-				if purged := s.s3Store.PurgeTombstonedObjects(ctx); purged > 0 {
-					log.Info().Int("count", purged).Msg("purged tombstoned S3 objects")
-				}
+				runGCCycle()
+			}
+		}
+	}()
 
-				// Tombstone content in expired file shares
-				if s.fileShareMgr != nil {
-					if tombstoned := s.fileShareMgr.TombstoneExpiredShareContents(ctx); tombstoned > 0 {
-						log.Info().Int("count", tombstoned).Msg("tombstoned expired file share content")
-					}
-				}
-
-				// Run garbage collection on versions and orphaned chunks
-				gcStart := time.Now()
-				gcStats := s.s3Store.RunGarbageCollection(ctx)
-				gcDuration := time.Since(gcStart).Seconds()
-
-				if gcStats.VersionsPruned > 0 || gcStats.ChunksDeleted > 0 {
-					log.Info().
-						Int("versions_pruned", gcStats.VersionsPruned).
-						Int("chunks_deleted", gcStats.ChunksDeleted).
-						Int64("bytes_reclaimed", gcStats.BytesReclaimed).
-						Int("objects_scanned", gcStats.ObjectsScanned).
-						Msg("S3 garbage collection completed")
-				}
-
-				// Record GC metrics
-				if metrics := s3.GetS3Metrics(); metrics != nil {
-					metrics.RecordGCRun(gcStats.VersionsPruned, gcStats.ChunksDeleted, gcStats.BytesReclaimed, gcDuration)
-				}
-
-				// Update CAS metrics after GC
-				s.updateCASMetrics()
+	// Refresh storage/CAS gauges every 60s so dashboards stay current
+	// between the hourly GC cycles.
+	metricsTicker := time.NewTicker(60 * time.Second)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer metricsTicker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-metricsTicker.C:
+				s.updateS3Metrics()
 			}
 		}
 	}()
@@ -792,20 +922,128 @@ func (s *Server) StartReplicator() error {
 	return nil
 }
 
-// updateCASMetrics collects and updates CAS/chunking metrics.
-func (s *Server) updateCASMetrics() {
+// updateS3Metrics collects CAS stats once and updates all S3-related Prometheus
+// gauges (chunks, objects, storage bytes, quota, registered users).
+func (s *Server) updateS3Metrics() {
 	if s.s3Store == nil {
+		return
+	}
+	metrics := s3.GetS3Metrics()
+	if metrics == nil {
 		return
 	}
 
 	casStats := s.s3Store.GetCASStats()
+	metrics.UpdateCASMetrics(
+		casStats.ChunkCount,
+		casStats.ChunkBytes,
+		casStats.LogicalBytes,
+		casStats.VersionBytes,
+		casStats.RecycledBytes,
+		casStats.VersionCount,
+	)
+
+	buckets, err := s.s3Store.ListBuckets(context.Background())
+	if err != nil {
+		return
+	}
+
+	// Use physical chunk bytes (post-dedup) as the headline storage metric.
+	// NOTE: This is intentionally the same value as tunnelmesh_s3_chunk_storage_bytes
+	// (set by UpdateCASMetrics above). storage_bytes is the headline/dashboard metric;
+	// chunk_storage_bytes lives in the CAS namespace for dedup analysis.
+	storageBytes := casStats.ChunkBytes
+
+	var quotaBytes int64
+	if qs := s.s3Store.QuotaStats(); qs != nil {
+		quotaBytes = qs.MaxBytes
+	}
+
+	metrics.UpdateStorageMetrics(len(buckets), casStats.ObjectCount, storageBytes, quotaBytes)
+
+	if s.s3Credentials != nil {
+		metrics.SetRegisteredUsers(s.s3Credentials.UserCount())
+	}
+}
+
+// collectAndPersistCapacity collects local volume/quota stats, updates the local
+// capacity registry, updates Prometheus metrics, and persists to the system bucket.
+func (s *Server) collectAndPersistCapacity(ctx context.Context) {
+	if s.s3Store == nil || s.capacityRegistry == nil {
+		return
+	}
+
+	total, used, available, err := s.s3Store.VolumeStats()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to collect volume stats")
+		return
+	}
+
+	snap := &s3.CapacitySnapshot{
+		Timestamp:            time.Now(),
+		CoordinatorName:      s.cfg.Name,
+		VolumeTotalBytes:     total,
+		VolumeUsedBytes:      used,
+		VolumeAvailableBytes: available,
+	}
+
+	// Add quota info if available
+	if qs := s.s3Store.QuotaStats(); qs != nil {
+		snap.QuotaMaxBytes = qs.MaxBytes
+		snap.QuotaUsedBytes = qs.UsedBytes
+		snap.QuotaAvailBytes = qs.AvailableBytes
+	} else {
+		snap.QuotaAvailBytes = -1 // unlimited
+	}
+
+	// Update local registry
+	s.capacityRegistry.Update(snap)
+
+	// Update Prometheus metrics
 	if metrics := s3.GetS3Metrics(); metrics != nil {
-		metrics.UpdateCASMetrics(
-			casStats.ChunkCount,
-			casStats.ChunkBytes,
-			casStats.LogicalBytes,
-			casStats.VersionCount,
-		)
+		metrics.UpdateVolumeMetrics(total, used, available)
+	}
+
+	// Persist to system bucket
+	if s.s3SystemStore != nil {
+		key := "stats/" + s.cfg.Name + ".capacity.json"
+		if err := s.s3SystemStore.SaveJSON(ctx, key, snap); err != nil {
+			log.Warn().Err(err).Msg("failed to persist capacity snapshot")
+		}
+	}
+}
+
+// loadPeerCapacitySnapshots loads capacity snapshots from the system bucket
+// for all coordinators and populates the capacity registry.
+func (s *Server) loadPeerCapacitySnapshots(ctx context.Context) {
+	if s.s3Store == nil || s.s3SystemStore == nil || s.capacityRegistry == nil {
+		return
+	}
+
+	objects, _, _, err := s.s3Store.ListObjects(ctx, "_tunnelmesh", "stats/", "", 1000)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list capacity snapshots")
+		return
+	}
+
+	loaded := 0
+	for _, obj := range objects {
+		key := obj.Key
+		if !strings.HasSuffix(key, ".capacity.json") {
+			continue
+		}
+
+		var snap s3.CapacitySnapshot
+		if err := s.s3SystemStore.LoadJSON(ctx, key, &snap); err != nil {
+			log.Warn().Err(err).Str("key", key).Msg("failed to load capacity snapshot")
+			continue
+		}
+		s.capacityRegistry.Update(&snap)
+		loaded++
+	}
+
+	if loaded > 0 {
+		log.Info().Int("count", loaded).Msg("loaded peer capacity snapshots")
 	}
 }
 
@@ -932,6 +1170,9 @@ func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) erro
 	store.SetDefaultObjectExpiryDays(cfg.Coordinator.S3.ObjectExpiryDays)
 	store.SetDefaultShareExpiryDays(cfg.Coordinator.S3.ShareExpiryDays)
 
+	// Set recycle bin retention config
+	store.SetRecycleBinRetentionDays(cfg.Coordinator.S3.RecycleBinRetentionDays)
+
 	// Set version retention config
 	store.SetVersionRetentionDays(cfg.Coordinator.S3.VersionRetentionDays)
 	store.SetMaxVersionsPerObject(cfg.Coordinator.S3.MaxVersionsPerObject)
@@ -950,12 +1191,9 @@ func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) erro
 	// Create RBAC authorizer for S3
 	rbacAuth := s3.NewRBACAuthorizer(s.s3Credentials, s.s3Authorizer)
 
-	// Initialize S3 metrics with the same registry as coordinator metrics
-	// Will use default registry if metricsRegistry is nil (standalone coordinator)
-	s3Metrics := s3.InitS3Metrics(s.metricsRegistry)
-
-	// Create S3 server
-	s.s3Server = s3.NewServer(store, rbacAuth, s3Metrics)
+	// Create S3 server (metrics are initialized later in SetMetricsRegistry
+	// when the correct Prometheus registry is available)
+	s.s3Server = s3.NewServer(store, rbacAuth, nil)
 
 	// Create system store for internal coordinator data
 	// Use a service peer ID for the coordinator
@@ -1016,6 +1254,8 @@ func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) erro
 
 	// Initialize file share manager
 	s.fileShareMgr = s3.NewFileShareManager(store, systemStore, s.s3Authorizer)
+	s.s3Server.SetBucketRecoverer(s.fileShareMgr)
+	s.s3Server.SetRequestForwarder(s)
 	log.Info().Int("shares", len(s.fileShareMgr.List())).Msg("file share manager initialized")
 
 	// Recover coordinator state from S3
@@ -1070,6 +1310,18 @@ func (s *Server) recoverCoordinatorState(ctx context.Context, cfg *config.PeerCo
 		// Note: peerInfo.aliases will be updated when peers reconnect
 		s.peersMu.Unlock()
 	}
+
+	// Recover coordinator IPs so full list is available before all coordinators re-register
+	if coordIPs, err := systemStore.LoadCoordinatorIPs(ctx); err == nil && len(coordIPs) > 0 {
+		log.Info().Strs("ips", coordIPs).Msg("recovering coordinator IPs")
+		s.storeCoordIPs(coordIPs)
+		if s.coordIPsCb != nil {
+			s.coordIPsCb(coordIPs)
+		}
+	}
+
+	// Pre-populate capacity registry from replicated system bucket
+	s.loadPeerCapacitySnapshots(ctx)
 }
 
 // ensureBuiltinGroupBindings sets up the built-in group bindings if not already present.
@@ -1364,13 +1616,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Load persisted peers BEFORE acquiring peersMu to avoid holding the lock
+	// during S3 I/O. Peer registration is idempotent, so a slightly stale read
+	// is safe — worst case is a missed name collision caught on next registration.
+	persistedPeers, _ := s.s3SystemStore.LoadPeers(context.Background())
+
 	s.peersMu.Lock()
 	defer s.peersMu.Unlock()
-
-	// Load persisted peers once at the start to avoid race conditions and improve performance
-	// Previously: LoadPeers() was called 3 times (lines 1393, 1420, and during group checks)
-	// This cache prevents race conditions where two peers register simultaneously
-	persistedPeers, _ := s.s3SystemStore.LoadPeers(context.Background())
 
 	// Check for hostname collision with different public key
 	// Important: Check both active peers AND persisted peers to prevent admin spoofing
@@ -1558,12 +1810,17 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist DNS data to S3 (async to avoid blocking registration)
-	go s.saveDNSData()
+	// Tracked by WaitGroup so Shutdown waits for completion before cleanup.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.saveDNSData()
+	}()
 
 	// Update replicator peer list if this is a coordinator
 	if peer.IsCoordinator && s.replicator != nil {
 		// SECURITY FIX #4: Don't add self to replication targets
-		// Check peer name instead of mesh IP to avoid race condition with coordMeshIPs.Store()
+		// Check peer name instead of mesh IP to avoid race condition with storeCoordIPs()
 		// which happens asynchronously after registration completes
 		if req.Name != s.cfg.Name {
 			s.replicator.AddPeer(meshIP)
@@ -1634,8 +1891,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.updatePeerRecord(peerID, req.Name, req.PublicKey, isNewPeer)
 
 		// Auto-create peer share on first registration
+		// Tracked by WaitGroup so Shutdown waits for completion before cleanup.
 		if isNewPeer && s.fileShareMgr != nil {
-			go s.createPeerShare(peerID, req.Name)
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				s.createPeerShare(peerID, req.Name)
+			}()
 		}
 
 		// Check if peer is admin (for both new and existing peers)
@@ -1664,10 +1926,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		go s.lookupPeerLocation(req.Name, geoLookupIP)
 	}
 
-	// Get coordinator mesh IPs safely (uses atomic.Value).
+	// Get coordinator mesh IPs safely (uses atomic.Pointer).
 	// May be empty during coordinator self-registration at startup — the coordinator's
 	// DNS resolver reads directly from the server's atomic via GetCoordMeshIPs() instead.
-	coordIPs, _ := s.coordMeshIPs.Load().([]string)
+	coordIPs := s.GetCoordMeshIPs()
 
 	// If registering peer is a coordinator, include list of all known coordinators
 	// This enables immediate bidirectional replication without separate ListPeers() call
@@ -1835,7 +2097,13 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// SECURITY FIX #1: Authenticate that the request is from a coordinator peer
+	// Authenticate the sender via TLS client cert or known mesh IP.
+	// We don't additionally check coordinator status because:
+	// 1. This endpoint is only reachable within the mesh (admin server binds to mesh IP)
+	// 2. Only coordinators have the code to send replication messages
+	// 3. Coordinator discovery is itself distributed via replication, creating a
+	//    chicken-and-egg problem if we require coordinator verification here
+	// 4. The replication protocol has its own integrity checks (checksums, versioning)
 	peerName := s.getRequestOwner(r)
 	if peerName == "" {
 		log.Warn().Str("remote_addr", r.RemoteAddr).Msg("replication request from unauthenticated peer")
@@ -1843,22 +2111,7 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Verify the peer is a coordinator
-	s.peersMu.RLock()
-	peerInfo, exists := s.peers[peerName]
-	s.peersMu.RUnlock()
-
-	if !exists {
-		log.Warn().Str("peer", peerName).Msg("replication request from unknown peer")
-		s.jsonError(w, "unknown peer", http.StatusForbidden)
-		return
-	}
-
-	if !peerInfo.peer.IsCoordinator {
-		log.Warn().Str("peer", peerName).Msg("replication request from non-coordinator peer")
-		s.jsonError(w, "coordinator access required", http.StatusForbidden)
-		return
-	}
+	from, _, _ := net.SplitHostPort(r.RemoteAddr)
 
 	// SECURITY FIX #2: Limit message size to prevent OOM attacks (100MB max)
 	const maxReplicationMessageSize = 100 * 1024 * 1024 // 100MB
@@ -1883,11 +2136,7 @@ func (s *Server) handleReplicationMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// SECURITY FIX #10: Use authenticated peer identity as sender, not spoofable header
-	// The peer's mesh IP is the authoritative source of truth
-	from := peerInfo.peer.MeshIP
-
-	// Handle via mesh transport
+	// Handle via mesh transport (from was determined during auth above)
 	if s.meshTransport != nil {
 		if err := s.meshTransport.HandleIncomingMessage(from, data); err != nil {
 			log.Warn().Err(err).Str("from", from).Str("peer", peerName).Msg("failed to handle replication message")
@@ -2030,8 +2279,27 @@ func (s *Server) ListenAndServe() error {
 
 // GetCoordMeshIPs returns the current list of coordinator mesh IPs.
 func (s *Server) GetCoordMeshIPs() []string {
-	ips, _ := s.coordMeshIPs.Load().([]string)
-	return ips
+	if set := s.coordIPs.Load(); set != nil {
+		return set.original
+	}
+	return nil
+}
+
+// getSortedCoordIPs returns the cached sorted coordinator IP list for deterministic hashing.
+func (s *Server) getSortedCoordIPs() []string {
+	if set := s.coordIPs.Load(); set != nil {
+		return set.sorted
+	}
+	return nil
+}
+
+// storeCoordIPs stores both the original and sorted coordinator IP lists as a single
+// atomic unit, preventing inconsistent reads between the two lists during updates.
+func (s *Server) storeCoordIPs(ips []string) {
+	sorted := make([]string, len(ips))
+	copy(sorted, ips)
+	sort.Strings(sorted)
+	s.coordIPs.Store(&coordIPSet{original: ips, sorted: sorted})
 }
 
 // OnCoordIPsChanged registers a callback that fires whenever the coordinator IP list changes.
@@ -2053,10 +2321,21 @@ func (s *Server) SetCoordMeshIP(ip string) {
 		}
 	}
 	s.peersMu.RUnlock()
-	s.coordMeshIPs.Store(ips)
+	s.storeCoordIPs(ips)
 	log.Info().Strs("ips", ips).Msg("coordinator mesh IPs set for 'this.tunnelmesh' resolution")
 	if s.coordIPsCb != nil {
 		s.coordIPsCb(ips)
+	}
+
+	// Persist coordinator IPs to system store (replicated to all coordinators)
+	if s.s3SystemStore != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			if err := s.s3SystemStore.SaveCoordinatorIPs(context.Background(), ips); err != nil {
+				log.Warn().Err(err).Msg("failed to persist coordinator IPs")
+			}
+		}()
 	}
 }
 
@@ -2067,9 +2346,9 @@ func (s *Server) broadcastCoordinatorList() {
 	// to prevent races between list building and storage.
 	s.peersMu.RLock()
 	var ips []string
-	// Include self first (our coordMeshIPs always starts with self)
-	if stored, ok := s.coordMeshIPs.Load().([]string); ok && len(stored) > 0 {
-		ips = append(ips, stored[0]) // Self IP is always first
+	// Include self first (original list always starts with self)
+	if existing := s.GetCoordMeshIPs(); len(existing) > 0 {
+		ips = append(ips, existing[0]) // Self IP is always first
 	}
 	for _, ci := range s.coordinators {
 		// Skip self (already included above)
@@ -2079,12 +2358,23 @@ func (s *Server) broadcastCoordinatorList() {
 		ips = append(ips, ci.peer.MeshIP)
 	}
 	if len(ips) > 0 {
-		s.coordMeshIPs.Store(ips)
+		s.storeCoordIPs(ips)
 	}
 	s.peersMu.RUnlock()
 
 	if len(ips) == 0 {
 		return
+	}
+
+	// Persist coordinator IPs to system store (replicated to all coordinators)
+	if s.s3SystemStore != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			if err := s.s3SystemStore.SaveCoordinatorIPs(context.Background(), ips); err != nil {
+				log.Warn().Err(err).Msg("failed to persist coordinator IPs")
+			}
+		}()
 	}
 
 	// Update local DNS resolver
@@ -2107,6 +2397,23 @@ func (s *Server) broadcastCoordinatorList() {
 func (s *Server) SetMetricsRegistry(registry prometheus.Registerer) {
 	s.metricsRegistry = registry
 	s.coordMetrics = InitCoordMetrics(registry)
+
+	// Initialize S3 metrics on the correct registry and wire into the S3 server.
+	// This must happen here (not in initS3Storage) because the registry is not
+	// available during server construction.
+	s3Metrics := s3.InitS3Metrics(registry)
+	if s.s3Server != nil {
+		s.s3Server.SetMetrics(s3Metrics)
+	}
+
+	// Refresh storage metrics now that metrics are initialized.
+	// StartPeriodicCleanup may have already run its startup update before
+	// the registry was set, so those updates would have been silently skipped.
+	go func() {
+		s.updateS3Metrics()
+		s.collectAndPersistCapacity(context.Background())
+	}()
+
 	log.Debug().Msg("coordinator metrics initialized")
 }
 

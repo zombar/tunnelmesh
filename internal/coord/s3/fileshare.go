@@ -2,6 +2,7 @@ package s3
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -21,7 +22,9 @@ type FileShareManager struct {
 }
 
 // NewFileShareManager creates a new file share manager.
-// It loads existing shares from the system store.
+// It loads existing shares from the system store and ensures their underlying
+// S3 buckets exist on disk. Buckets may be missing if share metadata was
+// replicated from another coordinator but the bucket directories were not.
 func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *auth.Authorizer) *FileShareManager {
 	mgr := &FileShareManager{
 		store:       store,
@@ -33,6 +36,26 @@ func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *aut
 	if systemStore != nil {
 		shares, _ := systemStore.LoadFileShares(context.Background())
 		mgr.shares = shares
+
+		// Ensure buckets exist for all loaded shares.
+		// Share metadata may have been replicated from another coordinator
+		// (via system store replication) without the corresponding bucket
+		// directories being created locally.
+		for _, share := range shares {
+			bucketName := FileShareBucketPrefix + share.Name
+			if _, err := store.HeadBucket(context.Background(), bucketName); err != nil {
+				// Bucket missing — recreate it with the share's stored replication factor
+				rf := share.ReplicationFactor
+				if rf < 1 || rf > 3 {
+					rf = 2 // Default for shares persisted before RF was stored
+				}
+				if createErr := store.CreateBucket(context.Background(), bucketName, share.Owner, rf, nil); createErr == nil {
+					log.Info().Str("share", share.Name).Str("bucket", bucketName).Int("rf", rf).Msg("recreated missing bucket for share")
+				} else {
+					log.Warn().Err(createErr).Str("share", share.Name).Str("bucket", bucketName).Msg("failed to recreate missing bucket for share")
+				}
+			}
+		}
 	}
 
 	return mgr
@@ -48,7 +71,6 @@ type FileShareOptions struct {
 
 // Create creates a new file share.
 // It creates the underlying bucket, sets up default permissions, and persists the share metadata.
-// If a bucket already exists (from a previously deleted share), it restores the tombstoned objects.
 // quotaBytes of 0 means unlimited (within global quota).
 func (m *FileShareManager) Create(ctx context.Context, name, description, ownerID string, quotaBytes int64, opts *FileShareOptions) (*FileShare, error) {
 	m.mu.Lock()
@@ -63,18 +85,18 @@ func (m *FileShareManager) Create(ctx context.Context, name, description, ownerI
 
 	bucketName := FileShareBucketPrefix + name
 
+	// Determine effective replication factor
+	replicationFactor := 2
+	if opts != nil && opts.ReplicationFactor > 0 {
+		replicationFactor = opts.ReplicationFactor
+	}
+
 	// Check if bucket already exists (from a previously deleted share)
 	bucketExists := false
 	if _, err := m.store.HeadBucket(ctx, bucketName); err == nil {
 		bucketExists = true
-		// Restore the bucket (O(1) - clears bucket tombstone flag)
-		_ = m.store.UntombstoneBucket(ctx, bucketName)
 	} else {
 		// Create new bucket
-		replicationFactor := 2 // Default replication factor
-		if opts != nil && opts.ReplicationFactor > 0 {
-			replicationFactor = opts.ReplicationFactor
-		}
 		if err := m.store.CreateBucket(ctx, bucketName, ownerID, replicationFactor, nil); err != nil {
 			return nil, fmt.Errorf("create bucket: %w", err)
 		}
@@ -105,12 +127,13 @@ func (m *FileShareManager) Create(ctx context.Context, name, description, ownerI
 	// Create share record
 	now := time.Now().UTC()
 	share := &FileShare{
-		Name:        name,
-		Description: description,
-		Owner:       ownerID,
-		CreatedAt:   now,
-		QuotaBytes:  quotaBytes,
-		GuestRead:   guestRead,
+		Name:              name,
+		Description:       description,
+		Owner:             ownerID,
+		CreatedAt:         now,
+		QuotaBytes:        quotaBytes,
+		GuestRead:         guestRead,
+		ReplicationFactor: replicationFactor,
 	}
 
 	// Set expiry from opts or use default
@@ -166,9 +189,11 @@ func (m *FileShareManager) Delete(ctx context.Context, name string) error {
 
 	bucketName := FileShareBucketPrefix + name
 
-	// Tombstone the bucket (soft delete - allows restore on recreate)
-	// This is O(1) - all objects in a tombstoned bucket are treated as tombstoned
-	_ = m.store.TombstoneBucket(ctx, bucketName)
+	// Hard delete: remove the entire bucket directory.
+	// File shares are admin-managed, so we skip per-object purge (which does
+	// expensive global chunk reference scans) and just delete the directory.
+	// Orphaned chunks will be cleaned up by the next periodic GC cycle.
+	_ = m.store.ForceDeleteBucket(ctx, bucketName)
 
 	// Remove group bindings for this bucket
 	for _, b := range m.authorizer.GroupBindings.List() {
@@ -204,6 +229,69 @@ func (m *FileShareManager) Get(name string) *FileShare {
 
 	for _, s := range m.shares {
 		if s.Name == name {
+			return s
+		}
+	}
+	return nil
+}
+
+// EnsureBucketForShare recreates a missing bucket for an existing share.
+// This handles the case where _meta.json was corrupted (e.g. disk-full truncation)
+// but the share metadata still exists in the system store.
+// Returns nil if the bucket is not a share bucket, no share exists, or the bucket already exists.
+func (m *FileShareManager) EnsureBucketForShare(ctx context.Context, bucketName string) error {
+	if !strings.HasPrefix(bucketName, FileShareBucketPrefix) {
+		return nil
+	}
+
+	shareName := strings.TrimPrefix(bucketName, FileShareBucketPrefix)
+	share := m.Get(shareName)
+	if share == nil {
+		// Share not in memory — it may have been created on another coordinator
+		// and replicated to our system store. Reload from system store.
+		share = m.refreshAndGet(ctx, shareName)
+		if share == nil {
+			return nil
+		}
+	}
+
+	if _, err := m.store.HeadBucket(ctx, bucketName); err == nil {
+		return nil // bucket exists
+	}
+
+	rf := share.ReplicationFactor
+	if rf < 1 || rf > 3 {
+		rf = 2
+	}
+
+	err := m.store.CreateBucket(ctx, bucketName, share.Owner, rf, nil)
+	if err != nil && errors.Is(err, ErrBucketExists) {
+		return nil // concurrent creation, fine
+	}
+	if err == nil {
+		log.Info().Str("share", shareName).Str("bucket", bucketName).Msg("recreated missing bucket for share on demand")
+	}
+	return err
+}
+
+// refreshAndGet reloads shares from the system store and returns the named share if found.
+// This catches shares that were created on another coordinator and replicated via the system bucket.
+func (m *FileShareManager) refreshAndGet(ctx context.Context, name string) *FileShare {
+	if m.systemStore == nil {
+		return nil
+	}
+	shares, err := m.systemStore.LoadFileShares(ctx)
+	if err != nil || len(shares) == 0 {
+		return nil
+	}
+
+	m.mu.Lock()
+	m.shares = shares
+	m.mu.Unlock()
+
+	for _, s := range shares {
+		if s.Name == name {
+			log.Info().Str("share", name).Msg("discovered replicated share from system store")
 			return s
 		}
 	}
@@ -264,9 +352,58 @@ func (m *FileShareManager) IsProtectedGroupBinding(binding *auth.GroupBinding) b
 	return binding.GroupName == auth.GroupEveryone
 }
 
-// TombstoneExpiredShareContents tombstones all objects in expired file shares.
-// Returns the number of objects tombstoned.
-func (m *FileShareManager) TombstoneExpiredShareContents(ctx context.Context) int {
+// PurgeOrphanedFileShareBuckets deletes file share buckets (fs+*) that no longer
+// have a corresponding share. This handles the case where a share is deleted on
+// one coordinator but the bucket directory was only removed locally — replicas
+// still have the bucket and its objects, preventing GC from cleaning up chunks.
+// Reloads share config from the system store first to pick up cross-coordinator deletions.
+func (m *FileShareManager) PurgeOrphanedFileShareBuckets(ctx context.Context) int {
+	// Reload from system store to pick up share deletions from other coordinators
+	if m.systemStore != nil {
+		if shares, err := m.systemStore.LoadFileShares(ctx); err == nil {
+			m.mu.Lock()
+			m.shares = shares
+			m.mu.Unlock()
+		}
+	}
+
+	// Build set of active share bucket names
+	m.mu.RLock()
+	activeShareBuckets := make(map[string]struct{}, len(m.shares))
+	for _, s := range m.shares {
+		activeShareBuckets[FileShareBucketPrefix+s.Name] = struct{}{}
+	}
+	m.mu.RUnlock()
+
+	// List all buckets and find orphaned file share buckets
+	buckets, err := m.store.ListBuckets(ctx)
+	if err != nil {
+		return 0
+	}
+
+	purged := 0
+	for _, bucket := range buckets {
+		if !strings.HasPrefix(bucket.Name, FileShareBucketPrefix) {
+			continue
+		}
+		if _, active := activeShareBuckets[bucket.Name]; active {
+			continue
+		}
+		// Bucket has fs+ prefix but no corresponding share — orphaned
+		log.Info().Str("bucket", bucket.Name).Msg("purging orphaned file share bucket")
+		if err := m.store.ForceDeleteBucket(ctx, bucket.Name); err != nil {
+			log.Warn().Err(err).Str("bucket", bucket.Name).Msg("failed to purge orphaned file share bucket")
+		} else {
+			purged++
+		}
+	}
+	return purged
+}
+
+// PurgeExpiredShareContents purges all objects in expired file shares.
+// Expired share content doesn't need a recycle bin — the share itself has expired.
+// Returns the number of objects purged.
+func (m *FileShareManager) PurgeExpiredShareContents(ctx context.Context) int {
 	m.mu.RLock()
 	expiredShares := make([]*FileShare, 0)
 	for _, s := range m.shares {
@@ -276,7 +413,7 @@ func (m *FileShareManager) TombstoneExpiredShareContents(ctx context.Context) in
 	}
 	m.mu.RUnlock()
 
-	tombstonedCount := 0
+	purgedCount := 0
 	for _, share := range expiredShares {
 		bucketName := FileShareBucketPrefix + share.Name
 
@@ -289,12 +426,8 @@ func (m *FileShareManager) TombstoneExpiredShareContents(ctx context.Context) in
 			}
 
 			for _, obj := range objects {
-				// Skip already tombstoned objects
-				if obj.IsTombstoned() {
-					continue
-				}
-				if err := m.store.TombstoneObject(ctx, bucketName, obj.Key); err == nil {
-					tombstonedCount++
+				if err := m.store.PurgeObject(ctx, bucketName, obj.Key); err == nil {
+					purgedCount++
 				}
 			}
 
@@ -305,5 +438,5 @@ func (m *FileShareManager) TombstoneExpiredShareContents(ctx context.Context) in
 		}
 	}
 
-	return tombstonedCount
+	return purgedCount
 }
