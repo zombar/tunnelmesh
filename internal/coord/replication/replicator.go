@@ -186,6 +186,13 @@ type Replicator struct {
 	// calls to prevent writer queue buildup on Store.mu (see lock contention fix).
 	metaImportSem chan struct{}
 
+	// Deferred chunk cleanup — coalesces chunk hashes from metadata imports
+	// and processes them in batches via a background worker, avoiding expensive
+	// full-filesystem walks (buildChunkReferenceSet) in the HTTP handler path.
+	deferredChunksMu sync.Mutex
+	deferredChunks   map[string]struct{}
+	deferredNotify   chan struct{} // buffered(1)
+
 	// Replication queue (replaces per-PutObject goroutine approach)
 	replQueue   chan struct{} // Notification channel (buffer=1)
 	replPending sync.Map      // map["bucket\x00key"]*replQueueEntry
@@ -323,6 +330,8 @@ func NewReplicator(config Config) *Replicator {
 		pendingFetchRequests:   make(map[string]chan *FetchChunkResponsePayload),
 		pendingFetchTimestamps: make(map[string]time.Time),
 		metaImportSem:          make(chan struct{}, 3),
+		deferredChunks:         make(map[string]struct{}),
+		deferredNotify:         make(chan struct{}, 1),
 		replQueue:              make(chan struct{}, 1),
 		chunkPipelineWindow:    config.ChunkPipelineWindow,
 		autoSyncInterval:       config.AutoSyncInterval,
@@ -362,6 +371,10 @@ func (r *Replicator) Start() error {
 		r.wg.Add(1)
 		go r.runAutoSyncWorker()
 	}
+
+	// Start deferred chunk cleanup worker
+	r.wg.Add(1)
+	go r.runDeferredChunkCleanupWorker()
 
 	// Start rebalancer if configured
 	if r.rebalancer != nil {
@@ -2277,6 +2290,73 @@ func (r *Replicator) sendReplicateObjectMeta(ctx context.Context, peerID, bucket
 	return nil
 }
 
+// enqueueDeferredChunkCleanup adds chunk hashes to the deferred cleanup set
+// and notifies the background worker. This avoids expensive buildChunkReferenceSet
+// walks in the HTTP handler path.
+func (r *Replicator) enqueueDeferredChunkCleanup(chunks []string) {
+	r.deferredChunksMu.Lock()
+	for _, h := range chunks {
+		r.deferredChunks[h] = struct{}{}
+	}
+	r.deferredChunksMu.Unlock()
+
+	// Non-blocking notify — if channel already has a pending signal, skip.
+	select {
+	case r.deferredNotify <- struct{}{}:
+	default:
+	}
+}
+
+// runDeferredChunkCleanupWorker processes deferred chunk cleanup in batches.
+// It coalesces chunk hashes over a 30-second window, then performs a single
+// DeleteUnreferencedChunks call (one buildChunkReferenceSet walk instead of N).
+func (r *Replicator) runDeferredChunkCleanupWorker() {
+	defer r.wg.Done()
+
+	for {
+		// Wait for notification or shutdown.
+		select {
+		case <-r.deferredNotify:
+		case <-r.ctx.Done():
+			return
+		}
+
+		// Coalesce: wait 30 seconds to collect more chunks.
+		select {
+		case <-time.After(30 * time.Second):
+		case <-r.ctx.Done():
+			return
+		}
+
+		// Swap out the pending set so we don't block enqueuers during the walk.
+		r.deferredChunksMu.Lock()
+		pending := r.deferredChunks
+		r.deferredChunks = make(map[string]struct{})
+		r.deferredChunksMu.Unlock()
+
+		if len(pending) == 0 {
+			continue
+		}
+
+		// Convert set to slice.
+		chunks := make([]string, 0, len(pending))
+		for h := range pending {
+			chunks = append(chunks, h)
+		}
+
+		r.logger.Debug().
+			Int("chunks", len(chunks)).
+			Msg("Deferred chunk cleanup: starting batch")
+
+		freed := r.s3.DeleteUnreferencedChunks(r.ctx, chunks)
+
+		r.logger.Info().
+			Int("chunks_checked", len(chunks)).
+			Int64("bytes_freed", freed).
+			Msg("Deferred chunk cleanup completed")
+	}
+}
+
 // handleReplicateObjectMeta processes an incoming object metadata replication message.
 func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 	var payload ReplicateObjectMetaPayload
@@ -2297,13 +2377,13 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 	// With lock hold reduced to ~5ms, 3 concurrent imports create ~15ms max queue time.
 	select {
 	case r.metaImportSem <- struct{}{}:
-		defer func() { <-r.metaImportSem }()
 	case <-ctx.Done():
 		return fmt.Errorf("metadata import semaphore: %w", ctx.Err())
 	}
 
 	chunksToCheck, err := r.s3.ImportObjectMeta(ctx, payload.Bucket, payload.Key, payload.MetaJSON, payload.BucketOwner)
 	if err != nil {
+		<-r.metaImportSem
 		r.logger.Error().Err(err).
 			Str("bucket", payload.Bucket).
 			Str("key", payload.Key).
@@ -2312,23 +2392,10 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 		return fmt.Errorf("import object meta: %w", err)
 	}
 
-	// Clean up chunks from pruned old versions that are no longer referenced.
-	// This prevents orphaned chunks from accumulating on replica coordinators.
-	if len(chunksToCheck) > 0 {
-		freed := r.s3.DeleteUnreferencedChunks(ctx, chunksToCheck)
-		if freed > 0 {
-			r.logger.Debug().
-				Str("bucket", payload.Bucket).
-				Str("key", payload.Key).
-				Int64("bytes_freed", freed).
-				Int("chunks_checked", len(chunksToCheck)).
-				Msg("Cleaned up unreferenced chunks after metadata import")
-		}
-	}
-
-	// Import version history if present
+	// Import version history if present (still under semaphore for bounded concurrency).
+	var vChunks []string
 	if len(payload.Versions) > 0 {
-		imported, vChunks, vErr := r.s3.ImportVersionHistory(ctx, payload.Bucket, payload.Key, payload.Versions)
+		imported, vc, vErr := r.s3.ImportVersionHistory(ctx, payload.Bucket, payload.Key, payload.Versions)
 		if vErr != nil {
 			r.logger.Warn().Err(vErr).
 				Str("bucket", payload.Bucket).
@@ -2341,10 +2408,22 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 				Int("imported", imported).
 				Int("total", len(payload.Versions)).
 				Msg("Imported version history from replication")
-			if len(vChunks) > 0 {
-				r.s3.DeleteUnreferencedChunks(ctx, vChunks)
-			}
+			vChunks = vc
 		}
+	}
+
+	// Release semaphore immediately after imports — expensive chunk cleanup
+	// is deferred to a background worker to keep handler response times low.
+	<-r.metaImportSem
+
+	// Defer chunk cleanup to background worker instead of running expensive
+	// buildChunkReferenceSet filesystem walks inline (100-800ms+ each).
+	// The 5-minute GC cycle serves as a safety net for any missed chunks.
+	if len(chunksToCheck) > 0 {
+		r.enqueueDeferredChunkCleanup(chunksToCheck)
+	}
+	if len(vChunks) > 0 {
+		r.enqueueDeferredChunkCleanup(vChunks)
 	}
 
 	r.logger.Info().
