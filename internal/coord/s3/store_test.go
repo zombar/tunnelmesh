@@ -2980,3 +2980,101 @@ func TestGetBucketErasureCodingPolicy_BucketNotFound(t *testing.T) {
 	_, _, _, err := store.GetBucketErasureCodingPolicy(ctx, "nonexistent")
 	assert.Error(t, err)
 }
+
+func TestAtomicWriteFile(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("basic write and read", func(t *testing.T) {
+		path := filepath.Join(dir, "test.json")
+		data := []byte(`{"key": "value"}`)
+		require.NoError(t, atomicWriteFile(path, data, 0644))
+
+		got, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, data, got)
+	})
+
+	t.Run("overwrites existing file atomically", func(t *testing.T) {
+		path := filepath.Join(dir, "overwrite.json")
+		require.NoError(t, atomicWriteFile(path, []byte("old"), 0644))
+		require.NoError(t, atomicWriteFile(path, []byte("new"), 0644))
+
+		got, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("new"), got)
+	})
+
+	t.Run("no temp files left on success", func(t *testing.T) {
+		path := filepath.Join(dir, "clean.json")
+		require.NoError(t, atomicWriteFile(path, []byte("data"), 0644))
+
+		entries, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		for _, e := range entries {
+			assert.False(t, strings.HasPrefix(e.Name(), ".tmp-"),
+				"temp file should be cleaned up: %s", e.Name())
+		}
+	})
+
+	t.Run("fails on nonexistent directory", func(t *testing.T) {
+		path := filepath.Join(dir, "nonexistent", "file.json")
+		err := atomicWriteFile(path, []byte("data"), 0644)
+		assert.Error(t, err)
+	})
+}
+
+func TestImportObjectMeta_ConcurrentStress(t *testing.T) {
+	store := newTestStoreWithCAS(t)
+	ctx := context.Background()
+
+	// Create a bucket upfront
+	require.NoError(t, store.CreateBucket(ctx, "stress", "owner", 1, nil))
+
+	const goroutines = 20
+	const objectsPerGoroutine = 5
+
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines*objectsPerGoroutine)
+
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < objectsPerGoroutine; i++ {
+				key := fmt.Sprintf("obj-%d-%d", g, i)
+				meta := ObjectMeta{
+					Key:         key,
+					Size:        int64(100 + g*10 + i),
+					ContentType: "text/plain",
+					Chunks:      []string{fmt.Sprintf("chunk-%d-%d", g, i)},
+				}
+				metaJSON, err := json.Marshal(meta)
+				if err != nil {
+					errs <- err
+					return
+				}
+				if _, err := store.ImportObjectMeta(ctx, "stress", key, metaJSON, ""); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Fatalf("concurrent ImportObjectMeta failed: %v", err)
+	}
+
+	// Verify all objects are readable
+	for g := 0; g < goroutines; g++ {
+		for i := 0; i < objectsPerGoroutine; i++ {
+			key := fmt.Sprintf("obj-%d-%d", g, i)
+			got, err := store.GetObjectMeta(ctx, "stress", key)
+			require.NoError(t, err, "object %s should be readable", key)
+			assert.Equal(t, key, got.Key)
+		}
+	}
+}

@@ -182,6 +182,10 @@ type Replicator struct {
 	// Rebalancer (nil if not configured)
 	rebalancer *Rebalancer
 
+	// Metadata import concurrency limiter — bounds concurrent ImportObjectMeta
+	// calls to prevent writer queue buildup on Store.mu (see lock contention fix).
+	metaImportSem chan struct{}
+
 	// Replication queue (replaces per-PutObject goroutine approach)
 	replQueue   chan struct{} // Notification channel (buffer=1)
 	replPending sync.Map      // map["bucket\x00key"]*replQueueEntry
@@ -318,6 +322,7 @@ func NewReplicator(config Config) *Replicator {
 		pendingChunks:          make(map[string]*pendingChunkReplication),
 		pendingFetchRequests:   make(map[string]chan *FetchChunkResponsePayload),
 		pendingFetchTimestamps: make(map[string]time.Time),
+		metaImportSem:          make(chan struct{}, 3),
 		replQueue:              make(chan struct{}, 1),
 		chunkPipelineWindow:    config.ChunkPipelineWindow,
 		autoSyncInterval:       config.AutoSyncInterval,
@@ -2287,6 +2292,15 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 
 	ctx, cancel := context.WithTimeout(r.ctx, r.applyTimeout)
 	defer cancel()
+
+	// Limit concurrent metadata imports to prevent Store.mu writer queue buildup.
+	// With lock hold reduced to ~5ms, 3 concurrent imports create ~15ms max queue time.
+	select {
+	case r.metaImportSem <- struct{}{}:
+		defer func() { <-r.metaImportSem }()
+	case <-ctx.Done():
+		return fmt.Errorf("metadata import semaphore: %w", ctx.Err())
+	}
 
 	chunksToCheck, err := r.s3.ImportObjectMeta(ctx, payload.Bucket, payload.Key, payload.MetaJSON, payload.BucketOwner)
 	if err != nil {
