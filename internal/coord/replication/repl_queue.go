@@ -75,7 +75,7 @@ func (r *Replicator) drainReplicationQueue(ctx context.Context) {
 		Msg("Draining replication queue")
 
 	// Process with bounded concurrency
-	const maxConcurrent = 10
+	const maxConcurrent = 5
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 
@@ -120,7 +120,9 @@ func (r *Replicator) processQueueEntry(ctx context.Context, entry *replQueueEntr
 	}
 }
 
-// processQueuePut replicates an object to all peers in parallel and cleans up non-assigned chunks.
+// processQueuePut replicates an object to all peers in parallel and cleans up non-assigned chunks on success.
+// Each peer gets its own goroutine with an independent 60s timeout, so one slow/unreachable
+// peer cannot starve others of time (the root cause of uneven distribution).
 func (r *Replicator) processQueuePut(ctx context.Context, entry *replQueueEntry, peers []string) {
 	if r.chunkRegistry == nil {
 		// No chunk registry — fall back to file-level replication
@@ -141,7 +143,7 @@ func (r *Replicator) processQueuePut(ctx context.Context, entry *replQueueEntry,
 		}(peerID)
 	}
 
-	var failedPeers []string
+	allSucceeded := true
 	for range peers {
 		res := <-results
 		if res.err != nil {
@@ -151,22 +153,23 @@ func (r *Replicator) processQueuePut(ctx context.Context, entry *replQueueEntry,
 				Str("key", entry.key).
 				Int("retry", entry.retries).
 				Msg("Queued replication failed")
-			failedPeers = append(failedPeers, res.peerID)
+			allSucceeded = false
 		}
 	}
 
-	// Always attempt cleanup — safety check inside CleanupNonAssignedChunks
-	// ensures we never delete the last copy of a chunk
-	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if err := r.CleanupNonAssignedChunks(cleanupCtx, entry.bucket, entry.key); err != nil {
-		r.logger.Error().Err(err).
-			Str("bucket", entry.bucket).
-			Str("key", entry.key).
-			Msg("Failed to cleanup non-assigned chunks after queued replication")
-	}
-
-	if len(failedPeers) > 0 {
+	if allSucceeded {
+		// All peers received their chunks — safe to clean up non-assigned local chunks.
+		// Safety check inside CleanupNonAssignedChunks verifies remote owners exist
+		// before deleting, preventing data loss on edge cases.
+		cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := r.CleanupNonAssignedChunks(cleanupCtx, entry.bucket, entry.key); err != nil {
+			r.logger.Error().Err(err).
+				Str("bucket", entry.bucket).
+				Str("key", entry.key).
+				Msg("Failed to cleanup non-assigned chunks after queued replication")
+		}
+	} else {
 		r.reEnqueueOnFailure(entry)
 	}
 }
