@@ -314,6 +314,51 @@ func syncedWriteFile(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+// atomicWriteFile writes data to a file using atomic rename but without fsync.
+// This is faster than syncedWriteFile (~0.1ms vs ~10-50ms) because it skips
+// the fsync syscall. The data may be lost on power failure, but the file will
+// never be partially written (atomic rename guarantees).
+//
+// Use this for replicated metadata that can be recovered via auto-sync from
+// source coordinators. Do NOT use for user-written data (PutObject) where
+// durability matters.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+
+	success := false
+	defer func() {
+		if !success {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if err := tmp.Chmod(perm); err != nil {
+		return err
+	}
+
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+
+	success = true
+	return nil
+}
+
 // NewStoreWithCAS creates a new S3 store with CAS (Content-Addressable Storage) enabled.
 // This enables CDC chunking, encryption, compression, and version history.
 func NewStoreWithCAS(dataDir string, quota *QuotaManager, masterKey [32]byte) (*Store, error) {
@@ -2436,6 +2481,14 @@ func (s *Store) GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectM
 
 // ReadChunk reads a chunk from CAS by its hash.
 // This is used by the replicator to fetch chunk data for sending to peers.
+// ChunkExists checks if a chunk exists in CAS without reading its data.
+func (s *Store) ChunkExists(hash string) bool {
+	if s.cas == nil {
+		return false
+	}
+	return s.cas.ChunkExists(hash)
+}
+
 func (s *Store) ReadChunk(ctx context.Context, hash string) ([]byte, error) {
 	if s.cas == nil {
 		return nil, fmt.Errorf("CAS not initialized")
@@ -2484,8 +2537,14 @@ func (s *Store) WriteChunkDirect(ctx context.Context, hash string, data []byte) 
 // This is used by the replication receiver to create the metadata file so the
 // remote coordinator can serve reads for objects whose chunks arrive separately.
 // bucketOwner is used when auto-creating the bucket (empty string defaults to "system").
+//
+// Lock hold time is minimized: validation and directory creation happen before
+// the lock, pruneExpiredVersions runs after the lock is released, and all writes
+// use atomicWriteFile (no fsync) since replicated metadata is recoverable via
+// auto-sync from source coordinators.
 func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJSON []byte, bucketOwner string) ([]string, error) {
-	// Validate names
+	// === Phase 1: Before lock — validation, unmarshal, directory creation ===
+
 	if err := validateName(bucket); err != nil {
 		return nil, fmt.Errorf("invalid bucket name: %w", err)
 	}
@@ -2493,19 +2552,29 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 		return nil, fmt.Errorf("invalid key: %w", err)
 	}
 
-	// Validate that metaJSON is valid ObjectMeta
 	var meta ObjectMeta
 	if err := json.Unmarshal(metaJSON, &meta); err != nil {
 		return nil, fmt.Errorf("invalid object meta JSON: %w", err)
 	}
 
+	// Pre-create directories outside the lock (MkdirAll is idempotent)
+	bucketDir := s.bucketPath(bucket)
+	metaDir := filepath.Join(bucketDir, "meta")
+	if mkErr := os.MkdirAll(metaDir, 0755); mkErr != nil {
+		return nil, fmt.Errorf("create bucket/meta directories: %w", mkErr)
+	}
+	metaPath := s.objectMetaPath(bucket, key)
+	if mkErr := os.MkdirAll(filepath.Dir(metaPath), 0755); mkErr != nil {
+		return nil, fmt.Errorf("create meta parent directory: %w", mkErr)
+	}
+
+	// === Phase 2: Under lock — reads, archive, writes (all atomicWriteFile) ===
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// Ensure bucket exists — create bucket meta if needed
 	bucketMeta, err := s.getBucketMeta(bucket)
 	if err != nil {
-		// Bucket doesn't exist — create minimal bucket meta
 		if bucketOwner == "" {
 			bucketOwner = "system"
 		}
@@ -2515,35 +2584,18 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 			Owner:             bucketOwner,
 			ReplicationFactor: 2, // Auto-created during replication → multi-coordinator setup
 		}
-		bucketDir := s.bucketPath(bucket)
-		if mkErr := os.MkdirAll(filepath.Join(bucketDir, "meta"), 0755); mkErr != nil {
-			return nil, fmt.Errorf("create bucket directories: %w", mkErr)
-		}
 		bmData, marshalErr := json.Marshal(bucketMeta)
 		if marshalErr != nil {
+			s.mu.Unlock()
 			return nil, fmt.Errorf("marshal bucket meta: %w", marshalErr)
 		}
-		if writeErr := syncedWriteFile(s.bucketMetaPath(bucket), bmData, 0644); writeErr != nil {
+		if writeErr := atomicWriteFile(s.bucketMetaPath(bucket), bmData, 0644); writeErr != nil {
+			s.mu.Unlock()
 			return nil, fmt.Errorf("write bucket meta: %w", writeErr)
 		}
 	}
 
-	// Ensure meta directory exists
-	metaDir := filepath.Join(s.bucketPath(bucket), "meta")
-	if mkErr := os.MkdirAll(metaDir, 0755); mkErr != nil {
-		return nil, fmt.Errorf("create meta directory: %w", mkErr)
-	}
-
-	// Write the object metadata file
-	metaPath := s.objectMetaPath(bucket, key)
-
-	// Ensure parent directory exists (for nested keys like "dir/file.txt")
-	if mkErr := os.MkdirAll(filepath.Dir(metaPath), 0755); mkErr != nil {
-		return nil, fmt.Errorf("create meta parent directory: %w", mkErr)
-	}
-
 	// Check if object already exists (for idempotent retries)
-	// Subtract old size before adding new to prevent double-counting
 	var oldLogicalBytes int64
 	isNewObject := true
 	if oldMeta, err := s.getObjectMeta(bucket, key); err == nil {
@@ -2552,42 +2604,66 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 		oldLogicalBytes = oldMeta.Size
 	}
 
-	// Archive current version before overwriting — same as PutObject does.
-	// This enables GC to prune old versions on replica coordinators.
-	if err := s.archiveCurrentVersion(bucket, key); err != nil {
-		// Non-fatal: log warning but don't fail replication import
-		s.logger.Warn().Err(err).
-			Str("bucket", bucket).Str("key", key).
-			Msg("Failed to archive version during replication import")
+	// Archive current version before overwriting (inlined to use atomicWriteFile).
+	// archiveCurrentVersion calls syncedWriteFile which we want to avoid under lock.
+	if currentMeta, archErr := s.getObjectMeta(bucket, key); archErr == nil {
+		versionID := currentMeta.VersionID
+		if versionID == "" {
+			versionID = generateVersionID()
+			currentMeta.VersionID = versionID
+		}
+		versionDir := s.versionDir(bucket, key)
+		if mkErr := os.MkdirAll(versionDir, 0755); mkErr != nil {
+			s.logger.Warn().Err(mkErr).
+				Str("bucket", bucket).Str("key", key).
+				Msg("Failed to create version dir during replication import")
+		} else {
+			versionPath := s.versionMetaPath(bucket, key, versionID)
+			vData, vErr := json.MarshalIndent(currentMeta, "", "  ")
+			if vErr == nil {
+				if wErr := atomicWriteFile(versionPath, vData, 0644); wErr != nil {
+					s.logger.Warn().Err(wErr).
+						Str("bucket", bucket).Str("key", key).
+						Msg("Failed to archive version during replication import")
+				} else {
+					s.statsVersionCount.Add(1)
+					s.statsVersionBytes.Add(currentMeta.Size)
+				}
+			}
+		}
 	}
 
-	if writeErr := syncedWriteFile(metaPath, metaJSON, 0644); writeErr != nil {
+	// Write the object metadata
+	if writeErr := atomicWriteFile(metaPath, metaJSON, 0644); writeErr != nil {
+		s.mu.Unlock()
 		return nil, fmt.Errorf("write object meta: %w", writeErr)
 	}
 
-	// Compute LogicalBytes from imported object's metadata size
+	// Update incremental stats (atomics, but done under lock for consistency with bucket meta)
 	newLogicalBytes := meta.Size
-
-	// Update incremental stats
 	if isNewObject {
 		s.statsObjectCount.Add(1)
 	}
 	s.statsLogicalBytes.Add(newLogicalBytes - oldLogicalBytes)
 
-	// Prune expired versions inline (lazy cleanup), same as PutObject does.
-	// Return chunk hashes from pruned versions so the caller can clean up
-	// unreferenced chunks immediately (critical for replica coordinators).
-	_, chunksToCheck := s.pruneExpiredVersions(ctx, bucket, key)
-
-	// Update bucket size tracking (idempotent: old size subtracted above)
+	// Update bucket size tracking
 	bucketMeta.SizeBytes += meta.Size
 	bmData, marshalErr := json.Marshal(bucketMeta)
 	if marshalErr != nil {
+		s.mu.Unlock()
 		return nil, fmt.Errorf("marshal bucket meta: %w", marshalErr)
 	}
-	if writeErr := syncedWriteFile(s.bucketMetaPath(bucket), bmData, 0644); writeErr != nil {
+	if writeErr := atomicWriteFile(s.bucketMetaPath(bucket), bmData, 0644); writeErr != nil {
+		s.mu.Unlock()
 		return nil, fmt.Errorf("update bucket meta: %w", writeErr)
 	}
+
+	s.mu.Unlock()
+
+	// === Phase 3: After lock — pruning (filesystem walk, safe without lock) ===
+	// Version files have unique names, os.Remove is atomic/idempotent,
+	// and stats use atomics, so this is safe outside the lock.
+	_, chunksToCheck := s.pruneExpiredVersions(ctx, bucket, key)
 
 	return chunksToCheck, nil
 }
@@ -3628,6 +3704,183 @@ func (s *Store) ListVersions(ctx context.Context, bucket, key string) ([]Version
 	})
 
 	return versions, nil
+}
+
+// GetVersionHistory returns archived version entries for an object (version ID + full meta JSON).
+// The current (live) version is not included; only entries from the versions/ directory.
+func (s *Store) GetVersionHistory(ctx context.Context, bucket, key string) ([]VersionHistoryEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var entries []VersionHistoryEntry
+
+	// Get archived versions from versions directory
+	versionDir := s.versionDir(bucket, key)
+	dirEntries, err := os.ReadDir(versionDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read version dir: %w", err)
+	}
+
+	for _, entry := range dirEntries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+
+		versionID := strings.TrimSuffix(entry.Name(), ".json")
+		versionPath := filepath.Join(versionDir, entry.Name())
+		data, readErr := os.ReadFile(versionPath)
+		if readErr != nil {
+			continue
+		}
+
+		entries = append(entries, VersionHistoryEntry{
+			VersionID: versionID,
+			MetaJSON:  data,
+		})
+	}
+
+	return entries, nil
+}
+
+// VersionHistoryEntry represents a version entry with its raw metadata JSON.
+type VersionHistoryEntry struct {
+	VersionID string
+	MetaJSON  []byte
+}
+
+// ImportVersionHistory imports version entries from replication, skipping any that
+// already exist (dedup by versionID). After importing, prunes expired versions to
+// enforce local retention policy. Returns count of newly imported versions and
+// chunk hashes from pruned versions that may need garbage collection.
+//
+// Lock hold time is minimized: directory creation before lock, atomicWriteFile
+// instead of syncedWriteFile, and pruneExpiredVersions after lock release.
+func (s *Store) ImportVersionHistory(ctx context.Context, bucket, key string, versions []VersionHistoryEntry) (int, []string, error) {
+	if len(versions) == 0 {
+		return 0, nil, nil
+	}
+
+	// Pre-create version directory outside the lock (MkdirAll is idempotent)
+	versionDir := s.versionDir(bucket, key)
+	if err := os.MkdirAll(versionDir, 0755); err != nil {
+		return 0, nil, fmt.Errorf("create version directory: %w", err)
+	}
+
+	s.mu.Lock()
+
+	imported := 0
+	for _, v := range versions {
+		versionPath := filepath.Join(versionDir, v.VersionID+".json")
+
+		// Skip if already exists (dedup by versionID)
+		if _, err := os.Stat(versionPath); err == nil {
+			continue
+		}
+
+		// Validate JSON before writing
+		if !json.Valid(v.MetaJSON) {
+			continue
+		}
+
+		if err := atomicWriteFile(versionPath, v.MetaJSON, 0644); err != nil {
+			s.mu.Unlock()
+			return imported, nil, fmt.Errorf("write version %s: %w", v.VersionID, err)
+		}
+		imported++
+
+		// Update stats to match what archiveCurrentVersion does.
+		s.statsVersionCount.Add(1)
+		var meta ObjectMeta
+		if json.Unmarshal(v.MetaJSON, &meta) == nil {
+			s.statsVersionBytes.Add(meta.Size)
+		}
+	}
+
+	s.mu.Unlock()
+
+	// Prune expired versions after lock release — filesystem walk + deletes
+	// are safe without lock (unique version filenames, atomic os.Remove, atomic stats).
+	var chunksToCheck []string
+	if imported > 0 {
+		_, chunksToCheck = s.pruneExpiredVersions(ctx, bucket, key)
+	}
+
+	return imported, chunksToCheck, nil
+}
+
+// GetAllObjectKeys returns all object keys grouped by bucket.
+// Used by the rebalancer to iterate all objects for redistribution.
+// The lock is released between buckets to avoid holding it during long I/O scans.
+func (s *Store) GetAllObjectKeys(ctx context.Context) (map[string][]string, error) {
+	// First pass: get bucket names under lock
+	s.mu.RLock()
+	bucketsDir := filepath.Join(s.dataDir, "buckets")
+	bucketEntries, err := os.ReadDir(bucketsDir)
+	s.mu.RUnlock()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read buckets dir: %w", err)
+	}
+
+	var bucketNames []string
+	for _, bEntry := range bucketEntries {
+		if bEntry.IsDir() {
+			bucketNames = append(bucketNames, bEntry.Name())
+		}
+	}
+
+	// Second pass: list objects per bucket, re-acquiring lock for each
+	result := make(map[string][]string, len(bucketNames))
+	for _, bucket := range bucketNames {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		s.mu.RLock()
+		metaDir := filepath.Join(s.bucketPath(bucket), "meta")
+		entries, readErr := os.ReadDir(metaDir)
+		s.mu.RUnlock()
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				continue
+			}
+			return nil, fmt.Errorf("read meta dir for %s: %w", bucket, readErr)
+		}
+
+		var keys []string
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+				continue
+			}
+			keys = append(keys, strings.TrimSuffix(entry.Name(), ".json"))
+		}
+		if len(keys) > 0 {
+			result[bucket] = keys
+		}
+	}
+
+	return result, nil
+}
+
+// GetBucketErasureCodingPolicy returns the erasure coding policy for a bucket.
+func (s *Store) GetBucketErasureCodingPolicy(ctx context.Context, bucket string) (bool, int, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	meta, err := s.getBucketMeta(bucket)
+	if err != nil {
+		return false, 0, 0, fmt.Errorf("get bucket meta: %w", err)
+	}
+
+	if meta.ErasureCoding == nil {
+		return false, 0, 0, nil
+	}
+
+	return meta.ErasureCoding.Enabled, meta.ErasureCoding.DataShards, meta.ErasureCoding.ParityShards, nil
 }
 
 // GetObjectVersion retrieves a specific version of an object.

@@ -78,6 +78,9 @@ type S3Store interface {
 	// GetObjectMeta retrieves object metadata without loading chunk data
 	GetObjectMeta(ctx context.Context, bucket, key string) (*ObjectMeta, error)
 
+	// ChunkExists checks if a chunk exists in CAS without reading its data.
+	ChunkExists(ctx context.Context, hash string) bool
+
 	// ReadChunk reads a chunk from CAS by hash
 	ReadChunk(ctx context.Context, hash string) ([]byte, error)
 
@@ -102,6 +105,19 @@ type S3Store interface {
 	// PurgeObject permanently removes an object, its versions, and unreferenced chunks.
 	// Used for replicated deletes where tombstoning is unnecessary.
 	PurgeObject(ctx context.Context, bucket, key string) error
+
+	// GetVersionHistory returns archived version entries for an object (version ID + full meta JSON).
+	// The current (live) version is not included; only entries from the versions/ directory.
+	GetVersionHistory(ctx context.Context, bucket, key string) ([]VersionEntry, error)
+
+	// ImportVersionHistory imports version entries, skipping any that already exist (dedup by versionID).
+	// After importing, prunes expired versions to enforce local retention policy.
+	// Returns count of newly imported versions and chunk hashes from pruned versions for GC.
+	ImportVersionHistory(ctx context.Context, bucket, key string, versions []VersionEntry) (int, []string, error)
+
+	// GetAllObjectKeys returns all object keys grouped by bucket.
+	// Used by the rebalancer to iterate all objects for redistribution.
+	GetAllObjectKeys(ctx context.Context) (map[string][]string, error)
 }
 
 // ChunkRegistryInterface defines operations for chunk ownership tracking.
@@ -163,6 +179,30 @@ type Replicator struct {
 	droppedCount  atomic.Uint64 // Operations dropped due to pending limit
 	rateLimited   atomic.Uint64 // Messages dropped due to rate limiting
 
+	// Rebalancer (nil if not configured)
+	rebalancer *Rebalancer
+
+	// Metadata import concurrency limiter — bounds concurrent ImportObjectMeta
+	// calls to prevent writer queue buildup on Store.mu (see lock contention fix).
+	metaImportSem chan struct{}
+
+	// Deferred chunk cleanup — coalesces chunk hashes from metadata imports
+	// and processes them in batches via a background worker, avoiding expensive
+	// full-filesystem walks (buildChunkReferenceSet) in the HTTP handler path.
+	deferredChunksMu sync.Mutex
+	deferredChunks   map[string]struct{}
+	deferredNotify   chan struct{} // buffered(1)
+
+	// Replication queue (replaces per-PutObject goroutine approach)
+	replQueue   chan struct{} // Notification channel (buffer=1)
+	replPending sync.Map      // map["bucket\x00key"]*replQueueEntry
+
+	// Chunk pipelining
+	chunkPipelineWindow int
+
+	// Auto-sync interval (0 = disabled)
+	autoSyncInterval time.Duration
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -207,6 +247,8 @@ type Config struct {
 	SyncResponseTimeout  time.Duration   // Timeout for handling sync responses (default: 10min)
 	ChunkAckTimeout      time.Duration   // Timeout for chunk-level ACKs (default: 30s, Phase 4)
 	MaxConcurrentSends   int             // Maximum concurrent outbound replication sends (default: 20)
+	ChunkPipelineWindow  int             // Maximum concurrent chunk sends per ReplicateObject (default: 5)
+	AutoSyncInterval     time.Duration   // How often to re-enqueue all objects for replication (default: 5min, 0 = disabled)
 	Context              context.Context // SECURITY FIX #3: Parent context for proper cancellation propagation
 }
 
@@ -245,6 +287,12 @@ func NewReplicator(config Config) *Replicator {
 	if config.MaxConcurrentSends == 0 {
 		config.MaxConcurrentSends = 20 // Default: 20 concurrent outbound replication sends
 	}
+	if config.ChunkPipelineWindow == 0 {
+		config.ChunkPipelineWindow = 5 // Default: 5 concurrent chunk sends per object
+	}
+	if config.AutoSyncInterval == 0 {
+		config.AutoSyncInterval = 5 * time.Minute // Default: 5 minutes
+	}
 
 	// SECURITY FIX #3: Use provided context or create a new one
 	// This allows proper context propagation and cancellation from parent
@@ -281,6 +329,12 @@ func NewReplicator(config Config) *Replicator {
 		pendingChunks:          make(map[string]*pendingChunkReplication),
 		pendingFetchRequests:   make(map[string]chan *FetchChunkResponsePayload),
 		pendingFetchTimestamps: make(map[string]time.Time),
+		metaImportSem:          make(chan struct{}, 3),
+		deferredChunks:         make(map[string]struct{}),
+		deferredNotify:         make(chan struct{}, 1),
+		replQueue:              make(chan struct{}, 1),
+		chunkPipelineWindow:    config.ChunkPipelineWindow,
+		autoSyncInterval:       config.AutoSyncInterval,
 		ctx:                    ctx,
 		cancel:                 cancel,
 	}
@@ -289,6 +343,11 @@ func NewReplicator(config Config) *Replicator {
 	config.Transport.RegisterHandler(r.handleIncomingMessage)
 
 	return r
+}
+
+// SetRebalancer attaches a rebalancer to this replicator.
+func (r *Replicator) SetRebalancer(rb *Rebalancer) {
+	r.rebalancer = rb
 }
 
 // Start starts the replicator background tasks.
@@ -303,12 +362,40 @@ func (r *Replicator) Start() error {
 	r.wg.Add(1)
 	go r.fetchRequestCleanupWorker()
 
+	// Start replication queue worker
+	r.wg.Add(1)
+	go r.runReplicationQueueWorker()
+
+	// Start auto-sync worker if enabled
+	if r.autoSyncInterval > 0 {
+		r.wg.Add(1)
+		go r.runAutoSyncWorker()
+	}
+
+	// Start deferred chunk cleanup worker
+	r.wg.Add(1)
+	go r.runDeferredChunkCleanupWorker()
+
+	// Start rebalancer if configured
+	if r.rebalancer != nil {
+		r.rebalancer.Start()
+	}
+
 	return nil
 }
 
 // Stop stops the replicator and waits for background tasks to finish.
 func (r *Replicator) Stop() error {
 	r.logger.Info().Msg("Stopping replicator")
+
+	// Stop rebalancer first
+	if r.rebalancer != nil {
+		r.rebalancer.Stop()
+	}
+
+	// Final drain of the replication queue before cancelling context
+	r.drainReplicationQueueFinal()
+
 	r.cancel()
 	r.wg.Wait()
 	return nil
@@ -333,22 +420,32 @@ func (r *Replicator) releaseSendSlot() {
 // AddPeer adds a coordinator peer to replicate to.
 func (r *Replicator) AddPeer(coordMeshIP string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
+	added := false
 	if !r.peers[coordMeshIP] {
 		r.logger.Info().Str("peer", coordMeshIP).Msg("Added replication peer")
 		r.peers[coordMeshIP] = true
+		added = true
+	}
+	r.mu.Unlock()
+
+	if added && r.rebalancer != nil {
+		r.rebalancer.NotifyTopologyChange()
 	}
 }
 
 // RemovePeer removes a coordinator peer.
 func (r *Replicator) RemovePeer(coordMeshIP string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
+	removed := false
 	if r.peers[coordMeshIP] {
 		r.logger.Info().Str("peer", coordMeshIP).Msg("Removed replication peer")
 		delete(r.peers, coordMeshIP)
+		removed = true
+	}
+	r.mu.Unlock()
+
+	if removed && r.rebalancer != nil {
+		r.rebalancer.NotifyTopologyChange()
 	}
 }
 
@@ -884,14 +981,26 @@ func (r *Replicator) handleSyncRequest(msg *Message) error {
 				contentType = metadata["content-type"]
 			}
 
-			objects = append(objects, SyncObjectEntry{
+			entry := SyncObjectEntry{
 				Bucket:        bucket,
 				Key:           key,
 				Data:          data,
 				VersionVector: vv,
 				ContentType:   contentType,
 				Metadata:      metadata,
-			})
+			}
+
+			// Include version history in sync
+			versions, vErr := r.s3.GetVersionHistory(ctx, bucket, key)
+			if vErr != nil {
+				r.logger.Warn().Err(vErr).
+					Str("bucket", bucket).Str("key", key).
+					Msg("Failed to get version history for sync, sending without versions")
+			} else if len(versions) > 0 {
+				entry.Versions = versions
+			}
+
+			objects = append(objects, entry)
 		}
 	}
 
@@ -1011,6 +1120,25 @@ func (r *Replicator) handleSyncResponse(msg *Message) error {
 				Str("key", obj.Key).
 				Str("relationship", relationship.String()).
 				Msg("Skipped synced object (local is newer or equal)")
+		}
+
+		// Always import version history regardless of object relationship —
+		// versions are additive and any coordinator should have complete history
+		if len(obj.Versions) > 0 {
+			imported, vChunks, vErr := r.s3.ImportVersionHistory(ctx, obj.Bucket, obj.Key, obj.Versions)
+			if vErr != nil {
+				r.logger.Warn().Err(vErr).
+					Str("bucket", obj.Bucket).Str("key", obj.Key).
+					Msg("Failed to import version history during sync")
+			} else if imported > 0 {
+				r.logger.Debug().
+					Str("bucket", obj.Bucket).Str("key", obj.Key).
+					Int("imported", imported).
+					Msg("Imported version history during sync")
+				if len(vChunks) > 0 {
+					r.s3.DeleteUnreferencedChunks(ctx, vChunks)
+				}
+			}
 		}
 	}
 
@@ -1444,69 +1572,9 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 		Int("already_replicated", len(meta.Chunks)-len(chunksToReplicate)).
 		Msg("Starting chunk-level replication")
 
-	// Replicate each missing chunk
-	for i, chunkHash := range chunksToReplicate {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("replication canceled: %w", ctx.Err())
-		default:
-		}
-
-		// Read chunk data from local CAS. If the chunk was cleaned up by a
-		// concurrent CleanupNonAssignedChunks (e.g. another object shares this
-		// chunk hash via CAS dedup), fall back to fetching from a peer.
-		chunkData, err := r.s3.ReadChunk(ctx, chunkHash)
-		if err != nil {
-			localErr := err
-			chunkData, err = r.fetchChunkFromPeers(ctx, chunkHash)
-			if err != nil {
-				return fmt.Errorf("read chunk %s: local: %w, peers: %w", chunkHash, localErr, err)
-			}
-		}
-
-		// Get chunk metadata
-		chunkMeta := meta.ChunkMetadata[chunkHash]
-		if chunkMeta == nil {
-			// Fallback: create minimal metadata if not present
-			chunkMeta = &ChunkMetadata{
-				Hash: chunkHash,
-				Size: int64(len(chunkData)),
-			}
-		}
-
-		// Find chunk index in file (for ordering)
-		chunkIndex := -1
-		for idx, hash := range meta.Chunks {
-			if hash == chunkHash {
-				chunkIndex = idx
-				break
-			}
-		}
-
-		// Create chunk replication payload
-		payload := ReplicateChunkPayload{
-			Bucket:        bucket,
-			Key:           key,
-			ChunkHash:     chunkHash,
-			ChunkData:     chunkData,
-			ChunkIndex:    chunkIndex,
-			TotalChunks:   len(meta.Chunks),
-			ChunkSize:     chunkMeta.Size,
-			VersionVector: VersionVector(chunkMeta.VersionVector),
-		}
-
-		// Send chunk to peer
-		if err := r.sendReplicateChunk(ctx, peerID, payload); err != nil {
-			return fmt.Errorf("send chunk %s (%d/%d): %w", chunkHash, i+1, len(chunksToReplicate), err)
-		}
-
-		r.logger.Debug().
-			Str("bucket", bucket).
-			Str("key", key).
-			Str("chunk", truncateHashForLog(chunkHash)).
-			Int("progress", i+1).
-			Int("total", len(chunksToReplicate)).
-			Msg("Replicated chunk")
+	// Replicate chunks with pipelining for throughput
+	if err := r.replicateChunksPipelined(ctx, peerID, bucket, key, chunksToReplicate, meta); err != nil {
+		return err
 	}
 
 	// Send object metadata so the remote peer can serve reads
@@ -1532,6 +1600,121 @@ func (r *Replicator) ReplicateObject(ctx context.Context, bucket, key, peerID st
 		Msg("Completed chunk-level replication with metadata")
 
 	return nil
+}
+
+// replicateChunksPipelined sends chunks with windowed concurrency for throughput.
+// Instead of sending chunks one at a time (N × RTT), this sends up to
+// chunkPipelineWindow chunks concurrently.
+func (r *Replicator) replicateChunksPipelined(ctx context.Context, peerID, bucket, key string, chunksToReplicate []string, meta *ObjectMeta) error {
+	window := r.chunkPipelineWindow
+	if window <= 1 || len(chunksToReplicate) <= 1 {
+		// Fall back to sequential for single chunk or window=1
+		for i, chunkHash := range chunksToReplicate {
+			if err := r.replicateSingleChunk(ctx, peerID, bucket, key, chunkHash, meta); err != nil {
+				return fmt.Errorf("send chunk %s (%d/%d): %w", chunkHash, i+1, len(chunksToReplicate), err)
+			}
+		}
+		return nil
+	}
+
+	inflight := make(chan struct{}, window)
+	type chunkResult struct {
+		index int
+		hash  string
+		err   error
+	}
+	resultCh := make(chan chunkResult, len(chunksToReplicate))
+
+	for i, chunkHash := range chunksToReplicate {
+		select {
+		case <-ctx.Done():
+			// Collect already-sent results before returning
+			goto collect
+		case inflight <- struct{}{}:
+		}
+
+		go func(idx int, hash string) {
+			defer func() { <-inflight }()
+			err := r.replicateSingleChunk(ctx, peerID, bucket, key, hash, meta)
+			resultCh <- chunkResult{index: idx, hash: hash, err: err}
+		}(i, chunkHash)
+	}
+
+collect:
+	// Collect all results
+	var firstErr error
+	collected := 0
+	for collected < len(chunksToReplicate) {
+		select {
+		case res := <-resultCh:
+			collected++
+			if res.err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("send chunk %s (%d/%d): %w",
+					res.hash, res.index+1, len(chunksToReplicate), res.err)
+			}
+			if res.err == nil {
+				r.logger.Debug().
+					Str("bucket", bucket).
+					Str("key", key).
+					Str("chunk", truncateHashForLog(res.hash)).
+					Int("progress", collected).
+					Int("total", len(chunksToReplicate)).
+					Msg("Replicated chunk")
+			}
+		case <-ctx.Done():
+			if firstErr == nil {
+				firstErr = fmt.Errorf("replication canceled: %w", ctx.Err())
+			}
+			return firstErr
+		}
+	}
+
+	return firstErr
+}
+
+// replicateSingleChunk reads and sends a single chunk to a peer.
+func (r *Replicator) replicateSingleChunk(ctx context.Context, peerID, bucket, key, chunkHash string, meta *ObjectMeta) error {
+	// Read chunk data from local CAS. If the chunk was cleaned up by a
+	// concurrent CleanupNonAssignedChunks, fall back to fetching from a peer.
+	chunkData, err := r.s3.ReadChunk(ctx, chunkHash)
+	if err != nil {
+		localErr := err
+		chunkData, err = r.fetchChunkFromPeers(ctx, chunkHash)
+		if err != nil {
+			return fmt.Errorf("read chunk %s: local: %w, peers: %w", chunkHash, localErr, err)
+		}
+	}
+
+	// Get chunk metadata
+	chunkMeta := meta.ChunkMetadata[chunkHash]
+	if chunkMeta == nil {
+		chunkMeta = &ChunkMetadata{
+			Hash: chunkHash,
+			Size: int64(len(chunkData)),
+		}
+	}
+
+	// Find chunk index in file (for ordering)
+	chunkIndex := -1
+	for idx, hash := range meta.Chunks {
+		if hash == chunkHash {
+			chunkIndex = idx
+			break
+		}
+	}
+
+	payload := ReplicateChunkPayload{
+		Bucket:        bucket,
+		Key:           key,
+		ChunkHash:     chunkHash,
+		ChunkData:     chunkData,
+		ChunkIndex:    chunkIndex,
+		TotalChunks:   len(meta.Chunks),
+		ChunkSize:     chunkMeta.Size,
+		VersionVector: VersionVector(chunkMeta.VersionVector),
+	}
+
+	return r.sendReplicateChunk(ctx, peerID, payload)
 }
 
 // fetchChunkFromPeers tries to fetch a chunk from any available peer.
@@ -2051,12 +2234,23 @@ func (r *Replicator) sendFetchChunkResponse(peerID string, payload FetchChunkRes
 
 // sendReplicateObjectMeta sends object metadata to a peer so it can serve reads.
 // This is fire-and-forget (no ACK needed) since metadata is idempotent.
+// Also includes version history so any coordinator can serve version listings.
 func (r *Replicator) sendReplicateObjectMeta(ctx context.Context, peerID, bucket, key string, metaJSON []byte) error {
 	payload := ReplicateObjectMetaPayload{
 		Bucket:      bucket,
 		Key:         key,
 		MetaJSON:    json.RawMessage(metaJSON),
 		BucketOwner: r.nodeID, // Preserve ownership: sender is the original bucket owner
+	}
+
+	// Include version history so all coordinators can serve version listings
+	versions, err := r.s3.GetVersionHistory(ctx, bucket, key)
+	if err != nil {
+		r.logger.Warn().Err(err).
+			Str("bucket", bucket).Str("key", key).
+			Msg("Failed to get version history for replication, sending without versions")
+	} else if len(versions) > 0 {
+		payload.Versions = versions
 	}
 
 	payloadJSON, err := json.Marshal(payload)
@@ -2096,6 +2290,73 @@ func (r *Replicator) sendReplicateObjectMeta(ctx context.Context, peerID, bucket
 	return nil
 }
 
+// enqueueDeferredChunkCleanup adds chunk hashes to the deferred cleanup set
+// and notifies the background worker. This avoids expensive buildChunkReferenceSet
+// walks in the HTTP handler path.
+func (r *Replicator) enqueueDeferredChunkCleanup(chunks []string) {
+	r.deferredChunksMu.Lock()
+	for _, h := range chunks {
+		r.deferredChunks[h] = struct{}{}
+	}
+	r.deferredChunksMu.Unlock()
+
+	// Non-blocking notify — if channel already has a pending signal, skip.
+	select {
+	case r.deferredNotify <- struct{}{}:
+	default:
+	}
+}
+
+// runDeferredChunkCleanupWorker processes deferred chunk cleanup in batches.
+// It coalesces chunk hashes over a 30-second window, then performs a single
+// DeleteUnreferencedChunks call (one buildChunkReferenceSet walk instead of N).
+func (r *Replicator) runDeferredChunkCleanupWorker() {
+	defer r.wg.Done()
+
+	for {
+		// Wait for notification or shutdown.
+		select {
+		case <-r.deferredNotify:
+		case <-r.ctx.Done():
+			return
+		}
+
+		// Coalesce: wait 30 seconds to collect more chunks.
+		select {
+		case <-time.After(30 * time.Second):
+		case <-r.ctx.Done():
+			return
+		}
+
+		// Swap out the pending set so we don't block enqueuers during the walk.
+		r.deferredChunksMu.Lock()
+		pending := r.deferredChunks
+		r.deferredChunks = make(map[string]struct{})
+		r.deferredChunksMu.Unlock()
+
+		if len(pending) == 0 {
+			continue
+		}
+
+		// Convert set to slice.
+		chunks := make([]string, 0, len(pending))
+		for h := range pending {
+			chunks = append(chunks, h)
+		}
+
+		r.logger.Debug().
+			Int("chunks", len(chunks)).
+			Msg("Deferred chunk cleanup: starting batch")
+
+		freed := r.s3.DeleteUnreferencedChunks(r.ctx, chunks)
+
+		r.logger.Info().
+			Int("chunks_checked", len(chunks)).
+			Int64("bytes_freed", freed).
+			Msg("Deferred chunk cleanup completed")
+	}
+}
+
 // handleReplicateObjectMeta processes an incoming object metadata replication message.
 func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 	var payload ReplicateObjectMetaPayload
@@ -2112,8 +2373,17 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 	ctx, cancel := context.WithTimeout(r.ctx, r.applyTimeout)
 	defer cancel()
 
+	// Limit concurrent metadata imports to prevent Store.mu writer queue buildup.
+	// With lock hold reduced to ~5ms, 3 concurrent imports create ~15ms max queue time.
+	select {
+	case r.metaImportSem <- struct{}{}:
+	case <-ctx.Done():
+		return fmt.Errorf("metadata import semaphore: %w", ctx.Err())
+	}
+
 	chunksToCheck, err := r.s3.ImportObjectMeta(ctx, payload.Bucket, payload.Key, payload.MetaJSON, payload.BucketOwner)
 	if err != nil {
+		<-r.metaImportSem
 		r.logger.Error().Err(err).
 			Str("bucket", payload.Bucket).
 			Str("key", payload.Key).
@@ -2122,18 +2392,38 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 		return fmt.Errorf("import object meta: %w", err)
 	}
 
-	// Clean up chunks from pruned old versions that are no longer referenced.
-	// This prevents orphaned chunks from accumulating on replica coordinators.
-	if len(chunksToCheck) > 0 {
-		freed := r.s3.DeleteUnreferencedChunks(ctx, chunksToCheck)
-		if freed > 0 {
+	// Import version history if present (still under semaphore for bounded concurrency).
+	var vChunks []string
+	if len(payload.Versions) > 0 {
+		imported, vc, vErr := r.s3.ImportVersionHistory(ctx, payload.Bucket, payload.Key, payload.Versions)
+		if vErr != nil {
+			r.logger.Warn().Err(vErr).
+				Str("bucket", payload.Bucket).
+				Str("key", payload.Key).
+				Msg("Failed to import version history")
+		} else if imported > 0 {
 			r.logger.Debug().
 				Str("bucket", payload.Bucket).
 				Str("key", payload.Key).
-				Int64("bytes_freed", freed).
-				Int("chunks_checked", len(chunksToCheck)).
-				Msg("Cleaned up unreferenced chunks after metadata import")
+				Int("imported", imported).
+				Int("total", len(payload.Versions)).
+				Msg("Imported version history from replication")
+			vChunks = vc
 		}
+	}
+
+	// Release semaphore immediately after imports — expensive chunk cleanup
+	// is deferred to a background worker to keep handler response times low.
+	<-r.metaImportSem
+
+	// Defer chunk cleanup to background worker instead of running expensive
+	// buildChunkReferenceSet filesystem walks inline (100-800ms+ each).
+	// The 5-minute GC cycle serves as a safety net for any missed chunks.
+	if len(chunksToCheck) > 0 {
+		r.enqueueDeferredChunkCleanup(chunksToCheck)
+	}
+	if len(vChunks) > 0 {
+		r.enqueueDeferredChunkCleanup(vChunks)
 	}
 
 	r.logger.Info().
@@ -2192,10 +2482,33 @@ func (r *Replicator) CleanupNonAssignedChunks(ctx context.Context, bucket, key s
 		assignedSet[idx] = true
 	}
 
-	// Delete non-assigned chunks
-	var deleted, kept int
+	// Delete non-assigned chunks (with safety check: never delete the last copy)
+	var deleted, kept, skippedNoOwner int
 	for idx, chunkHash := range meta.Chunks {
 		if assignedSet[idx] {
+			kept++
+			continue
+		}
+
+		// Safety check: verify at least one remote owner has this chunk
+		owners, err := r.chunkRegistry.GetOwners(chunkHash)
+		if err != nil || len(owners) == 0 {
+			// No known owners — unsafe to delete, keep as safety net
+			skippedNoOwner++
+			kept++
+			continue
+		}
+
+		hasRemoteOwner := false
+		for _, owner := range owners {
+			if owner != r.nodeID {
+				hasRemoteOwner = true
+				break
+			}
+		}
+		if !hasRemoteOwner {
+			// Only we own this chunk — unsafe to delete
+			skippedNoOwner++
 			kept++
 			continue
 		}
@@ -2224,6 +2537,7 @@ func (r *Replicator) CleanupNonAssignedChunks(ctx context.Context, bucket, key s
 		Str("key", key).
 		Int("deleted", deleted).
 		Int("kept", kept).
+		Int("skipped_no_remote_owner", skippedNoOwner).
 		Int("total", len(meta.Chunks)).
 		Int("peers", len(peers)).
 		Msg("Cleaned up non-assigned chunks")

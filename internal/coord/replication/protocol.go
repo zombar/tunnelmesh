@@ -102,6 +102,7 @@ type SyncObjectEntry struct {
 	VersionVector VersionVector     `json:"version_vector"`
 	ContentType   string            `json:"content_type,omitempty"`
 	Metadata      map[string]string `json:"metadata,omitempty"`
+	Versions      []VersionEntry    `json:"versions,omitempty"` // Version history entries
 }
 
 // Chunk-level replication payloads (added in Phase 2)
@@ -173,6 +174,13 @@ type FetchChunkResponsePayload struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// VersionEntry represents a single version's metadata for replication.
+// Used to replicate version history alongside object metadata.
+type VersionEntry struct {
+	VersionID string          `json:"version_id"`
+	MetaJSON  json.RawMessage `json:"meta_json"`
+}
+
 // ReplicateObjectMetaPayload contains object metadata for replication to a peer.
 // The receiving coordinator uses this to create the metadata file so it can
 // serve reads for objects whose chunks arrive via chunk-level replication.
@@ -181,6 +189,7 @@ type ReplicateObjectMetaPayload struct {
 	Key         string          `json:"key"`
 	MetaJSON    json.RawMessage `json:"meta_json"`
 	BucketOwner string          `json:"bucket_owner,omitempty"` // Original bucket owner for auto-created buckets
+	Versions    []VersionEntry  `json:"versions,omitempty"`     // Version history entries (replicated to all coordinators)
 }
 
 // NewReplicateMessage creates a new replication message.

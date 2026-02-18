@@ -61,13 +61,14 @@ func (m *mockTransport) getLastSent(coordMeshIP string) []byte {
 
 // mockS3Store implements S3Store for testing.
 type mockS3Store struct {
-	mu            sync.Mutex
-	objects       map[string]mockS3Object // map["bucket/key"]object
-	chunks        map[string][]byte       // map[hash]data (for chunk-level operations)
-	putErr        error                   // If set, Put will return this error
-	metaErr       error                   // If set, GetObjectMeta will return this error
-	chunkErr      error                   // If set, chunk operations will return this error
-	chunkRequests int                     // Count of ReadChunk calls
+	mu             sync.Mutex
+	objects        map[string]mockS3Object   // map["bucket/key"]object
+	chunks         map[string][]byte         // map[hash]data (for chunk-level operations)
+	versionHistory map[string][]VersionEntry // map["bucket/key:versions"]entries
+	putErr         error                     // If set, Put will return this error
+	metaErr        error                     // If set, GetObjectMeta will return this error
+	chunkErr       error                     // If set, chunk operations will return this error
+	chunkRequests  int                       // Count of ReadChunk calls
 }
 
 type mockS3Object struct {
@@ -198,6 +199,13 @@ func (m *mockS3Store) GetObjectMeta(ctx context.Context, bucket, key string) (*O
 }
 
 // ReadChunk reads a chunk from CAS.
+func (m *mockS3Store) ChunkExists(_ context.Context, hash string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, exists := m.chunks[hash]
+	return exists
+}
+
 func (m *mockS3Store) ReadChunk(ctx context.Context, hash string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -289,6 +297,75 @@ func (m *mockS3Store) PurgeObject(ctx context.Context, bucket, key string) error
 
 	delete(m.objects, m.makeKey(bucket, key))
 	return nil
+}
+
+// GetVersionHistory returns version history entries for an object.
+func (m *mockS3Store) GetVersionHistory(_ context.Context, bucket, key string) ([]VersionEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	k := m.makeKey(bucket, key) + ":versions"
+	versions, exists := m.versionHistory[k]
+	if !exists {
+		return nil, nil
+	}
+	// Return a copy
+	result := make([]VersionEntry, len(versions))
+	copy(result, versions)
+	return result, nil
+}
+
+// ImportVersionHistory imports version entries, deduplicating by versionID.
+func (m *mockS3Store) ImportVersionHistory(_ context.Context, bucket, key string, versions []VersionEntry) (int, []string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	k := m.makeKey(bucket, key) + ":versions"
+	if m.versionHistory == nil {
+		m.versionHistory = make(map[string][]VersionEntry)
+	}
+
+	existing := make(map[string]bool)
+	for _, v := range m.versionHistory[k] {
+		existing[v.VersionID] = true
+	}
+
+	imported := 0
+	for _, v := range versions {
+		if existing[v.VersionID] {
+			continue
+		}
+		m.versionHistory[k] = append(m.versionHistory[k], v)
+		existing[v.VersionID] = true
+		imported++
+	}
+
+	return imported, nil, nil
+}
+
+// GetAllObjectKeys returns all object keys grouped by bucket.
+func (m *mockS3Store) GetAllObjectKeys(_ context.Context) (map[string][]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := make(map[string][]string)
+	for k := range m.objects {
+		parts := splitFirst(k, '/')
+		if len(parts) == 2 {
+			result[parts[0]] = append(result[parts[0]], parts[1])
+		}
+	}
+	return result, nil
+}
+
+// splitFirst splits a string at the first occurrence of sep.
+func splitFirst(s string, sep byte) []string {
+	for i := 0; i < len(s); i++ {
+		if s[i] == sep {
+			return []string{s[:i], s[i+1:]}
+		}
+	}
+	return []string{s}
 }
 
 // addObjectWithChunks adds an object with chunk-level metadata (helper for tests).
@@ -1571,6 +1648,11 @@ func TestCleanupNonAssignedChunks_ThreeCoordinators(t *testing.T) {
 	r.AddPeer("coord-b")
 	r.AddPeer("coord-c")
 
+	// Register remote owners for all chunks (simulating successful replication)
+	for _, hash := range chunks {
+		registry.setOwnership(hash, []string{"coord-a", "coord-b", "coord-c"})
+	}
+
 	// Verify all chunks exist before cleanup
 	for _, hash := range chunks {
 		_, exists := s3Store.chunks[hash]
@@ -1662,6 +1744,86 @@ func TestCleanupNonAssignedChunks_NoChunkRegistry(t *testing.T) {
 	err := r.CleanupNonAssignedChunks(ctx, "bucket", "file.bin")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "chunk registry not configured")
+}
+
+func TestCleanupNonAssignedChunks_SkipsWhenNoRemoteOwner(t *testing.T) {
+	ctx := context.Background()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+	transport := newMockTransport()
+
+	chunks := []string{"c0", "c1", "c2", "c3", "c4", "c5"}
+	chunkData := map[string][]byte{
+		"c0": []byte("data0"),
+		"c1": []byte("data1"),
+		"c2": []byte("data2"),
+		"c3": []byte("data3"),
+		"c4": []byte("data4"),
+		"c5": []byte("data5"),
+	}
+	s3Store.addObjectWithChunks("bucket", "file.bin", chunks, chunkData)
+
+	r := NewReplicator(Config{
+		NodeID:        "coord-a",
+		Transport:     transport,
+		S3Store:       s3Store,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	r.AddPeer("coord-b")
+	r.AddPeer("coord-c")
+
+	// Only register coord-a as owner (no remote owners) — simulates failed replication
+	for _, hash := range chunks {
+		registry.setOwnership(hash, []string{"coord-a"})
+	}
+
+	err := r.CleanupNonAssignedChunks(ctx, "bucket", "file.bin")
+	require.NoError(t, err)
+
+	// All chunks should be kept since no remote owner exists
+	for _, hash := range chunks {
+		_, exists := s3Store.chunks[hash]
+		assert.True(t, exists, "chunk %s should be kept when no remote owner exists", hash)
+	}
+}
+
+func TestCleanupNonAssignedChunks_SkipsWhenNoOwners(t *testing.T) {
+	ctx := context.Background()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+	transport := newMockTransport()
+
+	chunks := []string{"c0", "c1"}
+	chunkData := map[string][]byte{
+		"c0": []byte("data0"),
+		"c1": []byte("data1"),
+	}
+	s3Store.addObjectWithChunks("bucket", "file.bin", chunks, chunkData)
+
+	r := NewReplicator(Config{
+		NodeID:        "coord-a",
+		Transport:     transport,
+		S3Store:       s3Store,
+		ChunkRegistry: registry,
+		Logger:        zerolog.Nop(),
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	r.AddPeer("coord-b")
+
+	// Don't register any owners — simulates fresh chunk with no registry entries
+
+	err := r.CleanupNonAssignedChunks(ctx, "bucket", "file.bin")
+	require.NoError(t, err)
+
+	// All chunks should be kept since no owners exist
+	for _, hash := range chunks {
+		_, exists := s3Store.chunks[hash]
+		assert.True(t, exists, "chunk %s should be kept when no owners in registry", hash)
+	}
 }
 
 func TestReplicateObject_SendsMetadata(t *testing.T) {

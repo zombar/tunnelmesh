@@ -437,10 +437,24 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 			AckTimeout:           10 * time.Second,
 			RetryInterval:        30 * time.Second,
 			MaxPendingOperations: 10000,
+			ChunkPipelineWindow:  5,               // Send up to 5 chunks concurrently per object
+			AutoSyncInterval:     5 * time.Minute, // Re-enqueue all objects every 5 minutes
 		})
 
 		// Wire replicator into S3 store for distributed reads (fetching remote chunks)
 		srv.s3Store.SetReplicator(srv.replicator)
+
+		// Initialize rebalancer for automatic data redistribution on topology changes
+		rebalancer := replication.NewRebalancer(srv.replicator, s3Adapter, chunkRegistry, log.Logger)
+		rebalancer.OnCycleComplete = func(stats replication.RebalancerStats) {
+			if m := s3.GetS3Metrics(); m != nil {
+				m.RebalanceRunsTotal.Add(float64(stats.RunsTotal))
+				m.RebalanceChunksMovedTotal.Add(float64(stats.ChunksRedistributed))
+				m.RebalanceChunksCleanedTotal.Add(float64(stats.ChunksCleaned))
+				m.RebalanceBytesTransferred.Add(float64(stats.BytesTransferred))
+			}
+		}
+		srv.replicator.SetRebalancer(rebalancer)
 
 		log.Info().
 			Str("node_id", nodeID).

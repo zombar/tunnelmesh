@@ -2,7 +2,6 @@ package coord
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -334,79 +333,12 @@ func (s *Server) handleS3PutObject(w http.ResponseWriter, r *http.Request, bucke
 	}
 	s.updateListingIndex(bucket, key, &putInfo, "put")
 
-	// Replicate to other coordinators asynchronously using chunk-level replication.
-	// Chunks are already stored by PutObject above — ReplicateObject reads them from CAS
-	// and only sends chunks the remote peer doesn't already have.
-	//
-	// Uses WithoutCancel so replication completes even after the HTTP response is sent,
-	// while preserving trace context from the original request.
-	// 60s timeout accounts for chunk transfer + metadata send + cleanup across all peers.
+	// Enqueue replication to other coordinators via background queue.
+	// The queue provides deduplication (last-writer-wins), bounded concurrency,
+	// and automatic retry — replacing the previous per-PUT goroutine approach
+	// that caused goroutine explosion under sustained load.
 	if s.replicator != nil {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
-			defer cancel()
-
-			peers := s.replicator.GetPeers()
-			if len(peers) == 0 {
-				return
-			}
-
-			// Replicate to all peers in parallel with bounded concurrency.
-			// Semaphore acquisition and result collection both respect context
-			// cancellation to prevent goroutine leaks on timeout.
-			type result struct {
-				peerID string
-				err    error
-			}
-			results := make(chan result, len(peers))
-			sem := make(chan struct{}, 3)
-
-			for _, peerID := range peers {
-				go func(pid string) {
-					// Acquire semaphore, bail out if context expires while waiting
-					select {
-					case sem <- struct{}{}:
-						defer func() { <-sem }()
-					case <-ctx.Done():
-						results <- result{pid, ctx.Err()}
-						return
-					}
-					results <- result{pid, s.replicator.ReplicateObject(ctx, bucket, key, pid)}
-				}(peerID)
-			}
-
-			allSucceeded := true
-			for range peers {
-				select {
-				case res := <-results:
-					if res.err != nil {
-						log.Error().Err(res.err).
-							Str("peer", res.peerID).
-							Str("bucket", bucket).
-							Str("key", key).
-							Msg("Failed to replicate S3 PUT operation")
-						allSucceeded = false
-					}
-				case <-ctx.Done():
-					log.Warn().
-						Str("bucket", bucket).
-						Str("key", key).
-						Msg("Replication timed out, skipping cleanup")
-					allSucceeded = false
-				}
-			}
-
-			// Only cleanup non-assigned chunks if ALL peers received their chunks.
-			// If any peer failed, keep all chunks locally so a retry can succeed.
-			if allSucceeded {
-				if err := s.replicator.CleanupNonAssignedChunks(ctx, bucket, key); err != nil {
-					log.Error().Err(err).
-						Str("bucket", bucket).
-						Str("key", key).
-						Msg("Failed to cleanup non-assigned chunks")
-				}
-			}
-		}()
+		s.replicator.EnqueueReplication(bucket, key, "put")
 	}
 
 	w.Header().Set("ETag", meta.ETag)
@@ -439,20 +371,9 @@ func (s *Server) handleS3DeleteObject(w http.ResponseWriter, r *http.Request, bu
 	// Update listing index: move from objects to recycled
 	s.updateListingIndex(bucket, key, nil, "delete")
 
-	// Replicate delete to other coordinators asynchronously.
-	// Uses WithoutCancel so replication completes after the HTTP response is sent,
-	// while preserving trace context from the original request.
+	// Enqueue delete replication via background queue.
 	if s.replicator != nil {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
-			defer cancel()
-			if err := s.replicator.ReplicateDelete(ctx, bucket, key); err != nil {
-				log.Error().Err(err).
-					Str("bucket", bucket).
-					Str("key", key).
-					Msg("Failed to replicate S3 DELETE operation")
-			}
-		}()
+		s.replicator.EnqueueReplication(bucket, key, "delete")
 	}
 
 	w.WriteHeader(http.StatusNoContent)

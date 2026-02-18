@@ -53,6 +53,12 @@ type S3Metrics struct {
 	VolumeTotalBytes     prometheus.Gauge // tunnelmesh_s3_volume_total_bytes
 	VolumeUsedBytes      prometheus.Gauge // tunnelmesh_s3_volume_used_bytes
 	VolumeAvailableBytes prometheus.Gauge // tunnelmesh_s3_volume_available_bytes
+
+	// Rebalancer metrics
+	RebalanceRunsTotal          prometheus.Counter // tunnelmesh_s3_rebalance_runs_total
+	RebalanceChunksMovedTotal   prometheus.Counter // tunnelmesh_s3_rebalance_chunks_moved_total
+	RebalanceChunksCleanedTotal prometheus.Counter // tunnelmesh_s3_rebalance_chunks_cleaned_total
+	RebalanceBytesTransferred   prometheus.Counter // tunnelmesh_s3_rebalance_bytes_transferred_total
 }
 
 // InitS3Metrics initializes all S3 metrics on the given registry.
@@ -182,6 +188,24 @@ func InitS3Metrics(registry prometheus.Registerer) *S3Metrics {
 			VolumeAvailableBytes: promauto.With(registry).NewGauge(prometheus.GaugeOpts{
 				Name: "tunnelmesh_s3_volume_available_bytes",
 				Help: "Available filesystem space in bytes (non-root)",
+			}),
+
+			// Rebalancer metrics
+			RebalanceRunsTotal: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_rebalance_runs_total",
+				Help: "Total number of data rebalance cycles",
+			}),
+			RebalanceChunksMovedTotal: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_rebalance_chunks_moved_total",
+				Help: "Total chunks moved during rebalance operations",
+			}),
+			RebalanceChunksCleanedTotal: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_rebalance_chunks_cleaned_total",
+				Help: "Total stale chunks cleaned up after rebalance operations",
+			}),
+			RebalanceBytesTransferred: promauto.With(registry).NewCounter(prometheus.CounterOpts{
+				Name: "tunnelmesh_s3_rebalance_bytes_transferred_total",
+				Help: "Total bytes transferred during rebalance operations",
 			}),
 		}
 		s3MetricsPtr.Store(m)
