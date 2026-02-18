@@ -66,6 +66,24 @@ func NewFileShareManager(store *Store, systemStore *SystemStore, authorizer *aut
 	return mgr
 }
 
+// reloadShares refreshes the in-memory shares list from the system store.
+// Must be called with m.mu held. This prevents stale overwrites when multiple
+// coordinators create or delete shares concurrently — without it, SaveFileShares
+// would overwrite shares created by other coordinators since the last load.
+func (m *FileShareManager) reloadShares(ctx context.Context) {
+	if m.systemStore == nil {
+		return
+	}
+	shares, err := m.systemStore.LoadFileShares(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to reload shares from system store before save")
+		return
+	}
+	if shares != nil {
+		m.shares = shares
+	}
+}
+
 // FileShareOptions contains optional settings for creating a file share.
 type FileShareOptions struct {
 	ExpiresAt         time.Time // When the share expires (zero = use default or never)
@@ -80,6 +98,10 @@ type FileShareOptions struct {
 func (m *FileShareManager) Create(ctx context.Context, name, description, ownerID string, quotaBytes int64, opts *FileShareOptions) (*FileShare, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Reload from system store to pick up shares created by other coordinators,
+	// preventing stale overwrites when we SaveFileShares below.
+	m.reloadShares(ctx)
 
 	// Check if share already exists
 	for _, s := range m.shares {
@@ -179,6 +201,10 @@ func (m *FileShareManager) Create(ctx context.Context, name, description, ownerI
 func (m *FileShareManager) Delete(ctx context.Context, name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Reload from system store to pick up shares created by other coordinators,
+	// preventing stale overwrites when we SaveFileShares below.
+	m.reloadShares(ctx)
 
 	// Find the share
 	var shareIdx = -1

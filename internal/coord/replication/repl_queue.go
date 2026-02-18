@@ -120,9 +120,11 @@ func (r *Replicator) processQueueEntry(ctx context.Context, entry *replQueueEntr
 	}
 }
 
-// processQueuePut replicates an object to all peers in parallel and cleans up non-assigned chunks on success.
+// processQueuePut replicates an object to all peers in parallel.
 // Each peer gets its own goroutine with an independent 60s timeout, so one slow/unreachable
 // peer cannot starve others of time (the root cause of uneven distribution).
+// Note: chunk cleanup after topology changes is handled by the rebalancer, which uses
+// confirmedSent tracking to safely delete only chunks that the new owner has acknowledged.
 func (r *Replicator) processQueuePut(ctx context.Context, entry *replQueueEntry, peers []string) {
 	if r.chunkRegistry == nil {
 		// No chunk registry — fall back to file-level replication
@@ -157,19 +159,7 @@ func (r *Replicator) processQueuePut(ctx context.Context, entry *replQueueEntry,
 		}
 	}
 
-	if allSucceeded {
-		// All peers received their chunks — safe to clean up non-assigned local chunks.
-		// Safety check inside CleanupNonAssignedChunks verifies remote owners exist
-		// before deleting, preventing data loss on edge cases.
-		cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		if err := r.CleanupNonAssignedChunks(cleanupCtx, entry.bucket, entry.key); err != nil {
-			r.logger.Error().Err(err).
-				Str("bucket", entry.bucket).
-				Str("key", entry.key).
-				Msg("Failed to cleanup non-assigned chunks after queued replication")
-		}
-	} else {
+	if !allSucceeded {
 		r.reEnqueueOnFailure(entry)
 	}
 }

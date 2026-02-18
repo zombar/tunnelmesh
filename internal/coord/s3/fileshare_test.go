@@ -803,6 +803,92 @@ func TestPurgeOrphanedFileShareBuckets_DeletesOldOrphans(t *testing.T) {
 	assert.ErrorIs(t, err, ErrBucketNotFound, "old orphaned bucket should be deleted")
 }
 
+func TestFileShareManager_Create_PreservesRemoteShares(t *testing.T) {
+	// Simulates two coordinators sharing a system store. Coordinator A creates
+	// a share, then coordinator B creates a different share. B's Create() must
+	// not overwrite A's share when saving back to the system store.
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizerA := auth.NewAuthorizerWithGroups()
+	authorizerB := auth.NewAuthorizerWithGroups()
+
+	// Coordinator A creates "photos"
+	mgrA := NewFileShareManager(store, systemStore, authorizerA)
+	_, err = mgrA.Create(context.Background(), "photos", "Photos share", "alice", 0, nil)
+	require.NoError(t, err)
+
+	// Coordinator B starts fresh — doesn't have "photos" in memory
+	mgrB := NewFileShareManager(store, systemStore, authorizerB)
+	// Clear B's memory to simulate it not having loaded A's share yet
+	mgrB.mu.Lock()
+	mgrB.shares = nil
+	mgrB.mu.Unlock()
+
+	// B creates "docs" — this should reload from system store first,
+	// preserving A's "photos" share
+	_, err = mgrB.Create(context.Background(), "docs", "Documents share", "bob", 0, nil)
+	require.NoError(t, err)
+
+	// Verify both shares exist in the system store
+	shares, err := systemStore.LoadFileShares(context.Background())
+	require.NoError(t, err)
+	names := make(map[string]bool)
+	for _, s := range shares {
+		names[s.Name] = true
+	}
+	assert.True(t, names["photos"], "A's share should survive B's Create")
+	assert.True(t, names["docs"], "B's share should be saved")
+}
+
+func TestFileShareManager_Delete_PreservesRemoteShares(t *testing.T) {
+	// Simulates two coordinators sharing a system store. Coordinator A creates
+	// two shares, then coordinator B creates a share. Then A deletes one of its
+	// shares — B's share must not be lost.
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizerA := auth.NewAuthorizerWithGroups()
+	authorizerB := auth.NewAuthorizerWithGroups()
+
+	// Coordinator A creates "photos" and "music"
+	mgrA := NewFileShareManager(store, systemStore, authorizerA)
+	_, err = mgrA.Create(context.Background(), "photos", "Photos share", "alice", 0, nil)
+	require.NoError(t, err)
+	_, err = mgrA.Create(context.Background(), "music", "Music share", "alice", 0, nil)
+	require.NoError(t, err)
+
+	// Coordinator B creates "docs" (system store now has photos, music, docs)
+	mgrB := NewFileShareManager(store, systemStore, authorizerB)
+	_, err = mgrB.Create(context.Background(), "docs", "Documents share", "bob", 0, nil)
+	require.NoError(t, err)
+
+	// A doesn't know about B's "docs" in memory — clear and reload only A's shares
+	mgrA.mu.Lock()
+	mgrA.shares = []*FileShare{
+		{Name: "photos", Owner: "alice"},
+		{Name: "music", Owner: "alice"},
+	}
+	mgrA.mu.Unlock()
+
+	// A deletes "music" — reloadShares should pick up B's "docs" before saving
+	err = mgrA.Delete(context.Background(), "music")
+	require.NoError(t, err)
+
+	// Verify system store has "photos" and "docs" (not "music")
+	shares, err := systemStore.LoadFileShares(context.Background())
+	require.NoError(t, err)
+	names := make(map[string]bool)
+	for _, s := range shares {
+		names[s.Name] = true
+	}
+	assert.True(t, names["photos"], "A's remaining share should survive")
+	assert.True(t, names["docs"], "B's share should survive A's Delete")
+	assert.False(t, names["music"], "deleted share should be gone")
+}
+
 func TestPurgeOrphanedFileShareBuckets_KeepsActiveBuckets(t *testing.T) {
 	store := newTestStoreWithCASForFileshare(t)
 	systemStore, err := NewSystemStore(store, "svc:coordinator")
