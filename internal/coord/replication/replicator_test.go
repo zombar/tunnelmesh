@@ -16,12 +16,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// sentMessage records a single sent message for test assertions.
+type sentMessage struct {
+	to   string
+	data []byte
+}
+
 // mockTransport implements Transport for testing.
 type mockTransport struct {
-	mu      sync.Mutex
-	sent    map[string][]byte // map[coordMeshIP]lastMessage
-	handler func(from string, data []byte) error
-	sendErr error // If set, SendToCoordinator will return this error
+	mu           sync.Mutex
+	sent         map[string][]byte // map[coordMeshIP]lastMessage
+	sentMessages []sentMessage     // all sent messages in order
+	handler      func(from string, data []byte) error
+	sendErr      error // If set, SendToCoordinator will return this error
 }
 
 func newMockTransport() *mockTransport {
@@ -38,7 +45,9 @@ func (m *mockTransport) SendToCoordinator(ctx context.Context, coordMeshIP strin
 		return m.sendErr
 	}
 
-	m.sent[coordMeshIP] = append([]byte(nil), data...) // Copy data
+	copied := append([]byte(nil), data...)
+	m.sent[coordMeshIP] = copied
+	m.sentMessages = append(m.sentMessages, sentMessage{to: coordMeshIP, data: copied})
 	return nil
 }
 

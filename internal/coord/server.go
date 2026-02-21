@@ -1270,6 +1270,7 @@ func (s *Server) initS3Storage(ctx context.Context, cfg *config.PeerConfig) erro
 	s.fileShareMgr = s3.NewFileShareManager(store, systemStore, s.s3Authorizer)
 	s.s3Server.SetBucketRecoverer(s.fileShareMgr)
 	s.s3Server.SetRequestForwarder(s)
+	s.s3Server.SetDeleteNotifier(s)
 	log.Info().Int("shares", len(s.fileShareMgr.List())).Msg("file share manager initialized")
 
 	// Recover coordinator state from S3

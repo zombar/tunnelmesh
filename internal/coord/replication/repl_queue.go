@@ -2,8 +2,11 @@ package replication
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // replQueueEntry represents a pending replication operation in the queue.
@@ -276,4 +279,56 @@ func (r *Replicator) runAutoSyncCycle() {
 			Int("peers", len(peers)).
 			Msg("Auto-sync: enqueued all objects for replication")
 	}
+
+	// Send object manifest for reconciliation — replicas purge objects
+	// not in the manifest to recover from lost delete messages.
+	r.sendObjectManifest(ctx, allKeys, peers)
+}
+
+// sendObjectManifest sends the set of live objects to each peer so they can
+// purge any local objects not in the manifest. This is fire-and-forget:
+// reconciliation is idempotent and will be retried on the next auto-sync cycle.
+func (r *Replicator) sendObjectManifest(ctx context.Context, allKeys map[string][]string, peers []string) {
+	if len(allKeys) == 0 && len(peers) == 0 {
+		return
+	}
+
+	payload := ObjectManifestPayload{BucketKeys: allKeys}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		r.logger.Error().Err(err).Msg("Auto-sync: failed to marshal object manifest")
+		return
+	}
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeObjectManifest,
+		ID:      uuid.New().String(),
+		From:    r.nodeID,
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	data, err := msg.Marshal()
+	if err != nil {
+		r.logger.Error().Err(err).Msg("Auto-sync: failed to marshal manifest message")
+		return
+	}
+
+	for _, peerID := range peers {
+		if err := r.acquireSendSlot(ctx); err != nil {
+			r.logger.Warn().Err(err).Msg("Auto-sync: context cancelled during manifest send")
+			return
+		}
+		sendErr := r.transport.SendToCoordinator(ctx, peerID, data)
+		r.releaseSendSlot()
+		if sendErr != nil {
+			r.logger.Warn().Err(sendErr).
+				Str("peer", peerID).
+				Msg("Auto-sync: failed to send object manifest")
+		}
+	}
+
+	r.logger.Debug().
+		Int("peers", len(peers)).
+		Msg("Auto-sync: sent object manifest for reconciliation")
 }

@@ -667,6 +667,8 @@ func (r *Replicator) handleIncomingMessage(from string, data []byte) error {
 		return r.handleFetchChunkResponse(msg)
 	case MessageTypeReplicateObjectMeta:
 		return r.handleReplicateObjectMeta(msg)
+	case MessageTypeObjectManifest:
+		return r.handleObjectManifest(msg)
 	default:
 		r.logger.Warn().Str("type", string(msg.Type)).Msg("Unknown message type")
 		return fmt.Errorf("unknown message type: %s", msg.Type)
@@ -2432,6 +2434,83 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 		Msg("Successfully imported object metadata")
 
 	r.incrementReceivedCount()
+	return nil
+}
+
+// handleObjectManifest processes an incoming object manifest from a peer.
+// It purges local objects not present in the manifest, recovering from lost deletes.
+func (r *Replicator) handleObjectManifest(msg *Message) error {
+	var payload ObjectManifestPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal object manifest payload: %w", err)
+	}
+
+	// Build set of (bucket, key) from the manifest for O(1) lookups
+	manifestSet := make(map[string]map[string]struct{}, len(payload.BucketKeys))
+	for bucket, keys := range payload.BucketKeys {
+		keySet := make(map[string]struct{}, len(keys))
+		for _, k := range keys {
+			keySet[k] = struct{}{}
+		}
+		manifestSet[bucket] = keySet
+	}
+
+	ctx, cancel := context.WithTimeout(r.ctx, 2*time.Minute)
+	defer cancel()
+
+	localKeys, err := r.s3.GetAllObjectKeys(ctx)
+	if err != nil {
+		r.logger.Warn().Err(err).Msg("Manifest reconciliation: failed to get local object keys")
+		return fmt.Errorf("get local keys: %w", err)
+	}
+
+	// Collect objects to purge: local objects not in the manifest.
+	// Safety: skip system bucket, only purge from buckets the sender also has.
+	const maxPurgePerManifest = 100
+	var purged int
+
+	for bucket, keys := range localKeys {
+		// Never purge system bucket based on manifest
+		if bucket == "_tunnelmesh" {
+			continue
+		}
+
+		// Only reconcile buckets that the sender knows about (present in manifest,
+		// possibly with zero objects). If the sender doesn't mention a bucket at all,
+		// it may not be the owner — skip to avoid cross-owner purging.
+		senderKeys, senderHasBucket := manifestSet[bucket]
+		if !senderHasBucket {
+			continue
+		}
+
+		for _, key := range keys {
+			if purged >= maxPurgePerManifest {
+				r.logger.Info().
+					Int("purged", purged).
+					Msg("Manifest reconciliation: hit per-manifest purge cap")
+				return nil
+			}
+
+			if _, exists := senderKeys[key]; !exists {
+				if err := r.s3.PurgeObject(ctx, bucket, key); err != nil {
+					r.logger.Warn().Err(err).
+						Str("bucket", bucket).
+						Str("key", key).
+						Msg("Manifest reconciliation: failed to purge object")
+					continue
+				}
+				purged++
+			}
+		}
+	}
+
+	if purged > 0 {
+		r.logger.Info().
+			Int("purged", purged).
+			Str("from", msg.From).
+			Msg("Manifest reconciliation: purged stale objects")
+	}
+
 	return nil
 }
 

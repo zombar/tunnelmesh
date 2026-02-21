@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -712,4 +713,55 @@ func TestProcessQueuePut_ReEnqueuesOnPartialFailure(t *testing.T) {
 		}
 	}
 	assert.Greater(t, bCount, 0, "coord-b should have received some chunks despite coord-c failure")
+}
+
+func TestAutoSyncCycle_SendsManifest(t *testing.T) {
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+
+	r := NewReplicator(Config{
+		NodeID:              "coord-a",
+		Transport:           transport,
+		S3Store:             s3Store,
+		ChunkRegistry:       registry,
+		Logger:              zerolog.Nop(),
+		ChunkPipelineWindow: 5,
+		AutoSyncInterval:    0,
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	r.AddPeer("coord-b")
+
+	// Add some objects
+	s3Store.addObjectWithChunks("bucket1", "file1.txt", []string{"h1"}, map[string][]byte{"h1": []byte("d1")})
+	s3Store.addObjectWithChunks("bucket1", "file2.txt", []string{"h2"}, map[string][]byte{"h2": []byte("d2")})
+	s3Store.addObjectWithChunks("bucket2", "doc.txt", []string{"h3"}, map[string][]byte{"h3": []byte("d3")})
+
+	// Run auto-sync cycle — this enqueues puts AND sends the manifest
+	r.runAutoSyncCycle()
+
+	// Check that the transport received a manifest message
+	transport.mu.Lock()
+	messages := transport.sentMessages
+	transport.mu.Unlock()
+
+	var foundManifest bool
+	for _, sent := range messages {
+		msg, err := UnmarshalMessage(sent.data)
+		if err != nil {
+			continue
+		}
+		if msg.Type == MessageTypeObjectManifest {
+			foundManifest = true
+			var payload ObjectManifestPayload
+			require.NoError(t, json.Unmarshal(msg.Payload, &payload))
+			assert.Contains(t, payload.BucketKeys, "bucket1")
+			assert.Contains(t, payload.BucketKeys, "bucket2")
+			assert.ElementsMatch(t, []string{"file1.txt", "file2.txt"}, payload.BucketKeys["bucket1"])
+			assert.ElementsMatch(t, []string{"doc.txt"}, payload.BucketKeys["bucket2"])
+			break
+		}
+	}
+	assert.True(t, foundManifest, "Auto-sync should send an object manifest to peers")
 }
