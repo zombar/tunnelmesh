@@ -12,6 +12,11 @@ import (
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 )
 
+// orphanedBucketGracePeriod is the minimum age a bucket must reach before it
+// can be purged as orphaned. This prevents deleting buckets that were replicated
+// from another coordinator before the corresponding share config arrives.
+const orphanedBucketGracePeriod = 10 * time.Minute
+
 // FileShareManager manages file shares backed by S3 buckets.
 type FileShareManager struct {
 	store       *Store
@@ -389,7 +394,15 @@ func (m *FileShareManager) PurgeOrphanedFileShareBuckets(ctx context.Context) in
 		if _, active := activeShareBuckets[bucket.Name]; active {
 			continue
 		}
-		// Bucket has fs+ prefix but no corresponding share — orphaned
+		// Bucket has fs+ prefix but no corresponding share — orphaned.
+		// Skip young buckets: in a multi-coordinator setup, object replication
+		// can create the bucket before the share config is replicated.
+		if time.Since(bucket.CreatedAt) < orphanedBucketGracePeriod {
+			log.Debug().Str("bucket", bucket.Name).
+				Dur("age", time.Since(bucket.CreatedAt)).
+				Msg("skipping young orphaned file share bucket (grace period)")
+			continue
+		}
 		log.Info().Str("bucket", bucket.Name).Msg("purging orphaned file share bucket")
 		if err := m.store.ForceDeleteBucket(ctx, bucket.Name); err != nil {
 			log.Warn().Err(err).Str("bucket", bucket.Name).Msg("failed to purge orphaned file share bucket")
