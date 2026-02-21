@@ -223,41 +223,11 @@ func TestRebalancer_OnCycleCompleteCallback(t *testing.T) {
 
 	assert.True(t, callbackCalled)
 	assert.Equal(t, uint64(1), callbackStats.RunsTotal)
+	assert.Equal(t, uint64(1), callbackStats.ObjectsEnqueued)
 }
 
-func TestRebalancer_CleansUpStaleChunks(t *testing.T) {
-	// Set up coord1 with real peer replicators so chunk sends succeed.
-	broker := newTestTransportBroker()
-	s3Store := newMockS3Store()
-	registry := newMockChunkRegistry()
-	logger := zerolog.Nop()
-
-	replicator := NewReplicator(Config{
-		NodeID:        "coord1",
-		Transport:     broker.newTransportFor("coord1"),
-		S3Store:       s3Store,
-		ChunkRegistry: registry,
-		Logger:        logger,
-	})
-	require.NoError(t, replicator.Start())
-	defer func() { _ = replicator.Stop() }()
-
-	// Start peer replicators so sendReplicateChunk succeeds
-	for _, peerID := range []string{"coord2", "coord3"} {
-		peerS3 := newMockS3Store()
-		peer := NewReplicator(Config{
-			NodeID:        peerID,
-			Transport:     broker.newTransportFor(peerID),
-			S3Store:       peerS3,
-			ChunkRegistry: newMockChunkRegistry(),
-			Logger:        logger,
-		})
-		require.NoError(t, peer.Start())
-		defer func() { _ = peer.Stop() }()
-	}
-
-	rb := NewRebalancer(replicator, s3Store, registry, logger)
-	rb.debounceDuration = 0
+func TestRebalancer_EnqueuesObjectsAfterRebalance(t *testing.T) {
+	rb, replicator, s3Store := newTestRebalancer(t)
 
 	// 6 chunks across 2 objects, all stored locally
 	chunks1 := []string{"chunk_a", "chunk_b", "chunk_c"}
@@ -279,43 +249,36 @@ func TestRebalancer_CleansUpStaleChunks(t *testing.T) {
 	rb.NotifyTopologyChange()
 	rb.runRebalanceCycle(context.Background())
 
-	// Verify we still have all chunks
+	// Verify we still have all chunks (no cleanup)
 	for _, h := range append(chunks1, chunks2...) {
 		assert.True(t, s3Store.ChunkExists(context.Background(), h), "should still have %s", h)
 	}
 
-	// Add coord2/coord3 — with RF=2 < 3 coords, some chunks should move OFF us
+	// Add coord2/coord3 — rebalancer should NOT delete any chunks
 	replicator.AddPeer("coord2")
 	replicator.AddPeer("coord3")
+
+	var callbackStats RebalancerStats
+	rb.OnCycleComplete = func(stats RebalancerStats) {
+		callbackStats = stats
+	}
+
 	rb.NotifyTopologyChange()
 	rb.runRebalanceCycle(context.Background())
 
-	// With 3 coordinators and RF=2, each chunk should be on 2 of 3 coordinators.
-	// Chunks not assigned to coord1 AND successfully sent should be deleted.
-	policy := NewStripingPolicy([]string{"coord1", "coord2", "coord3"})
-
-	// Check that chunks NOT assigned to coord1 were cleaned up
-	for i, hash := range chunks1 {
-		assigned := policy.ChunksForPeer("coord1", len(chunks1), 2)
-		isAssigned := false
-		for _, idx := range assigned {
-			if idx == i {
-				isAssigned = true
-				break
-			}
-		}
-		if !isAssigned {
-			assert.False(t, s3Store.ChunkExists(context.Background(), hash),
-				"chunk %s (index %d) should have been cleaned up", hash, i)
-		}
+	// ALL chunks must still exist — rebalancer no longer deletes chunks
+	for _, h := range append(chunks1, chunks2...) {
+		assert.True(t, s3Store.ChunkExists(context.Background(), h),
+			"chunk %s must be preserved (rebalancer should not delete chunks)", h)
 	}
 
-	// Verify stats include cleaned chunks
+	// Verify objects were enqueued for replication
+	assert.Equal(t, uint64(2), callbackStats.ObjectsEnqueued, "both objects should be enqueued")
 	assert.Greater(t, rb.GetStats().RunsTotal, uint64(0))
 }
 
-func TestRebalancer_NoCleanupWithoutSuccessfulSend(t *testing.T) {
-	// Without real peer replicators, sends fail → chunks must NOT be deleted.
+func TestRebalancer_ChunksAlwaysPreserved(t *testing.T) {
+	// Rebalancer never deletes chunks — they are always preserved locally.
 	rb, replicator, s3Store := newTestRebalancer(t)
 
 	chunks := []string{"chunk_a", "chunk_b", "chunk_c"}
@@ -330,54 +293,24 @@ func TestRebalancer_NoCleanupWithoutSuccessfulSend(t *testing.T) {
 	rb.NotifyTopologyChange()
 	rb.runRebalanceCycle(context.Background())
 
-	// Add peers (no real replicators → sends will fail)
+	// Add peers
 	replicator.AddPeer("coord2")
 	replicator.AddPeer("coord3")
 	rb.NotifyTopologyChange()
 	rb.runRebalanceCycle(context.Background())
 
-	// ALL chunks must still exist because sends failed
+	// ALL chunks must still exist — rebalancer never deletes chunks
 	for _, h := range chunks {
 		assert.True(t, s3Store.ChunkExists(context.Background(), h),
-			"chunk %s must be preserved when send fails", h)
+			"chunk %s must be preserved (rebalancer never deletes chunks)", h)
 	}
 }
 
-func TestRebalancer_CleanupPreservesSharedChunks(t *testing.T) {
-	// Set up with real peer replicators so sends succeed.
-	broker := newTestTransportBroker()
-	s3Store := newMockS3Store()
-	registry := newMockChunkRegistry()
-	logger := zerolog.Nop()
-
-	replicator := NewReplicator(Config{
-		NodeID:        "coord1",
-		Transport:     broker.newTransportFor("coord1"),
-		S3Store:       s3Store,
-		ChunkRegistry: registry,
-		Logger:        logger,
-	})
-	require.NoError(t, replicator.Start())
-	defer func() { _ = replicator.Stop() }()
-
-	for _, peerID := range []string{"coord2", "coord3"} {
-		peer := NewReplicator(Config{
-			NodeID:        peerID,
-			Transport:     broker.newTransportFor(peerID),
-			S3Store:       newMockS3Store(),
-			ChunkRegistry: newMockChunkRegistry(),
-			Logger:        logger,
-		})
-		require.NoError(t, peer.Start())
-		defer func() { _ = peer.Stop() }()
-	}
-
-	rb := NewRebalancer(replicator, s3Store, registry, logger)
-	rb.debounceDuration = 0
+func TestRebalancer_SharedChunksPreserved(t *testing.T) {
+	// Rebalancer never deletes chunks, so shared chunks are always preserved.
+	rb, replicator, s3Store := newTestRebalancer(t)
 
 	// Two objects share a chunk hash — "shared_chunk" appears in both.
-	// Even if it's not assigned to us for object1, it IS assigned for object2,
-	// so it must NOT be deleted.
 	s3Store.addObjectWithChunks("bucket1", "file1", []string{"shared_chunk", "only_a"}, map[string][]byte{
 		"shared_chunk": []byte("shared_data"),
 		"only_a":       []byte("only_a_data"),
@@ -387,39 +320,20 @@ func TestRebalancer_CleanupPreservesSharedChunks(t *testing.T) {
 		"shared_chunk": []byte("shared_data"),
 	})
 
-	// 3 coordinators so RF=2 < 3 — some chunk indices won't be assigned to us
+	// 3 coordinators so RF=2 < 3
 	replicator.AddPeer("coord2")
 	replicator.AddPeer("coord3")
 
 	rb.NotifyTopologyChange()
 	rb.runRebalanceCycle(context.Background())
 
-	// The shared chunk should still exist because it's assigned to us for at least
-	// one of the two objects (different index, different assignment).
-	// With 3 peers and RF=2, index 0 → peers 0,1; index 1 → peers 1,2.
-	// coord1 is one of {coord1, coord2, coord3} sorted.
-	// In file1: shared_chunk is index 0, in file2: shared_chunk is index 1.
-	// At least one of those indices should assign to coord1 with RF=2.
-	policy := NewStripingPolicy([]string{"coord1", "coord2", "coord3"})
-	file1Assigned := policy.ChunksForPeer("coord1", 2, 2)
-	file2Assigned := policy.ChunksForPeer("coord1", 2, 2)
-
-	sharedNeeded := false
-	for _, idx := range file1Assigned {
-		if idx == 0 { // shared_chunk is index 0 in file1
-			sharedNeeded = true
-		}
-	}
-	for _, idx := range file2Assigned {
-		if idx == 1 { // shared_chunk is index 1 in file2
-			sharedNeeded = true
-		}
-	}
-
-	if sharedNeeded {
-		assert.True(t, s3Store.ChunkExists(context.Background(), "shared_chunk"),
-			"shared chunk should be preserved when assigned to us for any object")
-	}
+	// All chunks must still exist — rebalancer never deletes chunks
+	assert.True(t, s3Store.ChunkExists(context.Background(), "shared_chunk"),
+		"shared chunk must be preserved")
+	assert.True(t, s3Store.ChunkExists(context.Background(), "only_a"),
+		"only_a chunk must be preserved")
+	assert.True(t, s3Store.ChunkExists(context.Background(), "only_b"),
+		"only_b chunk must be preserved")
 }
 
 // TestReplicateObjectMeta_IncludesVersionHistory verifies that sendReplicateObjectMeta

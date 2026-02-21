@@ -743,3 +743,226 @@ func TestEnsureBucketForShare_ReplicatedShare(t *testing.T) {
 	// Share should now be in mgrB's memory
 	assert.NotNil(t, mgrB.Get("photos"))
 }
+
+func TestPurgeOrphanedFileShareBuckets_GracePeriod(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a fs+ bucket directly (no share config) — simulates replication
+	// arriving before the share config is replicated.
+	bucketName := FileShareBucketPrefix + "replicated"
+	err = store.CreateBucket(context.Background(), bucketName, "alice", 1, nil)
+	require.NoError(t, err)
+
+	// Bucket was just created (young) — purge should skip it
+	purged := mgr.PurgeOrphanedFileShareBuckets(context.Background())
+	assert.Equal(t, 0, purged, "young orphaned bucket should survive grace period")
+
+	// Verify bucket still exists
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	assert.NoError(t, err, "bucket should still exist after purge (grace period)")
+}
+
+func TestPurgeOrphanedFileShareBuckets_DeletesOldOrphans(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a fs+ bucket directly (no share config)
+	bucketName := FileShareBucketPrefix + "stale"
+	err = store.CreateBucket(context.Background(), bucketName, "alice", 1, nil)
+	require.NoError(t, err)
+
+	// Backdate the bucket's CreatedAt to make it older than the grace period
+	metaPath := filepath.Join(store.DataDir(), "buckets", bucketName, "_meta.json")
+	metaData, err := os.ReadFile(metaPath)
+	require.NoError(t, err)
+
+	// Replace the timestamp with one from 20 minutes ago
+	meta, err := store.HeadBucket(context.Background(), bucketName)
+	require.NoError(t, err)
+	oldTime := time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339Nano)
+	updated := bytes.Replace(metaData,
+		[]byte(meta.CreatedAt.Format(time.RFC3339Nano)),
+		[]byte(oldTime), 1)
+	require.NoError(t, os.WriteFile(metaPath, updated, 0644))
+
+	// Now purge should delete the old orphaned bucket
+	purged := mgr.PurgeOrphanedFileShareBuckets(context.Background())
+	assert.Equal(t, 1, purged, "old orphaned bucket should be purged")
+
+	// Verify bucket is gone
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	assert.ErrorIs(t, err, ErrBucketNotFound, "old orphaned bucket should be deleted")
+}
+
+func TestFileShareManager_Create_PreservesRemoteShares(t *testing.T) {
+	// Simulates two coordinators sharing a system store. Coordinator A creates
+	// a share, then coordinator B creates a different share. B's Create() must
+	// not overwrite A's share when saving back to the system store.
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizerA := auth.NewAuthorizerWithGroups()
+	authorizerB := auth.NewAuthorizerWithGroups()
+
+	// Coordinator A creates "photos"
+	mgrA := NewFileShareManager(store, systemStore, authorizerA)
+	_, err = mgrA.Create(context.Background(), "photos", "Photos share", "alice", 0, nil)
+	require.NoError(t, err)
+
+	// Coordinator B starts fresh — doesn't have "photos" in memory
+	mgrB := NewFileShareManager(store, systemStore, authorizerB)
+	// Clear B's memory to simulate it not having loaded A's share yet
+	mgrB.mu.Lock()
+	mgrB.shares = nil
+	mgrB.mu.Unlock()
+
+	// B creates "docs" — this should reload from system store first,
+	// preserving A's "photos" share
+	_, err = mgrB.Create(context.Background(), "docs", "Documents share", "bob", 0, nil)
+	require.NoError(t, err)
+
+	// Verify both shares exist in the system store
+	shares, err := systemStore.LoadFileShares(context.Background())
+	require.NoError(t, err)
+	names := make(map[string]bool)
+	for _, s := range shares {
+		names[s.Name] = true
+	}
+	assert.True(t, names["photos"], "A's share should survive B's Create")
+	assert.True(t, names["docs"], "B's share should be saved")
+}
+
+func TestFileShareManager_Delete_PreservesRemoteShares(t *testing.T) {
+	// Simulates two coordinators sharing a system store. Coordinator A creates
+	// two shares, then coordinator B creates a share. Then A deletes one of its
+	// shares — B's share must not be lost.
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizerA := auth.NewAuthorizerWithGroups()
+	authorizerB := auth.NewAuthorizerWithGroups()
+
+	// Coordinator A creates "photos" and "music"
+	mgrA := NewFileShareManager(store, systemStore, authorizerA)
+	_, err = mgrA.Create(context.Background(), "photos", "Photos share", "alice", 0, nil)
+	require.NoError(t, err)
+	_, err = mgrA.Create(context.Background(), "music", "Music share", "alice", 0, nil)
+	require.NoError(t, err)
+
+	// Coordinator B creates "docs" (system store now has photos, music, docs)
+	mgrB := NewFileShareManager(store, systemStore, authorizerB)
+	_, err = mgrB.Create(context.Background(), "docs", "Documents share", "bob", 0, nil)
+	require.NoError(t, err)
+
+	// A doesn't know about B's "docs" in memory — clear and reload only A's shares
+	mgrA.mu.Lock()
+	mgrA.shares = []*FileShare{
+		{Name: "photos", Owner: "alice"},
+		{Name: "music", Owner: "alice"},
+	}
+	mgrA.mu.Unlock()
+
+	// A deletes "music" — reloadShares should pick up B's "docs" before saving
+	err = mgrA.Delete(context.Background(), "music")
+	require.NoError(t, err)
+
+	// Verify system store has "photos" and "docs" (not "music")
+	shares, err := systemStore.LoadFileShares(context.Background())
+	require.NoError(t, err)
+	names := make(map[string]bool)
+	for _, s := range shares {
+		names[s.Name] = true
+	}
+	assert.True(t, names["photos"], "A's remaining share should survive")
+	assert.True(t, names["docs"], "B's share should survive A's Delete")
+	assert.False(t, names["music"], "deleted share should be gone")
+}
+
+func TestPurgeOrphanedFileShareBuckets_KeepsActiveBuckets(t *testing.T) {
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a proper share (bucket + config)
+	_, err = mgr.Create(context.Background(), "active", "Active share", "alice", 0, nil)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + "active"
+
+	// Backdate the bucket so it's past the grace period
+	metaPath := filepath.Join(store.DataDir(), "buckets", bucketName, "_meta.json")
+	metaData, err := os.ReadFile(metaPath)
+	require.NoError(t, err)
+
+	oldTime := time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339Nano)
+	meta, _ := store.HeadBucket(context.Background(), bucketName)
+	updated := bytes.Replace(metaData,
+		[]byte(meta.CreatedAt.Format(time.RFC3339Nano)),
+		[]byte(oldTime), 1)
+	require.NoError(t, os.WriteFile(metaPath, updated, 0644))
+
+	// Purge should NOT delete this bucket — it has a corresponding share
+	purged := mgr.PurgeOrphanedFileShareBuckets(context.Background())
+	assert.Equal(t, 0, purged, "active share bucket should not be purged")
+
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	assert.NoError(t, err, "active share bucket should still exist")
+}
+
+func TestPurgeOrphanedFileShareBuckets_NilSystemStoreDoesNotWipeShares(t *testing.T) {
+	// Reproduces the bug where LoadFileShares returns (nil, nil) when the system
+	// bucket object doesn't exist (not replicated yet). Previously, this caused
+	// m.shares to be set to nil, making ALL fs+ buckets appear orphaned.
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a proper share
+	_, err = mgr.Create(context.Background(), "photos", "Photos share", "alice", 0, nil)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + "photos"
+
+	// Backdate the bucket past the grace period
+	metaPath := filepath.Join(store.DataDir(), "buckets", bucketName, "_meta.json")
+	metaData, err := os.ReadFile(metaPath)
+	require.NoError(t, err)
+
+	oldTime := time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339Nano)
+	meta, _ := store.HeadBucket(context.Background(), bucketName)
+	updated := bytes.Replace(metaData,
+		[]byte(meta.CreatedAt.Format(time.RFC3339Nano)),
+		[]byte(oldTime), 1)
+	require.NoError(t, os.WriteFile(metaPath, updated, 0644))
+
+	// Now delete the file_shares.json from the system bucket to simulate
+	// the object not having been replicated to this coordinator yet.
+	err = store.PurgeObject(context.Background(), SystemBucket, FileSharesPath)
+	require.NoError(t, err)
+
+	// PurgeOrphanedFileShareBuckets should NOT wipe in-memory shares
+	// when LoadFileShares returns nil (object not found).
+	purged := mgr.PurgeOrphanedFileShareBuckets(context.Background())
+	assert.Equal(t, 0, purged, "bucket should survive when system store returns nil shares")
+
+	// Verify bucket still exists
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	assert.NoError(t, err, "bucket should still exist — nil shares must not wipe in-memory shares")
+}

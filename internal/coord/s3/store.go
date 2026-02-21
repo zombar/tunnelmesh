@@ -27,12 +27,12 @@ import (
 // GCGracePeriod is the minimum age of a chunk before it can be garbage collected.
 // This prevents deleting chunks that are being replicated or uploaded.
 //
-// IMPORTANT: This assumes file uploads complete within this duration. For very large
-// files or slow networks, increase this value to prevent premature chunk deletion.
+// IMPORTANT: This must be longer than the maximum time for metadata to arrive
+// after chunk replication. Auto-sync has a 2-min initial delay + 5-min interval,
+// so metadata can take up to 7 minutes to arrive. 10 minutes provides margin.
 //
-// Default: 5 minutes (balanced between responsiveness and replication safety)
 // For large file uploads or high-latency networks: Consider 1 hour or more
-const GCGracePeriod = 5 * time.Minute
+const GCGracePeriod = 10 * time.Minute
 
 // MaxErasureCodingFileSize is the maximum file size for erasure coding (Phase 1).
 // Files larger than this will use standard replication.

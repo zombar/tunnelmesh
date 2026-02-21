@@ -1086,9 +1086,17 @@ func runJoinWithConfigAndCallback(ctx context.Context, cfg *config.PeerConfig, o
 		srv.SetCoordMeshIP(resp.MeshIP)
 		srv.SetMetricsRegistry(metrics.Registry)
 
-		// Note: Existing coordinator discovery is handled by StartReplicator()
-		// which is called later in this function. It discovers peers from the
-		// server's peer list after the coordinator has fully joined the mesh.
+		// Add coordinator peers discovered during registration.
+		// The registration response includes IPs of all known coordinators,
+		// enabling immediate bidirectional replication.
+		if replicator := srv.GetReplicator(); replicator != nil && len(resp.Coordinators) > 0 {
+			for _, coordIP := range resp.Coordinators {
+				replicator.AddPeer(coordIP)
+			}
+			log.Info().
+				Int("peers", len(resp.Coordinators)).
+				Msg("added coordinator peers from registration response")
+		}
 
 		// Load TLS certificate once for all services
 		// TLS is mandatory for coordinators (admin, S3, NFS all require HTTPS)

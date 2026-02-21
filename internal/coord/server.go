@@ -450,7 +450,7 @@ func NewServer(ctx context.Context, cfg *config.PeerConfig) (*Server, error) {
 			if m := s3.GetS3Metrics(); m != nil {
 				m.RebalanceRunsTotal.Add(float64(stats.RunsTotal))
 				m.RebalanceChunksMovedTotal.Add(float64(stats.ChunksRedistributed))
-				m.RebalanceChunksCleanedTotal.Add(float64(stats.ChunksCleaned))
+				m.RebalanceObjectsEnqueuedTotal.Add(float64(stats.ObjectsEnqueued))
 				m.RebalanceBytesTransferred.Add(float64(stats.BytesTransferred))
 			}
 		}
@@ -2240,6 +2240,12 @@ func (s *Server) createPeerShare(peerID, peerName string) {
 		if err := s.s3SystemStore.SaveBindings(ctx, s.s3Authorizer.Bindings.List()); err != nil {
 			log.Warn().Err(err).Msg("failed to persist role bindings for auto-created share")
 		}
+	}
+
+	// Trigger immediate replication of file share metadata so other coordinators
+	// learn about the new share before PurgeOrphanedFileShareBuckets runs.
+	if s.replicator != nil {
+		s.replicator.EnqueueReplication(s3.SystemBucket, s3.FileSharesPath, "put")
 	}
 
 	log.Info().Str("peer", peerName).Str("share", share.Name).Msg("auto-created peer share")

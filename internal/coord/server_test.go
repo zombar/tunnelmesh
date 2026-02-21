@@ -1642,3 +1642,29 @@ func TestServer_SetCoordinatorID_OnInit(t *testing.T) {
 	assert.Equal(t, "test-coord", srv.s3Store.CoordinatorID(),
 		"SetCoordinatorID should be called during server init with cfg.Name")
 }
+
+func TestServer_RegistrationResponseCoordinatorPeers(t *testing.T) {
+	srv := newTestServerWithS3(t)
+
+	replicator := srv.GetReplicator()
+	require.NotNil(t, replicator, "server with S3 should have a replicator")
+
+	// Before: no peers
+	assert.Empty(t, replicator.GetPeers(), "replicator should start with no peers")
+
+	// Simulate processing resp.Coordinators from registration response
+	// (mirrors the code in main.go after join_mesh registration)
+	respCoordinators := []string{"10.0.0.1", "10.0.0.2"}
+	for _, coordIP := range respCoordinators {
+		replicator.AddPeer(coordIP)
+	}
+
+	// After: peers should be added
+	peers := replicator.GetPeers()
+	assert.Len(t, peers, 2, "replicator should have 2 peers after adding from registration response")
+	assert.ElementsMatch(t, []string{"10.0.0.1", "10.0.0.2"}, peers)
+
+	// AddPeer is idempotent — adding same peer again should not duplicate
+	replicator.AddPeer("10.0.0.1")
+	assert.Len(t, replicator.GetPeers(), 2, "duplicate AddPeer should be idempotent")
+}
