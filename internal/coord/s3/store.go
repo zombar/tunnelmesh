@@ -803,6 +803,18 @@ func (s *Store) writeBucketMeta(bucket string, meta *BucketMeta) error {
 	return nil
 }
 
+// GetBucketOwner returns the owner of a bucket (empty string if not found).
+func (s *Store) GetBucketOwner(_ context.Context, bucket string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	meta, err := s.getBucketMeta(bucket)
+	if err != nil {
+		return ""
+	}
+	return meta.Owner
+}
+
 // HeadBucket checks if a bucket exists.
 func (s *Store) HeadBucket(ctx context.Context, bucket string) (*BucketMeta, error) {
 	s.mu.RLock()

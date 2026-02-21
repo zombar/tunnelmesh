@@ -803,3 +803,63 @@ func TestAutoSyncCycle_EmptyStoreSkipsManifest(t *testing.T) {
 			"Empty store must not send manifest (could cause mass purge on replicas)")
 	}
 }
+
+func TestManifestReconciliation_SkipsBucketsNotOwnedBySender(t *testing.T) {
+	// In a multi-coordinator setup, coordinator A should not be able to
+	// purge objects from buckets owned by coordinator C on this node.
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+
+	r := NewReplicator(Config{
+		NodeID:              "coord-b",
+		Transport:           transport,
+		S3Store:             s3Store,
+		ChunkRegistry:       registry,
+		Logger:              zerolog.Nop(),
+		ChunkPipelineWindow: 5,
+		AutoSyncInterval:    0,
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	// coord-b has objects from two different owners:
+	// - bucket-a owned by coord-a (replicated from coord-a)
+	// - bucket-c owned by coord-c (replicated from coord-c)
+	s3Store.addObjectWithChunks("bucket-a", "file1.txt", []string{"h1"}, map[string][]byte{"h1": []byte("d1")})
+	s3Store.addObjectWithChunks("bucket-c", "file1.txt", []string{"h2"}, map[string][]byte{"h2": []byte("d2")})
+	s3Store.bucketOwners = map[string]string{
+		"bucket-a": "coord-a",
+		"bucket-c": "coord-c",
+	}
+
+	// coord-a sends a manifest listing bucket-a (empty) and bucket-c (empty).
+	// Without ownership check, this would purge both. With the fix, only bucket-a
+	// objects should be purged because coord-a doesn't own bucket-c.
+	payload := ObjectManifestPayload{
+		BucketKeys: map[string][]string{
+			"bucket-a": {}, // coord-a removed all objects from its bucket
+			"bucket-c": {}, // coord-a claims bucket-c is empty too (wrong!)
+		},
+	}
+	payloadJSON, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeObjectManifest,
+		ID:      "test-manifest",
+		From:    "coord-a", // Sender is coord-a
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	err = r.handleObjectManifest(msg)
+	require.NoError(t, err)
+
+	// bucket-a/file1.txt should be purged (coord-a owns bucket-a, and file is not in manifest)
+	_, _, err = s3Store.Get(context.Background(), "bucket-a", "file1.txt")
+	assert.Error(t, err, "bucket-a/file1.txt should be purged (sender owns this bucket)")
+
+	// bucket-c/file1.txt should NOT be purged (coord-a doesn't own bucket-c)
+	_, _, err = s3Store.Get(context.Background(), "bucket-c", "file1.txt")
+	assert.NoError(t, err, "bucket-c/file1.txt should survive (sender doesn't own this bucket)")
+}

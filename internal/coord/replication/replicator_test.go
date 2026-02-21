@@ -74,6 +74,7 @@ type mockS3Store struct {
 	objects        map[string]mockS3Object   // map["bucket/key"]object
 	chunks         map[string][]byte         // map[hash]data (for chunk-level operations)
 	versionHistory map[string][]VersionEntry // map["bucket/key:versions"]entries
+	bucketOwners   map[string]string         // map[bucket]ownerNodeID
 	putErr         error                     // If set, Put will return this error
 	metaErr        error                     // If set, GetObjectMeta will return this error
 	chunkErr       error                     // If set, chunk operations will return this error
@@ -365,6 +366,17 @@ func (m *mockS3Store) GetAllObjectKeys(_ context.Context) (map[string][]string, 
 		}
 	}
 	return result, nil
+}
+
+// GetBucketOwner returns the owner of a bucket.
+func (m *mockS3Store) GetBucketOwner(_ context.Context, bucket string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.bucketOwners != nil {
+		return m.bucketOwners[bucket]
+	}
+	return ""
 }
 
 // splitFirst splits a string at the first occurrence of sep.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
+	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"golang.org/x/time/rate"
 )
 
@@ -118,6 +119,10 @@ type S3Store interface {
 	// GetAllObjectKeys returns all object keys grouped by bucket.
 	// Used by the rebalancer to iterate all objects for redistribution.
 	GetAllObjectKeys(ctx context.Context) (map[string][]string, error)
+
+	// GetBucketOwner returns the owner of a bucket (empty string if bucket not found).
+	// Used by manifest reconciliation to validate sender ownership.
+	GetBucketOwner(ctx context.Context, bucket string) string
 }
 
 // ChunkRegistryInterface defines operations for chunk ownership tracking.
@@ -2465,21 +2470,27 @@ func (r *Replicator) handleObjectManifest(msg *Message) error {
 	}
 
 	// Collect objects to purge: local objects not in the manifest.
-	// Safety: skip system bucket, only purge from buckets the sender also has.
+	// Safety: skip system bucket, only purge from buckets the sender owns.
 	const maxPurgePerManifest = 100
 	var purged int
 
 	for bucket, keys := range localKeys {
 		// Never purge system bucket based on manifest
-		if bucket == "_tunnelmesh" {
+		if bucket == auth.SystemBucket {
 			continue
 		}
 
-		// Only reconcile buckets that the sender knows about (present in manifest,
-		// possibly with zero objects). If the sender doesn't mention a bucket at all,
-		// it may not be the owner — skip to avoid cross-owner purging.
+		// Only reconcile buckets that the sender mentions in the manifest.
 		senderKeys, senderHasBucket := manifestSet[bucket]
 		if !senderHasBucket {
+			continue
+		}
+
+		// Only purge from buckets the sender actually owns. On replicas, the
+		// bucket owner is set to the source coordinator's node ID during import.
+		// This prevents coordinator A's manifest from purging objects in buckets
+		// owned by coordinator C that were replicated to this node.
+		if owner := r.s3.GetBucketOwner(ctx, bucket); owner != "" && owner != msg.From {
 			continue
 		}
 

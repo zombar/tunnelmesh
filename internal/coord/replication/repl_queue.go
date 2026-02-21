@@ -334,5 +334,6 @@ func (r *Replicator) sendObjectManifest(ctx context.Context, allKeys map[string]
 
 	r.logger.Debug().
 		Int("peers", len(peers)).
+		Int("manifest_bytes", len(payloadJSON)).
 		Msg("Auto-sync: sent object manifest for reconciliation")
 }
