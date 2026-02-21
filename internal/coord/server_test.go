@@ -1656,7 +1656,7 @@ func TestServer_RegistrationResponseCoordinatorPeers(t *testing.T) {
 	// (mirrors the code in main.go after join_mesh registration)
 	respCoordinators := []string{"10.0.0.1", "10.0.0.2"}
 	for _, coordIP := range respCoordinators {
-		replicator.AddPeer(coordIP)
+		replicator.AddPeer(coordIP, coordIP)
 	}
 
 	// After: peers should be added
@@ -1665,6 +1665,6 @@ func TestServer_RegistrationResponseCoordinatorPeers(t *testing.T) {
 	assert.ElementsMatch(t, []string{"10.0.0.1", "10.0.0.2"}, peers)
 
 	// AddPeer is idempotent — adding same peer again should not duplicate
-	replicator.AddPeer("10.0.0.1")
+	replicator.AddPeer("10.0.0.1", "10.0.0.1")
 	assert.Len(t, replicator.GetPeers(), 2, "duplicate AddPeer should be idempotent")
 }

@@ -921,7 +921,7 @@ func (s *Server) StartReplicator() error {
 	for name, info := range s.coordinators {
 		// Don't add self to replication targets
 		if name != s.cfg.Name {
-			s.replicator.AddPeer(info.peer.MeshIP)
+			s.replicator.AddPeer(info.peer.MeshIP, name)
 			log.Debug().
 				Str("peer", name).
 				Str("mesh_ip", info.peer.MeshIP).
@@ -1838,7 +1838,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		// Check peer name instead of mesh IP to avoid race condition with storeCoordIPs()
 		// which happens asynchronously after registration completes
 		if req.Name != s.cfg.Name {
-			s.replicator.AddPeer(meshIP)
+			s.replicator.AddPeer(meshIP, req.Name)
 			log.Debug().Str("peer", req.Name).Str("mesh_ip", meshIP).Msg("added coordinator to replication targets")
 		} else {
 			log.Debug().Str("peer", req.Name).Msg("skipping self-replication (coordinator registering itself)")
@@ -1949,25 +1949,31 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// If registering peer is a coordinator, include list of all known coordinators
 	// This enables immediate bidirectional replication without separate ListPeers() call
 	var coordinators []string
+	var coordinatorNames map[string]string
 	if peer.IsCoordinator {
 		for _, peerInfo := range s.peers {
 			if peerInfo.peer.IsCoordinator && peerInfo.peer.MeshIP != meshIP {
 				coordinators = append(coordinators, peerInfo.peer.MeshIP)
+				if coordinatorNames == nil {
+					coordinatorNames = make(map[string]string)
+				}
+				coordinatorNames[peerInfo.peer.MeshIP] = peerInfo.peer.Name
 			}
 		}
 	}
 
 	resp := proto.RegisterResponse{
-		MeshIP:        meshIP,
-		MeshCIDR:      mesh.CIDR,
-		Domain:        mesh.DomainSuffix,
-		Token:         token,
-		CoordMeshIPs:  coordIPs, // All coordinator IPs for DNS round-robin
-		ServerVersion: s.version,
-		PeerName:      req.Name, // May differ from original request if renamed
-		PeerID:        peerID,
-		IsAdmin:       isAdmin,
-		Coordinators:  coordinators, // For immediate replication setup
+		MeshIP:           meshIP,
+		MeshCIDR:         mesh.CIDR,
+		Domain:           mesh.DomainSuffix,
+		Token:            token,
+		CoordMeshIPs:     coordIPs, // All coordinator IPs for DNS round-robin
+		ServerVersion:    s.version,
+		PeerName:         req.Name, // May differ from original request if renamed
+		PeerID:           peerID,
+		IsAdmin:          isAdmin,
+		Coordinators:     coordinators,     // For immediate replication setup
+		CoordinatorNames: coordinatorNames, // For replication ownership tracking
 	}
 
 	// Generate TLS certificate for the peer

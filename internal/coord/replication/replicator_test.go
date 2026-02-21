@@ -566,8 +566,8 @@ func TestReplicator_AddRemovePeer(t *testing.T) {
 	assert.Empty(t, r.GetPeers())
 
 	// Add peers
-	r.AddPeer("coord2.mesh")
-	r.AddPeer("coord3.mesh")
+	r.AddPeer("coord2.mesh", "coord2.mesh")
+	r.AddPeer("coord3.mesh", "coord3.mesh")
 
 	peers := r.GetPeers()
 	assert.Len(t, peers, 2)
@@ -575,7 +575,7 @@ func TestReplicator_AddRemovePeer(t *testing.T) {
 	assert.Contains(t, peers, "coord3.mesh")
 
 	// Add duplicate (should be idempotent)
-	r.AddPeer("coord2.mesh")
+	r.AddPeer("coord2.mesh", "coord2.mesh")
 	assert.Len(t, r.GetPeers(), 2)
 
 	// Remove peer
@@ -731,8 +731,8 @@ func TestReplicator_GetStats(t *testing.T) {
 	assert.Equal(t, 0, stats.PendingACKs)
 
 	// Add peers
-	r.AddPeer("coord2.mesh")
-	r.AddPeer("coord3.mesh")
+	r.AddPeer("coord2.mesh", "coord2.mesh")
+	r.AddPeer("coord3.mesh", "coord3.mesh")
 
 	stats = r.GetStats()
 	assert.Equal(t, 2, stats.PeerCount)
@@ -773,7 +773,7 @@ func TestReplicator_TransportError(t *testing.T) {
 	s3 := newMockS3Store()
 	r := createTestReplicatorWithMocks(t, transport, s3)
 
-	r.AddPeer("coord2.mesh")
+	r.AddPeer("coord2.mesh", "coord2.mesh")
 
 	// ReplicateDelete should return error when transport fails
 	err := r.ReplicateDelete(context.Background(), "system", "test.json")
@@ -1042,8 +1042,8 @@ func TestReplicateObject_ChunkReadError_FallbackSuccess(t *testing.T) {
 
 	// Sender knows about both peers: coord-peer for fallback fetching,
 	// coord-receiver as the replication target (both needed for striping)
-	sender.AddPeer("coord-peer")
-	sender.AddPeer("coord-receiver")
+	sender.AddPeer("coord-peer", "coord-peer")
+	sender.AddPeer("coord-receiver", "coord-receiver")
 
 	// Replicate should succeed via peer fallback
 	err := sender.ReplicateObject(ctx, "bucket1", "file.txt", "coord-receiver")
@@ -1263,8 +1263,8 @@ func TestStripedReplicateObject_Distribution(t *testing.T) {
 	t.Cleanup(func() { _ = sender.Stop() })
 
 	// Add two peers
-	sender.AddPeer("coord-peer1")
-	sender.AddPeer("coord-peer2")
+	sender.AddPeer("coord-peer1", "coord-peer1")
+	sender.AddPeer("coord-peer2", "coord-peer2")
 
 	// Track chunks received by each peer via intercepting broker
 	var peer1Chunks []string
@@ -1360,7 +1360,7 @@ func TestStripedReplicateObject_SinglePeer(t *testing.T) {
 	t.Cleanup(func() { _ = sender.Stop() })
 
 	// Only one peer
-	sender.AddPeer("coord-peer1")
+	sender.AddPeer("coord-peer1", "coord-peer1")
 
 	// Set up receiver
 	peerTransport := broker.newTransportFor("coord-peer1")
@@ -1664,7 +1664,7 @@ func TestReplicateObject_SendsMetadata(t *testing.T) {
 	_ = rB.Start()
 	defer func() { _ = rB.Stop() }()
 
-	rA.AddPeer("coord-b")
+	rA.AddPeer("coord-b", "coord-b")
 
 	// Create object on coordinator A with chunks
 	chunks := []string{"hash-a", "hash-b"}
@@ -2152,7 +2152,7 @@ func TestSendSemaphoreLimitsConcurrency(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = r.Stop() })
 
-	r.AddPeer("peer-1")
+	r.AddPeer("peer-1", "peer-1")
 
 	// Store a test object
 	err := s3Store.Put(context.Background(), "bucket", "key", []byte("data"), "text/plain", nil)

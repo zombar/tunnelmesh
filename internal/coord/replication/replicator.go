@@ -154,8 +154,9 @@ type Replicator struct {
 	chunkAckTimeout     time.Duration // Timeout for chunk-level ACKs (Phase 4)
 
 	// Peer coordinators
-	mu    sync.RWMutex
-	peers map[string]bool // map[coordMeshIP]true
+	mu        sync.RWMutex
+	peers     map[string]bool   // map[coordMeshIP]true
+	peerNames map[string]string // map[coordMeshIP]coordinatorName
 
 	// Pending ACKs (file-level)
 	pendingMu sync.RWMutex
@@ -330,6 +331,7 @@ func NewReplicator(config Config) *Replicator {
 		sendSem:                make(chan struct{}, config.MaxConcurrentSends),
 		rateLimiter:            rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst),
 		peers:                  make(map[string]bool),
+		peerNames:              make(map[string]string),
 		pending:                make(map[string]*pendingReplication),
 		pendingChunks:          make(map[string]*pendingChunkReplication),
 		pendingFetchRequests:   make(map[string]chan *FetchChunkResponsePayload),
@@ -423,14 +425,15 @@ func (r *Replicator) releaseSendSlot() {
 }
 
 // AddPeer adds a coordinator peer to replicate to.
-func (r *Replicator) AddPeer(coordMeshIP string) {
+func (r *Replicator) AddPeer(coordMeshIP, name string) {
 	r.mu.Lock()
 	added := false
 	if !r.peers[coordMeshIP] {
-		r.logger.Info().Str("peer", coordMeshIP).Msg("Added replication peer")
+		r.logger.Info().Str("peer", coordMeshIP).Str("name", name).Msg("Added replication peer")
 		r.peers[coordMeshIP] = true
 		added = true
 	}
+	r.peerNames[coordMeshIP] = name
 	r.mu.Unlock()
 
 	if added && r.rebalancer != nil {
@@ -445,6 +448,7 @@ func (r *Replicator) RemovePeer(coordMeshIP string) {
 	if r.peers[coordMeshIP] {
 		r.logger.Info().Str("peer", coordMeshIP).Msg("Removed replication peer")
 		delete(r.peers, coordMeshIP)
+		delete(r.peerNames, coordMeshIP)
 		removed = true
 	}
 	r.mu.Unlock()
@@ -464,6 +468,26 @@ func (r *Replicator) GetPeers() []string {
 		peers = append(peers, peer)
 	}
 	return peers
+}
+
+// getPeerNodeIDs returns the set of coordinator names for all known peers.
+// This is used for ownership checks where bucket owners are stored as
+// coordinator names (e.g. "coordinator-1") rather than mesh IPs.
+func (r *Replicator) getPeerNodeIDs() map[string]struct{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := make(map[string]struct{}, len(r.peerNames))
+	for _, name := range r.peerNames {
+		names[name] = struct{}{}
+	}
+	return names
+}
+
+// getPeerName returns the coordinator name for a given mesh IP.
+func (r *Replicator) getPeerName(meshIP string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.peerNames[meshIP]
 }
 
 // RequestSync sends a sync request to a specific coordinator peer.
@@ -2490,7 +2514,10 @@ func (r *Replicator) handleObjectManifest(msg *Message) error {
 		// bucket owner is set to the source coordinator's node ID during import.
 		// This prevents coordinator A's manifest from purging objects in buckets
 		// owned by coordinator C that were replicated to this node.
-		if owner := r.s3.GetBucketOwner(ctx, bucket); owner != "" && owner != msg.From {
+		// Note: msg.From is a mesh IP but bucket owners are coordinator names,
+		// so we resolve the sender's name for comparison.
+		senderName := r.getPeerName(msg.From)
+		if owner := r.s3.GetBucketOwner(ctx, bucket); owner != "" && owner != senderName {
 			continue
 		}
 

@@ -267,11 +267,10 @@ func (r *Replicator) runAutoSyncCycle() {
 		return
 	}
 
-	// Build peer set for O(1) lookups
-	peerSet := make(map[string]struct{}, len(peers))
-	for _, p := range peers {
-		peerSet[p] = struct{}{}
-	}
+	// Build peer node ID set for O(1) lookups. Bucket owners are stored as
+	// coordinator names (e.g. "coordinator-1"), not mesh IPs, so we need the
+	// name mapping to correctly identify replicated buckets.
+	peerNodeIDs := r.getPeerNodeIDs()
 
 	// Filter to locally-owned buckets only. On replicas, buckets imported via
 	// replication have their owner set to the source coordinator's node ID.
@@ -280,7 +279,7 @@ func (r *Replicator) runAutoSyncCycle() {
 	var skippedBuckets int
 	for bucket, keys := range allKeys {
 		owner := r.s3.GetBucketOwner(ctx, bucket)
-		if _, isPeer := peerSet[owner]; isPeer {
+		if _, isPeerNode := peerNodeIDs[owner]; isPeerNode {
 			skippedBuckets++
 			continue
 		}

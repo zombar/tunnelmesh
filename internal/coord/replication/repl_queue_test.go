@@ -127,7 +127,7 @@ func TestDrainReplicationQueue_Put(t *testing.T) {
 	require.NoError(t, rB.Start())
 	defer func() { _ = rB.Stop() }()
 
-	rA.AddPeer("coord-b")
+	rA.AddPeer("coord-b", "coord-b")
 
 	// Add object on coord-a
 	chunks := []string{"hash1", "hash2"}
@@ -175,7 +175,7 @@ func TestDrainReplicationQueue_Delete(t *testing.T) {
 	require.NoError(t, rB.Start())
 	defer func() { _ = rB.Stop() }()
 
-	rA.AddPeer("coord-b")
+	rA.AddPeer("coord-b", "coord-b")
 
 	// Add object on coord-b to be deleted
 	_ = s3b.Put(context.Background(), "bucket1", "file.txt", []byte("data"), "text/plain", nil)
@@ -272,7 +272,7 @@ func TestDrainReplicationQueue_BoundedConcurrency(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = r.Stop() })
 
-	r.AddPeer("coord-peer")
+	r.AddPeer("coord-peer", "coord-peer")
 
 	// Enqueue 20 delete operations
 	for i := 0; i < 20; i++ {
@@ -321,7 +321,7 @@ func TestShutdownDrain(t *testing.T) {
 	require.NoError(t, rB.Start())
 	defer func() { _ = rB.Stop() }()
 
-	rA.AddPeer("coord-b")
+	rA.AddPeer("coord-b", "coord-b")
 
 	// Add object and enqueue
 	chunks := []string{"hash1"}
@@ -368,7 +368,7 @@ func TestRunReplicationQueueWorker_SignalWakeup(t *testing.T) {
 	require.NoError(t, rB.Start())
 	defer func() { _ = rB.Stop() }()
 
-	rA.AddPeer("coord-b")
+	rA.AddPeer("coord-b", "coord-b")
 
 	// Add object
 	chunks := []string{"hash1"}
@@ -411,7 +411,7 @@ func TestAutoSyncCycle(t *testing.T) {
 	require.NoError(t, rB.Start())
 	defer func() { _ = rB.Stop() }()
 
-	rA.AddPeer("coord-b")
+	rA.AddPeer("coord-b", "coord-b")
 
 	// Add multiple objects
 	for _, key := range []string{"file1.txt", "file2.txt"} {
@@ -485,7 +485,7 @@ func TestChunkPipelining_MultipleChunks(t *testing.T) {
 	require.NoError(t, rB.Start())
 	defer func() { _ = rB.Stop() }()
 
-	rA.AddPeer("coord-b")
+	rA.AddPeer("coord-b", "coord-b")
 
 	// Create object with 10 chunks
 	chunks := make([]string, 10)
@@ -540,7 +540,7 @@ func TestChunkPipelining_WindowOne(t *testing.T) {
 	require.NoError(t, rB.Start())
 	defer func() { _ = rB.Stop() }()
 
-	rA.AddPeer("coord-b")
+	rA.AddPeer("coord-b", "coord-b")
 
 	chunks := []string{"hash-a", "hash-b", "hash-c"}
 	chunkData := map[string][]byte{
@@ -607,8 +607,8 @@ func TestProcessQueuePut_ParallelPeerReplication(t *testing.T) {
 	require.NoError(t, rC.Start())
 	defer func() { _ = rC.Stop() }()
 
-	rA.AddPeer("coord-b")
-	rA.AddPeer("coord-c")
+	rA.AddPeer("coord-b", "coord-b")
+	rA.AddPeer("coord-c", "coord-c")
 
 	// Create object with 6 chunks so striping distributes across all coordinators
 	chunks := make([]string, 6)
@@ -677,8 +677,8 @@ func TestProcessQueuePut_ReEnqueuesOnPartialFailure(t *testing.T) {
 	defer func() { _ = rB.Stop() }()
 
 	// Add coord-b (reachable) and coord-c (no replicator = unreachable)
-	rA.AddPeer("coord-b")
-	rA.AddPeer("coord-c")
+	rA.AddPeer("coord-b", "coord-b")
+	rA.AddPeer("coord-c", "coord-c")
 
 	// Create object with 6 chunks for realistic striping
 	chunks := make([]string, 6)
@@ -731,7 +731,7 @@ func TestAutoSyncCycle_SendsManifest(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = r.Stop() })
 
-	r.AddPeer("coord-b")
+	r.AddPeer("coord-b", "coord-b")
 
 	// Add some objects
 	s3Store.addObjectWithChunks("bucket1", "file1.txt", []string{"h1"}, map[string][]byte{"h1": []byte("d1")})
@@ -784,7 +784,7 @@ func TestAutoSyncCycle_EmptyStoreSkipsManifest(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = r.Stop() })
 
-	r.AddPeer("coord-b")
+	r.AddPeer("coord-b", "coord-b")
 
 	// No objects in the store — run auto-sync
 	r.runAutoSyncCycle()
@@ -822,6 +822,10 @@ func TestManifestReconciliation_SkipsBucketsNotOwnedBySender(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = r.Stop() })
 
+	// Register coord-a and coord-c as peers (mesh IP → name mapping)
+	r.AddPeer("10.0.0.1", "coord-a")
+	r.AddPeer("10.0.0.3", "coord-c")
+
 	// coord-b has objects from two different owners:
 	// - bucket-a owned by coord-a (replicated from coord-a)
 	// - bucket-c owned by coord-c (replicated from coord-c)
@@ -835,6 +839,7 @@ func TestManifestReconciliation_SkipsBucketsNotOwnedBySender(t *testing.T) {
 	// coord-a sends a manifest listing bucket-a (empty) and bucket-c (empty).
 	// Without ownership check, this would purge both. With the fix, only bucket-a
 	// objects should be purged because coord-a doesn't own bucket-c.
+	// Note: msg.From is a mesh IP (overridden by handleIncomingMessage in production)
 	payload := ObjectManifestPayload{
 		BucketKeys: map[string][]string{
 			"bucket-a": {}, // coord-a removed all objects from its bucket
@@ -848,7 +853,7 @@ func TestManifestReconciliation_SkipsBucketsNotOwnedBySender(t *testing.T) {
 		Version: ProtocolVersion,
 		Type:    MessageTypeObjectManifest,
 		ID:      "test-manifest",
-		From:    "coord-a", // Sender is coord-a
+		From:    "10.0.0.1", // Sender's mesh IP (resolved to "coord-a" via peerNames)
 		Payload: json.RawMessage(payloadJSON),
 	}
 
@@ -865,59 +870,80 @@ func TestManifestReconciliation_SkipsBucketsNotOwnedBySender(t *testing.T) {
 }
 
 func TestAutoSyncCycle_SkipsReplicatedBuckets(t *testing.T) {
-	// A replica should NOT re-replicate objects it received from other coordinators.
-	// Only locally-owned buckets should be included in auto-sync.
-	transport := newMockTransport()
-	s3Store := newMockS3Store()
-	registry := newMockChunkRegistry()
-
-	r := NewReplicator(Config{
-		NodeID:              "coord-b",
-		Transport:           transport,
-		S3Store:             s3Store,
-		ChunkRegistry:       registry,
-		Logger:              zerolog.Nop(),
-		ChunkPipelineWindow: 5,
-		AutoSyncInterval:    0,
-	})
-	t.Cleanup(func() { _ = r.Stop() })
-
-	r.AddPeer("coord-a")
-
-	// coord-b has:
-	// - local-bucket: owned by "alice" (created via S3 API on this coordinator)
-	// - replicated-bucket: owned by "coord-a" (replicated from coord-a)
-	s3Store.addObjectWithChunks("local-bucket", "local.txt", []string{"h1"}, map[string][]byte{"h1": []byte("d1")})
-	s3Store.addObjectWithChunks("replicated-bucket", "remote.txt", []string{"h2"}, map[string][]byte{"h2": []byte("d2")})
-	s3Store.bucketOwners = map[string]string{
-		"local-bucket":      "alice",   // Locally created — not a peer ID
-		"replicated-bucket": "coord-a", // Replicated from coord-a — IS a peer ID
+	tests := []struct {
+		name        string
+		nodeID      string
+		peerMeshIP  string
+		peerName    string
+		bucketOwner string // owner of the replicated bucket
+	}{
+		{
+			name:        "same_identifier",
+			nodeID:      "coord-b",
+			peerMeshIP:  "coord-a",
+			peerName:    "coord-a",
+			bucketOwner: "coord-a",
+		},
+		{
+			name:        "mesh_ip_vs_coordinator_name",
+			nodeID:      "coordinator-2",
+			peerMeshIP:  "10.0.0.1",
+			peerName:    "coordinator-1",
+			bucketOwner: "coordinator-1", // Owner is coordinator name, NOT mesh IP
+		},
 	}
 
-	r.runAutoSyncCycle()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := newMockTransport()
+			s3Store := newMockS3Store()
+			registry := newMockChunkRegistry()
 
-	// Check the manifest: should only contain local-bucket, not replicated-bucket
-	transport.mu.Lock()
-	messages := transport.sentMessages
-	transport.mu.Unlock()
+			r := NewReplicator(Config{
+				NodeID:              tc.nodeID,
+				Transport:           transport,
+				S3Store:             s3Store,
+				ChunkRegistry:       registry,
+				Logger:              zerolog.Nop(),
+				ChunkPipelineWindow: 5,
+				AutoSyncInterval:    0,
+			})
+			t.Cleanup(func() { _ = r.Stop() })
 
-	var manifestPayload ObjectManifestPayload
-	var foundManifest bool
-	for _, sent := range messages {
-		msg, err := UnmarshalMessage(sent.data)
-		if err != nil {
-			continue
-		}
-		if msg.Type == MessageTypeObjectManifest {
-			foundManifest = true
-			require.NoError(t, json.Unmarshal(msg.Payload, &manifestPayload))
-			break
-		}
+			r.AddPeer(tc.peerMeshIP, tc.peerName)
+
+			s3Store.addObjectWithChunks("local-bucket", "local.txt", []string{"h1"}, map[string][]byte{"h1": []byte("d1")})
+			s3Store.addObjectWithChunks("replicated-bucket", "remote.txt", []string{"h2"}, map[string][]byte{"h2": []byte("d2")})
+			s3Store.bucketOwners = map[string]string{
+				"local-bucket":      "alice",
+				"replicated-bucket": tc.bucketOwner,
+			}
+
+			r.runAutoSyncCycle()
+
+			transport.mu.Lock()
+			messages := transport.sentMessages
+			transport.mu.Unlock()
+
+			var manifestPayload ObjectManifestPayload
+			var foundManifest bool
+			for _, sent := range messages {
+				msg, err := UnmarshalMessage(sent.data)
+				if err != nil {
+					continue
+				}
+				if msg.Type == MessageTypeObjectManifest {
+					foundManifest = true
+					require.NoError(t, json.Unmarshal(msg.Payload, &manifestPayload))
+					break
+				}
+			}
+
+			require.True(t, foundManifest, "Should send manifest for locally-owned buckets")
+			assert.Contains(t, manifestPayload.BucketKeys, "local-bucket",
+				"Manifest should include locally-owned bucket")
+			assert.NotContains(t, manifestPayload.BucketKeys, "replicated-bucket",
+				"Manifest should NOT include replicated bucket (owned by peer)")
+		})
 	}
-
-	require.True(t, foundManifest, "Should send manifest for locally-owned buckets")
-	assert.Contains(t, manifestPayload.BucketKeys, "local-bucket",
-		"Manifest should include locally-owned bucket")
-	assert.NotContains(t, manifestPayload.BucketKeys, "replicated-bucket",
-		"Manifest should NOT include replicated bucket (owned by peer)")
 }
