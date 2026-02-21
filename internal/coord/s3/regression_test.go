@@ -849,3 +849,118 @@ func TestRegression_PurgeOrphanedBucketsStaleEmptyShares(t *testing.T) {
 	// different from nil (object not found / not replicated yet).
 	assert.Equal(t, 1, purged, "empty (non-nil) share list should allow purging")
 }
+
+// =============================================================================
+// 21. Regression: Identical re-imports must NOT create version archives
+// =============================================================================
+// Auto-sync re-imports all objects every 5 min. Without the ETag guard,
+// each re-import archives the current version, GC prunes it (deleting chunks),
+// then auto-sync re-replicates — causing a sawtooth in storage metrics.
+
+func TestRegression_IdenticalReimportSkipsVersionArchive(t *testing.T) {
+	src := newRegressionStore(t, "coord1")
+	dst := newRegressionStore(t, "coord2")
+	ctx := context.Background()
+
+	require.NoError(t, src.CreateBucket(ctx, "docs", "admin", 2, nil))
+	data := []byte("Identical re-imports must not create version archives")
+	meta := uploadFile(t, src, "docs", "report.txt", data)
+	require.NotEmpty(t, meta.ETag, "PutObject should set ETag")
+
+	// Initial replication
+	replicateFile(t, src, dst, "docs", "report.txt", meta)
+	requireFileReadable(t, dst, "docs", "report.txt", data, "after initial replication")
+
+	// Simulate 50 auto-sync re-imports with the same metadata
+	metaJSON, _ := json.Marshal(meta)
+	for i := 0; i < 50; i++ {
+		chunksToCheck, err := dst.ImportObjectMeta(ctx, "docs", "report.txt", metaJSON, "admin")
+		require.NoError(t, err, "import round %d", i)
+		assert.Nil(t, chunksToCheck, "round %d: identical re-import should return nil", i)
+	}
+
+	// No version archives should have been created
+	versionsDir := filepath.Join(dst.DataDir(), "buckets", "docs", "versions", "report.txt")
+	entries, _ := os.ReadDir(versionsDir)
+	assert.Empty(t, entries, "no version archives should exist after identical re-imports")
+
+	// Age chunks and run GC — nothing should be deleted
+	ageAllChunks(t, dst, 15*time.Minute)
+	freed := dst.DeleteUnreferencedChunks(ctx, meta.Chunks)
+	assert.Zero(t, freed, "GC must not delete chunks after identical re-imports")
+
+	requireFileReadable(t, dst, "docs", "report.txt", data, "after 50 identical re-imports + GC")
+}
+
+// =============================================================================
+// 22. Regression: Different ETag import must still archive the old version
+// =============================================================================
+
+func TestRegression_DifferentETagImportArchivesVersion(t *testing.T) {
+	src := newRegressionStore(t, "coord1")
+	dst := newRegressionStore(t, "coord2")
+	ctx := context.Background()
+
+	require.NoError(t, src.CreateBucket(ctx, "docs", "admin", 2, nil))
+
+	// Upload v1 and replicate
+	dataV1 := []byte("Version 1 content")
+	metaV1 := uploadFile(t, src, "docs", "file.txt", dataV1)
+	replicateFile(t, src, dst, "docs", "file.txt", metaV1)
+
+	// Upload v2 with different content (different ETag) and import
+	dataV2 := []byte("Version 2 content — different!")
+	metaV2 := uploadFile(t, src, "docs", "file.txt", dataV2)
+	require.NotEqual(t, metaV1.ETag, metaV2.ETag, "different content must produce different ETags")
+
+	metaJSON2, _ := json.Marshal(metaV2)
+	for _, h := range metaV2.Chunks {
+		chunkData, err := src.cas.ReadChunk(ctx, h)
+		require.NoError(t, err)
+		require.NoError(t, dst.WriteChunkDirect(ctx, h, chunkData))
+	}
+	_, err := dst.ImportObjectMeta(ctx, "docs", "file.txt", metaJSON2, "admin")
+	require.NoError(t, err)
+
+	// Version archive should exist for v1
+	versionsDir := filepath.Join(dst.DataDir(), "buckets", "docs", "versions", "file.txt")
+	entries, err := os.ReadDir(versionsDir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "should have 1 archived version from v1")
+
+	// Current version should be v2
+	requireFileReadable(t, dst, "docs", "file.txt", dataV2, "after v2 import")
+}
+
+// =============================================================================
+// 23. Regression: Empty ETag imports must NOT be skipped (legacy behavior)
+// =============================================================================
+
+func TestRegression_EmptyETagImportNotSkipped(t *testing.T) {
+	store := newRegressionStore(t, "coord1")
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateBucket(ctx, "legacy", "admin", 1, nil))
+
+	// Import with empty ETag (simulates legacy or test metadata)
+	meta := ObjectMeta{
+		Key:         "old.txt",
+		Size:        42,
+		ContentType: "text/plain",
+		Chunks:      []string{"legacyhash1"},
+	}
+	metaJSON, err := json.Marshal(meta)
+	require.NoError(t, err)
+	_, err = store.ImportObjectMeta(ctx, "legacy", "old.txt", metaJSON, "admin")
+	require.NoError(t, err)
+
+	// Re-import with same empty ETag — should NOT be skipped (archives)
+	_, err = store.ImportObjectMeta(ctx, "legacy", "old.txt", metaJSON, "admin")
+	require.NoError(t, err)
+
+	// Should have created a version archive (old behavior preserved)
+	versionsDir := filepath.Join(store.DataDir(), "buckets", "legacy", "versions", "old.txt")
+	entries, err := os.ReadDir(versionsDir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "empty ETag re-import should still archive (legacy behavior)")
+}
