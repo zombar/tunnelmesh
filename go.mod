@@ -5,7 +5,7 @@ go 1.25.0
 toolchain go1.25.7
 
 require (
-	filippo.io/edwards25519 v1.1.1
+	filippo.io/edwards25519 v1.2.0
 	github.com/containerd/errdefs v1.0.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/go-git/go-billy/v5 v5.7.0
