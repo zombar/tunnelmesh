@@ -1674,8 +1674,8 @@ collect:
 
 // replicateSingleChunk reads and sends a single chunk to a peer.
 func (r *Replicator) replicateSingleChunk(ctx context.Context, peerID, bucket, key, chunkHash string, meta *ObjectMeta) error {
-	// Read chunk data from local CAS. If the chunk was cleaned up by a
-	// concurrent CleanupNonAssignedChunks, fall back to fetching from a peer.
+	// Read chunk data from local CAS. If the chunk is missing locally
+	// (e.g. GC cleaned it up), fall back to fetching from a peer.
 	chunkData, err := r.s3.ReadChunk(ctx, chunkHash)
 	if err != nil {
 		localErr := err
@@ -1718,8 +1718,7 @@ func (r *Replicator) replicateSingleChunk(ctx context.Context, peerID, bucket, k
 }
 
 // fetchChunkFromPeers tries to fetch a chunk from any available peer.
-// Used as a fallback when a chunk has been cleaned up locally by a concurrent
-// CleanupNonAssignedChunks from another object's replication.
+// Used as a fallback when a chunk is missing locally (e.g. cleaned up by GC).
 func (r *Replicator) fetchChunkFromPeers(ctx context.Context, chunkHash string) ([]byte, error) {
 	peers := r.GetPeers()
 	if len(peers) == 0 {
@@ -2437,110 +2436,3 @@ func (r *Replicator) handleReplicateObjectMeta(msg *Message) error {
 }
 
 // ==== Chunk Cleanup After Replication ====
-
-// CleanupNonAssignedChunks removes chunks that are not assigned to this coordinator
-// according to the striping policy. This should only be called after all peers have
-// successfully received their chunks via ReplicateObject.
-func (r *Replicator) CleanupNonAssignedChunks(ctx context.Context, bucket, key string) error {
-	if r.chunkRegistry == nil {
-		return fmt.Errorf("chunk registry not configured")
-	}
-
-	// Get object metadata
-	meta, err := r.s3.GetObjectMeta(ctx, bucket, key)
-	if err != nil {
-		return fmt.Errorf("get object metadata: %w", err)
-	}
-
-	if len(meta.Chunks) == 0 {
-		return nil
-	}
-
-	// Build striping policy from all coordinators
-	peers := r.GetPeers()
-	allCoords := make([]string, 0, len(peers)+1)
-	allCoords = append(allCoords, r.nodeID)
-	allCoords = append(allCoords, peers...)
-
-	if len(allCoords) <= 1 {
-		// No peers — keep everything
-		return nil
-	}
-
-	// Use bucket's replication factor for consistent assignment
-	replicationFactor := r.s3.GetBucketReplicationFactor(ctx, bucket)
-	if replicationFactor < 1 {
-		replicationFactor = 2 // Fallback if bucket RF is unknown
-	}
-
-	sp := NewStripingPolicy(allCoords)
-	assignedIndices := sp.ChunksForPeer(r.nodeID, len(meta.Chunks), replicationFactor)
-
-	// Build set of assigned indices
-	assignedSet := make(map[int]bool, len(assignedIndices))
-	for _, idx := range assignedIndices {
-		assignedSet[idx] = true
-	}
-
-	// Delete non-assigned chunks (with safety check: never delete the last copy)
-	var deleted, kept, skippedNoOwner int
-	for idx, chunkHash := range meta.Chunks {
-		if assignedSet[idx] {
-			kept++
-			continue
-		}
-
-		// Safety check: verify at least one remote owner has this chunk
-		owners, err := r.chunkRegistry.GetOwners(chunkHash)
-		if err != nil || len(owners) == 0 {
-			// No known owners — unsafe to delete, keep as safety net
-			skippedNoOwner++
-			kept++
-			continue
-		}
-
-		hasRemoteOwner := false
-		for _, owner := range owners {
-			if owner != r.nodeID {
-				hasRemoteOwner = true
-				break
-			}
-		}
-		if !hasRemoteOwner {
-			// Only we own this chunk — unsafe to delete
-			skippedNoOwner++
-			kept++
-			continue
-		}
-
-		// Delete from local CAS
-		if err := r.s3.DeleteChunk(ctx, chunkHash); err != nil {
-			r.logger.Warn().Err(err).
-				Str("chunk", truncateHashForLog(chunkHash)).
-				Int("index", idx).
-				Msg("Failed to delete non-assigned chunk")
-			continue
-		}
-
-		// Unregister from chunk registry
-		if err := r.chunkRegistry.UnregisterChunk(chunkHash); err != nil {
-			r.logger.Warn().Err(err).
-				Str("chunk", truncateHashForLog(chunkHash)).
-				Msg("Failed to unregister chunk from registry")
-		}
-
-		deleted++
-	}
-
-	r.logger.Info().
-		Str("bucket", bucket).
-		Str("key", key).
-		Int("deleted", deleted).
-		Int("kept", kept).
-		Int("skipped_no_remote_owner", skippedNoOwner).
-		Int("total", len(meta.Chunks)).
-		Int("peers", len(peers)).
-		Msg("Cleaned up non-assigned chunks")
-
-	return nil
-}

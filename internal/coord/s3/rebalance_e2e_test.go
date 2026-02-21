@@ -174,7 +174,7 @@ func TestE2E_FilesSurviveTopologyChangeAndGC(t *testing.T) {
 	}
 
 	// Age the newly-written version files
-	for coordID, store := range stores {
+	for _, store := range stores {
 		versionsDir := filepath.Join(store.dataDir, "buckets", "docs", "versions")
 		_ = filepath.Walk(versionsDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() {
@@ -182,7 +182,6 @@ func TestE2E_FilesSurviveTopologyChangeAndGC(t *testing.T) {
 			}
 			return os.Chtimes(path, twoHoursAgo, twoHoursAgo)
 		})
-		_ = coordID
 	}
 
 	// Run GC again

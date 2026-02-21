@@ -123,8 +123,9 @@ func (r *Replicator) processQueueEntry(ctx context.Context, entry *replQueueEntr
 // processQueuePut replicates an object to all peers in parallel.
 // Each peer gets its own goroutine with an independent 60s timeout, so one slow/unreachable
 // peer cannot starve others of time (the root cause of uneven distribution).
-// Note: chunk cleanup after topology changes is handled by the rebalancer, which uses
-// confirmedSent tracking to safely delete only chunks that the new owner has acknowledged.
+// Note: chunk cleanup is deferred to GC — the rebalancer no longer deletes chunks
+// directly, instead relying on EnqueueReplication to propagate metadata so GC can
+// safely identify orphaned chunks.
 func (r *Replicator) processQueuePut(ctx context.Context, entry *replQueueEntry, peers []string) {
 	if r.chunkRegistry == nil {
 		// No chunk registry — fall back to file-level replication
