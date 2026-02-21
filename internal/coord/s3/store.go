@@ -2602,6 +2602,15 @@ func (s *Store) ImportObjectMeta(ctx context.Context, bucket, key string, metaJS
 		bucketMeta.SizeBytes -= oldMeta.Size
 		isNewObject = false
 		oldLogicalBytes = oldMeta.Size
+
+		// Skip re-import if content is identical (same ETag).
+		// Auto-sync re-imports all objects every 5 min; without this,
+		// each re-import archives the current version, creating useless
+		// version files that GC prunes, deleting associated chunks.
+		if meta.ETag != "" && oldMeta.ETag == meta.ETag {
+			s.mu.Unlock()
+			return nil, nil
+		}
 	}
 
 	// Archive current version before overwriting (inlined to use atomicWriteFile).
