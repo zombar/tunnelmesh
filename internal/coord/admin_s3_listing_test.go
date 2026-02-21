@@ -167,7 +167,7 @@ func TestForwardedEntryTTL(t *testing.T) {
 					Key:         "old.txt",
 					Size:        10,
 					Forwarded:   true,
-					ForwardedAt: time.Now().Add(-time.Minute), // 60s ago, well past 30s TTL
+					ForwardedAt: time.Now().Add(-15 * time.Minute), // 15min ago, well past 10min TTL
 					SourceIP:    "10.0.0.2",
 				},
 				{

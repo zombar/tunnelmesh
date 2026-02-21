@@ -184,6 +184,14 @@ func (s *Server) handleShareCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Trigger immediate replication of file share metadata so other coordinators
+	// learn about the new share before PurgeOrphanedFileShareBuckets runs.
+	// Without this, share metadata relies on auto-sync (up to 7 min delay),
+	// during which other coordinators may purge the fs+ bucket as orphaned.
+	if s.replicator != nil {
+		s.replicator.EnqueueReplication(s3.SystemBucket, s3.FileSharesPath, "put")
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(share)
@@ -232,6 +240,12 @@ func (s *Server) handleShareByName(w http.ResponseWriter, r *http.Request) {
 			if err := s.s3SystemStore.SaveGroupBindings(r.Context(), s.s3Authorizer.GroupBindings.List()); err != nil {
 				log.Warn().Err(err).Msg("failed to persist group bindings")
 			}
+		}
+
+		// Trigger immediate replication of share deletion so other coordinators
+		// know to purge the orphaned fs+ bucket promptly.
+		if s.replicator != nil {
+			s.replicator.EnqueueReplication(s3.SystemBucket, s3.FileSharesPath, "put")
 		}
 
 		w.Header().Set("Content-Type", "application/json")
