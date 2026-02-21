@@ -863,3 +863,61 @@ func TestManifestReconciliation_SkipsBucketsNotOwnedBySender(t *testing.T) {
 	_, _, err = s3Store.Get(context.Background(), "bucket-c", "file1.txt")
 	assert.NoError(t, err, "bucket-c/file1.txt should survive (sender doesn't own this bucket)")
 }
+
+func TestAutoSyncCycle_SkipsReplicatedBuckets(t *testing.T) {
+	// A replica should NOT re-replicate objects it received from other coordinators.
+	// Only locally-owned buckets should be included in auto-sync.
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+
+	r := NewReplicator(Config{
+		NodeID:              "coord-b",
+		Transport:           transport,
+		S3Store:             s3Store,
+		ChunkRegistry:       registry,
+		Logger:              zerolog.Nop(),
+		ChunkPipelineWindow: 5,
+		AutoSyncInterval:    0,
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	r.AddPeer("coord-a")
+
+	// coord-b has:
+	// - local-bucket: owned by "alice" (created via S3 API on this coordinator)
+	// - replicated-bucket: owned by "coord-a" (replicated from coord-a)
+	s3Store.addObjectWithChunks("local-bucket", "local.txt", []string{"h1"}, map[string][]byte{"h1": []byte("d1")})
+	s3Store.addObjectWithChunks("replicated-bucket", "remote.txt", []string{"h2"}, map[string][]byte{"h2": []byte("d2")})
+	s3Store.bucketOwners = map[string]string{
+		"local-bucket":      "alice",   // Locally created — not a peer ID
+		"replicated-bucket": "coord-a", // Replicated from coord-a — IS a peer ID
+	}
+
+	r.runAutoSyncCycle()
+
+	// Check the manifest: should only contain local-bucket, not replicated-bucket
+	transport.mu.Lock()
+	messages := transport.sentMessages
+	transport.mu.Unlock()
+
+	var manifestPayload ObjectManifestPayload
+	var foundManifest bool
+	for _, sent := range messages {
+		msg, err := UnmarshalMessage(sent.data)
+		if err != nil {
+			continue
+		}
+		if msg.Type == MessageTypeObjectManifest {
+			foundManifest = true
+			require.NoError(t, json.Unmarshal(msg.Payload, &manifestPayload))
+			break
+		}
+	}
+
+	require.True(t, foundManifest, "Should send manifest for locally-owned buckets")
+	assert.Contains(t, manifestPayload.BucketKeys, "local-bucket",
+		"Manifest should include locally-owned bucket")
+	assert.NotContains(t, manifestPayload.BucketKeys, "replicated-bucket",
+		"Manifest should NOT include replicated bucket (owned by peer)")
+}

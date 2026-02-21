@@ -248,8 +248,10 @@ func (r *Replicator) runAutoSyncWorker() {
 	}
 }
 
-// runAutoSyncCycle enqueues all objects for replication.
-// The queue deduplicates, and ReplicateObject skips already-replicated chunks.
+// runAutoSyncCycle enqueues locally-owned objects for replication.
+// Only buckets owned by this coordinator are synced — replicated buckets
+// (owned by peer coordinators) are skipped to prevent ping-pong replication
+// where replicas re-replicate received objects back to the source.
 func (r *Replicator) runAutoSyncCycle() {
 	peers := r.GetPeers()
 	if len(peers) == 0 {
@@ -265,24 +267,48 @@ func (r *Replicator) runAutoSyncCycle() {
 		return
 	}
 
-	var total int
+	// Build peer set for O(1) lookups
+	peerSet := make(map[string]struct{}, len(peers))
+	for _, p := range peers {
+		peerSet[p] = struct{}{}
+	}
+
+	// Filter to locally-owned buckets only. On replicas, buckets imported via
+	// replication have their owner set to the source coordinator's node ID.
+	// We skip those to avoid re-replicating objects back to the source.
+	localKeys := make(map[string][]string, len(allKeys))
+	var skippedBuckets int
 	for bucket, keys := range allKeys {
+		owner := r.s3.GetBucketOwner(ctx, bucket)
+		if _, isPeer := peerSet[owner]; isPeer {
+			skippedBuckets++
+			continue
+		}
+		localKeys[bucket] = keys
+	}
+
+	var total int
+	for bucket, keys := range localKeys {
 		for _, key := range keys {
 			r.EnqueueReplication(bucket, key, "put")
 			total++
 		}
+		_ = bucket
 	}
 
-	if total > 0 {
+	if total > 0 || skippedBuckets > 0 {
 		r.logger.Info().
 			Int("objects", total).
 			Int("peers", len(peers)).
-			Msg("Auto-sync: enqueued all objects for replication")
+			Int("skipped_replica_buckets", skippedBuckets).
+			Msg("Auto-sync: enqueued locally-owned objects for replication")
 	}
 
 	// Send object manifest for reconciliation — replicas purge objects
 	// not in the manifest to recover from lost delete messages.
-	r.sendObjectManifest(ctx, allKeys, peers)
+	// Only includes locally-owned buckets: each coordinator is authoritative
+	// for its own buckets and should not send manifests for replicated ones.
+	r.sendObjectManifest(ctx, localKeys, peers)
 }
 
 // sendObjectManifest sends the set of live objects to each peer so they can
