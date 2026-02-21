@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
+	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/documents"
 	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/mesh"
 	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/story"
 )
@@ -49,6 +50,9 @@ type SimulatorConfig struct {
 	UseMesh     bool                    // Enable mesh integration
 	MeshClient  *mesh.CoordinatorClient // Coordinator API client (nil = standalone)
 	SharePrefix string                  // Peer name prefix for share bucket names (e.g. "s3bench" → buckets are "fs+s3bench_sharename")
+
+	// Document generation (optional)
+	GeneratorOptions []documents.GeneratorOption // Options for document generator (e.g., WithContentLoader)
 }
 
 // DefaultConfig returns a simulator config with sensible defaults.
@@ -166,7 +170,7 @@ func NewSimulator(config SimulatorConfig) (*Simulator, error) {
 
 	sim := &Simulator{
 		config:       config,
-		workloadGen:  NewWorkloadGenerator(config.Story, config.TimeScale),
+		workloadGen:  NewWorkloadGenerator(config.Story, config.TimeScale, config.GeneratorOptions...),
 		adversaryGen: make(map[string]*AdversarySimulator),
 		workflowGen:  NewWorkflowGenerator(config.Story, config.TimeScale),
 		userMgr:      config.UserManager,

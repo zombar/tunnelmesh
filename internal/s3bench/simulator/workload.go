@@ -54,10 +54,10 @@ type WorkloadGenerator struct {
 }
 
 // NewWorkloadGenerator creates a new workload generator.
-func NewWorkloadGenerator(s story.Story, timeScale float64) *WorkloadGenerator {
+func NewWorkloadGenerator(s story.Story, timeScale float64, genOpts ...documents.GeneratorOption) *WorkloadGenerator {
 	return &WorkloadGenerator{
 		story:     s,
-		generator: documents.NewGenerator(s),
+		generator: documents.NewGenerator(s, genOpts...),
 		timeScale: timeScale,
 		docCounts: make(map[string]int),
 	}

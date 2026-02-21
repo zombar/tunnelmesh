@@ -81,3 +81,6 @@ tunnelmesh_icon.png
 .tunnelmesh-token
 output.json
 results.json
+
+# S3Bench generated content (regenerate locally with generate-s3bench-data)
+internal/s3bench/data/

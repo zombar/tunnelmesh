@@ -3,7 +3,8 @@
         docker-build docker-up docker-down docker-logs docker-clean docker-test \
         ghcr-login ghcr-build ghcr-push deploy deploy-plan deploy-destroy deploy-taint-coordinator \
         deploy-update deploy-update-node \
-        service-install service-uninstall service-start service-stop service-status
+        service-install service-uninstall service-start service-stop service-status \
+        generate-s3bench-data clean-s3bench-data s3bench
 
 # Build variables
 BINARY_NAME=tunnelmesh
@@ -361,6 +362,39 @@ service-status:
 service-logs:
 	./$(BUILD_DIR)/$(BINARY_NAME) service logs --follow
 
+# S3Bench data generation
+.PHONY: generate-s3bench-data clean-s3bench-data s3bench
+
+generate-s3bench-data:
+	@echo "Checking for pre-generated s3bench content..."
+	@if [ -d internal/s3bench/data/alien_invasion ] && [ -f internal/s3bench/data/alien_invasion/index.json ]; then \
+		echo "✓ Content already exists at internal/s3bench/data/alien_invasion/"; \
+		echo "  To regenerate, run: make clean-s3bench-data && make generate-s3bench-data"; \
+	else \
+		echo "Generating s3bench content using Ollama..."; \
+		$(GO) run cmd/generate-s3bench-data/main.go \
+			--scenario alien_invasion \
+			--ollama-endpoint http://honker:11434 \
+			--ollama-model gpt-oss:120b \
+			--output internal/s3bench/data/alien_invasion/ \
+			--seed 42 \
+			--concurrency 10; \
+		if [ $$? -eq 0 ]; then \
+			echo "✓ Content generation complete"; \
+		else \
+			echo "✗ Content generation failed - s3bench will use lorem ipsum fallback"; \
+		fi \
+	fi
+
+clean-s3bench-data:
+	@echo "Removing generated s3bench content..."
+	rm -rf internal/s3bench/data/alien_invasion/
+	@echo "✓ Content removed (will regenerate on next run)"
+
+s3bench: generate-s3bench-data
+	@echo "Running s3bench with alien_invasion scenario..."
+	$(GO) run cmd/$(S3BENCH_NAME)/main.go run alien_invasion --time-scale 100
+
 # Help
 help:
 	@echo "Available targets:"
@@ -394,6 +428,11 @@ help:
 	@echo "  service-stop      - Stop the service"
 	@echo "  service-status    - Show service status"
 	@echo "  service-logs      - Follow service logs"
+	@echo ""
+	@echo "S3Bench targets:"
+	@echo "  generate-s3bench-data  - Generate realistic content using Ollama (idempotent)"
+	@echo "  clean-s3bench-data     - Remove generated content"
+	@echo "  s3bench                - Run s3bench (auto-generates content if needed)"
 	@echo ""
 	@echo "Docker targets:"
 	@echo "  docker-build        - Build Docker images"
