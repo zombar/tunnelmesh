@@ -2242,6 +2242,12 @@ func (s *Server) createPeerShare(peerID, peerName string) {
 		}
 	}
 
+	// Trigger immediate replication of file share metadata so other coordinators
+	// learn about the new share before PurgeOrphanedFileShareBuckets runs.
+	if s.replicator != nil {
+		s.replicator.EnqueueReplication(s3.SystemBucket, s3.FileSharesPath, "put")
+	}
+
 	log.Info().Str("peer", peerName).Str("share", share.Name).Msg("auto-created peer share")
 }
 

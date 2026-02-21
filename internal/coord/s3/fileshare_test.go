@@ -922,3 +922,47 @@ func TestPurgeOrphanedFileShareBuckets_KeepsActiveBuckets(t *testing.T) {
 	_, err = store.HeadBucket(context.Background(), bucketName)
 	assert.NoError(t, err, "active share bucket should still exist")
 }
+
+func TestPurgeOrphanedFileShareBuckets_NilSystemStoreDoesNotWipeShares(t *testing.T) {
+	// Reproduces the bug where LoadFileShares returns (nil, nil) when the system
+	// bucket object doesn't exist (not replicated yet). Previously, this caused
+	// m.shares to be set to nil, making ALL fs+ buckets appear orphaned.
+	store := newTestStoreWithCASForFileshare(t)
+	systemStore, err := NewSystemStore(store, "svc:coordinator")
+	require.NoError(t, err)
+
+	authorizer := auth.NewAuthorizerWithGroups()
+	mgr := NewFileShareManager(store, systemStore, authorizer)
+
+	// Create a proper share
+	_, err = mgr.Create(context.Background(), "photos", "Photos share", "alice", 0, nil)
+	require.NoError(t, err)
+
+	bucketName := FileShareBucketPrefix + "photos"
+
+	// Backdate the bucket past the grace period
+	metaPath := filepath.Join(store.DataDir(), "buckets", bucketName, "_meta.json")
+	metaData, err := os.ReadFile(metaPath)
+	require.NoError(t, err)
+
+	oldTime := time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339Nano)
+	meta, _ := store.HeadBucket(context.Background(), bucketName)
+	updated := bytes.Replace(metaData,
+		[]byte(meta.CreatedAt.Format(time.RFC3339Nano)),
+		[]byte(oldTime), 1)
+	require.NoError(t, os.WriteFile(metaPath, updated, 0644))
+
+	// Now delete the file_shares.json from the system bucket to simulate
+	// the object not having been replicated to this coordinator yet.
+	err = store.PurgeObject(context.Background(), SystemBucket, FileSharesPath)
+	require.NoError(t, err)
+
+	// PurgeOrphanedFileShareBuckets should NOT wipe in-memory shares
+	// when LoadFileShares returns nil (object not found).
+	purged := mgr.PurgeOrphanedFileShareBuckets(context.Background())
+	assert.Equal(t, 0, purged, "bucket should survive when system store returns nil shares")
+
+	// Verify bucket still exists
+	_, err = store.HeadBucket(context.Background(), bucketName)
+	assert.NoError(t, err, "bucket should still exist — nil shares must not wipe in-memory shares")
+}

@@ -389,9 +389,13 @@ func (m *FileShareManager) IsProtectedGroupBinding(binding *auth.GroupBinding) b
 // still have the bucket and its objects, preventing GC from cleaning up chunks.
 // Reloads share config from the system store first to pick up cross-coordinator deletions.
 func (m *FileShareManager) PurgeOrphanedFileShareBuckets(ctx context.Context) int {
-	// Reload from system store to pick up share deletions from other coordinators
+	// Reload from system store to pick up share deletions from other coordinators.
+	// Only overwrite if we got a non-nil result — LoadFileShares returns (nil, nil)
+	// when the object doesn't exist (e.g., system bucket hasn't been replicated yet).
+	// Without this nil check, m.shares gets wiped and ALL fs+ buckets past the
+	// grace period are purged, causing file share data loss.
 	if m.systemStore != nil {
-		if shares, err := m.systemStore.LoadFileShares(ctx); err == nil {
+		if shares, err := m.systemStore.LoadFileShares(ctx); err == nil && shares != nil {
 			m.mu.Lock()
 			m.shares = shares
 			m.mu.Unlock()

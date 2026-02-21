@@ -1136,7 +1136,7 @@ func (r *Replicator) handleSyncResponse(msg *Message) error {
 					Int("imported", imported).
 					Msg("Imported version history during sync")
 				if len(vChunks) > 0 {
-					r.s3.DeleteUnreferencedChunks(ctx, vChunks)
+					r.enqueueDeferredChunkCleanup(vChunks)
 				}
 			}
 		}
