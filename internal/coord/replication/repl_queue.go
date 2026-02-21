@@ -288,8 +288,12 @@ func (r *Replicator) runAutoSyncCycle() {
 // sendObjectManifest sends the set of live objects to each peer so they can
 // purge any local objects not in the manifest. This is fire-and-forget:
 // reconciliation is idempotent and will be retried on the next auto-sync cycle.
+//
+// Safety: we never send an empty manifest. During transient states (startup,
+// S3 not yet loaded) an empty manifest would cause replicas to purge all
+// their objects. Skipping is safe — the next cycle will send a full manifest.
 func (r *Replicator) sendObjectManifest(ctx context.Context, allKeys map[string][]string, peers []string) {
-	if len(allKeys) == 0 && len(peers) == 0 {
+	if len(allKeys) == 0 || len(peers) == 0 {
 		return
 	}
 

@@ -765,3 +765,41 @@ func TestAutoSyncCycle_SendsManifest(t *testing.T) {
 	}
 	assert.True(t, foundManifest, "Auto-sync should send an object manifest to peers")
 }
+
+func TestAutoSyncCycle_EmptyStoreSkipsManifest(t *testing.T) {
+	// An empty object store (e.g. during startup before S3 loads) must NOT
+	// send a manifest — an empty manifest would cause replicas to purge everything.
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+
+	r := NewReplicator(Config{
+		NodeID:              "coord-a",
+		Transport:           transport,
+		S3Store:             s3Store,
+		ChunkRegistry:       registry,
+		Logger:              zerolog.Nop(),
+		ChunkPipelineWindow: 5,
+		AutoSyncInterval:    0,
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	r.AddPeer("coord-b")
+
+	// No objects in the store — run auto-sync
+	r.runAutoSyncCycle()
+
+	// No manifest should be sent
+	transport.mu.Lock()
+	messages := transport.sentMessages
+	transport.mu.Unlock()
+
+	for _, sent := range messages {
+		msg, err := UnmarshalMessage(sent.data)
+		if err != nil {
+			continue
+		}
+		assert.NotEqual(t, MessageTypeObjectManifest, msg.Type,
+			"Empty store must not send manifest (could cause mass purge on replicas)")
+	}
+}
