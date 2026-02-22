@@ -228,10 +228,12 @@ func (r *Replicator) drainReplicationQueueFinal() {
 func (r *Replicator) runAutoSyncWorker() {
 	defer r.wg.Done()
 
-	// Initial delay to let the cluster stabilize
+	// Initial delay to let the cluster stabilize, but wake early on on-demand trigger.
 	select {
 	case <-r.ctx.Done():
 		return
+	case <-r.manifestSyncCh:
+		r.runAutoSyncCycle()
 	case <-time.After(2 * time.Minute):
 	}
 
@@ -243,6 +245,8 @@ func (r *Replicator) runAutoSyncWorker() {
 		case <-r.ctx.Done():
 			return
 		case <-ticker.C:
+			r.runAutoSyncCycle()
+		case <-r.manifestSyncCh:
 			r.runAutoSyncCycle()
 		}
 	}

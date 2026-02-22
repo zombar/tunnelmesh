@@ -1056,3 +1056,163 @@ func TestManifestReconciliation_UnknownSenderSkipsPurge(t *testing.T) {
 	_, _, err = s3Store.Get(context.Background(), "bucket-a", "file.txt")
 	assert.NoError(t, err, "object must survive when sender is unknown")
 }
+
+// TestTriggerManifestSync_NonBlocking verifies that TriggerManifestSync is
+// non-blocking and idempotent: multiple rapid calls produce at most one pending
+// signal in the buffered channel.
+func TestTriggerManifestSync_NonBlocking(t *testing.T) {
+	r := NewReplicator(Config{
+		NodeID:           "coord-a",
+		Transport:        newMockTransport(),
+		S3Store:          newMockS3Store(),
+		Logger:           zerolog.Nop(),
+		AutoSyncInterval: 0,
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	// Channel starts empty.
+	assert.Equal(t, 0, len(r.manifestSyncCh), "channel should start empty")
+
+	// First call queues a signal.
+	r.TriggerManifestSync()
+	assert.Equal(t, 1, len(r.manifestSyncCh), "one signal should be queued after first call")
+
+	// Second call must be a no-op (channel already full) and must not block.
+	done := make(chan struct{})
+	go func() {
+		r.TriggerManifestSync()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// Good: returned without blocking.
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("TriggerManifestSync blocked unexpectedly")
+	}
+
+	// Still only one pending signal.
+	assert.Equal(t, 1, len(r.manifestSyncCh), "channel should still hold exactly one signal")
+}
+
+// TestTriggerManifestSync_WorkerDrains verifies that the auto-sync worker picks
+// up the on-demand trigger and calls runAutoSyncCycle (evidenced by a manifest
+// message being sent to peers).
+func TestTriggerManifestSync_WorkerDrains(t *testing.T) {
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+
+	// Use a very long ticker interval so only the on-demand path fires.
+	r := NewReplicator(Config{
+		NodeID:              "coord-a",
+		Transport:           transport,
+		S3Store:             s3Store,
+		ChunkRegistry:       registry,
+		Logger:              zerolog.Nop(),
+		ChunkPipelineWindow: 5,
+		AutoSyncInterval:    24 * time.Hour, // effectively never ticks during test
+	})
+	require.NoError(t, r.Start())
+	t.Cleanup(func() { _ = r.Stop() })
+
+	r.AddPeer("coord-b", "coord-b")
+
+	// Put an object so the manifest is non-empty (empty manifests are suppressed).
+	s3Store.addObjectWithChunks("bucket1", "file.txt", []string{"h1"}, map[string][]byte{"h1": []byte("data")})
+
+	// Signal the on-demand sync — worker must wake and send manifest.
+	r.TriggerManifestSync()
+
+	// Wait for the manifest message to arrive (worker runs asynchronously).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		transport.mu.Lock()
+		msgs := transport.sentMessages
+		transport.mu.Unlock()
+
+		for _, sent := range msgs {
+			msg, err := UnmarshalMessage(sent.data)
+			if err != nil {
+				continue
+			}
+			if msg.Type == MessageTypeObjectManifest {
+				// Channel should be drained by the worker now.
+				assert.Equal(t, 0, len(r.manifestSyncCh), "worker should drain manifestSyncCh")
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("worker did not send manifest within 2 seconds of TriggerManifestSync")
+}
+
+// TestTriggerManifestSync_Deduplication verifies that two rapid calls before
+// the worker fires result in exactly one runAutoSyncCycle invocation, not two.
+func TestTriggerManifestSync_Deduplication(t *testing.T) {
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+
+	r := NewReplicator(Config{
+		NodeID:              "coord-a",
+		Transport:           transport,
+		S3Store:             s3Store,
+		ChunkRegistry:       registry,
+		Logger:              zerolog.Nop(),
+		ChunkPipelineWindow: 5,
+		AutoSyncInterval:    24 * time.Hour,
+	})
+	require.NoError(t, r.Start())
+	t.Cleanup(func() { _ = r.Stop() })
+
+	r.AddPeer("coord-b", "coord-b")
+	s3Store.addObjectWithChunks("bucket1", "file.txt", []string{"h1"}, map[string][]byte{"h1": []byte("data")})
+
+	// Two rapid triggers before the worker can drain the first.
+	r.TriggerManifestSync()
+	r.TriggerManifestSync()
+
+	// The channel is buffered(1): second call is a no-op.
+	assert.LessOrEqual(t, len(r.manifestSyncCh), 1, "deduplicated: at most 1 signal in channel")
+
+	// Worker will fire once and drain the channel — wait for it.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		transport.mu.Lock()
+		manifestCount := 0
+		for _, sent := range transport.sentMessages {
+			msg, err := UnmarshalMessage(sent.data)
+			if err != nil {
+				continue
+			}
+			if msg.Type == MessageTypeObjectManifest {
+				manifestCount++
+			}
+		}
+		transport.mu.Unlock()
+
+		if manifestCount >= 1 {
+			// Give the worker a moment to potentially fire a second time.
+			time.Sleep(100 * time.Millisecond)
+
+			transport.mu.Lock()
+			finalCount := 0
+			for _, sent := range transport.sentMessages {
+				msg, err := UnmarshalMessage(sent.data)
+				if err != nil {
+					continue
+				}
+				if msg.Type == MessageTypeObjectManifest {
+					finalCount++
+				}
+			}
+			transport.mu.Unlock()
+
+			assert.Equal(t, 1, finalCount,
+				"two rapid TriggerManifestSync calls should result in exactly one cycle")
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("worker did not send manifest within 2 seconds")
+}

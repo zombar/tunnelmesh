@@ -209,6 +209,9 @@ type Replicator struct {
 	// Auto-sync interval (0 = disabled)
 	autoSyncInterval time.Duration
 
+	// On-demand manifest sync trigger (buffered 1 — deduplicated).
+	manifestSyncCh chan struct{}
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -340,6 +343,7 @@ func NewReplicator(config Config) *Replicator {
 		deferredChunks:         make(map[string]struct{}),
 		deferredNotify:         make(chan struct{}, 1),
 		replQueue:              make(chan struct{}, 1),
+		manifestSyncCh:         make(chan struct{}, 1),
 		chunkPipelineWindow:    config.ChunkPipelineWindow,
 		autoSyncInterval:       config.AutoSyncInterval,
 		ctx:                    ctx,
@@ -355,6 +359,17 @@ func NewReplicator(config Config) *Replicator {
 // SetRebalancer attaches a rebalancer to this replicator.
 func (r *Replicator) SetRebalancer(rb *Rebalancer) {
 	r.rebalancer = rb
+}
+
+// TriggerManifestSync signals the auto-sync worker to immediately broadcast the
+// current object manifest to all peers. This is used after local bucket deletion
+// so replicas can purge orphaned objects without waiting for the next scheduled cycle.
+// Non-blocking and deduplicated: if a sync is already queued, this is a no-op.
+func (r *Replicator) TriggerManifestSync() {
+	select {
+	case r.manifestSyncCh <- struct{}{}:
+	default:
+	}
 }
 
 // Start starts the replicator background tasks.
