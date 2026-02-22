@@ -375,7 +375,7 @@ generate-s3bench-data:
 		$(GO) run cmd/generate-s3bench-data/main.go \
 			--scenario alien_invasion \
 			--ollama-endpoint http://honker:11434 \
-			--ollama-model gpt-oss:120b \
+			--ollama-model gpt-oss:20b \
 			--output internal/s3bench/data/alien_invasion/ \
 			--seed 42 \
 			--concurrency 10; \
