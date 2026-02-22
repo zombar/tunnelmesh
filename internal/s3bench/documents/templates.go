@@ -18,18 +18,34 @@ import (
 type Generator struct {
 	story     story.Story
 	docCounts map[string]int // Track document counts per type
+	loader    *ContentLoader // Optional pre-generated content loader
 }
 
-// NewGenerator creates a new document generator for the given story.
-func NewGenerator(s story.Story) *Generator {
-	return &Generator{
-		story:     s,
-		docCounts: make(map[string]int),
+// GeneratorOption configures a Generator
+type GeneratorOption func(*Generator)
+
+// WithContentLoader configures the generator to use pre-generated content
+func WithContentLoader(loader *ContentLoader) GeneratorOption {
+	return func(g *Generator) {
+		g.loader = loader
 	}
 }
 
+// NewGenerator creates a new document generator for the given story.
+func NewGenerator(s story.Story, opts ...GeneratorOption) *Generator {
+	g := &Generator{
+		story:     s,
+		docCounts: make(map[string]int),
+	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
+}
+
 // Generate creates a document based on the rule and context.
-// Randomly selects between markdown and JSON formats (unless format is already set in context).
+// If a content loader is configured, attempts to load pre-generated content first.
+// Falls back to lorem ipsum generation if loader unavailable or fails.
 // Returns content, format ("markdown" or "json"), and error.
 func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte, string, error) {
 	g.docCounts[rule.Type]++
@@ -41,17 +57,46 @@ func (g *Generator) Generate(rule story.DocumentRule, ctx story.Context) ([]byte
 	ctx.Data["DocumentNumber"] = g.docCounts[rule.Type]
 	ctx.Data["Rule"] = rule
 
-	// Use format from context if set (for version consistency), otherwise randomly select
+	// Determine version (from context or default to 1)
+	version := 1
+	if v, ok := ctx.Data["Version"]; ok {
+		version = v.(int)
+	}
+
+	// Add Phase to context if not present (needed by loader)
+	if _, ok := ctx.Data["Phase"]; !ok {
+		if elapsed, ok := ctx.Data["Elapsed"].(time.Duration); ok {
+			ctx.Data["Phase"] = GetPhase(elapsed)
+		} else {
+			ctx.Data["Phase"] = 1 // Default to phase 1
+		}
+	}
+
+	var content []byte
 	var format string
+	var err error
+
+	// Try loader first if available
+	if g.loader != nil {
+		content, format, err = g.loader.LoadContent(rule.Type, ctx, version)
+		if err == nil {
+			// Success - apply patterns and return
+			content = ApplyDataPattern(content, rule.DataPattern, rule.SizeRange, format)
+			content = EnsureSizeRange(content, rule.SizeRange, format)
+			return content, format, nil
+		}
+		// Loader failed - log warning and fall through to lorem ipsum
+		// (Don't log at Warn level to avoid noise when content not generated)
+	}
+
+	// Fallback to lorem ipsum generation
+	// Use format from context if set (for version consistency), otherwise randomly select
 	if f, ok := ctx.Data["Format"].(string); ok {
 		format = f
 	} else {
 		// Randomly select document format (60% markdown, 40% JSON)
 		format = selectDocumentFormat()
 	}
-
-	var content []byte
-	var err error
 
 	switch format {
 	case "markdown":

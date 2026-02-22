@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tunnelmesh/tunnelmesh/internal/auth"
 	"github.com/tunnelmesh/tunnelmesh/internal/coord/s3"
+	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/documents"
 	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/mesh"
 	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/simulator"
 	"github.com/tunnelmesh/tunnelmesh/internal/s3bench/story"
@@ -401,6 +402,24 @@ func runIteration(ctx context.Context, st story.Story, userMgr *simulator.UserMa
 		}
 	}
 
+	// Initialize content loader (optional - for alien_invasion scenario)
+	var genOpts []documents.GeneratorOption
+	storyName := st.Name()
+	if storyName == "alien_invasion" {
+		log.Info().Msg("Loading pre-generated content for alien_invasion scenario")
+		loader, err := documents.NewContentLoader("alien_invasion", 42) // Fixed seed for reproducibility
+		if err != nil {
+			log.Warn().Err(err).Msg("Failed to load pre-generated content, using lorem ipsum fallback")
+		} else {
+			genOpts = append(genOpts, documents.WithContentLoader(loader))
+			stats := loader.Statistics()
+			log.Info().
+				Int("documents", stats.TotalDocuments).
+				Float64("dedup_target", stats.EstimatedDedupRatio).
+				Msg("Loaded pre-generated content")
+		}
+	}
+
 	// Configure simulator
 	config := simulator.SimulatorConfig{
 		Story:                st,
@@ -416,6 +435,7 @@ func runIteration(ctx context.Context, st story.Story, userMgr *simulator.UserMa
 		UseMesh:              meshClient != nil,
 		MeshClient:           meshClient,
 		SharePrefix:          sharePrefix,
+		GeneratorOptions:     genOpts,
 		WorkflowTestsEnabled: map[simulator.WorkflowType]bool{
 			simulator.WorkflowDeletion:    testDeletion,
 			simulator.WorkflowExpiration:  testExpiration,
