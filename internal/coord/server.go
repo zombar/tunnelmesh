@@ -1960,6 +1960,19 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 				coordinatorNames[peerInfo.peer.MeshIP] = peerInfo.peer.Name
 			}
 		}
+		// Include self so the registering coordinator discovers THIS coordinator as a
+		// replication peer. Without this, getPeerName(msg.From) returns "" on the
+		// registrant and all manifest-based purges are silently skipped.
+		// Guards: skip if self-registering (would cause coordinator to replicate to itself),
+		// or if own mesh IP not yet known (SetCoordMeshIP not yet called).
+		if req.Name != s.cfg.Name && len(coordIPs) > 0 {
+			selfMeshIP := coordIPs[0] // Self is always first in GetCoordMeshIPs()
+			if coordinatorNames == nil {
+				coordinatorNames = make(map[string]string)
+			}
+			coordinators = append(coordinators, selfMeshIP)
+			coordinatorNames[selfMeshIP] = s.cfg.Name
+		}
 	}
 
 	resp := proto.RegisterResponse{
