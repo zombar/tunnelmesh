@@ -2495,8 +2495,23 @@ func (r *Replicator) handleObjectManifest(msg *Message) error {
 
 	// Collect objects to purge: local objects not in the manifest.
 	// Safety: skip system bucket, only purge from buckets the sender owns.
-	const maxPurgePerManifest = 100
+	//
+	// Two cases handled:
+	//   1. Bucket in manifest: purge objects locally present but absent from manifest
+	//      (sender updated/deleted individual objects).
+	//   2. Bucket NOT in manifest: sender owns the bucket locally but excluded it
+	//      entirely → sender deleted the whole bucket → purge all local objects.
+	//      This is the primary mechanism for cleaning up replicated buckets after
+	//      a file share (or any bucket) is deleted on the primary coordinator.
+	//
+	// maxPurgePerManifest caps the object-level reconciliation case (case 1) to
+	// limit damage from unexpected state mismatches. Case 2 (bucket deletion) has
+	// no cap because we must purge the entire bucket to recover storage.
+	const maxPurgePerManifest = 1000
 	var purged int
+
+	// Resolve the sender's coordinator name once (msg.From is a mesh IP).
+	senderName := r.getPeerName(msg.From)
 
 	for bucket, keys := range localKeys {
 		// Never purge system bucket based on manifest
@@ -2504,23 +2519,32 @@ func (r *Replicator) handleObjectManifest(msg *Message) error {
 			continue
 		}
 
-		// Only reconcile buckets that the sender mentions in the manifest.
-		senderKeys, senderHasBucket := manifestSet[bucket]
-		if !senderHasBucket {
-			continue
-		}
-
-		// Only purge from buckets the sender actually owns. On replicas, the
+		// Only process buckets the sender actually owns. On replicas, the
 		// bucket owner is set to the source coordinator's node ID during import.
 		// This prevents coordinator A's manifest from purging objects in buckets
 		// owned by coordinator C that were replicated to this node.
-		// Note: msg.From is a mesh IP but bucket owners are coordinator names,
-		// so we resolve the sender's name for comparison.
-		senderName := r.getPeerName(msg.From)
-		if owner := r.s3.GetBucketOwner(ctx, bucket); owner != "" && owner != senderName {
+		if owner := r.s3.GetBucketOwner(ctx, bucket); owner == "" || owner != senderName {
 			continue
 		}
 
+		senderKeys, senderHasBucket := manifestSet[bucket]
+		if !senderHasBucket {
+			// Sender owns this bucket but omitted it from the manifest entirely.
+			// This means the sender deleted the bucket; purge all local objects.
+			for _, key := range keys {
+				if err := r.s3.PurgeObject(ctx, bucket, key); err != nil {
+					r.logger.Warn().Err(err).
+						Str("bucket", bucket).
+						Str("key", key).
+						Msg("Manifest reconciliation: failed to purge object from deleted bucket")
+					continue
+				}
+				purged++
+			}
+			continue
+		}
+
+		// Bucket exists in both the manifest and locally: reconcile at object level.
 		for _, key := range keys {
 			if purged >= maxPurgePerManifest {
 				r.logger.Info().
@@ -2534,7 +2558,7 @@ func (r *Replicator) handleObjectManifest(msg *Message) error {
 					r.logger.Warn().Err(err).
 						Str("bucket", bucket).
 						Str("key", key).
-						Msg("Manifest reconciliation: failed to purge object")
+						Msg("Manifest reconciliation: failed to purge stale object")
 					continue
 				}
 				purged++
@@ -2546,6 +2570,7 @@ func (r *Replicator) handleObjectManifest(msg *Message) error {
 		r.logger.Info().
 			Int("purged", purged).
 			Str("from", msg.From).
+			Str("sender_name", senderName).
 			Msg("Manifest reconciliation: purged stale objects")
 	}
 

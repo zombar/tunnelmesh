@@ -947,3 +947,112 @@ func TestAutoSyncCycle_SkipsReplicatedBuckets(t *testing.T) {
 		})
 	}
 }
+
+func TestManifestReconciliation_PurgesDeletedBuckets(t *testing.T) {
+	// After a file share (or any bucket) is deleted on the primary coordinator,
+	// the next manifest won't include that bucket at all. Replica coordinators
+	// must purge all local objects in buckets that are:
+	//   a) owned by the sender, AND
+	//   b) absent from the sender's manifest (= sender has deleted the bucket)
+	// This is the primary fix for inter-run object accumulation in s3bench.
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+	registry := newMockChunkRegistry()
+
+	r := NewReplicator(Config{
+		NodeID:              "coord-b",
+		Transport:           transport,
+		S3Store:             s3Store,
+		ChunkRegistry:       registry,
+		Logger:              zerolog.Nop(),
+		ChunkPipelineWindow: 5,
+		AutoSyncInterval:    0,
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	r.AddPeer("10.0.0.1", "coord-a")
+
+	// coord-b has two file-share buckets replicated from coord-a.
+	// coord-a then deletes "fs+deleted-share" but keeps "fs+active-share".
+	s3Store.addObjectWithChunks("fs+active-share", "doc1.txt", []string{"h1"}, map[string][]byte{"h1": []byte("d1")})
+	s3Store.addObjectWithChunks("fs+active-share", "doc2.txt", []string{"h2"}, map[string][]byte{"h2": []byte("d2")})
+	s3Store.addObjectWithChunks("fs+deleted-share", "doc1.txt", []string{"h3"}, map[string][]byte{"h3": []byte("d3")})
+	s3Store.addObjectWithChunks("fs+deleted-share", "doc2.txt", []string{"h4"}, map[string][]byte{"h4": []byte("d4")})
+	s3Store.bucketOwners = map[string]string{
+		"fs+active-share":  "coord-a",
+		"fs+deleted-share": "coord-a",
+	}
+
+	// coord-a sends a manifest that includes only fs+active-share.
+	// fs+deleted-share is absent because coord-a called ForceDeleteBucket on it.
+	payload := ObjectManifestPayload{
+		BucketKeys: map[string][]string{
+			"fs+active-share": {"doc1.txt", "doc2.txt"}, // still alive
+			// fs+deleted-share intentionally absent — coord-a deleted it
+		},
+	}
+	payloadJSON, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeObjectManifest,
+		ID:      "test-manifest-deleted",
+		From:    "10.0.0.1",
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	err = r.handleObjectManifest(msg)
+	require.NoError(t, err)
+
+	// fs+active-share objects must survive (they're in the manifest)
+	_, _, err = s3Store.Get(context.Background(), "fs+active-share", "doc1.txt")
+	assert.NoError(t, err, "active share doc1.txt should survive")
+	_, _, err = s3Store.Get(context.Background(), "fs+active-share", "doc2.txt")
+	assert.NoError(t, err, "active share doc2.txt should survive")
+
+	// fs+deleted-share objects must be purged (sender deleted the whole bucket)
+	_, _, err = s3Store.Get(context.Background(), "fs+deleted-share", "doc1.txt")
+	assert.Error(t, err, "deleted share doc1.txt must be purged")
+	_, _, err = s3Store.Get(context.Background(), "fs+deleted-share", "doc2.txt")
+	assert.Error(t, err, "deleted share doc2.txt must be purged")
+}
+
+func TestManifestReconciliation_UnknownSenderSkipsPurge(t *testing.T) {
+	// If the sender's mesh IP is not in our peerNames map (e.g. peer not yet
+	// registered), senderName is empty and GetBucketOwner returns a non-empty
+	// name, so the ownership check prevents any purge.
+	transport := newMockTransport()
+	s3Store := newMockS3Store()
+
+	r := NewReplicator(Config{
+		NodeID:    "coord-b",
+		Transport: transport,
+		S3Store:   s3Store,
+		Logger:    zerolog.Nop(),
+	})
+	t.Cleanup(func() { _ = r.Stop() })
+
+	// No peers registered → getPeerName returns ""
+	s3Store.addObjectWithChunks("bucket-a", "file.txt", []string{"h1"}, map[string][]byte{"h1": []byte("d1")})
+	s3Store.bucketOwners = map[string]string{"bucket-a": "coord-a"}
+
+	payload := ObjectManifestPayload{BucketKeys: map[string][]string{}} // empty manifest
+	payloadJSON, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	msg := &Message{
+		Version: ProtocolVersion,
+		Type:    MessageTypeObjectManifest,
+		ID:      "test-unknown-sender",
+		From:    "10.0.0.99", // unknown IP
+		Payload: json.RawMessage(payloadJSON),
+	}
+
+	err = r.handleObjectManifest(msg)
+	require.NoError(t, err)
+
+	// Object must NOT be purged (sender is unknown, no ownership match)
+	_, _, err = s3Store.Get(context.Background(), "bucket-a", "file.txt")
+	assert.NoError(t, err, "object must survive when sender is unknown")
+}
